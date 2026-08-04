@@ -92,3 +92,13 @@ SELECT tablename, policyname
   FROM pg_policies
  WHERE schemaname = 'app' AND cmd = 'SELECT' AND qual LIKE '%deleted_at IS NULL%'
  ORDER BY 1, 2;
+
+\echo '== 10. Tabelle di bookkeeping delle migration duplicate =='
+-- Deve esistere una sola `_sqlx_migrations`, in `public`. Una copia nello schema
+-- `app` significa che il migratore ha girato con `search_path = app, public` su un
+-- database dove lo schema `app` esisteva già: SQLx creerebbe una seconda tabella
+-- vuota e riapplicherebbe tutte le migration. Il migratore fissa il search_path
+-- proprio per questo (vedi crates/migrator/src/main.rs).
+SELECT n.nspname AS schema, c.relname
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relname = '_sqlx_migrations' AND n.nspname <> 'public';
