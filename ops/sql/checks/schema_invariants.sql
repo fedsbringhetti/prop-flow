@@ -82,3 +82,13 @@ SELECT c.relname AS table_name, a.attname AS column_name, format_type(a.atttypid
    AND NOT (c.relname = 'ai_jobs' AND a.attname = 'cost_amount')
    AND NOT (c.relname = 'leases'  AND a.attname IN ('rent_frequency', 'rent_due_day'))
  ORDER BY 1, 2;
+
+\echo '== 9. Policy di SELECT che filtrano il soft delete =='
+-- Una policy di SELECT che contiene `deleted_at IS NULL` rende impossibile il
+-- soft delete: PostgreSQL applica le policy di SELECT anche alla riga nuova di un
+-- UPDATE, quindi valorizzare `deleted_at` produrrebbe una riga invisibile a chi
+-- la scrive. Il filtro va nelle query, non nella RLS. Vedi migrations/0016.
+SELECT tablename, policyname
+  FROM pg_policies
+ WHERE schemaname = 'app' AND cmd = 'SELECT' AND qual LIKE '%deleted_at IS NULL%'
+ ORDER BY 1, 2;
