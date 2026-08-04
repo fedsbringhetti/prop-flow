@@ -1,0 +1,33 @@
+# Servizi di sviluppo per il layer dati.
+# Gli altri servizi (api, worker, minio, otel-collector) verranno aggiunti negli step successivi.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: propflow-postgres
+    environment:
+      POSTGRES_DB: propflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # collazione deterministica: i test su ORDER BY/unique non devono dipendere dall'host
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    command:
+      - postgres
+      - -c
+      - timezone=Europe/Rome
+      - -c
+      - log_min_duration_statement=200
+      # niente parametri di query nei log: i valori possono contenere PII
+      - -c
+      - log_statement=none
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d propflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
