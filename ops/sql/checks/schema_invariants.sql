@@ -1,36 +1,55 @@
 -- =============================================================================
--- Controlli statici sullo schema. Da eseguire in CI dopo `sqlx migrate run`.
--- Ogni query deve restituire ZERO righe: qualsiasi output è un difetto.
---   psql -f ops/sql/checks/schema_invariants.sql "$DATABASE_URL"
+-- Invarianti dello schema. Da eseguire dopo le migration, in CI e in locale.
+--
+-- Ogni controllo raccoglie le proprie violazioni in una tabella temporanea; alla
+-- fine le violazioni vengono stampate e, se ce n'è almeno una, lo script solleva
+-- un'eccezione. Serve a entrambi gli usi: in locale si legge *cosa* non torna, in
+-- CI il processo esce con codice diverso da zero e la pipeline si ferma.
+--
+--   psql -v ON_ERROR_STOP=1 -f ops/sql/checks/schema_invariants.sql "$DATABASE_URL"
 -- =============================================================================
 
 \set ON_ERROR_STOP on
 \pset pager off
 
-\echo '== 1. Tabelle di business senza RLS attiva =='
-SELECT c.relname
+-- Tabella temporanea di sessione: senza ON COMMIT DROP, che fuori da una
+-- transazione esplicita la distruggerebbe subito dopo averla creata.
+CREATE TEMP TABLE invariant_violations (
+    check_name TEXT NOT NULL,
+    detail     TEXT NOT NULL
+);
+
+-- 1. Ogni tabella di business deve avere la Row Level Security attiva.
+--    Le partizioni di audit_log ereditano la RLS del padre e sono escluse.
+INSERT INTO invariant_violations
+SELECT 'rls-non-attiva', c.relname
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname = 'app' AND c.relkind IN ('r', 'p')
    AND NOT c.relrowsecurity
-   AND c.relname NOT LIKE 'audit\_log\_%';   -- le partizioni ereditano la RLS del padre
+   AND c.relname NOT LIKE 'audit\_log\_%'
+   AND c.relname <> '_sqlx_migrations';
 
-\echo '== 2. Tabelle con RLS attiva ma senza alcuna policy (accesso negato a tutti) =='
-SELECT c.relname
+-- 2. RLS attiva senza policy nega l'accesso a tutti: è un errore, non una scelta.
+INSERT INTO invariant_violations
+SELECT 'rls-senza-policy', c.relname
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname = 'app' AND c.relkind IN ('r', 'p') AND c.relrowsecurity
    AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)
    AND c.relname NOT LIKE 'audit\_log\_%';
 
-\echo '== 3. Viste senza security_invoker (bypass della RLS) =='
-SELECT c.relname
+-- 3. Una vista senza security_invoker gira con i diritti dell'owner e aggira la
+--    RLS del chiamante.
+INSERT INTO invariant_violations
+SELECT 'vista-senza-security-invoker', c.relname
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname = 'app' AND c.relkind = 'v'
    AND NOT COALESCE(array_to_string(c.reloptions, ',') LIKE '%security_invoker=true%', false);
 
-\echo '== 4. Foreign key senza indice sulla colonna referenziante =='
-SELECT con.conrelid::regclass AS referencing_table,
-       att.attname            AS column_name,
-       con.conname
+-- 4. Una foreign key senza indice utilizzabile sulla colonna referenziante
+--    trasforma ogni verifica di integrità in una scansione sequenziale.
+INSERT INTO invariant_violations
+SELECT 'fk-senza-indice',
+       format('%s.%s (%s)', con.conrelid::regclass, att.attname, con.conname)
   FROM pg_constraint con
   JOIN pg_namespace n ON n.oid = con.connamespace
   CROSS JOIN LATERAL unnest(con.conkey) AS k(attnum)
@@ -38,14 +57,13 @@ SELECT con.conrelid::regclass AS referencing_table,
  WHERE con.contype = 'f' AND n.nspname = 'app'
    AND array_length(con.conkey, 1) = 1
    AND NOT EXISTS (
-     SELECT 1 FROM pg_index i
-      WHERE i.indrelid = con.conrelid
-        AND i.indkey[0] = k.attnum        -- basta essere prefisso dell'indice
-   )
- ORDER BY 1, 2;
+     SELECT 1 FROM pg_index i WHERE i.indrelid = con.conrelid AND i.indkey[0] = k.attnum
+   );
 
-\echo '== 5. Tabelle senza trigger updated_at pur avendo la colonna =='
-SELECT c.relname
+-- 5. Una tabella con updated_at ma senza il trigger si affiderebbe a ogni singola
+--    query per aggiornarlo, e prima o poi una se lo dimentica.
+INSERT INTO invariant_violations
+SELECT 'updated-at-senza-trigger', c.relname
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
   JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'updated_at'
@@ -56,21 +74,27 @@ SELECT c.relname
       WHERE t.tgrelid = c.oid AND t.tgname = 'set_updated_at' AND NOT t.tgisinternal
    );
 
-\echo '== 6. Funzioni SECURITY DEFINER senza search_path fissato (privilege escalation) =='
-SELECT p.proname
+-- 6. SECURITY DEFINER senza search_path fissato è una scalata di privilegi in
+--    attesa: chi chiama può far risolvere i nomi non qualificati a oggetti suoi.
+INSERT INTO invariant_violations
+SELECT 'definer-senza-search-path', p.proname
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname = 'app' AND p.prosecdef
    AND NOT COALESCE(array_to_string(p.proconfig, ',') LIKE '%search_path=%', false);
 
-\echo '== 7. FORCE RLS attiva (ricorrerebbe nelle policy via funzioni SECURITY DEFINER) =='
-SELECT c.relname
+-- 7. FORCE ROW LEVEL SECURITY applica le policy anche all'owner, e le nostre
+--    funzioni di accesso sono SECURITY DEFINER proprio per leggere senza policy:
+--    con FORCE attiva le policy ricorrono su se stesse.
+INSERT INTO invariant_violations
+SELECT 'force-rls-attiva', c.relname
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname = 'app' AND c.relforcerowsecurity;
 
-\echo '== 8. Colonne monetarie che non usano il dominio app.money_amount =='
--- Confronto sul tipo per OID (non sul nome formattato: format_type omette lo schema
--- quando è nel search_path, e restituirebbe falsi negativi/positivi).
-SELECT c.relname AS table_name, a.attname AS column_name, format_type(a.atttypid, a.atttypmod) AS type
+-- 8. Le colonne monetarie devono usare il dominio, che è l'unico posto dove si
+--    cambia la precisione.
+INSERT INTO invariant_violations
+SELECT 'colonna-monetaria-fuori-dominio',
+       format('%s.%s è %s', c.relname, a.attname, format_type(a.atttypid, a.atttypmod))
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
   JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -78,27 +102,38 @@ SELECT c.relname AS table_name, a.attname AS column_name, format_type(a.atttypid
    AND (a.attname LIKE '%amount%' OR a.attname LIKE '%rent\_%'
         OR a.attname LIKE '%\_rent' OR a.attname LIKE '%price%')
    AND a.atttypid <> 'app.money_amount'::regtype
-   -- eccezioni note: costo AI a 6 decimali, giorno di scadenza del canone
+   -- eccezioni volute: costo AI a sei decimali, frequenza e giorno del canone
    AND NOT (c.relname = 'ai_jobs' AND a.attname = 'cost_amount')
-   AND NOT (c.relname = 'leases'  AND a.attname IN ('rent_frequency', 'rent_due_day'))
- ORDER BY 1, 2;
+   AND NOT (c.relname = 'leases' AND a.attname IN ('rent_frequency', 'rent_due_day'));
 
-\echo '== 9. Policy di SELECT che filtrano il soft delete =='
--- Una policy di SELECT che contiene `deleted_at IS NULL` rende impossibile il
--- soft delete: PostgreSQL applica le policy di SELECT anche alla riga nuova di un
--- UPDATE, quindi valorizzare `deleted_at` produrrebbe una riga invisibile a chi
--- la scrive. Il filtro va nelle query, non nella RLS. Vedi migrations/0016.
-SELECT tablename, policyname
+-- 9. `deleted_at IS NULL` in una policy di SELECT rende impossibile il soft
+--    delete: PostgreSQL applica le policy di SELECT anche alla riga nuova di un
+--    UPDATE, quindi valorizzare deleted_at produrrebbe una riga invisibile a chi
+--    la scrive. Il filtro va nelle query. Vedi migrations/0016.
+INSERT INTO invariant_violations
+SELECT 'policy-select-filtra-soft-delete', format('%s.%s', tablename, policyname)
   FROM pg_policies
- WHERE schemaname = 'app' AND cmd = 'SELECT' AND qual LIKE '%deleted_at IS NULL%'
- ORDER BY 1, 2;
+ WHERE schemaname = 'app' AND cmd = 'SELECT' AND qual LIKE '%deleted_at IS NULL%';
 
-\echo '== 10. Tabelle di bookkeeping delle migration duplicate =='
--- Deve esistere una sola `_sqlx_migrations`, in `public`. Una copia nello schema
--- `app` significa che il migratore ha girato con `search_path = app, public` su un
--- database dove lo schema `app` esisteva già: SQLx creerebbe una seconda tabella
--- vuota e riapplicherebbe tutte le migration. Il migratore fissa il search_path
--- proprio per questo (vedi crates/migrator/src/main.rs).
-SELECT n.nspname AS schema, c.relname
+-- 10. Una seconda `_sqlx_migrations` fuori da `public` significa che il migratore
+--     ha girato con search_path = app, public su un database dove lo schema app
+--     esisteva già: SQLx creerebbe una tabella vuota e riapplicherebbe tutto.
+INSERT INTO invariant_violations
+SELECT 'bookkeeping-migration-duplicato', format('%s._sqlx_migrations', n.nspname)
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.relname = '_sqlx_migrations' AND n.nspname <> 'public';
+
+-- ---------------------------------------------------------------------------
+\echo ''
+\echo 'Violazioni rilevate (vuoto = tutto in ordine):'
+SELECT check_name, detail FROM invariant_violations ORDER BY 1, 2;
+
+DO $$
+DECLARE v_count bigint;
+BEGIN
+  SELECT count(*) INTO v_count FROM invariant_violations;
+  IF v_count > 0 THEN
+    RAISE EXCEPTION '% invarianti dello schema violate (elenco sopra)', v_count;
+  END IF;
+  RAISE NOTICE 'tutte le invarianti dello schema sono rispettate';
+END $$;

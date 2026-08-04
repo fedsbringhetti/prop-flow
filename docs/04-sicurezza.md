@@ -1,0 +1,199 @@
+# 04 — Sicurezza
+
+## Difesa a strati
+
+Nessun singolo controllo è l'unico. Le proprietà importanti sono imposte in più
+punti, in modo che un errore in uno non diventi una fuga di dati.
+
+| Proprietà | Imposta da |
+|---|---|
+| Isolamento fra organizzazioni | Policy RLS (autorità) + `authorization::ensure_member` (semantica del 403) |
+| Soft delete anziché cancellazione | `DELETE` non concesso al ruolo applicativo + `deleted_at` nelle query |
+| Nessun SQL fuori dal layer dati | `AppState` non espone il pool + controllo grep in CI |
+| Il dominio non tocca l'infrastruttura | Confini fra crate + `check-domain-purity.sh` |
+| Nessun segreto nei log | Redazione nell'audit + `Debug` redatto + `log_statement=none` in PostgreSQL |
+| Traccia non falsificabile | Trigger `SECURITY DEFINER` + `audit_log` append-only + privilegi revocati |
+
+## Autenticazione
+
+### Access token
+
+JWT firmato **EdDSA (Ed25519)**, non HMAC. Quando i moduli si separeranno in
+servizi, ognuno potrà verificare i token con la sola chiave pubblica; con HS256
+ogni verificatore sarebbe anche un potenziale emittente.
+
+- Vita: **15 minuti** (`auth.access_token_ttl_seconds`). Breve perché **non è
+  revocabile**.
+- Claim: `sub`, `org`, `role`, `prole`, `iss`, `aud`, `exp`, `iat`, `jti`.
+- `exp`, `iss`, `aud`, `sub` sono obbligatori in validazione: un token senza
+  scadenza che passasse la verifica sarebbe eterno. Tolleranza di 5 secondi per lo
+  sfasamento fra orologi.
+- `role` serve a rispondere `403` senza interrogare il database. **Non è
+  autorevole**: la RLS rilegge sempre la membership.
+
+Le chiavi si passano come **percorsi di file**, non come contenuto: in Kubernetes
+arrivano come Secret montati, e una chiave privata in una variabile d'ambiente è
+leggibile da `/proc`, dai dump di crash e da `docker inspect`. Generazione:
+`./ops/dev/generate-jwt-keys.sh`, che cerca un OpenSSL 3 perché l'`openssl` di
+sistema su macOS è LibreSSL e non conosce Ed25519.
+
+### Refresh token
+
+**Opachi**, non JWT: devono poter essere revocati prima della scadenza, e un JWT
+autoconsistente resta valido anche dopo un logout. La fonte di verità è la riga in
+`app.user_sessions`, che si può revocare.
+
+- 256 bit di entropia da `getrandom`, codificati base64url.
+- In database va solo lo **hash SHA-256**. Un digest semplice basta: con 256 bit di
+  entropia non esiste il dizionario che renderebbe utile un KDF lento. Ma una
+  copia del dump non deve permettere di impersonare nessuno.
+- Vita: **30 giorni**.
+- **Rotazione a uso singolo**: ogni refresh consuma il token presentato ed emette
+  uno nuovo.
+
+#### Rilevamento del riuso
+
+Se arriva un token già ruotato, esistono due copie e non si sa quale parte sia
+legittima: **cadono tutte le sessioni dell'utente**. Il caso è modellato nel
+dominio come violazione di invariante (`RefreshSession::ensure_usable`), non come
+semplice rifiuto, ed è coperto da un test che verifica che anche il successore
+diventi inutilizzabile.
+
+L'ordine di scrittura conta: il successore va inserito **prima** di aggiornare
+`rotated_to`, che è una foreign key autoreferenziale. L'ordine inverso viola il
+vincolo — è un bug che i test hanno trovato.
+
+### Password
+
+- **Argon2id**, profilo OWASP: 19 MiB di memoria, 3 iterazioni, parallelismo 1. La
+  memoria è la difesa che conta contro il cracking su GPU, dove la potenza di
+  calcolo è abbondante ma la RAM per thread no.
+- L'hashing gira su `spawn_blocking`: decine di millisecondi di CPU sul reattore
+  async bloccherebbero altre richieste. Per questo la porta `PasswordHasher` è
+  `async`.
+- Policy: minimo **12 caratteri**, massimo 512, nessun obbligo di classi miste. Le
+  regole di composizione spingono verso password prevedibili tipo `Password1!`,
+  mentre la lunghezza è la leva che conta. Il massimo non è estetico: Argon2 lavora
+  sull'intero input, e una password da un megabyte è un vettore di denial of
+  service.
+- `PasswordHash` ha un `Debug` che stampa `<redatto>`: la strada più comune perché
+  un hash finisca in un log è un `dbg!` dimenticato.
+
+### Anti-enumerazione degli account
+
+Tre accorgimenti, tutti verificati da test:
+
+1. Credenziali errate e account inesistente producono **la stessa risposta**:
+   `401` con lo stesso corpo.
+2. Quando l'utente non esiste si spende comunque il tempo di una verifica Argon2 su
+   un hash di riferimento generato all'avvio: senza questo, la latenza
+   distinguerebbe gli account esistenti a parità di risposta.
+3. Un'email malformata al login dà `401`, non `422`: dire "email non valida" a chi
+   prova indirizzi a caso è informazione gratuita.
+
+Analogamente, `404` e non `403` quando una risorsa non è visibile: un `403`
+confermerebbe che esiste.
+
+### Blocco dopo tentativi falliti
+
+Dieci tentativi consecutivi bloccano l'account per **15 minuti**. Temporaneo e non
+permanente: un attacco a dizionario non deve tradursi in un blocco definitivo, che
+sarebbe un denial of service verso l'utente legittimo. Il contatore viene
+persistito anche quando la richiesta fallisce, altrimenti non conterebbe nulla.
+
+## Autorizzazione
+
+### Ruoli di organizzazione
+
+| Ruolo | Staff | Poteri |
+|---|---|---|
+| `owner` | sì | tutto nell'organizzazione, incluso amministrarla |
+| `manager` | sì | operazioni sul patrimonio, contratti, contabilità |
+| `tenant` | no | i propri contratti, addebiti, segnalazioni, spese condivise |
+
+`is_staff` include anche l'amministratore di piattaforma
+(`users.platform_role = 'admin'`).
+
+### Cambio di organizzazione
+
+Header `X-Org-Id`. Se coincide con l'organizzazione del token, il ruolo nel token
+vale. Se è diversa, quel ruolo non si applica e la membership viene **riletta dal
+database**: la policy su `org_members` mostra a ciascuno le proprie appartenenze
+(`user_id = app.current_user_id()`), quindi basta un contesto con il solo utente.
+
+Non si distingue "organizzazione inesistente" da "non ne fai parte": la differenza
+rivelerebbe l'esistenza di organizzazioni altrui.
+
+### Il pool privilegiato
+
+`begin_privileged()` usa un ruolo con `BYPASSRLS`. Ammesso **solo** dove un
+contesto di sicurezza non può esistere:
+
+- registrazione — utente, organizzazione e membership non esistono ancora;
+- login — la policy su `users` mostra una riga solo a chi è già identificato;
+- rotazione del refresh token — il chiamante presenta un token, non un'identità.
+
+Ogni altro uso è un errore di progetto. Il logout, per contrasto, passa dal
+contesto normale: la policy su `user_sessions` impedisce di revocare la sessione di
+qualcun altro anche presentandone l'hash corretto.
+
+## Dati personali
+
+- **Cifratura applicativa** per i campi sensibili: `fiscal_code_encrypted`,
+  `mfa_secret_encrypted`. Il database vede solo il testo cifrato e un riferimento
+  logico alla chiave (`encryption_key_ref`, es. `kms:v3`), mai il materiale
+  crittografico. Il provider di cifratura è dietro interfaccia.
+- `fiscal_code_fingerprint` è un HMAC-SHA256 che permette lookup e deduplica senza
+  decifrare.
+- `documents.is_encrypted` e `encryption_key_ref`: i file sono cifrati a riposo
+  nello storage oggetti.
+- `retention_until` sui documenti abilita un purge job. Non esiste ancora un job.
+- Soft delete: la cancellazione di un utente va progettata insieme agli obblighi di
+  conservazione fiscale, che superano il diritto alla cancellazione per i dati
+  contrattuali.
+
+## Logging
+
+Regola: **niente dati personali nei log, nelle tracce, negli eventi.**
+
+- I layer applicativi non registrano email, token o corpi di richiesta.
+- `PasswordHash` e `TokenHash` hanno `Debug` redatto. Farlo anche per i tipi nuovi
+  che contengono segreti.
+- L'audit redige le colonne sensibili prima di scriverle.
+- PostgreSQL gira con `log_statement=none`: i parametri delle query contengono dati
+  personali.
+- Gli errori interni restituiscono al client solo il `request_id`; il dettaglio
+  tecnico resta nei log correlato da quello. Un messaggio di errore del database in
+  una risposta HTTP è ricognizione gratuita.
+- Gli eventi di dominio trasportano identificatori e nomi di campo, non valori.
+
+## Difese al bordo HTTP
+
+| Difesa | Come |
+|---|---|
+| Limite sul corpo | `RequestBodyLimitLayer`, 1 MiB per default |
+| Timeout | 30 secondi, risposta `503` |
+| `statement_timeout` | 10 secondi per connessione, impostato con `set_config` |
+| Request id | Generato se assente, propagato in risposta |
+| `WWW-Authenticate` | Presente sui `401` |
+| Errori uniformi | RFC 9457 anche per il `404` di rotta sconosciuta |
+
+## Contenitore
+
+Utente non privilegiato `uid 10001`, filesystem in sola lettura,
+`no-new-privileges`. Un processo che non ha bisogno di root non deve averlo.
+
+## Ciò che non c'è ancora
+
+Elenco onesto, con i dettagli in [09 — Stato e roadmap](09-stato-e-roadmap.md).
+
+- **Rate limiting** su login e registrazione. Il lockout per utente c'è, un limite
+  per IP no: oggi è demandato all'ingress.
+- **Verifica dell'email** bloccante: il campo `email_verified_at` esiste, il flusso
+  no.
+- **MFA**: la colonna esiste, la logica no.
+- **CORS** non configurato (il layer è disponibile, non è montato).
+- **Gate sulle licenze** delle dipendenze: la CI controlla vulnerabilità, crate
+  ritirati e provenienza, non le licenze.
+- **Rotazione delle chiavi** di firma: non c'è un `kid` nei token, quindi ruotare
+  la chiave invalida i token in circolazione.

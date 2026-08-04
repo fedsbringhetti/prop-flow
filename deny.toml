@@ -1,0 +1,32 @@
+# Configurazione di cargo-deny. Vedi .github/workflows/ci.yml, job "dependencies".
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+]
+
+[advisories]
+version = 2
+# Un crate ritirato dal registry non deve restare in un lockfile che dichiariamo
+# riproducibile.
+yanked = "deny"
+ignore = []
+
+[bans]
+# Versioni duplicate della stessa libreria: segnalate, non bloccanti. Nell'albero
+# di sqlx e del toolkit async sono spesso inevitabili e imposte da terzi.
+multiple-versions = "warn"
+wildcards = "deny"
+# Nessuna dipendenza vietata per ora. Esempio di uso futuro:
+# deny = [{ crate = "openssl", reason = "si usa rustls" }]
+deny = []
+
+[sources]
+# Solo crates.io. Una dipendenza da un repository git arbitrario è codice di terzi
+# senza revisione né versionamento stabile.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
