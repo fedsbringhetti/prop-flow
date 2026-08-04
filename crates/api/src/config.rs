@@ -1,0 +1,139 @@
+use std::path::PathBuf;
+use std::time::Duration;
+
+use figment::Figment;
+use figment::providers::{Env, Format, Toml};
+
+/// Configurazione dell'applicazione.
+///
+/// Si legge da `config/default.toml` (opzionale) e dalle variabili d'ambiente con
+/// prefisso `PROPFLOW__`, dove il doppio underscore separa i livelli:
+/// `PROPFLOW__DATABASE__APPLICATION_URL`. L'ambiente vince sul file, così un
+/// deploy Kubernetes non ha bisogno di riscrivere il file.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ServerConfig {
+    #[serde(default = "default_bind")]
+    pub bind: String,
+    /// Timeout complessivo di una richiesta.
+    #[serde(default = "default_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
+    /// Dimensione massima del corpo di una richiesta, in byte.
+    #[serde(default = "default_body_limit_bytes")]
+    pub body_limit_bytes: usize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DatabaseConfig {
+    /// Connessione del servizio HTTP: ruolo soggetto alla Row Level Security.
+    pub application_url: String,
+    /// Connessione dei flussi pre-autenticazione e del worker: ruolo con BYPASSRLS.
+    pub privileged_url: String,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+    #[serde(default = "default_statement_timeout_seconds")]
+    pub statement_timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AuthConfig {
+    /// Percorso della chiave privata Ed25519 (PEM PKCS#8).
+    ///
+    /// Un percorso e non il contenuto: in Kubernetes le chiavi arrivano come
+    /// Secret montati su file, e una chiave privata in una variabile d'ambiente
+    /// finisce nei dump di `/proc`, nei log di crash e in `docker inspect`.
+    pub private_key_path: PathBuf,
+    pub public_key_path: PathBuf,
+    #[serde(default = "default_issuer")]
+    pub issuer: String,
+    #[serde(default = "default_audience")]
+    pub audience: String,
+    /// Vita dell'access token: breve, perché non è revocabile.
+    #[serde(default = "default_access_ttl_seconds")]
+    pub access_token_ttl_seconds: i64,
+    /// Vita del refresh token: lunga, ma revocabile e a rotazione singola.
+    #[serde(default = "default_refresh_ttl_days")]
+    pub refresh_token_ttl_days: i64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TelemetryConfig {
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+    #[serde(default)]
+    pub otlp_endpoint: Option<String>,
+    #[serde(default = "default_log_filter")]
+    pub filter: String,
+    #[serde(default)]
+    pub json_logs: bool,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self {
+            service_name: default_service_name(),
+            otlp_endpoint: None,
+            filter: default_log_filter(),
+            json_logs: false,
+        }
+    }
+}
+
+impl AppConfig {
+    /// L'errore è incapsulato: `figment::Error` accumula il contesto di tutte le
+    /// sorgenti e supera i 200 byte, che non vale la pena propagare per valore.
+    pub fn load() -> Result<Self, Box<figment::Error>> {
+        Figment::new()
+            .merge(Toml::file("config/default.toml"))
+            .merge(Env::prefixed("PROPFLOW__").split("__"))
+            .extract()
+            .map_err(Box::new)
+    }
+
+    #[must_use]
+    pub const fn request_timeout(&self) -> Duration {
+        Duration::from_secs(self.server.request_timeout_seconds)
+    }
+}
+
+fn default_bind() -> String {
+    "0.0.0.0:8080".to_owned()
+}
+const fn default_request_timeout_seconds() -> u64 {
+    30
+}
+const fn default_body_limit_bytes() -> usize {
+    1024 * 1024
+}
+const fn default_max_connections() -> u32 {
+    16
+}
+const fn default_statement_timeout_seconds() -> u64 {
+    10
+}
+fn default_issuer() -> String {
+    "propflow".to_owned()
+}
+fn default_audience() -> String {
+    "propflow-api".to_owned()
+}
+const fn default_access_ttl_seconds() -> i64 {
+    900
+}
+const fn default_refresh_ttl_days() -> i64 {
+    30
+}
+fn default_service_name() -> String {
+    "propflow-api".to_owned()
+}
+fn default_log_filter() -> String {
+    "info,propflow_api=debug".to_owned()
+}
