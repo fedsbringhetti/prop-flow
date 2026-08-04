@@ -1,0 +1,17 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Segreti e configurazione locale — mai in repository.
+# NB: .sqlx/ (metadata offline di SQLx) va invece committata: serve alla CI per
+# compilare le query senza un database raggiungibile.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Sistema operativo / editor
+.DS_Store
+.idea/
+.vscode/
