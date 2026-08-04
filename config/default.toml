@@ -1,0 +1,28 @@
+# Valori di default per lo sviluppo locale.
+# Le variabili d'ambiente con prefisso PROPFLOW__ hanno la precedenza, quindi in
+# produzione questo file può restare com'è o mancare del tutto.
+#
+# Nessun segreto qui: URL con password e percorsi delle chiavi arrivano
+# dall'ambiente o dal gestore dei segreti.
+
+[server]
+bind = "0.0.0.0:8080"
+request_timeout_seconds = 30
+body_limit_bytes = 1048576
+
+[database]
+max_connections = 16
+statement_timeout_seconds = 10
+
+[auth]
+issuer = "propflow"
+audience = "propflow-api"
+# 15 minuti: l'access token non è revocabile, quindi vive poco.
+access_token_ttl_seconds = 900
+# 30 giorni: il refresh token è revocabile e a rotazione singola.
+refresh_token_ttl_days = 30
+
+[telemetry]
+service_name = "propflow-api"
+filter = "info,propflow_api=debug,propflow_application=debug"
+json_logs = false
