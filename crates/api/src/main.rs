@@ -8,6 +8,7 @@ use propflow_api::state::{AppState, Dependencies};
 use propflow_infrastructure::db::PoolSettings;
 use propflow_infrastructure::security::{
     Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
+    OpaqueTokenGenerator,
 };
 use propflow_infrastructure::telemetry::{self, TelemetrySettings};
 use propflow_infrastructure::{DatabasePools, PgUnitOfWorkFactory, SystemClock};
@@ -83,6 +84,7 @@ async fn main() -> Result<()> {
         refresh_tokens: Arc::new(OpaqueRefreshTokenFactory::new(Duration::days(
             config.auth.refresh_token_ttl_days,
         ))),
+        invitation_tokens: Arc::new(OpaqueTokenGenerator),
         clock: Arc::new(SystemClock),
         pools: pools.clone(),
     };

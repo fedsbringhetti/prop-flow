@@ -35,6 +35,9 @@ use utoipa::{Modify, OpenApi};
         crate::routes::leases::add_party,
         crate::routes::leases::activate,
         crate::routes::leases::terminate,
+        crate::routes::invitations::invite,
+        crate::routes::invitations::revoke,
+        crate::routes::invitations::accept,
     ),
     components(schemas(
         crate::error::ProblemDetails,
@@ -69,6 +72,10 @@ use utoipa::{Modify, OpenApi};
         crate::routes::leases::LeaseStatusDto,
         crate::routes::leases::RentFrequencyDto,
         crate::routes::leases::LeasePartyRoleDto,
+        crate::routes::invitations::InviteTenantRequest,
+        crate::routes::invitations::InvitationResponse,
+        crate::routes::invitations::AcceptInvitationRequest,
+        crate::routes::invitations::AcceptInvitationResponse,
     )),
     modifiers(&BearerAuth),
     tags(
@@ -76,6 +83,7 @@ use utoipa::{Modify, OpenApi};
         (name = "immobili", description = "Gestione del patrimonio"),
         (name = "stanze", description = "Stanze di un immobile in co-living"),
         (name = "contratti", description = "Contratti di locazione e parti contrattuali"),
+        (name = "inviti", description = "Onboarding dell'inquilino"),
         (name = "sistema", description = "Liveness e readiness"),
     )
 )]

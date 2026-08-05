@@ -739,3 +739,300 @@ async fn a_room_of_another_property_cannot_be_let() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
     assert_eq!(problem["errors"][0]["field"], "room_id");
 }
+
+/// Emette un invito su un contratto e restituisce (`invitation_id`, `token`).
+async fn invite_tenant(app: &TestApp, token: &str, lease: &str, email: &str) -> (String, String) {
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            token,
+            serde_json::json!({ "email": email, "full_name": "Inquilino Invitato" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+    (
+        body["id"].as_str().expect("id").to_owned(),
+        body["accept_token"].as_str().expect("token").to_owned(),
+    )
+}
+
+/// Il test che dimostra la bidirezionalità: prima dello step 3 era impossibile,
+/// perché nessuno poteva diventare inquilino dall'API.
+#[tokio::test]
+async fn a_tenant_becomes_real_and_sees_only_what_is_theirs() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario").await;
+
+    // Due immobili: quello affittato e uno che l'inquilino non deve vedere.
+    let rented = create_property(&app, &owner, "Immobile affittato").await;
+    let other = create_property(&app, &owner, "Immobile non affittato").await;
+
+    let (_, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{rented}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera dell'inquilino", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let room = room["id"].as_str().expect("id").to_owned();
+
+    let lease = draft_lease(&app, &owner, &rented, Some(&room), 0, Some(365)).await;
+    // Un secondo contratto sull'altro immobile: l'inquilino non deve vederlo.
+    let foreign_lease = draft_lease(&app, &owner, &other, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("inquilino");
+    let (invitation, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    assert!(!invitation.is_empty());
+
+    // L'invito ha creato la parte contrattuale, ancora senza utente collegato.
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let party = &detail["parties"][0];
+    assert_eq!(party["email"], tenant_email);
+    assert!(
+        party.get("user_id").is_none(),
+        "la parte non deve avere un utente prima dell'accettazione: {detail}"
+    );
+    // `Decimal` va sul filo come stringa, con la scala che ha nel database.
+    assert_eq!(party["share_percent"], "100.00");
+
+    // L'inquilino si registra con la stessa email e accetta.
+    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    assert_ne!(tenant_org, owner_org);
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["organization_id"], owner_org);
+    assert_eq!(accepted["role"], "tenant");
+    assert_eq!(accepted["lease_id"], lease);
+
+    // Da qui l'inquilino vede il proprio contratto nell'organizzazione del
+    // proprietario: la visibilità arriva da `lease_parties.user_id`.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/leases",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let visible: Vec<&str> = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(visible, vec![lease.as_str()], "corpo: {page}");
+    assert!(
+        !visible.contains(&foreign_lease.as_str()),
+        "l'inquilino vede un contratto che non è suo"
+    );
+
+    // E vede l'immobile in cui abita, non l'altro dello stesso proprietario.
+    let (status, properties) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/properties",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {properties}");
+    let visible: Vec<&str> = properties["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(visible, vec![rented.as_str()], "corpo: {properties}");
+    assert!(
+        !visible.contains(&other.as_str()),
+        "l'inquilino vede il secondo immobile del proprietario"
+    );
+
+    // La parte contrattuale è collegata al suo utente.
+    let (_, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert!(
+        detail["parties"][0]["user_id"].is_string(),
+        "la parte non è stata collegata: {detail}"
+    );
+    assert!(detail["parties"][0]["joined_at"].is_string());
+
+    // L'inquilino è membro, non staff: non crea contratti né stanze.
+    let (status, body) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/leases",
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "property_id": rented,
+                "start_date": day(400),
+                "rent_amount": "100.00",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {body}");
+
+    let (status, body) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/properties/{rented}/rooms"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "name": "Camera abusiva" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {body}");
+
+    // E non invita nessun altro.
+    let (status, body) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/leases/{lease}/invitations"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "email": common::unique_email("amico"),
+                "full_name": "Un Amico",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {body}");
+
+    // Riaccettare lo stesso invito è un conflitto, non un secondo ingresso.
+    let (status, body) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {body}");
+}
+
+#[tokio::test]
+async fn an_unknown_token_is_indistinguishable_from_someone_elses() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "invito-ignoto").await;
+    let property = create_property(&app, &owner, "Immobile con invito").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let invited = common::unique_email("invitato");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &invited).await;
+
+    // Un estraneo con il token in mano: l'email non corrisponde, quindi 401 —
+    // lo stesso di un token inventato, perché distinguerli direbbe quali inviti
+    // esistono.
+    let (intruder, _) = common::register_and_login(&app, "estraneo").await;
+    let (with_stolen_token, body) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &intruder,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    let (with_invented_token, other_body) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &intruder,
+            serde_json::json!({ "token": "token-mai-emesso" }),
+        )
+        .await;
+
+    assert_eq!(with_stolen_token, StatusCode::UNAUTHORIZED, "corpo: {body}");
+    assert_eq!(with_invented_token, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["title"], other_body["title"]);
+}
+
+#[tokio::test]
+async fn a_revoked_invitation_no_longer_works_and_leaves_no_membership() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "invito-revocato").await;
+    let property = create_property(&app, &owner, "Immobile con invito revocato").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("revocato");
+    let (invitation, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/invitations/{invitation}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    let (status, body) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
+
+    // Nessuna scrittura parziale: non è diventato membro, quindi non vede nulla
+    // dell'organizzazione che lo aveva invitato.
+    let (status, body) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/leases",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {body}");
+}
+
+#[tokio::test]
+async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "doppio-invito").await;
+    let property = create_property(&app, &owner, "Immobile invitato due volte").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let email = common::unique_email("una-volta-sola");
+
+    invite_tenant(&app, &owner, &lease, &email).await;
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            &owner,
+            serde_json::json!({ "email": email, "full_name": "Inquilino Invitato" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("invito")),
+        "il conflitto deve dire cosa è duplicato: {problem}"
+    );
+}

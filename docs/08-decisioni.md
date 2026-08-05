@@ -428,3 +428,67 @@ di preavviso vive in `Lease::EXPIRING_WINDOW_DAYS` e coincide con quella della
 dashboard: due valori diversi farebbero dire "in scadenza" a una schermata e non
 all'altra. Il rinnovo automatico (`auto_renew`) resta non implementato: quello *è*
 una decisione, e richiede lo scheduler.
+
+---
+
+<a id="adr-020"></a>
+
+## ADR-020 — Accettazione di un invito via RLS, non con il pool privilegiato
+
+**Contesto.** Accettare un invito richiede tre scritture in un'organizzazione di cui
+non si è ancora membri: creare la propria membership, collegare la parte
+contrattuale, marcare l'invito. Le policy esistenti vietavano tutte e tre.
+
+**Decisione.** Si estende la Row Level Security
+(`migrations/0018_invitation_acceptance_rls.sql`), non si usa `begin_privileged()`.
+
+**Motivo.** La regola 20 di `CLAUDE.md` limita il pool privilegiato a registrazione,
+login e rotazione del refresh token, ed è ciò che ne tiene piccola la superficie.
+Quei tre flussi esistono perché un contesto di sicurezza non **può** esistere:
+avvengono prima dell'autenticazione, e la policy su `users` mostra una riga solo a
+chi è già identificato. Qui il contesto esiste — chi accetta è autenticato — e manca
+soltanto la membership. Aggiungere un quarto caso avrebbe reso la regola una lista di
+eccezioni invece di un criterio.
+
+**Come.** Due funzioni `SECURITY DEFINER`, `app.has_pending_invitation(org_id)` e
+`app.current_user_email()`, e cinque policy: `org_members` INSERT di sé stessi con
+ruolo `tenant`, `org_invitations` SELECT e UPDATE del proprio invito,
+`lease_parties` SELECT e UPDATE della riga con la propria email e `user_id IS NULL`.
+
+**Due controlli indipendenti.** Il token resta verificato dall'applicazione, per
+confronto sullo hash: la policy non lo vede. L'applicazione prova che chi chiama
+**possiede** il token; la RLS prova che esiste davvero un invito pendente per
+quell'email. Nessuno dei due da solo basterebbe, e sono difendibili separatamente:
+un difetto nel confronto dello hash non concede l'accesso a un'organizzazione che non
+ha invitato nessuno.
+
+**Conseguenza: la lettura non può dipendere dallo stato "pendente".** Marcare
+l'invito accettato produrrebbe una riga che chi la scrive non potrebbe più rileggere
+— lo stesso difetto di [ADR-008](#adr-008). Le policy di SELECT dell'invitato si
+basano quindi sull'email, che l'operazione non cambia; il vincolo "pendente" vive
+nelle `USING` degli UPDATE, dove si applica alla riga esistente.
+
+**Conseguenza: l'ordine delle scritture è parte del progetto.**
+`has_pending_invitation` diventa falso appena l'invito è marcato accettato, quindi
+marcarlo per primo si toglierebbe il permesso di completare il resto.
+`AcceptInvitation` scrive nell'ordine membership → parte contrattuale → invito, e il
+commento nel codice lo dice.
+
+**Difetto osservato durante l'implementazione.** Le tre scritture riuscivano e
+l'accettazione falliva sull'**ultimo** statement: l'evento di dominio. Chi accetta
+arriva con il contesto della propria organizzazione personale — di quella
+dell'invito non è ancora membro, e il middleware rifiuterebbe di selezionarla — ma
+`domain_events_insert` ammetteva solo `org_id = app.current_org_id()`. Poiché
+l'evento entra nella stessa transazione del comando, il rifiuto annullava tutto. La
+policy ora ammette anche `app.is_org_member(org_id)`, che a quel punto è vero:
+"posso annunciare un fatto di un'organizzazione di cui sono membro" è comunque
+isolamento, e non lega la scrittura dell'evento all'ordine degli statement.
+
+**Verifica.** Un test di integrazione esegue l'accettazione con una fabbrica di unità
+di lavoro il cui `begin_privileged()` **solleva un panic**. Non è un commento che
+dice "non si usa il pool privilegiato": è un test che fallisce se qualcuno lo usa.
+
+**Alternativa scartata.** `begin_privileged()` per l'accettazione. Più rapido da
+scrivere, e sarebbe stato il quarto uso di un percorso che ne ammette tre — dopo il
+quarto il criterio non esiste più, e la superficie di codice che gira con
+`BYPASSRLS` cresce senza che nessuno debba giustificarlo.

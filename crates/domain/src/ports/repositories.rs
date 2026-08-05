@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 
 use crate::events::DomainEvent;
-use crate::identity::{OrgMember, Organization, RefreshSession, TokenHash, User};
+use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::property::{Property, PropertyStatus, Room};
-use crate::shared::{Email, LeaseId, OrgId, PropertyId, RoomId, UserId};
+use crate::shared::{Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, UserId};
 
 /// Errori della persistenza espressi senza nominare la tecnologia.
 ///
@@ -216,6 +216,22 @@ pub trait LeasePartyRepository: Send {
     async fn list_for_lease(&mut self, lease_id: LeaseId) -> RepositoryResult<Vec<LeaseParty>>;
     async fn insert(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
     async fn update(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
+}
+
+/// Inviti a entrare in un'organizzazione.
+///
+/// La ricerca è per **hash del token** e non per email: chi accetta prova di
+/// possedere il token, non di conoscere un indirizzo. Cercare per email
+/// trasformerebbe l'invito in qualcosa di indovinabile.
+#[async_trait]
+pub trait InvitationRepository: Send {
+    async fn find_by_id(&mut self, id: InvitationId) -> RepositoryResult<Option<Invitation>>;
+    async fn find_by_token_hash(
+        &mut self,
+        token_hash: &TokenHash,
+    ) -> RepositoryResult<Option<Invitation>>;
+    async fn insert(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
+    async fn update(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa

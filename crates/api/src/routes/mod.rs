@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer};
 
 pub mod auth;
 pub mod health;
+pub mod invitations;
 pub mod leases;
 pub mod properties;
 pub mod rooms;

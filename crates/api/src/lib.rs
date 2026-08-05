@@ -49,6 +49,7 @@ pub fn router(state: AppState, body_limit_bytes: usize, request_timeout: Duratio
         .merge(routes::properties::router())
         .merge(routes::rooms::router())
         .merge(routes::leases::router())
+        .merge(routes::invitations::router())
         .merge(SwaggerUi::new("/docs").url("/openapi.json", openapi::ApiDoc::openapi()))
         .fallback(not_found)
         // 503 e non 408: il timeout scade per lentezza del server, non del client.

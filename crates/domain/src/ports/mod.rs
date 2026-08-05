@@ -7,8 +7,9 @@ mod uow;
 
 pub use clock::Clock;
 pub use repositories::{
-    EventSink, LeaseOverlap, LeasePage, LeasePartyRepository, LeaseQuery, LeaseRepository,
-    OrgMemberRepository, OrganizationRepository, PropertyPage, PropertyQuery, PropertyRepository,
-    RepositoryError, RepositoryResult, RoomRepository, SessionRepository, UserRepository,
+    EventSink, InvitationRepository, LeaseOverlap, LeasePage, LeasePartyRepository, LeaseQuery,
+    LeaseRepository, OrgMemberRepository, OrganizationRepository, PropertyPage, PropertyQuery,
+    PropertyRepository, RepositoryError, RepositoryResult, RoomRepository, SessionRepository,
+    UserRepository,
 };
 pub use uow::{UnitOfWork, UnitOfWorkFactory};

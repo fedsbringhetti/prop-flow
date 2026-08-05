@@ -14,6 +14,9 @@ mod common;
 use std::sync::Arc;
 
 use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
+use propflow_application::use_cases::invitation::{
+    AcceptInvitation, AcceptInvitationCommand, InviteTenant, InviteTenantCommand,
+};
 use propflow_application::use_cases::lease::{
     ActivateLease, ActivateLeaseCommand, AddLeaseParty, AddLeasePartyCommand, DraftLease,
     DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery,
@@ -29,6 +32,7 @@ use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
+use propflow_infrastructure::security::OpaqueTokenGenerator;
 
 fn address(city: &str) -> Address {
     Address::new(
@@ -644,5 +648,142 @@ async fn an_expired_lease_keeps_its_stored_state_but_leaves_the_dashboard() {
             .iter()
             .any(|item| item.lease.id() == expired.id()),
         "un contratto scaduto non deve comparire fra quelli in essere"
+    );
+}
+
+/// Fabbrica che rifiuta il pool privilegiato.
+///
+/// La regola 20 limita `begin_privileged()` a registrazione, login e rotazione del
+/// refresh token, e ADR-020 dice che l'accettazione di un invito non è fra questi.
+/// Un commento non lo dimostrerebbe: questa fabbrica fa fallire il test se il
+/// percorso privilegiato viene usato, anche per distrazione, anche fra sei mesi.
+struct ApplicationPoolOnly(Arc<dyn propflow_domain::ports::UnitOfWorkFactory>);
+
+#[async_trait::async_trait]
+impl propflow_domain::ports::UnitOfWorkFactory for ApplicationPoolOnly {
+    async fn begin(
+        &self,
+        context: &RequestContext,
+    ) -> propflow_domain::ports::RepositoryResult<Box<dyn propflow_domain::ports::UnitOfWork>> {
+        self.0.begin(context).await
+    }
+
+    async fn begin_privileged(
+        &self,
+    ) -> propflow_domain::ports::RepositoryResult<Box<dyn propflow_domain::ports::UnitOfWork>> {
+        panic!("l'accettazione di un invito non deve usare il pool privilegiato");
+    }
+}
+
+#[tokio::test]
+async fn accepting_an_invitation_never_touches_the_privileged_pool() {
+    let env = require_db!();
+    let owner = register_owner(&env, "invito-rls").await;
+    let property_id = create_property(&env, &owner, "Immobile con inquilino", "Trieste").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(0),
+        Some(days_from_today(365)),
+    )
+    .await;
+
+    // L'inquilino esiste già come utente, con la sua organizzazione personale: è
+    // esattamente la situazione in cui un contesto di sicurezza *esiste* e manca
+    // solo la membership.
+    let tenant = register_owner(&env, "invito-inquilino").await;
+    let tenant_email = {
+        let mut uow = env
+            .factory
+            .begin(&tenant)
+            .await
+            .expect("transazione aperta");
+        uow.users()
+            .find_by_id(tenant.user_id().expect("utente"))
+            .await
+            .expect("query riuscita")
+            .expect("utente visibile a sé stesso")
+            .email()
+            .clone()
+    };
+
+    let issued = InviteTenant::new(
+        Arc::clone(&env.factory),
+        Arc::new(OpaqueTokenGenerator),
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        &owner,
+        InviteTenantCommand {
+            lease_id: lease.id(),
+            email: tenant_email,
+            full_name: "Inquilino Invitato".to_owned(),
+        },
+    )
+    .await
+    .expect("invito emesso");
+
+    let restricted: Arc<dyn propflow_domain::ports::UnitOfWorkFactory> =
+        Arc::new(ApplicationPoolOnly(Arc::clone(&env.factory)));
+    let accepted = AcceptInvitation::new(
+        restricted,
+        Arc::new(OpaqueTokenGenerator),
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        &tenant,
+        AcceptInvitationCommand {
+            token: issued.token,
+        },
+    )
+    .await
+    .expect("accettazione riuscita con il solo pool applicativo");
+
+    assert_eq!(accepted.org_id, owner.org_id().expect("org"));
+    assert_eq!(accepted.role, OrgRole::Tenant);
+    assert_eq!(accepted.lease_id, Some(lease.id()));
+
+    // Le tre scritture sono avvenute, e nella stessa transazione: membership,
+    // collegamento della parte contrattuale, invito marcato.
+    let tenant_context = RequestContext::authenticated(tenant.user_id().expect("utente"))
+        .with_org(accepted.org_id, OrgRole::Tenant);
+    let mut uow = env
+        .factory
+        .begin(&tenant_context)
+        .await
+        .expect("transazione aperta");
+
+    let membership = uow
+        .members()
+        .find(accepted.org_id, tenant.user_id().expect("utente"))
+        .await
+        .expect("query riuscita")
+        .expect("membership creata");
+    assert_eq!(membership.role(), OrgRole::Tenant);
+    assert!(membership.is_active());
+
+    let parties = uow
+        .lease_parties()
+        .list_for_lease(lease.id())
+        .await
+        .expect("query riuscita");
+    assert!(
+        parties
+            .iter()
+            .any(|party| party.user_id() == tenant.user_id()),
+        "la parte contrattuale non è stata collegata all'utente"
+    );
+
+    // E ora l'inquilino vede il contratto: la visibilità passa da `lease_parties`.
+    let visible = uow
+        .leases()
+        .find_by_id(lease.id())
+        .await
+        .expect("query riuscita");
+    assert!(
+        visible.is_some(),
+        "l'inquilino non vede il contratto di cui è parte"
     );
 }

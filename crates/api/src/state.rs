@@ -1,7 +1,12 @@
 use std::sync::Arc;
 
-use propflow_application::ports::{PasswordHasher, RefreshTokenFactory, TokenIssuer};
+use propflow_application::ports::{
+    OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
+};
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::invitation::{
+    AcceptInvitation, InviteTenant, RevokeInvitation,
+};
 use propflow_application::use_cases::lease::{
     ActivateLease, AddLeaseParty, DraftLease, GetLease, ListLeases, TerminateLease,
 };
@@ -42,6 +47,10 @@ pub struct AppState {
     pub activate_lease: Arc<ActivateLease>,
     pub terminate_lease: Arc<TerminateLease>,
 
+    pub invite_tenant: Arc<InviteTenant>,
+    pub revoke_invitation: Arc<RevokeInvitation>,
+    pub accept_invitation: Arc<AcceptInvitation>,
+
     /// Serve al middleware di autenticazione per verificare gli access token.
     pub tokens: Arc<dyn TokenIssuer>,
     /// Serve al middleware per risolvere il ruolo quando il client cambia
@@ -57,6 +66,7 @@ pub struct Dependencies {
     pub hasher: Arc<dyn PasswordHasher>,
     pub tokens: Arc<dyn TokenIssuer>,
     pub refresh_tokens: Arc<dyn RefreshTokenFactory>,
+    pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,
     pub clock: Arc<dyn propflow_domain::ports::Clock>,
     pub pools: DatabasePools,
 }
@@ -69,6 +79,7 @@ impl AppState {
             hasher,
             tokens,
             refresh_tokens,
+            invitation_tokens,
             clock,
             pools,
         } = dependencies;
@@ -141,7 +152,24 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
-            terminate_lease: Arc::new(TerminateLease::new(Arc::clone(&unit_of_work), clock)),
+            terminate_lease: Arc::new(TerminateLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            invite_tenant: Arc::new(InviteTenant::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&clock),
+            )),
+            revoke_invitation: Arc::new(RevokeInvitation::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            accept_invitation: Arc::new(AcceptInvitation::new(
+                Arc::clone(&unit_of_work),
+                invitation_tokens,
+                clock,
+            )),
             tokens,
             unit_of_work,
             pools,

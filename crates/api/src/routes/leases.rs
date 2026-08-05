@@ -239,7 +239,7 @@ pub struct AddLeasePartyRequest {
     pub email: Option<String>,
     /// Quota di ripartizione del canone, 0–100. Se omessa, 100.
     #[serde(default)]
-    #[schema(value_type = Option<f64>)]
+    #[schema(value_type = Option<String>)]
     pub share_percent: Option<Decimal>,
     #[serde(default)]
     pub is_primary: Option<bool>,
@@ -354,7 +354,7 @@ pub struct LeasePartyResponse {
     pub full_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    #[schema(value_type = f64)]
+    #[schema(value_type = String)]
     pub share_percent: Decimal,
     pub is_primary: bool,
     pub joined_at: Option<NaiveDate>,

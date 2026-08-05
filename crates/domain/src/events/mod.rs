@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::identity::OrgRole;
-use crate::shared::{EventId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, UserId};
+use crate::shared::{
+    EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, UserId,
+};
 
 /// Evento di dominio pronto per l'outbox.
 ///
@@ -110,6 +112,9 @@ pub enum DomainEventPayload {
     LeaseActivated(LeaseActivated),
     LeaseTerminated(LeaseTerminated),
     LeasePartyAdded(LeasePartyAdded),
+    TenantInvited(TenantInvited),
+    InvitationRevoked(InvitationRevoked),
+    InvitationAccepted(InvitationAccepted),
 }
 
 impl DomainEventPayload {
@@ -128,6 +133,9 @@ impl DomainEventPayload {
             Self::LeaseActivated(_) => "lease.activated",
             Self::LeaseTerminated(_) => "lease.terminated",
             Self::LeasePartyAdded(_) => "lease.party.added",
+            Self::TenantInvited(_) => "identity.invitation.issued",
+            Self::InvitationRevoked(_) => "identity.invitation.revoked",
+            Self::InvitationAccepted(_) => "identity.invitation.accepted",
         }
     }
 
@@ -146,6 +154,9 @@ impl DomainEventPayload {
             | Self::LeaseActivated(_)
             | Self::LeaseTerminated(_)
             | Self::LeasePartyAdded(_) => "Lease",
+            Self::TenantInvited(_) | Self::InvitationRevoked(_) | Self::InvitationAccepted(_) => {
+                "Invitation"
+            }
         }
     }
 
@@ -164,6 +175,9 @@ impl DomainEventPayload {
             Self::LeaseActivated(event) => event.lease_id.as_uuid(),
             Self::LeaseTerminated(event) => event.lease_id.as_uuid(),
             Self::LeasePartyAdded(event) => event.lease_id.as_uuid(),
+            Self::TenantInvited(event) => event.invitation_id.as_uuid(),
+            Self::InvitationRevoked(event) => event.invitation_id.as_uuid(),
+            Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
         }
     }
 
@@ -182,6 +196,9 @@ impl DomainEventPayload {
             Self::LeaseActivated(event) => Some(event.org_id),
             Self::LeaseTerminated(event) => Some(event.org_id),
             Self::LeasePartyAdded(event) => Some(event.org_id),
+            Self::TenantInvited(event) => Some(event.org_id),
+            Self::InvitationRevoked(event) => Some(event.org_id),
+            Self::InvitationAccepted(event) => Some(event.org_id),
         }
     }
 }
@@ -314,5 +331,31 @@ pub struct LeasePartyAdded {
     pub lease_id: LeaseId,
     pub org_id: OrgId,
     pub party_id: LeasePartyId,
+    pub role: &'static str,
+}
+
+/// Nessuna email: è l'unico dato interessante dell'invito, ed è precisamente
+/// quello che un evento pubblicato su un broker non deve trasportare. Chi ha
+/// bisogno dell'indirizzo lo legge dall'aggregato.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TenantInvited {
+    pub invitation_id: InvitationId,
+    pub org_id: OrgId,
+    pub lease_id: Option<LeaseId>,
+    pub role: &'static str,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InvitationRevoked {
+    pub invitation_id: InvitationId,
+    pub org_id: OrgId,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InvitationAccepted {
+    pub invitation_id: InvitationId,
+    pub org_id: OrgId,
+    pub user_id: UserId,
+    pub lease_id: Option<LeaseId>,
     pub role: &'static str,
 }

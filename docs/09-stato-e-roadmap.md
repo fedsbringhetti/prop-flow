@@ -6,9 +6,9 @@ Stato al **5 agosto 2026**.
 
 ### Layer dati — completo per l'MVP
 
-Le 17 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 18 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 23 tabelle di business più `audit_log` partizionata, 35 enum,
-4 domini, 169 indici, 59 policy RLS, 49 trigger, 4 viste, 26 funzioni.
+6 domini, 169 indici, 64 policy RLS, 49 trigger, 4 viste, 28 funzioni.
 
 Coperti a schema: utenti e organizzazioni, immobili e stanze, contratti e parti
 contrattuali, documenti con allegato polimorfico, segnalazioni con thread e storico,
@@ -20,9 +20,9 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Componente | Stato |
 |---|---|
 | Workspace a 6 crate, vincoli verificati in CI | completo |
-| Dominio: value object, identità, immobili, stanze, contratti, eventi, porte | completo per la fetta |
+| Dominio: value object, identità, immobili, stanze, contratti, inviti, eventi, porte | completo per la fetta |
 | Unit of Work con contesto RLS, due pool | completo |
-| Repository: utenti, organizzazioni, membership, sessioni, immobili, stanze, contratti | completi |
+| Repository: utenti, organizzazioni, membership, sessioni, immobili, stanze, contratti, inviti | completi |
 | Outbox | completo |
 | Argon2id, EdDSA, refresh opachi con rotazione | completo |
 | Telemetria: log strutturati, OTLP | completo |
@@ -31,12 +31,13 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | CRUD immobili con PATCH parziale e archiviazione | completo |
 | CRUD stanze annidate sull'immobile | completo |
 | Contratti: bozza, parti, attivazione, disdetta, stati derivati | completo |
+| Inviti: emissione, revoca, accettazione senza pool privilegiato | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-98 test: 58 unitari di dominio, 7 applicativi, 4 di infrastruttura, 10 di
-integrazione sulla persistenza, 19 di contratto HTTP.
+110 test: 63 unitari di dominio, 8 applicativi, 5 di infrastruttura, 11 di
+integrazione sulla persistenza, 23 di contratto HTTP.
 
 ## Non implementato
 
@@ -45,18 +46,17 @@ integrazione sulla persistenza, 19 di contratto HTTP.
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Inviti** (`org_invitations`) — onboarding dell'inquilino.
-2. **Documenti** (`documents`) — richiede l'implementazione di `ObjectStorage`, già
+1. **Documenti** (`documents`) — richiede l'implementazione di `ObjectStorage`, già
    dichiarata come porta.
-3. **Segnalazioni** (`tickets`) — thread, storico, assegnazione.
-4. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
+2. **Segnalazioni** (`tickets`) — thread, storico, assegnazione.
+3. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
    `v_charge_balances` già disponibile.
-5. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
-6. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+4. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
+5. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
    `settlements`) — la vista dei saldi esiste già.
-7. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+6. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento.
-8. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
+7. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
 
 ### Trasversali mancanti
 
@@ -83,6 +83,14 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**Inviti** (punto 1). I contratti esistono, ma nessuno può ancora *diventare*
-inquilino dall'API: finché è così il ruolo `tenant` resta irraggiungibile e metà del
-prodotto non è verificabile end-to-end.
+**Documenti** (punto 1). L'anello bidirezionale è chiuso: il proprietario crea
+immobile, stanze e contratto, invita l'inquilino, e l'inquilino accetta e vede il
+proprio contratto e il proprio immobile — coperto da un test di contratto HTTP
+end-to-end. Da qui i moduli successivi non hanno più dipendenze bloccanti fra loro:
+i documenti vengono per primi perché richiedono l'unica porta già dichiarata e non
+implementata, `ObjectStorage`, e la stessa forma serve poi alle bollette.
+
+Manca invece l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
+adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
+proprietario. Va implementata prima di considerare l'onboarding pronto per utenti
+reali.

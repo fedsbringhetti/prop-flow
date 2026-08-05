@@ -237,7 +237,7 @@ pub struct UpdatePropertyRequest {
     #[serde(default)]
     pub address: Option<AddressDto>,
     #[serde(default, deserialize_with = "explicit_null")]
-    #[schema(value_type = Option<f64>, nullable)]
+    #[schema(value_type = Option<String>, nullable)]
     pub size_sqm: Patch<Decimal>,
     #[serde(default, deserialize_with = "explicit_null")]
     #[schema(value_type = Option<i32>, nullable)]
@@ -292,7 +292,8 @@ pub struct PropertyResponse {
     pub status: PropertyStatusDto,
     pub is_coliving: bool,
     pub address: AddressDto,
-    #[schema(value_type = Option<f64>)]
+    /// Stringa decimale: `Decimal` serializza come stringa, non come numero.
+    #[schema(value_type = Option<String>)]
     pub size_sqm: Option<Decimal>,
     pub rooms_count: Option<i16>,
     pub bathrooms_count: Option<i16>,

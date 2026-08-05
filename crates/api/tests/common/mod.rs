@@ -15,6 +15,7 @@ use propflow_api::state::{AppState, Dependencies};
 use propflow_infrastructure::db::PoolSettings;
 use propflow_infrastructure::security::{
     Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
+    OpaqueTokenGenerator,
 };
 use propflow_infrastructure::{DatabasePools, PgUnitOfWorkFactory, SystemClock};
 use tower::ServiceExt as _;
@@ -54,6 +55,7 @@ impl TestApp {
                 .expect("chiavi valide"),
             ),
             refresh_tokens: Arc::new(OpaqueRefreshTokenFactory::new(Duration::days(30))),
+            invitation_tokens: Arc::new(OpaqueTokenGenerator),
             clock: Arc::new(SystemClock),
             pools: pools.clone(),
         };
@@ -129,9 +131,27 @@ impl TestApp {
         token: Option<&str>,
         body: Option<serde_json::Value>,
     ) -> (StatusCode, serde_json::Value) {
+        self.send_in_org(method, path, token, None, body).await
+    }
+
+    /// Come [`TestApp::send`] ma con l'header `X-Org-Id`.
+    ///
+    /// Serve all'inquilino: il suo access token porta l'organizzazione personale,
+    /// e per leggere i dati dell'organizzazione del proprietario deve dichiararla.
+    pub async fn send_in_org(
+        &self,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        org: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
         let mut builder = Request::builder().method(method).uri(path);
         if let Some(token) = token {
             builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        if let Some(org) = org {
+            builder = builder.header("x-org-id", org);
         }
         let request = match body {
             Some(json) => builder
@@ -152,7 +172,15 @@ pub fn unique_email(prefix: &str) -> String {
 
 /// Registra un proprietario e restituisce (access_token, org_id).
 pub async fn register_and_login(app: &TestApp, prefix: &str) -> (String, String) {
-    let email = unique_email(prefix);
+    let (token, org, _) = register_and_login_with_email(app, &unique_email(prefix)).await;
+    (token, org)
+}
+
+/// Come [`register_and_login`] ma con un'email scelta dal chiamante: serve
+/// all'inquilino, che deve registrarsi con **la stessa** email dell'invito.
+/// Restituisce (access_token, org_id, email).
+pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (String, String, String) {
+    let email = email.to_owned();
     let password = "cavallo batteria graffetta";
 
     let (status, _) = app
@@ -183,5 +211,5 @@ pub async fn register_and_login(app: &TestApp, prefix: &str) -> (String, String)
         .as_str()
         .expect("organizzazione")
         .to_owned();
-    (token, org)
+    (token, org, email)
 }

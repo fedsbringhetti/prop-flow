@@ -17,7 +17,7 @@ specifica sbagliata è peggio di nessuna specifica.
 | Formato | JSON. Errori in `application/problem+json` |
 | Nomi | `snake_case` nei corpi, `kebab-case` nei percorsi |
 | Enum sul filo | `snake_case` (`apartment`, `partially_rented`) tranne le classi energetiche, maiuscole (`A4`, `G`) |
-| Importi | stringhe decimali (`"62.50"`), non float: un binario a virgola mobile non rappresenta esattamente 0.10 |
+| Importi | stringhe decimali (`"62.50"`), non float: un binario a virgola mobile non rappresenta esattamente 0.10. Vale per ogni valore decimale, comprese percentuali e metrature |
 | Date | ISO 8601 UTC |
 | Creazione | `201` con la risorsa nel corpo |
 | Eliminazione | `204` senza corpo (è un'archiviazione) |
@@ -229,6 +229,37 @@ resta nei log:
 
 Immobile e stanza sono distinti nel messaggio: in un co-living "l'immobile è
 occupato" sarebbe falso, perché le altre stanze restano libere.
+
+### Inviti
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/leases/{id}/invitations` | staff | `201` con il token da consegnare. `409` se c'è già un invito pendente per quell'email |
+| DELETE | `/api/v1/invitations/{id}` | staff | `204`. `409` se già accettato |
+| POST | `/api/v1/auth/accept-invitation` | autenticato | `200`. `401` se il token è sconosciuto, scaduto o revocato; `409` se già accettato |
+
+Emettere l'invito crea anche la **parte contrattuale** con `user_id` nullo, se non
+esiste già una riga con quella email: è ciò che l'invitato collegherà a sé, e senza
+di essa accettare non lo renderebbe parte di nulla.
+
+Il token in chiaro esiste **solo** nella risposta a `POST .../invitations`, come il
+refresh token: in database ne resta lo hash. L'invio dell'email non è implementato —
+la porta `Notifier` è dichiarata e senza adattatore — quindi è il proprietario a
+consegnare il token.
+
+`accept-invitation` richiede l'autenticazione ma **non** l'appartenenza: è
+l'operazione che la crea. Chi accetta non deve passare `X-Org-Id`, perché di quella
+organizzazione non è ancora membro; dopo l'accettazione sì, oppure attende il
+prossimo login.
+
+Un token sconosciuto e un token valido intestato a un'altra email danno lo stesso
+`401` con lo stesso corpo: distinguerli sarebbe un oracolo per capire quali inviti
+esistono. Un invito **già accettato** dà invece `409`, perché chi presenta quel token
+è la persona giusta e merita di sapere che l'operazione è già avvenuta.
+
+Un invito può conferire soltanto il ruolo `tenant`. Il vincolo è nel dominio e
+ripetuto nella policy di riga: nominare uno staff passa da chi amministra
+l'organizzazione, non da un token spedito per email.
 
 Esempio di creazione:
 

@@ -63,6 +63,7 @@ typed_id!(PropertyId, "un immobile");
 typed_id!(RoomId, "una stanza");
 typed_id!(LeaseId, "un contratto di locazione");
 typed_id!(LeasePartyId, "una parte contrattuale");
+typed_id!(InvitationId, "un invito");
 typed_id!(SessionId, "una sessione di refresh");
 typed_id!(EventId, "un evento di dominio");
 

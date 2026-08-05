@@ -68,7 +68,7 @@ pub struct CreateRoomRequest {
     #[serde(default)]
     pub status: Option<RoomStatusDto>,
     #[serde(default)]
-    #[schema(value_type = Option<f64>)]
+    #[schema(value_type = Option<String>)]
     pub size_sqm: Option<Decimal>,
     #[serde(default)]
     pub floor: Option<i16>,
@@ -81,7 +81,7 @@ pub struct CreateRoomRequest {
     pub monthly_rent: Option<String>,
     /// Quota di ripartizione delle utenze, 0–100. Assente significa "in parti uguali".
     #[serde(default)]
-    #[schema(value_type = Option<f64>)]
+    #[schema(value_type = Option<String>)]
     pub utility_share_percent: Option<Decimal>,
 }
 
@@ -116,7 +116,7 @@ pub struct UpdateRoomRequest {
     #[serde(default)]
     pub status: Option<RoomStatusDto>,
     #[serde(default, deserialize_with = "explicit_null")]
-    #[schema(value_type = Option<f64>, nullable)]
+    #[schema(value_type = Option<String>, nullable)]
     pub size_sqm: Patch<Decimal>,
     #[serde(default, deserialize_with = "explicit_null")]
     #[schema(value_type = Option<i32>, nullable)]
@@ -130,7 +130,7 @@ pub struct UpdateRoomRequest {
     #[schema(value_type = Option<String>, nullable)]
     pub monthly_rent: Patch<String>,
     #[serde(default, deserialize_with = "explicit_null")]
-    #[schema(value_type = Option<f64>, nullable)]
+    #[schema(value_type = Option<String>, nullable)]
     pub utility_share_percent: Patch<Decimal>,
 }
 
@@ -165,7 +165,7 @@ pub struct RoomResponse {
     pub organization_id: Uuid,
     pub name: String,
     pub status: RoomStatusDto,
-    #[schema(value_type = Option<f64>)]
+    #[schema(value_type = Option<String>)]
     pub size_sqm: Option<Decimal>,
     pub floor: Option<i16>,
     pub has_private_bathroom: bool,
@@ -175,7 +175,7 @@ pub struct RoomResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monthly_rent: Option<String>,
     pub currency: String,
-    #[schema(value_type = Option<f64>)]
+    #[schema(value_type = Option<String>)]
     pub utility_share_percent: Option<Decimal>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
