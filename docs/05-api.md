@@ -149,6 +149,29 @@ organizzazione. Non può crearli né modificarli: `403`.
 Lo stato non si porta ad `archived` con un PATCH — l'archiviazione ha effetti propri
 (soft delete, evento dedicato) e ha il suo verbo. Il tentativo dà `409`.
 
+### Stanze
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/properties/{property_id}/rooms` | staff | `201`, stato iniziale `available` |
+| GET | `/api/v1/properties/{property_id}/rooms` | membro | `200` con `items`, `404` se l'immobile non è visibile |
+| PATCH | `/api/v1/rooms/{id}` | staff | `200`. `409` se archiviata o se il nome è già usato |
+| DELETE | `/api/v1/rooms/{id}` | staff | `204`. Archiviazione |
+
+Creazione ed elenco sono annidati sotto l'immobile perché una stanza non ha vita
+propria; modifica e archiviazione vanno per id, perché il percorso dell'immobile non
+aggiungerebbe nulla e obbligherebbe il client a portarselo dietro.
+
+Un `property_id` non visibile dà `404` e non `403`, anche in scrittura: senza il
+controllo la richiesta arriverebbe al trigger di coerenza o alle policy di riga, e il
+chiamante vedrebbe un `409` o un `403` dove la risposta corretta è "non esiste".
+
+`monthly_rent` è una stringa decimale (`"450.00"`) come tutti gli importi. Il nome è
+unico dentro l'immobile fra le stanze non archiviate: archiviarne una libera il nome.
+
+L'elenco delle stanze non è paginato — sono poche per costruzione — e la risposta ha
+la forma `{ "items": [ … ] }` senza `next_cursor`.
+
 Esempio di creazione:
 
 ```bash

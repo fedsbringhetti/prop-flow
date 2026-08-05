@@ -60,7 +60,7 @@ Quattro livelli, ciascuno con un compito diverso.
 | Integrazione persistenza | `crates/infrastructure/tests/` | query, contesto RLS, atomicità di comando ed evento | **sì** |
 | Contratto HTTP | `crates/api/tests/` | codici di stato, formato degli errori, autorizzazione | **sì** |
 
-Attualmente **54 test**.
+Attualmente **67 test**.
 
 ### Perché i test di integrazione usano un database reale
 

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::identity::OrgRole;
-use crate::shared::{EventId, OrgId, PropertyId, UserId};
+use crate::shared::{EventId, OrgId, PropertyId, RoomId, UserId};
 
 /// Evento di dominio pronto per l'outbox.
 ///
@@ -103,6 +103,9 @@ pub enum DomainEventPayload {
     PropertyCreated(PropertyCreated),
     PropertyUpdated(PropertyUpdated),
     PropertyArchived(PropertyArchived),
+    RoomCreated(RoomCreated),
+    RoomUpdated(RoomUpdated),
+    RoomArchived(RoomArchived),
 }
 
 impl DomainEventPayload {
@@ -114,6 +117,9 @@ impl DomainEventPayload {
             Self::PropertyCreated(_) => "property.created",
             Self::PropertyUpdated(_) => "property.updated",
             Self::PropertyArchived(_) => "property.archived",
+            Self::RoomCreated(_) => "property.room.created",
+            Self::RoomUpdated(_) => "property.room.updated",
+            Self::RoomArchived(_) => "property.room.archived",
         }
     }
 
@@ -125,6 +131,7 @@ impl DomainEventPayload {
             Self::PropertyCreated(_) | Self::PropertyUpdated(_) | Self::PropertyArchived(_) => {
                 "Property"
             }
+            Self::RoomCreated(_) | Self::RoomUpdated(_) | Self::RoomArchived(_) => "Room",
         }
     }
 
@@ -136,6 +143,9 @@ impl DomainEventPayload {
             Self::PropertyCreated(event) => event.property_id.as_uuid(),
             Self::PropertyUpdated(event) => event.property_id.as_uuid(),
             Self::PropertyArchived(event) => event.property_id.as_uuid(),
+            Self::RoomCreated(event) => event.room_id.as_uuid(),
+            Self::RoomUpdated(event) => event.room_id.as_uuid(),
+            Self::RoomArchived(event) => event.room_id.as_uuid(),
         }
     }
 
@@ -147,6 +157,9 @@ impl DomainEventPayload {
             Self::PropertyCreated(event) => Some(event.org_id),
             Self::PropertyUpdated(event) => Some(event.org_id),
             Self::PropertyArchived(event) => Some(event.org_id),
+            Self::RoomCreated(event) => Some(event.org_id),
+            Self::RoomUpdated(event) => Some(event.org_id),
+            Self::RoomArchived(event) => Some(event.org_id),
         }
     }
 }
@@ -194,6 +207,50 @@ impl PropertyArchived {
     #[must_use]
     pub const fn new(property_id: PropertyId, org_id: OrgId, role: OrgRole) -> Self {
         Self {
+            property_id,
+            org_id,
+            archived_by_role: role.as_str(),
+        }
+    }
+}
+
+/// Una stanza porta sempre l'immobile che la contiene: chi consuma l'evento
+/// invalida la scheda dell'immobile senza dover risalire la relazione.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomCreated {
+    pub room_id: RoomId,
+    pub property_id: PropertyId,
+    pub org_id: OrgId,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomUpdated {
+    pub room_id: RoomId,
+    pub property_id: PropertyId,
+    pub org_id: OrgId,
+    /// Nomi dei campi modificati, non i valori: il canone di una stanza non
+    /// deve viaggiare su un broker.
+    pub changed_fields: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomArchived {
+    pub room_id: RoomId,
+    pub property_id: PropertyId,
+    pub org_id: OrgId,
+    pub archived_by_role: &'static str,
+}
+
+impl RoomArchived {
+    #[must_use]
+    pub const fn new(
+        room_id: RoomId,
+        property_id: PropertyId,
+        org_id: OrgId,
+        role: OrgRole,
+    ) -> Self {
+        Self {
+            room_id,
             property_id,
             org_id,
             archived_by_role: role.as_str(),

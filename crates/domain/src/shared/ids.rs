@@ -60,6 +60,7 @@ macro_rules! typed_id {
 typed_id!(OrgId, "un'organizzazione");
 typed_id!(UserId, "un utente");
 typed_id!(PropertyId, "un immobile");
+typed_id!(RoomId, "una stanza");
 typed_id!(SessionId, "una sessione di refresh");
 typed_id!(EventId, "un evento di dominio");
 

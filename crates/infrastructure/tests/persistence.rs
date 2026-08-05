@@ -18,10 +18,12 @@ use propflow_application::use_cases::property::{
     ArchiveProperty, ArchivePropertyCommand, CreateProperty, CreatePropertyCommand, ListProperties,
     ListPropertiesQuery,
 };
+use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_domain::RequestContext;
 use propflow_domain::identity::OrgRole;
-use propflow_domain::property::PropertyType;
-use propflow_domain::shared::{Address, CountryCode, PropertyId};
+use propflow_domain::ports::RepositoryError;
+use propflow_domain::property::{PropertyType, Room, RoomChanges};
+use propflow_domain::shared::{Address, CountryCode, PropertyId, RoomId};
 
 fn address(city: &str) -> Address {
     Address::new(
@@ -290,5 +292,108 @@ async fn archiving_is_a_soft_delete_and_the_app_role_cannot_hard_delete() {
         error.to_string().contains("permission denied")
             || error.to_string().contains("insufficient"),
         "errore inatteso: {error}"
+    );
+}
+
+/// Crea un immobile e restituisce il suo identificatore.
+async fn create_property(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    label: &str,
+    city: &str,
+) -> PropertyId {
+    CreateProperty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            CreatePropertyCommand {
+                label: label.to_owned(),
+                property_type: PropertyType::Apartment,
+                address: address(city),
+            },
+        )
+        .await
+        .expect("creazione riuscita")
+        .id()
+}
+
+#[tokio::test]
+async fn rooms_are_written_and_read_back_through_their_property() {
+    let env = require_db!();
+    let context = register_owner(&env, "stanze").await;
+    let property_id = create_property(&env, &context, "Casa in condivisione", "Padova").await;
+
+    let create = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let room = create
+        .execute(
+            &context,
+            CreateRoomCommand {
+                property_id,
+                name: "Camera A".to_owned(),
+                attributes: RoomChanges {
+                    monthly_rent: Some(Some("450.00".parse().expect("decimale valido"))),
+                    utility_share_percent: Some(Some("33.33".parse().expect("decimale valido"))),
+                    has_private_bathroom: Some(true),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .expect("creazione della stanza riuscita");
+
+    // La rilettura passa dal database: verifica insieme i cast su
+    // `app.money_amount`, `app.percentage` e l'enum `room_status`.
+    let rooms = ListRooms::new(Arc::clone(&env.factory))
+        .execute(&context, property_id)
+        .await
+        .expect("elenco riuscito");
+    let stored = rooms
+        .iter()
+        .find(|item| item.id() == room.id())
+        .expect("stanza presente nell'elenco");
+    assert_eq!(stored.name(), "Camera A");
+    assert_eq!(
+        stored
+            .monthly_rent()
+            .map(|money| money.amount().to_string()),
+        Some("450.00".to_owned())
+    );
+    assert_eq!(
+        stored
+            .utility_share_percent()
+            .map(|value| value.to_string()),
+        Some("33.33".to_owned())
+    );
+    assert!(stored.has_private_bathroom());
+}
+
+#[tokio::test]
+async fn a_room_cannot_be_attached_to_a_property_of_another_organization() {
+    let env = require_db!();
+    let alfa = register_owner(&env, "stitching-alfa").await;
+    let beta = register_owner(&env, "stitching-beta").await;
+    let alfa_property = create_property(&env, &alfa, "Immobile di Alfa", "Verona").await;
+
+    // Stanza dichiarata nell'organizzazione Beta ma agganciata a un immobile di
+    // Alfa: sarebbe una riga invisibile alla RLS di entrambe, e quindi non più
+    // correggibile dall'interfaccia. Il trigger `assert_org_matches_property` la
+    // rifiuta prima che esista.
+    let room = Room::create(
+        RoomId::generate(),
+        beta.org_id().expect("org"),
+        alfa_property,
+        "Camera rubata",
+        chrono::Utc::now(),
+    )
+    .expect("aggregato valido: il dominio non conosce le organizzazioni altrui");
+
+    let mut uow = env.factory.begin(&beta).await.expect("transazione aperta");
+    let error = uow
+        .rooms()
+        .insert(&room)
+        .await
+        .expect_err("il cross-org stitching doveva essere rifiutato");
+    assert!(
+        matches!(error, RepositoryError::Integrity { .. }),
+        "atteso Integrity, ottenuto {error:?}"
     );
 }

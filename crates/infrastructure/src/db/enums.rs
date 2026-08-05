@@ -9,7 +9,7 @@
 
 use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, UserStatus};
 use propflow_domain::ports::RepositoryError;
-use propflow_domain::property::{EnergyClass, PropertyStatus, PropertyType};
+use propflow_domain::property::{EnergyClass, PropertyStatus, PropertyType, RoomStatus};
 
 fn unknown(kind: &'static str, value: &str) -> RepositoryError {
     RepositoryError::Backend {
@@ -88,6 +88,12 @@ string_enum!("property_status", PropertyStatus, property_status_to_db, property_
     Archived => "archived",
 });
 
+string_enum!("room_status", RoomStatus, room_status_to_db, room_status_from_db, {
+    Available => "available",
+    Occupied => "occupied",
+    Unavailable => "unavailable",
+});
+
 // Le classi energetiche restano maiuscole anche nel database: 'A4', 'B', 'G'.
 string_enum!("energy_class", EnergyClass, energy_class_to_db, energy_class_from_db, {
     A4 => "A4",
@@ -122,6 +128,16 @@ mod tests {
         ] {
             assert_eq!(
                 property_status_from_db(property_status_to_db(status)).expect("noto"),
+                status
+            );
+        }
+        for status in [
+            RoomStatus::Available,
+            RoomStatus::Occupied,
+            RoomStatus::Unavailable,
+        ] {
+            assert_eq!(
+                room_status_from_db(room_status_to_db(status)).expect("noto"),
                 status
             );
         }

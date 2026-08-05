@@ -5,6 +5,7 @@ use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase
 use propflow_application::use_cases::property::{
     ArchiveProperty, CreateProperty, GetProperty, ListProperties, UpdateProperty,
 };
+use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_infrastructure::DatabasePools;
 
@@ -25,6 +26,11 @@ pub struct AppState {
     pub list_properties: Arc<ListProperties>,
     pub update_property: Arc<UpdateProperty>,
     pub archive_property: Arc<ArchiveProperty>,
+
+    pub create_room: Arc<CreateRoom>,
+    pub list_rooms: Arc<ListRooms>,
+    pub update_room: Arc<UpdateRoom>,
+    pub archive_room: Arc<ArchiveRoom>,
 
     /// Serve al middleware di autenticazione per verificare gli access token.
     pub tokens: Arc<dyn TokenIssuer>,
@@ -91,7 +97,20 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
-            archive_property: Arc::new(ArchiveProperty::new(Arc::clone(&unit_of_work), clock)),
+            archive_property: Arc::new(ArchiveProperty::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            create_room: Arc::new(CreateRoom::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            list_rooms: Arc::new(ListRooms::new(Arc::clone(&unit_of_work))),
+            update_room: Arc::new(UpdateRoom::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            archive_room: Arc::new(ArchiveRoom::new(Arc::clone(&unit_of_work), clock)),
             tokens,
             unit_of_work,
             pools,

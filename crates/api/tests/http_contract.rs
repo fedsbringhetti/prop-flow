@@ -302,3 +302,151 @@ async fn openapi_document_is_served() {
         "rotta assente dal documento"
     );
 }
+
+/// Crea un immobile e restituisce il suo id.
+async fn create_property(app: &TestApp, token: &str, label: &str) -> String {
+    let (status, created) = app
+        .post_auth(
+            "/api/v1/properties",
+            token,
+            serde_json::json!({
+                "label": label,
+                "property_type": "apartment",
+                "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    created["id"].as_str().expect("id").to_owned()
+}
+
+#[tokio::test]
+async fn full_room_lifecycle() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "stanze").await;
+    let property = create_property(&app, &token, "Casa in condivisione").await;
+
+    let (status, created) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &token,
+            serde_json::json!({
+                "name": "Camera A",
+                "monthly_rent": "450.00",
+                "has_private_bathroom": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["status"], "available");
+    // Gli importi sul filo sono stringhe, non float.
+    assert_eq!(created["monthly_rent"], "450.00");
+    assert_eq!(created["has_private_bathroom"], true);
+    let room = created["id"].as_str().expect("id").to_owned();
+
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}/rooms"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "corpo: {page}"
+    );
+
+    // Modifica parziale, con azzeramento esplicito del canone.
+    let (status, patched) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/rooms/{room}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "occupied", "monthly_rent": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {patched}");
+    assert_eq!(patched["status"], "occupied");
+    assert!(
+        patched.get("monthly_rent").is_none(),
+        "canone non azzerato: {patched}"
+    );
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/rooms/{room}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // Dopo l'archiviazione la stanza non compare più nell'elenco.
+    let (_, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}/rooms"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(0),
+        "corpo: {page}"
+    );
+}
+
+#[tokio::test]
+async fn a_room_on_someone_elses_property_is_not_found() {
+    let app = require_app!();
+    let (alfa, _) = common::register_and_login(&app, "stanza-alfa").await;
+    let (beta, _) = common::register_and_login(&app, "stanza-beta").await;
+    let property = create_property(&app, &alfa, "Immobile di Alfa").await;
+
+    // 404 e non 403: un 403 confermerebbe che l'immobile esiste.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &beta,
+            serde_json::json!({ "name": "Camera abusiva" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
+}
+
+#[tokio::test]
+async fn two_rooms_cannot_share_a_name_in_the_same_property() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "nomi").await;
+    let property = create_property(&app, &token, "Casa con nomi ripetuti").await;
+    let body = serde_json::json!({ "name": "Camera A" });
+
+    let (first, _) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &token,
+            body.clone(),
+        )
+        .await;
+    assert_eq!(first, StatusCode::CREATED);
+
+    let (second, problem) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &token,
+            body,
+        )
+        .await;
+    assert_eq!(second, StatusCode::CONFLICT, "corpo: {problem}");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("stanza")),
+        "il conflitto deve dire cosa è duplicato: {problem}"
+    );
+}

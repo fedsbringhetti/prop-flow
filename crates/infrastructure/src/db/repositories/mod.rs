@@ -12,5 +12,6 @@
 mod member;
 mod organization;
 mod property;
+mod room;
 mod session;
 mod user;

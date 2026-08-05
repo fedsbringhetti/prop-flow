@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::events::DomainEvent;
 use crate::identity::{OrgMember, Organization, RefreshSession, TokenHash, User};
-use crate::property::{Property, PropertyStatus};
-use crate::shared::{Email, OrgId, PropertyId, UserId};
+use crate::property::{Property, PropertyStatus, Room};
+use crate::shared::{Email, OrgId, PropertyId, RoomId, UserId};
 
 /// Errori della persistenza espressi senza nominare la tecnologia.
 ///
@@ -115,6 +115,22 @@ pub trait PropertyRepository: Send {
     /// portato ad archiviato in un solo statement. Il ruolo applicativo non ha
     /// nemmeno il privilegio `DELETE`.
     async fn soft_delete(&mut self, property: &Property) -> RepositoryResult<()>;
+}
+
+/// Stanze di un immobile.
+///
+/// Non c'è un `list` generale né una paginazione: una stanza non ha vita propria
+/// e si legge sempre attraverso l'immobile che la contiene, dove il numero di
+/// righe è per costruzione piccolo.
+#[async_trait]
+pub trait RoomRepository: Send {
+    async fn find_by_id(&mut self, id: RoomId) -> RepositoryResult<Option<Room>>;
+    async fn list_for_property(&mut self, property_id: PropertyId) -> RepositoryResult<Vec<Room>>;
+    async fn insert(&mut self, room: &Room) -> RepositoryResult<()>;
+    async fn update(&mut self, room: &Room) -> RepositoryResult<()>;
+    /// Soft delete: la riga resta con `deleted_at` valorizzato, perché i
+    /// contratti per stanza continuano a riferirsi a essa.
+    async fn soft_delete(&mut self, room: &Room) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa

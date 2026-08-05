@@ -25,6 +25,10 @@ use utoipa::{Modify, OpenApi};
         crate::routes::properties::detail,
         crate::routes::properties::update,
         crate::routes::properties::archive,
+        crate::routes::rooms::create,
+        crate::routes::rooms::list,
+        crate::routes::rooms::update,
+        crate::routes::rooms::archive,
     ),
     components(schemas(
         crate::error::ProblemDetails,
@@ -43,11 +47,17 @@ use utoipa::{Modify, OpenApi};
         crate::routes::properties::PropertyTypeDto,
         crate::routes::properties::PropertyStatusDto,
         crate::routes::properties::EnergyClassDto,
+        crate::routes::rooms::CreateRoomRequest,
+        crate::routes::rooms::UpdateRoomRequest,
+        crate::routes::rooms::RoomResponse,
+        crate::routes::rooms::RoomListResponse,
+        crate::routes::rooms::RoomStatusDto,
     )),
     modifiers(&BearerAuth),
     tags(
         (name = "autenticazione", description = "Registrazione, accesso e rotazione dei token"),
         (name = "immobili", description = "Gestione del patrimonio"),
+        (name = "stanze", description = "Stanze di un immobile in co-living"),
         (name = "sistema", description = "Liveness e readiness"),
     )
 )]
