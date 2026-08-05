@@ -170,13 +170,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Il binario installato sul runner, non l'action containerizzata: quella gira
+      # in un'immagine Alpine con un Rust proprio, dove il pin di
+      # rust-toolchain.toml non esiste e rustup emette un errore fuorviante. Qui il
+      # toolchain si risolve normalmente, non serve il pull di un'immagine da
+      # 239 MB, e l'output di cargo-deny compare nel log del passo.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
       # advisories: CVE note e crate ritirati. bans: versioni duplicate della
-      # stessa libreria. sources: nessuna dipendenza da registry o git non attesi.
+      # stessa libreria e wildcard verso crates.io. sources: nessuna dipendenza da
+      # registry o git non attesi.
       # Il controllo delle licenze richiede una allow-list curata e arriverà con
       # quella: un gate che dà falsi rossi viene disattivato entro una settimana.
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check advisories bans sources
+      - name: cargo-deny
+        run: cargo deny --all-features check advisories bans sources
 
   # ---------------------------------------------------------------------------
   # Job di riepilogo: è l'unico che conviene richiedere nella protezione del
