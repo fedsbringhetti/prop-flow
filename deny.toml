@@ -12,13 +12,36 @@ version = 2
 # Un crate ritirato dal registry non deve restare in un lockfile che dichiariamo
 # riproducibile.
 yanked = "deny"
-ignore = []
+# Le deroghe sono motivate per iscritto: una deroga senza motivo diventa permanente
+# per dimenticanza, e nessuno sa più se valga ancora.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = """
+Marvin Attack: timing sidechannel nella decifratura RSA di `rsa` 0.9.x, tirato
+nell'albero da jsonwebtoken con la feature `rust_crypto`.
+
+Non raggiungibile da questo codice: si firma e si verifica esclusivamente con EdDSA
+(Ed25519) — gli unici `Algorithm::` presenti sono `EdDSA` per i token e `Argon2id`
+per le password. Il crate viene compilato ma nessun percorso RSA viene eseguito.
+
+Non è eliminabile: la feature `rust_crypto` include `dep:rsa` senza possibilità di
+escluderlo, e l'alternativa `aws_lc_rs` richiederebbe un toolchain C e cmake
+nell'immagine di build, che è la ragione per cui `rust_crypto` è stata scelta.
+L'advisory non ha una versione corretta: 0.9.10 è l'ultima pubblicata.
+
+Da rivalutare se jsonwebtoken rende `rsa` opzionale, o se esce una versione di `rsa`
+che corregge il problema.""" },
+]
 
 [bans]
 # Versioni duplicate della stessa libreria: segnalate, non bloccanti. Nell'albero
 # di sqlx e del toolkit async sono spesso inevitabili e imposte da terzi.
 multiple-versions = "warn"
 wildcards = "deny"
+# Le path dependency interne non dichiarano una versione, quindi contano come
+# wildcard. Sono crate privati, mai pubblicati, e il percorso li fissa esattamente:
+# il divieto serve contro un `dep = "*"` verso crates.io, non contro i membri del
+# workspace.
+allow-wildcard-paths = true
 # Nessuna dipendenza vietata per ora. Esempio di uso futuro:
 # deny = [{ crate = "openssl", reason = "si usa rustls" }]
 deny = []
