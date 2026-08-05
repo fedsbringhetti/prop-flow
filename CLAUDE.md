@@ -106,10 +106,15 @@ possibile.
 
 - **Si verifica prima di committare, e i commit si concordano.** Implementa,
   esegui la suite completa, presenta il risultato, *poi* prepara i commit.
-- **Conventional Commits.** Il corpo spiega il **perché**, non il cosa: il diff
-  dice già cosa è cambiato. Vedi `git log` per il registro esistente.
+- **Conventional Commits, scritti in inglese.** Messaggi di commit, titoli e corpi
+  delle PR vanno in inglese. Il codice, i commenti e `docs/` restano in italiano:
+  la cronologia git è la parte del progetto che sopravvive ai contributori e che
+  un lettore esterno incontra per prima. Vedi `git log` per il registro esistente.
+  Il corpo spiega il **perché**, non il cosa: il diff dice già cosa è cambiato.
 - **Nessuna autoreferenza dell'assistente** nei messaggi di commit, nei corpi
-  delle PR, nei commenti.
+  delle PR, nei commenti: né firme, né `Co-Authored-By`, né riferimenti a come il
+  cambiamento è stato prodotto o a documenti di pianificazione esterni al
+  repository. Un commit si spiega da sé a chi lo leggerà fra un anno.
 - **Branch:** `<tipo>/<descrizione-kebab>`. `dev` è il branch di integrazione,
   `main` la linea stabile. Mai committare direttamente su `main` o `dev`.
 - **PR in stack:** la base è il branch padre, non `dev`. Non usare *squash* sul
