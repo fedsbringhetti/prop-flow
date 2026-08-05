@@ -9,6 +9,8 @@
 //! decodifica indipendente dalla risoluzione degli OID dei tipi definiti
 //! dall'utente, che varia con `search_path` e cache di connessione.
 
+mod lease;
+mod lease_party;
 mod member;
 mod organization;
 mod property;

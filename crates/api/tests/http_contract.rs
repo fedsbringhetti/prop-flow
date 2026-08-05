@@ -450,3 +450,292 @@ async fn two_rooms_cannot_share_a_name_in_the_same_property() {
         "il conflitto deve dire cosa è duplicato: {problem}"
     );
 }
+
+fn day(offset: i64) -> String {
+    (chrono::Utc::now().date_naive() + chrono::Duration::days(offset)).to_string()
+}
+
+/// Redige un contratto sull'immobile indicato e restituisce il suo id.
+async fn draft_lease(
+    app: &TestApp,
+    token: &str,
+    property: &str,
+    room: Option<&str>,
+    start_offset: i64,
+    end_offset: Option<i64>,
+) -> String {
+    let mut body = serde_json::json!({
+        "property_id": property,
+        "start_date": day(start_offset),
+        "rent_amount": "800.00",
+    });
+    if let Some(room) = room {
+        body["room_id"] = serde_json::json!(room);
+    }
+    if let Some(offset) = end_offset {
+        body["end_date"] = serde_json::json!(day(offset));
+    }
+
+    let (status, created) = app.post_auth("/api/v1/leases", token, body).await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    created["id"].as_str().expect("id").to_owned()
+}
+
+/// Aggiunge un inquilino al 100% al contratto indicato.
+async fn add_tenant(app: &TestApp, token: &str, lease: &str, name: &str, email: Option<&str>) {
+    let mut body = serde_json::json!({ "full_name": name, "is_primary": true });
+    if let Some(email) = email {
+        body["email"] = serde_json::json!(email);
+    }
+    let (status, created) = app
+        .post_auth(&format!("/api/v1/leases/{lease}/parties"), token, body)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+}
+
+#[tokio::test]
+async fn full_lease_lifecycle() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "contratto").await;
+    let property = create_property(&app, &token, "Immobile da affittare").await;
+
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    // Una bozza non è in essere, e il tipo si deduce dall'assenza della stanza.
+    let (status, drafted) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {drafted}");
+    assert_eq!(drafted["status"], "draft");
+    assert_eq!(drafted["effective_status"], "draft");
+    assert_eq!(drafted["lease_type"], "whole_property");
+    // Gli importi sul filo sono stringhe; il deposito assente diventa zero.
+    assert_eq!(drafted["rent_amount"], "800.00");
+    assert_eq!(drafted["deposit_amount"], "0.00");
+    assert_eq!(drafted["parties"].as_array().map(Vec::len), Some(0));
+
+    // Senza inquilini l'attivazione è rifiutata: un contratto attivo senza parti
+    // non sarebbe addebitabile.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+
+    add_tenant(&app, &token, &lease, "Mario Rossi", None).await;
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    assert_eq!(activated["status"], "active");
+    assert_eq!(activated["effective_status"], "active");
+    assert!(activated["signed_at"].is_string(), "corpo: {activated}");
+
+    // L'elenco filtrato per contratti in essere lo contiene.
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases?property_id={property}&in_force=true"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "corpo: {page}"
+    );
+
+    let (status, terminated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/terminate"),
+            &token,
+            serde_json::json!({ "reason": "trasferimento" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {terminated}");
+    assert_eq!(terminated["status"], "terminated");
+    assert!(terminated["terminated_at"].is_string());
+
+    // Disdirlo due volte non è ammesso.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/terminate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn an_overlapping_activation_says_what_is_occupied() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "conflitto").await;
+    let property = create_property(&app, &token, "Immobile conteso").await;
+
+    let first = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &first, "Primo Inquilino", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{first}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let second = draft_lease(&app, &token, &property, None, 180, Some(540)).await;
+    add_tenant(&app, &token, &second, "Secondo Inquilino", None).await;
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{second}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    // Il nome del vincolo resta nei log: la risposta dice cosa è occupato.
+    let detail = problem["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("immobile") && detail.contains("periodo"),
+        "il 409 deve essere parlante: {problem}"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_lease_reports_its_derived_status() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "scaduto").await;
+    let property = create_property(&app, &token, "Immobile con contratto finito").await;
+
+    let lease = draft_lease(&app, &token, &property, None, -730, Some(-30)).await;
+    add_tenant(&app, &token, &lease, "Ex Inquilino", None).await;
+    app.post_auth(
+        &format!("/api/v1/leases/{lease}/activate"),
+        &token,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let (status, body) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "active", "lo stato memorizzato non cambia");
+    assert_eq!(body["effective_status"], "expired", "corpo: {body}");
+
+    // E non compare fra quelli in essere.
+    let (_, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases?property_id={property}&in_force=true"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(0),
+        "corpo: {page}"
+    );
+}
+
+#[tokio::test]
+async fn filtering_by_a_derived_status_is_refused_with_a_hint() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "filtro").await;
+
+    let (status, problem) = app
+        .send("GET", "/api/v1/leases?status=expired", Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "status");
+    assert!(
+        problem["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("in_force")),
+        "l'errore deve indicare il filtro corretto: {problem}"
+    );
+}
+
+#[tokio::test]
+async fn a_lease_of_another_organization_is_not_found() {
+    let app = require_app!();
+    let (alfa, _) = common::register_and_login(&app, "contratto-alfa").await;
+    let (beta, _) = common::register_and_login(&app, "contratto-beta").await;
+    let property = create_property(&app, &alfa, "Immobile di Alfa").await;
+    let lease = draft_lease(&app, &alfa, &property, None, 0, Some(365)).await;
+
+    let (status, body) = app
+        .send("GET", &format!("/api/v1/leases/{lease}"), Some(&beta), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
+
+    // E nemmeno redigerne uno sull'immobile altrui.
+    let (status, body) = app
+        .post_auth(
+            "/api/v1/leases",
+            &beta,
+            serde_json::json!({
+                "property_id": property,
+                "start_date": day(0),
+                "rent_amount": "800.00",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
+}
+
+#[tokio::test]
+async fn a_room_of_another_property_cannot_be_let() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "stanza-altrui").await;
+    let first = create_property(&app, &token, "Prima casa").await;
+    let second = create_property(&app, &token, "Seconda casa").await;
+
+    let (_, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{second}/rooms"),
+            &token,
+            serde_json::json!({ "name": "Camera della seconda casa" }),
+        )
+        .await;
+    let room = room["id"].as_str().expect("id");
+
+    // Entrambi gli immobili sono visibili al proprietario, quindi la RLS non
+    // fermerebbe l'accostamento: il legame stanza-immobile va verificato.
+    let (status, problem) = app
+        .post_auth(
+            "/api/v1/leases",
+            &token,
+            serde_json::json!({
+                "property_id": first,
+                "room_id": room,
+                "start_date": day(0),
+                "rent_amount": "400.00",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "room_id");
+}

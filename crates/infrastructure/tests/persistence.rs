@@ -14,6 +14,10 @@ mod common;
 use std::sync::Arc;
 
 use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
+use propflow_application::use_cases::lease::{
+    ActivateLease, ActivateLeaseCommand, AddLeaseParty, AddLeasePartyCommand, DraftLease,
+    DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery,
+};
 use propflow_application::use_cases::property::{
     ArchiveProperty, ArchivePropertyCommand, CreateProperty, CreatePropertyCommand, ListProperties,
     ListPropertiesQuery,
@@ -21,9 +25,10 @@ use propflow_application::use_cases::property::{
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_domain::RequestContext;
 use propflow_domain::identity::OrgRole;
-use propflow_domain::ports::RepositoryError;
+use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
+use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
-use propflow_domain::shared::{Address, CountryCode, PropertyId, RoomId};
+use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
 
 fn address(city: &str) -> Address {
     Address::new(
@@ -395,5 +400,249 @@ async fn a_room_cannot_be_attached_to_a_property_of_another_organization() {
     assert!(
         matches!(error, RepositoryError::Integrity { .. }),
         "atteso Integrity, ottenuto {error:?}"
+    );
+}
+
+fn money(raw: &str) -> Money {
+    Money::new(raw.parse().expect("decimale valido"), Currency::EUR).expect("importo valido")
+}
+
+fn days_from_today(days: i64) -> chrono::NaiveDate {
+    chrono::Utc::now().date_naive() + chrono::Duration::days(days)
+}
+
+/// Redige un contratto con un inquilino al 100% e lo restituisce.
+async fn draft_lease(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+    room_id: Option<propflow_domain::shared::RoomId>,
+    start: chrono::NaiveDate,
+    end: Option<chrono::NaiveDate>,
+) -> propflow_domain::lease::Lease {
+    let view = DraftLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            DraftLeaseCommand {
+                property_id,
+                room_id,
+                start_date: start,
+                end_date: end,
+                rent: money("800.00"),
+                deposit: None,
+                rent_frequency: RentFrequency::Monthly,
+                rent_due_day: 1,
+                notice_months: None,
+                auto_renew: false,
+                renewal_months: None,
+                utilities_included: false,
+                istat_indexation: false,
+                notes: None,
+            },
+        )
+        .await
+        .expect("bozza redatta");
+
+    AddLeaseParty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            AddLeasePartyCommand {
+                lease_id: view.lease.id(),
+                role: LeasePartyRole::Tenant,
+                full_name: "Inquilino di prova".to_owned(),
+                email: None,
+                share_percent: rust_decimal::Decimal::from(100),
+                is_primary: true,
+            },
+        )
+        .await
+        .expect("parte aggiunta");
+
+    view.lease
+}
+
+async fn activate(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    lease_id: propflow_domain::shared::LeaseId,
+) -> Result<(), propflow_application::AppError> {
+    ActivateLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(context, ActivateLeaseCommand { id: lease_id })
+        .await
+        .map(|_| ())
+}
+
+#[tokio::test]
+async fn two_overlapping_leases_on_the_same_property_cannot_both_be_active() {
+    let env = require_db!();
+    let context = register_owner(&env, "sovrapposizione").await;
+    let property_id = create_property(&env, &context, "Immobile conteso", "Firenze").await;
+
+    let first = draft_lease(
+        &env,
+        &context,
+        property_id,
+        None,
+        days_from_today(0),
+        Some(days_from_today(365)),
+    )
+    .await;
+    let second = draft_lease(
+        &env,
+        &context,
+        property_id,
+        None,
+        days_from_today(180),
+        Some(days_from_today(540)),
+    )
+    .await;
+
+    // Due bozze sullo stesso periodo convivono: il vincolo di esclusione riguarda
+    // solo gli stati che impegnano l'immobile, quindi si possono preparare più
+    // ipotesi e attivarne una.
+    activate(&env, &context, first.id())
+        .await
+        .expect("la prima attivazione riesce");
+
+    let error = activate(&env, &context, second.id())
+        .await
+        .expect_err("la seconda deve essere rifiutata");
+    assert!(
+        matches!(
+            error,
+            propflow_application::AppError::OverlappingLease(LeaseOverlap::Property)
+        ),
+        "atteso un conflitto parlante sull'immobile, ottenuto {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn rooms_are_let_independently_but_a_room_cannot_be_let_twice() {
+    let env = require_db!();
+    let context = register_owner(&env, "per-stanza").await;
+    let property_id = create_property(&env, &context, "Casa a stanze", "Bologna").await;
+
+    let create_room = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let mut rooms = Vec::new();
+    for name in ["Camera A", "Camera B"] {
+        let room = create_room
+            .execute(
+                &context,
+                CreateRoomCommand {
+                    property_id,
+                    name: name.to_owned(),
+                    attributes: RoomChanges::default(),
+                },
+            )
+            .await
+            .expect("stanza creata");
+        rooms.push(room.id());
+    }
+
+    let start = days_from_today(0);
+    let end = Some(days_from_today(365));
+
+    // Due stanze diverse dello stesso immobile si affittano nello stesso periodo:
+    // il vincolo è su `room_id`, non sull'immobile.
+    for room_id in &rooms {
+        let lease = draft_lease(&env, &context, property_id, Some(*room_id), start, end).await;
+        activate(&env, &context, lease.id())
+            .await
+            .expect("ogni stanza si affitta per conto proprio");
+    }
+
+    // La stessa stanza no.
+    let duplicate = draft_lease(
+        &env,
+        &context,
+        property_id,
+        Some(rooms[0]),
+        days_from_today(30),
+        Some(days_from_today(400)),
+    )
+    .await;
+    let error = activate(&env, &context, duplicate.id())
+        .await
+        .expect_err("la stessa stanza non si affitta due volte");
+    assert!(
+        matches!(
+            error,
+            propflow_application::AppError::OverlappingLease(LeaseOverlap::Room)
+        ),
+        "atteso un conflitto parlante sulla stanza, ottenuto {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_lease_keeps_its_stored_state_but_leaves_the_dashboard() {
+    let env = require_db!();
+    let context = register_owner(&env, "scadenza").await;
+    let property_id = create_property(&env, &context, "Immobile scaduto", "Napoli").await;
+    let org_id = context.org_id().expect("org").as_uuid();
+
+    // Contratto già finito: iniziato due anni fa, terminato un mese fa.
+    let expired = draft_lease(
+        &env,
+        &context,
+        property_id,
+        None,
+        days_from_today(-730),
+        Some(days_from_today(-30)),
+    )
+    .await;
+    activate(&env, &context, expired.id())
+        .await
+        .expect("attivazione riuscita");
+
+    let detail = GetLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&context, expired.id())
+        .await
+        .expect("lettura riuscita");
+
+    // Nessuno scrive 'expired': lo stato memorizzato resta quello deciso da chi
+    // amministra, e la scadenza si deriva dalle date.
+    assert_eq!(detail.lease.status(), LeaseStatus::Active);
+    assert_eq!(detail.effective_status, LeaseStatus::Expired);
+
+    // Ed è la stessa risposta che dà la dashboard, che è il punto della migration
+    // 0017: prima contava `status = 'active'` e teneva dentro i contratti scaduti.
+    let active_leases: i64 =
+        sqlx::query_scalar("SELECT active_leases FROM app.v_owner_dashboard WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_one(env.pools.privileged())
+            .await
+            .expect("lettura della dashboard");
+    assert_eq!(
+        active_leases, 0,
+        "un contratto scaduto non è più fra quelli in essere"
+    );
+
+    let occupancy: i64 = sqlx::query_scalar(
+        "SELECT active_leases FROM app.v_property_occupancy WHERE property_id = $1",
+    )
+    .bind(property_id.as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("lettura dell'occupazione");
+    assert_eq!(occupancy, 0);
+
+    // Il filtro `in_force` dell'elenco usa la stessa funzione delle viste.
+    let list = ListLeases::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let in_force = list
+        .execute(
+            &context,
+            ListLeasesQuery {
+                in_force: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert!(
+        !in_force
+            .items
+            .iter()
+            .any(|item| item.lease.id() == expired.id()),
+        "un contratto scaduto non deve comparire fra quelli in essere"
     );
 }

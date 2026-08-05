@@ -377,3 +377,54 @@ saltati.
 
 **Conseguenze.** La pipeline è più lunga e richiede un PostgreSQL reale. In cambio
 i controlli 4, 9 e 10 hanno già trovato difetti reali.
+
+---
+
+<a id="adr-019"></a>
+
+## ADR-019 — Stati temporali derivati dalle date, non memorizzati
+
+**Difetto osservato.** `v_property_occupancy` e `v_owner_dashboard` contavano i
+contratti con `status = 'active'`. Un contratto a termine resta `active` anche dopo
+la scadenza, perché nessuno lo aggiorna: l'occupazione e il canone atteso
+includevano contratti finiti da mesi, e la cifra cresceva nel tempo senza che
+nessuno avesse sbagliato nulla.
+
+**Decisione.** Lo stato memorizzato cambia solo su **azioni esplicite**
+(`activate`, `terminate`, `cancel`). "In essere", "in scadenza" e "scaduto" si
+**calcolano** da `start_date` e `end_date`, in due punti che devono rispondere la
+stessa cosa:
+
+- `app.lease_in_force(status, start, end)` nel database, usata dalle viste e dal
+  filtro `in_force` dell'elenco;
+- `Lease::is_in_force`, `expires_within`, `effective_status` nel dominio.
+
+`expiring` ed `expired` restano fra i valori dell'enum PostgreSQL — una riga
+scritta a mano potrebbe contenerli, e un valore sconosciuto in lettura deve dare
+errore — ma **l'applicazione non li scrive mai**. L'elenco rifiuta con `422` un
+filtro `status=expired`, indicando `in_force`: restituire zero righe sarebbe il
+modo peggiore di dire che quello stato non esiste in database.
+
+**Motivo.** L'alternativa è uno scheduler che ogni notte porta ad `expired` i
+contratti scaduti. Aggiunge un componente da far girare, monitorare e recuperare
+dopo un fermo, e apre comunque una finestra in cui il database dice una cosa e il
+calendario un'altra. La scadenza non è una decisione: è una conseguenza, e le
+conseguenze si derivano.
+
+**Conseguenza: `end_date` è esclusiva.** Il contratto copre
+`[start_date, end_date)`. Non è una scelta nuova: è quella già presa dai vincoli
+`leases_no_overlap_property` e `leases_no_overlap_room`, che usano
+`daterange(start_date, COALESCE(end_date, 'infinity'), '[)')`. Con un confine
+inclusivo, il giorno di `end_date` sarebbe insieme "ancora in essere" per il
+predicato e "slot libero" per il vincolo di esclusione: due contratti sullo stesso
+immobile risulterebbero in essere per un giorno e la dashboard sommerebbe due
+canoni — cioè lo stesso errore di conteggio che questa decisione corregge. Il
+prezzo è che "contratto fino al 31/12" si registra con `end_date = 2027-01-01`.
+
+**Altre conseguenze.** Le due viste sono state riscritte in
+`migrations/0017_lease_in_force_views.sql`; `leases_expiring_90d` non guarda più lo
+stato `expiring` ma i contratti in essere che finiscono entro 90 giorni. La finestra
+di preavviso vive in `Lease::EXPIRING_WINDOW_DAYS` e coincide con quella della
+dashboard: due valori diversi farebbero dire "in scadenza" a una schermata e non
+all'altra. Il rinnovo automatico (`auto_renew`) resta non implementato: quello *è*
+una decisione, e richiede lo scheduler.

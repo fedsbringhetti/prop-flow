@@ -172,6 +172,64 @@ unico dentro l'immobile fra le stanze non archiviate: archiviarne una libera il 
 L'elenco delle stanze non è paginato — sono poche per costruzione — e la risposta ha
 la forma `{ "items": [ … ] }` senza `next_cursor`.
 
+### Contratti
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/leases` | staff | `201`, stato iniziale `draft` |
+| GET | `/api/v1/leases` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `in_force` |
+| GET | `/api/v1/leases/{id}` | membro | `200` con le parti contrattuali, o `404` |
+| POST | `/api/v1/leases/{id}/parties` | staff | `201`. `409` se esiste già un intestatario principale |
+| POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete |
+| POST | `/api/v1/leases/{id}/terminate` | staff | `200`. `409` se il contratto non è attivo |
+
+L'inquilino vede il **proprio** contratto con `GET`, non gli altri della stessa
+organizzazione: la distinzione la fa `app.can_access_lease` attraverso
+`lease_parties`, non un ramo applicativo sul ruolo.
+
+Attivazione e disdetta sono sotto-risorse e non un `PATCH` sullo stato: hanno
+effetti propri — firma, occupazione del periodo, data di fine rapporto — come già
+l'archiviazione degli immobili.
+
+Il tipo di contratto **non si dichiara**: si deduce dalla presenza di `room_id`.
+Dichiararlo a parte sarebbe soltanto un modo di contraddirlo, e il `CHECK`
+`leases_target_ck` lo rifiuterebbe.
+
+#### `status` ed `effective_status`
+
+La risposta porta due stati:
+
+- `status` è quello **memorizzato**, e cambia solo su azioni esplicite;
+- `effective_status` è quello **alla data odierna**, e può valere `expiring` o
+  `expired` mentre `status` resta `active`.
+
+Il client non ricalcola le date, e nessuno scheduler riscrive le righe: vedi
+[ADR-019](08-decisioni.md#adr-019). Per la stessa ragione `?status=expiring` e
+`?status=expired` danno `422` con l'indicazione di usare `?in_force=false`: quei
+valori non esistono in database, e rispondere con una pagina vuota sarebbe il modo
+peggiore di dirlo.
+
+`end_date` è **esclusiva**: un contratto valido fino al 31 dicembre 2026 si registra
+con `end_date` al 1° gennaio 2027.
+
+#### Periodo occupato
+
+Il `409` sulla sovrapposizione arriva dal vincolo di esclusione del database — una
+verifica applicativa sarebbe soggetta a race condition — ma il nome del vincolo
+resta nei log:
+
+```json
+{
+  "type": "https://propflow.dev/problems/conflict",
+  "title": "Periodo non disponibile",
+  "status": 409,
+  "detail": "esiste già una locazione attiva per questa stanza nel periodo indicato"
+}
+```
+
+Immobile e stanza sono distinti nel messaggio: in un co-living "l'immobile è
+occupato" sarebbe falso, perché le altre stanze restano libere.
+
 Esempio di creazione:
 
 ```bash

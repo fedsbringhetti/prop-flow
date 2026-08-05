@@ -1,4 +1,4 @@
-use propflow_domain::ports::RepositoryError;
+use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 
 /// Traduce un errore di SQLx in un errore di dominio.
 ///
@@ -16,9 +16,24 @@ pub fn map_sqlx_error(error: sqlx::Error) -> RepositoryError {
                 "23505" => RepositoryError::Conflict {
                     constraint: db_error.constraint().unwrap_or("sconosciuto").to_owned(),
                 },
+                // 23P01 exclusion_violation. I due vincoli di non sovrapposizione
+                // sono l'unico modo di rilevare che il periodo è occupato — una
+                // verifica applicativa sarebbe soggetta a race condition — quindi
+                // vengono riconosciuti per nome invece di finire in un 409 muto.
+                "23P01" => match db_error.constraint() {
+                    Some("leases_no_overlap_property") => {
+                        RepositoryError::OverlappingLease(LeaseOverlap::Property)
+                    }
+                    Some("leases_no_overlap_room") => {
+                        RepositoryError::OverlappingLease(LeaseOverlap::Room)
+                    }
+                    other => RepositoryError::Integrity {
+                        details: format!("{} ({})", other.unwrap_or("vincolo"), code),
+                    },
+                },
                 // 23503 foreign_key_violation, 23514 check_violation,
-                // 23P01 exclusion_violation, 23502 not_null_violation
-                "23503" | "23514" | "23P01" | "23502" => RepositoryError::Integrity {
+                // 23502 not_null_violation
+                "23503" | "23514" | "23502" => RepositoryError::Integrity {
                     details: format!("{} ({})", db_error.constraint().unwrap_or("vincolo"), code),
                 },
                 // 42501 insufficient_privilege: DELETE revocato, oppure una

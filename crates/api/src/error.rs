@@ -137,6 +137,17 @@ impl From<AppError> for ApiError {
                 api.detail = Some(format!("{resource} già esistente"));
                 api
             }
+            // Il vincolo di esclusione è l'autorità su questa invariante, ma il
+            // suo nome non dice niente a un client: la risposta nomina l'oggetto
+            // occupato, non `leases_no_overlap_room`.
+            AppError::OverlappingLease(target) => {
+                let mut api =
+                    Self::new(StatusCode::CONFLICT, "conflict", "Periodo non disponibile");
+                api.detail = Some(format!(
+                    "esiste già una locazione attiva per {target} nel periodo indicato"
+                ));
+                api
+            }
             AppError::Integrity { details } => {
                 let mut api = Self::new(StatusCode::CONFLICT, "conflict", "Vincolo violato");
                 api.internal = Some(details);

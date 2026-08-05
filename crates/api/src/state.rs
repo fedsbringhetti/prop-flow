@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use propflow_application::ports::{PasswordHasher, RefreshTokenFactory, TokenIssuer};
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::lease::{
+    ActivateLease, AddLeaseParty, DraftLease, GetLease, ListLeases, TerminateLease,
+};
 use propflow_application::use_cases::property::{
     ArchiveProperty, CreateProperty, GetProperty, ListProperties, UpdateProperty,
 };
@@ -31,6 +34,13 @@ pub struct AppState {
     pub list_rooms: Arc<ListRooms>,
     pub update_room: Arc<UpdateRoom>,
     pub archive_room: Arc<ArchiveRoom>,
+
+    pub draft_lease: Arc<DraftLease>,
+    pub get_lease: Arc<GetLease>,
+    pub list_leases: Arc<ListLeases>,
+    pub add_lease_party: Arc<AddLeaseParty>,
+    pub activate_lease: Arc<ActivateLease>,
+    pub terminate_lease: Arc<TerminateLease>,
 
     /// Serve al middleware di autenticazione per verificare gli access token.
     pub tokens: Arc<dyn TokenIssuer>,
@@ -110,7 +120,28 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
-            archive_room: Arc::new(ArchiveRoom::new(Arc::clone(&unit_of_work), clock)),
+            archive_room: Arc::new(ArchiveRoom::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            draft_lease: Arc::new(DraftLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_lease: Arc::new(GetLease::new(Arc::clone(&unit_of_work), Arc::clone(&clock))),
+            list_leases: Arc::new(ListLeases::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            add_lease_party: Arc::new(AddLeaseParty::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            activate_lease: Arc::new(ActivateLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            terminate_lease: Arc::new(TerminateLease::new(Arc::clone(&unit_of_work), clock)),
             tokens,
             unit_of_work,
             pools,

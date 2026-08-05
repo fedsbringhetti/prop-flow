@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use super::repositories::{
-    EventSink, OrgMemberRepository, OrganizationRepository, PropertyRepository, RepositoryResult,
-    RoomRepository, SessionRepository, UserRepository,
+    EventSink, LeasePartyRepository, LeaseRepository, OrgMemberRepository, OrganizationRepository,
+    PropertyRepository, RepositoryResult, RoomRepository, SessionRepository, UserRepository,
 };
 use crate::context::RequestContext;
 
@@ -23,6 +23,8 @@ pub trait UnitOfWork: Send {
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn properties(&mut self) -> &mut dyn PropertyRepository;
     fn rooms(&mut self) -> &mut dyn RoomRepository;
+    fn leases(&mut self) -> &mut dyn LeaseRepository;
+    fn lease_parties(&mut self) -> &mut dyn LeasePartyRepository;
     fn events(&mut self) -> &mut dyn EventSink;
 
     async fn commit(self: Box<Self>) -> RepositoryResult<()>;

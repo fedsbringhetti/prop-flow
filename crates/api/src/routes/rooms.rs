@@ -153,16 +153,9 @@ impl UpdateRoomRequest {
     }
 }
 
-/// Gli importi sul filo sono stringhe decimali, non float: un binario a virgola
-/// mobile non rappresenta esattamente 0.10, e in contabilità l'errore si accumula.
 fn parse_amount(raw: Option<String>) -> Result<Option<Decimal>, DomainError> {
-    raw.map(|value| {
-        value
-            .trim()
-            .parse::<Decimal>()
-            .map_err(|_| DomainError::validation("monthly_rent", "deve essere un importo decimale"))
-    })
-    .transpose()
+    raw.map(|value| crate::routes::amount("monthly_rent", &value))
+        .transpose()
 }
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
@@ -200,7 +193,9 @@ impl RoomResponse {
             floor: room.floor(),
             has_private_bathroom: room.has_private_bathroom(),
             is_furnished: room.is_furnished(),
-            monthly_rent: room.monthly_rent().map(|money| money.amount().to_string()),
+            monthly_rent: room
+                .monthly_rent()
+                .map(|money| crate::routes::format_amount(money.amount())),
             currency: room.currency().as_str().to_owned(),
             utility_share_percent: room.utility_share_percent(),
             created_at: room.created_at(),

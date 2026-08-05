@@ -1,7 +1,10 @@
+use propflow_domain::DomainError;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer};
 
 pub mod auth;
 pub mod health;
+pub mod leases;
 pub mod properties;
 pub mod rooms;
 
@@ -16,4 +19,26 @@ where
     D: Deserializer<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// Converte un importo dal filo.
+///
+/// Gli importi sono stringhe decimali e non numeri JSON: un float binario non
+/// rappresenta esattamente 0.10, e in contabilità la differenza si accumula. Il
+/// nome del campo si passa perché finisce nell'errore per campo del 422.
+pub(crate) fn amount(field: &'static str, raw: &str) -> Result<Decimal, DomainError> {
+    raw.trim()
+        .parse::<Decimal>()
+        .map_err(|_| DomainError::validation(field, "deve essere un importo decimale"))
+}
+
+/// Formatta un importo per il filo: sempre due decimali.
+///
+/// La scala di un `Decimal` dipende da come è stato costruito — `Decimal::ZERO` ha
+/// scala zero, un valore riletto da `NUMERIC(14,2)` ha scala due — quindi senza
+/// normalizzare lo stesso deposito uscirebbe come `"0"` nella risposta alla
+/// creazione e `"0.00"` alla lettura successiva. Il dominio ammette al massimo due
+/// decimali, quindi il troncamento non può perdere informazione.
+pub(crate) fn format_amount(value: Decimal) -> String {
+    format!("{value:.2}")
 }

@@ -14,6 +14,7 @@ pub mod context;
 pub mod error;
 pub mod events;
 pub mod identity;
+pub mod lease;
 pub mod ports;
 pub mod property;
 pub mod shared;

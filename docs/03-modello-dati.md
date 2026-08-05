@@ -254,8 +254,19 @@ Contengono solo aggregazioni derivabili, nessuna regola di business.
 |---|---|
 | `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto |
 | `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living |
-| `v_property_occupancy` | Stanze totali e occupate, percentuale, canone attivo |
-| `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti attivi, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
+| `v_property_occupancy` | Stanze totali e occupate, percentuale, contratti in essere e loro canone |
+| `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
+
+Le due viste sui contratti non filtrano `status = 'active'` ma
+`app.lease_in_force(status, start_date, end_date)`: lo stato memorizzato resta
+`active` anche dopo la scadenza, perché nessuno lo aggiorna, e contarlo gonfiava
+occupazione e canone atteso. Storia in [ADR-019](08-decisioni.md#adr-019).
+
+`app.lease_in_force` è l'unica definizione di "in essere": la usano le viste e il
+filtro `in_force` dell'elenco dei contratti, e il dominio ripete la stessa formula
+in `Lease::is_in_force`. `end_date` è **esclusiva** — il contratto copre
+`[start_date, end_date)` — per coerenza con i vincoli di non sovrapposizione, che
+usano un `daterange` `[)`.
 
 ## Migrazioni
 
