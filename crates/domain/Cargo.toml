@@ -1,0 +1,21 @@
+[package]
+name = "propflow-domain"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Il dominio non conosce l'infrastruttura: nessun sqlx, axum, tokio, reqwest.
+# serde è ammesso solo per i derive sugli eventi, che sono contratti verso l'esterno.
+# Il divieto è verificato in CI (vedi ops/ci/check-domain-purity.sh).
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
