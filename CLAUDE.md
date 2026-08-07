@@ -104,18 +104,36 @@ possibile.
 
 ## 3. Metodo di lavoro
 
-### Su git si scrive in inglese. Tutto.
+### Lingua: inglese su ciò che si vede da fuori
 
-**Senza eccezioni**: messaggi di commit, nomi dei branch, titoli e corpi delle PR,
-commenti di review, messaggi di tag, note di rilascio, `CHANGELOG.md`, titoli e
-descrizioni delle issue.
+Il criterio, unico e da applicare anche ai casi non elencati qui: **ciò che un
+estraneo incontra senza aprire un file è in inglese; la prosa interna del progetto
+resta in italiano.** Non conta se il testo vive dentro o fuori dal repository: conta
+se lo si legge dall'interfaccia di GitHub, da un changelog o da una pagina di
+progetto senza mai entrare nel codice.
 
-Restano in italiano il codice, i commenti nel codice, `docs/` e questo file.
+**In inglese, senza eccezioni:**
 
-Il criterio è dove vive il testo: ciò che finisce **dentro** i file del repository
-segue la lingua del progetto; ciò che finisce **nei metadati di git e di GitHub** è
-in inglese, perché è la parte che sopravvive ai contributori e che un lettore
-esterno — o uno strumento che genera un changelog — incontra per prima.
+- messaggi di commit, nomi dei branch, messaggi di tag;
+- titoli e corpi delle PR, commenti di review, titoli e descrizioni delle issue;
+- `README.md` — è la prima pagina del repository;
+- `cliff.toml` e tutto ciò che ne deriva: `CHANGELOG.md` e il corpo delle GitHub
+  Release, che da lì sono generati. Sbagliare qui sbaglia due superfici in una;
+- nei workflow in `.github/workflows/`: i nomi dei **job** e degli **step**, e le
+  annotazioni `::error::` e `::warning::`. I job compaiono come nomi dei check nelle
+  PR, gli step nel log di esecuzione, le annotazioni in cima al riepilogo.
+
+**In italiano:** `docs/`, questo file, i commenti nel codice Rust, nelle migration,
+negli script `ops/` e nei workflow. Sono prosa interna: in italiano è più precisa e
+più veloce da scrivere, e tradurre diciotto ADR densi di ragionamento rischia di
+perdere esattamente ciò per cui esistono. L'italiano resta anche nelle stringhe che
+il codice produce per sé, come il marcatore `SALTATO` dell'harness dei test su cui
+la CI fa `grep`: è un contratto interno, non un messaggio per chi legge la pipeline.
+
+**I nomi dei job sono un contratto con la protezione dei branch.** Il job di
+riepilogo si chiama `CI` ed è il check richiesto su `main` e `dev`: rinominarlo fa
+cercare a GitHub un check che non esiste più e blocca ogni merge finché non si
+aggiorna anche la protezione via `gh api`. Gli altri job si rinominano liberamente.
 
 Prima di scrivere un titolo di PR o un messaggio di commit, verifica di essere in
 inglese. È l'errore più facile da commettere e il più costoso da correggere dopo,
