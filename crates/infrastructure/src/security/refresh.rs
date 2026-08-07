@@ -3,8 +3,22 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
 use sha2::{Digest, Sha256};
 
-use propflow_application::ports::{CryptoError, RefreshTokenFactory, RefreshTokenMaterial};
+use propflow_application::ports::{
+    CryptoError, OpaqueToken, OpaqueTokenFactory, RefreshTokenFactory, RefreshTokenMaterial,
+};
 use propflow_domain::identity::TokenHash;
+
+/// 256 bit di entropia: fuori portata per un attacco a forza bruta, e non tanto
+/// lunghi da dare problemi in un header, in un cookie o in un URL di invito.
+const TOKEN_BYTES: usize = 32;
+
+fn random_token() -> Result<String, CryptoError> {
+    let mut raw = [0u8; TOKEN_BYTES];
+    getrandom::fill(&mut raw).map_err(|error| CryptoError::Backend {
+        details: error.to_string(),
+    })?;
+    Ok(URL_SAFE_NO_PAD.encode(raw))
+}
 
 /// Refresh token opachi da 256 bit di entropia.
 ///
@@ -17,10 +31,6 @@ pub struct OpaqueRefreshTokenFactory {
 }
 
 impl OpaqueRefreshTokenFactory {
-    /// 256 bit: fuori portata per un attacco a forza bruta, e non tanto lunghi da
-    /// dare problemi in un header o in un cookie.
-    const TOKEN_BYTES: usize = 32;
-
     #[must_use]
     pub const fn new(lifetime: Duration) -> Self {
         Self { lifetime }
@@ -29,11 +39,7 @@ impl OpaqueRefreshTokenFactory {
 
 impl RefreshTokenFactory for OpaqueRefreshTokenFactory {
     fn generate(&self) -> Result<RefreshTokenMaterial, CryptoError> {
-        let mut raw = [0u8; Self::TOKEN_BYTES];
-        getrandom::fill(&mut raw).map_err(|error| CryptoError::Backend {
-            details: error.to_string(),
-        })?;
-        let plaintext = URL_SAFE_NO_PAD.encode(raw);
+        let plaintext = random_token()?;
         let hash = hash_token(&plaintext);
         Ok(RefreshTokenMaterial { plaintext, hash })
     }
@@ -44,6 +50,26 @@ impl RefreshTokenFactory for OpaqueRefreshTokenFactory {
 
     fn lifetime(&self) -> Duration {
         self.lifetime
+    }
+}
+
+/// Token opachi non legati a una sessione: inviti, e in seguito verifica
+/// dell'email e reimpostazione della password.
+///
+/// Stessa entropia e stesso digest dei refresh token, tipo separato: la scadenza di
+/// un invito non ha niente a che vedere con quella di una sessione, e un tipo unico
+/// costringerebbe a scegliere quale delle due `lifetime` significa cosa.
+pub struct OpaqueTokenGenerator;
+
+impl OpaqueTokenFactory for OpaqueTokenGenerator {
+    fn generate(&self) -> Result<OpaqueToken, CryptoError> {
+        let plaintext = random_token()?;
+        let hash = hash_token(&plaintext);
+        Ok(OpaqueToken { plaintext, hash })
+    }
+
+    fn hash(&self, plaintext: &str) -> TokenHash {
+        hash_token(plaintext)
     }
 }
 
@@ -69,6 +95,19 @@ mod tests {
         assert_ne!(first.plaintext, second.plaintext);
         assert_eq!(factory.hash(&first.plaintext), first.hash);
         assert_ne!(first.hash, second.hash);
+    }
+
+    #[test]
+    fn invitation_tokens_share_the_hashing_of_refresh_tokens() {
+        // Lo stesso digest, così un token presentato dal client si ritrova in
+        // database qualunque delle due porte lo abbia generato.
+        let invitations = OpaqueTokenGenerator;
+        let token = invitations.generate().expect("generazione riuscita");
+        assert_eq!(invitations.hash(&token.plaintext), token.hash);
+        assert_eq!(
+            OpaqueRefreshTokenFactory::new(Duration::days(30)).hash(&token.plaintext),
+            token.hash
+        );
     }
 
     #[test]

@@ -137,6 +137,33 @@ Ogni altro uso è un errore di progetto. Il logout, per contrasto, passa dal
 contesto normale: la policy su `user_sessions` impedisce di revocare la sessione di
 qualcun altro anche presentandone l'hash corretto.
 
+Lo stesso vale per l'**accettazione di un invito**, che sarebbe stata il candidato
+naturale a un quarto caso: scrive in un'organizzazione di cui chi accetta non è
+ancora membro, ma un contesto di sicurezza *esiste* — è autenticato — e manca solo la
+membership. La risposta è stata estendere la Row Level Security
+([ADR-020](08-decisioni.md#adr-020)), e un test di integrazione esegue quel flusso
+con una fabbrica il cui `begin_privileged()` solleva un panic.
+
+### Inviti
+
+Il token di invito è opaco, 256 bit, con lo **hash** SHA-256 in database: stesso
+trattamento del refresh token, e per lo stesso motivo — una copia del dump non deve
+permettere di entrare in un'organizzazione. Il valore in chiaro esiste solo nella
+risposta che lo consegna, e la colonna `token_hash` è fra quelle **redatte**
+nell'audit log.
+
+Due controlli indipendenti proteggono l'accettazione: l'applicazione confronta lo
+hash del token, le policy verificano che esista un invito pendente per l'email
+dell'utente corrente. Un invito può conferire solo il ruolo `tenant`, e la condizione
+è ripetuta nella policy: un token spedito per email non deve poter diventare un ruolo
+di staff nemmeno con una query scritta a mano.
+
+Un token sconosciuto e un token intestato a un'altra email danno lo stesso `401` con
+lo stesso corpo, per la ragione di [ADR-017](08-decisioni.md#adr-017): distinguerli
+sarebbe un oracolo per capire quali inviti esistono. La scadenza è di **sette
+giorni**: abbastanza perché un'email non urgente venga letta, poco perché una casella
+compromessa mesi dopo valga ancora come credenziale.
+
 ## Dati personali
 
 - **Cifratura applicativa** per i campi sensibili: `fiscal_code_encrypted`,

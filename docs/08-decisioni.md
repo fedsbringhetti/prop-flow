@@ -377,3 +377,174 @@ saltati.
 
 **Conseguenze.** La pipeline è più lunga e richiede un PostgreSQL reale. In cambio
 i controlli 4, 9 e 10 hanno già trovato difetti reali.
+
+---
+
+<a id="adr-019"></a>
+
+## ADR-019 — Stati temporali derivati dalle date, non memorizzati
+
+**Difetto osservato.** `v_property_occupancy` e `v_owner_dashboard` contavano i
+contratti con `status = 'active'`. Un contratto a termine resta `active` anche dopo
+la scadenza, perché nessuno lo aggiorna: l'occupazione e il canone atteso
+includevano contratti finiti da mesi, e la cifra cresceva nel tempo senza che
+nessuno avesse sbagliato nulla.
+
+**Decisione.** Lo stato memorizzato cambia solo su **azioni esplicite**
+(`activate`, `terminate`, `cancel`). "In essere", "in scadenza" e "scaduto" si
+**calcolano** da `start_date` e `end_date`, in due punti che devono rispondere la
+stessa cosa:
+
+- `app.lease_in_force(status, start, end)` nel database, usata dalle viste e dal
+  filtro `in_force` dell'elenco;
+- `Lease::is_in_force`, `expires_within`, `effective_status` nel dominio.
+
+`expiring` ed `expired` restano fra i valori dell'enum PostgreSQL — una riga
+scritta a mano potrebbe contenerli, e un valore sconosciuto in lettura deve dare
+errore — ma **l'applicazione non li scrive mai**. L'elenco rifiuta con `422` un
+filtro `status=expired`, indicando `in_force`: restituire zero righe sarebbe il
+modo peggiore di dire che quello stato non esiste in database.
+
+**Motivo.** L'alternativa è uno scheduler che ogni notte porta ad `expired` i
+contratti scaduti. Aggiunge un componente da far girare, monitorare e recuperare
+dopo un fermo, e apre comunque una finestra in cui il database dice una cosa e il
+calendario un'altra. La scadenza non è una decisione: è una conseguenza, e le
+conseguenze si derivano.
+
+**Conseguenza: `end_date` è esclusiva.** Il contratto copre
+`[start_date, end_date)`. Non è una scelta nuova: è quella già presa dai vincoli
+`leases_no_overlap_property` e `leases_no_overlap_room`, che usano
+`daterange(start_date, COALESCE(end_date, 'infinity'), '[)')`. Con un confine
+inclusivo, il giorno di `end_date` sarebbe insieme "ancora in essere" per il
+predicato e "slot libero" per il vincolo di esclusione: due contratti sullo stesso
+immobile risulterebbero in essere per un giorno e la dashboard sommerebbe due
+canoni — cioè lo stesso errore di conteggio che questa decisione corregge. Il
+prezzo è che "contratto fino al 31/12" si registra con `end_date = 2027-01-01`.
+
+**Altre conseguenze.** Le due viste sono state riscritte in
+`migrations/0017_lease_in_force_views.sql`; `leases_expiring_90d` non guarda più lo
+stato `expiring` ma i contratti in essere che finiscono entro 90 giorni. La finestra
+di preavviso vive in `Lease::EXPIRING_WINDOW_DAYS` e coincide con quella della
+dashboard: due valori diversi farebbero dire "in scadenza" a una schermata e non
+all'altra. Il rinnovo automatico (`auto_renew`) resta non implementato: quello *è*
+una decisione, e richiede lo scheduler.
+
+---
+
+<a id="adr-020"></a>
+
+## ADR-020 — Accettazione di un invito via RLS, non con il pool privilegiato
+
+**Contesto.** Accettare un invito richiede tre scritture in un'organizzazione di cui
+non si è ancora membri: creare la propria membership, collegare la parte
+contrattuale, marcare l'invito. Le policy esistenti vietavano tutte e tre.
+
+**Decisione.** Si estende la Row Level Security
+(`migrations/0018_invitation_acceptance_rls.sql`), non si usa `begin_privileged()`.
+
+**Motivo.** La regola 20 di `CLAUDE.md` limita il pool privilegiato a registrazione,
+login e rotazione del refresh token, ed è ciò che ne tiene piccola la superficie.
+Quei tre flussi esistono perché un contesto di sicurezza non **può** esistere:
+avvengono prima dell'autenticazione, e la policy su `users` mostra una riga solo a
+chi è già identificato. Qui il contesto esiste — chi accetta è autenticato — e manca
+soltanto la membership. Aggiungere un quarto caso avrebbe reso la regola una lista di
+eccezioni invece di un criterio.
+
+**Come.** Due funzioni `SECURITY DEFINER`, `app.has_pending_invitation(org_id)` e
+`app.current_user_email()`, e cinque policy: `org_members` INSERT di sé stessi con
+ruolo `tenant`, `org_invitations` SELECT e UPDATE del proprio invito,
+`lease_parties` SELECT e UPDATE della riga con la propria email e `user_id IS NULL`.
+
+**Due controlli indipendenti.** Il token resta verificato dall'applicazione, per
+confronto sullo hash: la policy non lo vede. L'applicazione prova che chi chiama
+**possiede** il token; la RLS prova che esiste davvero un invito pendente per
+quell'email. Nessuno dei due da solo basterebbe, e sono difendibili separatamente:
+un difetto nel confronto dello hash non concede l'accesso a un'organizzazione che non
+ha invitato nessuno.
+
+**Conseguenza: la lettura non può dipendere dallo stato "pendente".** Marcare
+l'invito accettato produrrebbe una riga che chi la scrive non potrebbe più rileggere
+— lo stesso difetto di [ADR-008](#adr-008). Le policy di SELECT dell'invitato si
+basano quindi sull'email, che l'operazione non cambia; il vincolo "pendente" vive
+nelle `USING` degli UPDATE, dove si applica alla riga esistente.
+
+**Conseguenza: l'ordine delle scritture è parte del progetto.**
+`has_pending_invitation` diventa falso appena l'invito è marcato accettato, quindi
+marcarlo per primo si toglierebbe il permesso di completare il resto.
+`AcceptInvitation` scrive nell'ordine membership → parte contrattuale → invito, e il
+commento nel codice lo dice.
+
+**Difetto osservato durante l'implementazione.** Le tre scritture riuscivano e
+l'accettazione falliva sull'**ultimo** statement: l'evento di dominio. Chi accetta
+arriva con il contesto della propria organizzazione personale — di quella
+dell'invito non è ancora membro, e il middleware rifiuterebbe di selezionarla — ma
+`domain_events_insert` ammetteva solo `org_id = app.current_org_id()`. Poiché
+l'evento entra nella stessa transazione del comando, il rifiuto annullava tutto. La
+policy ora ammette anche `app.is_org_member(org_id)`, che a quel punto è vero:
+"posso annunciare un fatto di un'organizzazione di cui sono membro" è comunque
+isolamento, e non lega la scrittura dell'evento all'ordine degli statement.
+
+**Verifica.** Un test di integrazione esegue l'accettazione con una fabbrica di unità
+di lavoro il cui `begin_privileged()` **solleva un panic**. Non è un commento che
+dice "non si usa il pool privilegiato": è un test che fallisce se qualcuno lo usa.
+
+**Alternativa scartata.** `begin_privileged()` per l'accettazione. Più rapido da
+scrivere, e sarebbe stato il quarto uso di un percorso che ne ammette tre — dopo il
+quarto il criterio non esiste più, e la superficie di codice che gira con
+`BYPASSRLS` cresce senza che nessuno debba giustificarlo.
+
+---
+
+<a id="adr-021"></a>
+
+## ADR-021 — Il confine di isolamento si difende con i privilegi di colonna, non con il `WITH CHECK`
+
+**Difetto osservato.** Le policy introdotte da [ADR-020](#adr-020) permettevano a un
+utente autenticato con un invito pendente di iscriversi a **qualunque**
+organizzazione di cui conoscesse l'identificatore, e di leggere nome ed email di
+tutti i suoi membri. Riprodotto su database reale prima della correzione.
+
+**Causa.** Il `WITH CHECK` di una policy di UPDATE vincola **solo le colonne che
+nomina**; tutte le altre restano libere. Su `org_invitations_invitee_accept` il
+`WITH CHECK` era `email = app.current_user_email()`, quindi `org_id` non era
+vincolato:
+
+```sql
+UPDATE app.org_invitations SET org_id = '<altra org>' WHERE email = '<la mia>';
+```
+
+passava la `USING` — la riga *esistente* era un invito pendente e valido — e passava
+il `WITH CHECK`, perché l'email non cambiava. Da lì
+`has_pending_invitation(<altra org>)` diventava vero e
+`org_members_accept_invitation` ammetteva l'iscrizione come `tenant`.
+
+La stessa forma su `lease_parties_invitee_link`, dove il `WITH CHECK` fissava `email`
+e `user_id` ma non `lease_id`: l'invitato poteva agganciarsi a un contratto diverso
+da quello per cui era stato invitato.
+
+**Causa radice.** Queste due sono le uniche policy che concedono scrittura a un **non
+membro**, attraversando il confine dell'organizzazione. Altrove una colonna non
+vincolata resta dentro il perimetro di chi ha già accesso, e il danno massimo è
+spostare un proprio dato fra proprie organizzazioni. Qui la colonna non vincolata
+*è* il confine.
+
+**Decisione.** Non si irrigidisce il `WITH CHECK`. Una policy non può confrontare la
+riga nuova con quella vecchia — non esiste `OLD` — quindi ogni tentativo in quella
+direzione finirebbe per dipendere da sottigliezze di snapshot, che è esattamente il
+genere di ragionamento che ha prodotto il difetto. Si toglie invece al ruolo
+applicativo il privilegio di aggiornare le colonne di confine
+(`migrations/0019_invitation_column_privileges.sql`). Il permesso è verificato prima
+delle policy, quindi la manovra fallisce con `permission denied` qualunque cosa la
+policy ammetta.
+
+**Conseguenze.** L'elenco delle colonne concesse deve restare allineato a ciò che i
+repository aggiornano: aggiungerne una a una `SET` richiede di aggiungerla anche al
+`GRANT`. È voluto — è il punto in cui ci si ferma a chiedersi se quella colonna debba
+davvero essere scrivibile dall'applicazione. Il controllo 11 delle invarianti
+verifica che le colonne di confine restino non aggiornabili, e due test di
+integrazione riproducono i tentativi e li attendono respinti.
+
+**Regola generale che ne segue.** Quando una policy concede scrittura oltre il
+confine che il resto dello schema difende, il `WITH CHECK` non basta: va accompagnato
+da un privilegio di colonna che fissi le colonne del confine. Vale per ogni policy
+futura che ammetta un non membro.

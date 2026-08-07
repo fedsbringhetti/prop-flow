@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::identity::OrgRole;
-use crate::shared::{EventId, OrgId, PropertyId, UserId};
+use crate::shared::{
+    EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, UserId,
+};
 
 /// Evento di dominio pronto per l'outbox.
 ///
@@ -103,6 +105,16 @@ pub enum DomainEventPayload {
     PropertyCreated(PropertyCreated),
     PropertyUpdated(PropertyUpdated),
     PropertyArchived(PropertyArchived),
+    RoomCreated(RoomCreated),
+    RoomUpdated(RoomUpdated),
+    RoomArchived(RoomArchived),
+    LeaseDrafted(LeaseDrafted),
+    LeaseActivated(LeaseActivated),
+    LeaseTerminated(LeaseTerminated),
+    LeasePartyAdded(LeasePartyAdded),
+    TenantInvited(TenantInvited),
+    InvitationRevoked(InvitationRevoked),
+    InvitationAccepted(InvitationAccepted),
 }
 
 impl DomainEventPayload {
@@ -114,6 +126,16 @@ impl DomainEventPayload {
             Self::PropertyCreated(_) => "property.created",
             Self::PropertyUpdated(_) => "property.updated",
             Self::PropertyArchived(_) => "property.archived",
+            Self::RoomCreated(_) => "property.room.created",
+            Self::RoomUpdated(_) => "property.room.updated",
+            Self::RoomArchived(_) => "property.room.archived",
+            Self::LeaseDrafted(_) => "lease.drafted",
+            Self::LeaseActivated(_) => "lease.activated",
+            Self::LeaseTerminated(_) => "lease.terminated",
+            Self::LeasePartyAdded(_) => "lease.party.added",
+            Self::TenantInvited(_) => "identity.invitation.issued",
+            Self::InvitationRevoked(_) => "identity.invitation.revoked",
+            Self::InvitationAccepted(_) => "identity.invitation.accepted",
         }
     }
 
@@ -124,6 +146,16 @@ impl DomainEventPayload {
             Self::OrganizationCreated(_) => "Organization",
             Self::PropertyCreated(_) | Self::PropertyUpdated(_) | Self::PropertyArchived(_) => {
                 "Property"
+            }
+            Self::RoomCreated(_) | Self::RoomUpdated(_) | Self::RoomArchived(_) => "Room",
+            // Anche `LeasePartyAdded` è un evento del contratto: la parte non è un
+            // aggregato a sé, e chi consuma reagisce al contratto che è cambiato.
+            Self::LeaseDrafted(_)
+            | Self::LeaseActivated(_)
+            | Self::LeaseTerminated(_)
+            | Self::LeasePartyAdded(_) => "Lease",
+            Self::TenantInvited(_) | Self::InvitationRevoked(_) | Self::InvitationAccepted(_) => {
+                "Invitation"
             }
         }
     }
@@ -136,6 +168,16 @@ impl DomainEventPayload {
             Self::PropertyCreated(event) => event.property_id.as_uuid(),
             Self::PropertyUpdated(event) => event.property_id.as_uuid(),
             Self::PropertyArchived(event) => event.property_id.as_uuid(),
+            Self::RoomCreated(event) => event.room_id.as_uuid(),
+            Self::RoomUpdated(event) => event.room_id.as_uuid(),
+            Self::RoomArchived(event) => event.room_id.as_uuid(),
+            Self::LeaseDrafted(event) => event.lease_id.as_uuid(),
+            Self::LeaseActivated(event) => event.lease_id.as_uuid(),
+            Self::LeaseTerminated(event) => event.lease_id.as_uuid(),
+            Self::LeasePartyAdded(event) => event.lease_id.as_uuid(),
+            Self::TenantInvited(event) => event.invitation_id.as_uuid(),
+            Self::InvitationRevoked(event) => event.invitation_id.as_uuid(),
+            Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
         }
     }
 
@@ -147,6 +189,16 @@ impl DomainEventPayload {
             Self::PropertyCreated(event) => Some(event.org_id),
             Self::PropertyUpdated(event) => Some(event.org_id),
             Self::PropertyArchived(event) => Some(event.org_id),
+            Self::RoomCreated(event) => Some(event.org_id),
+            Self::RoomUpdated(event) => Some(event.org_id),
+            Self::RoomArchived(event) => Some(event.org_id),
+            Self::LeaseDrafted(event) => Some(event.org_id),
+            Self::LeaseActivated(event) => Some(event.org_id),
+            Self::LeaseTerminated(event) => Some(event.org_id),
+            Self::LeasePartyAdded(event) => Some(event.org_id),
+            Self::TenantInvited(event) => Some(event.org_id),
+            Self::InvitationRevoked(event) => Some(event.org_id),
+            Self::InvitationAccepted(event) => Some(event.org_id),
         }
     }
 }
@@ -199,4 +251,111 @@ impl PropertyArchived {
             archived_by_role: role.as_str(),
         }
     }
+}
+
+/// Una stanza porta sempre l'immobile che la contiene: chi consuma l'evento
+/// invalida la scheda dell'immobile senza dover risalire la relazione.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomCreated {
+    pub room_id: RoomId,
+    pub property_id: PropertyId,
+    pub org_id: OrgId,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomUpdated {
+    pub room_id: RoomId,
+    pub property_id: PropertyId,
+    pub org_id: OrgId,
+    /// Nomi dei campi modificati, non i valori: il canone di una stanza non
+    /// deve viaggiare su un broker.
+    pub changed_fields: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomArchived {
+    pub room_id: RoomId,
+    pub property_id: PropertyId,
+    pub org_id: OrgId,
+    pub archived_by_role: &'static str,
+}
+
+impl RoomArchived {
+    #[must_use]
+    pub const fn new(
+        room_id: RoomId,
+        property_id: PropertyId,
+        org_id: OrgId,
+        role: OrgRole,
+    ) -> Self {
+        Self {
+            room_id,
+            property_id,
+            org_id,
+            archived_by_role: role.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeaseDrafted {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+    pub room_id: Option<RoomId>,
+    pub lease_type: &'static str,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeaseActivated {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+    pub activated_at: DateTime<Utc>,
+}
+
+/// Senza `termination_reason`: è testo libero scritto da una persona, quindi può
+/// contenere qualunque cosa, e un evento pubblicato su un broker è un dato che
+/// viaggia e si conserva. Chi ha bisogno del motivo lo legge dall'aggregato.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeaseTerminated {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+    pub terminated_at: DateTime<Utc>,
+}
+
+/// Nessun nome né email: identificatori e ruolo bastano a sapere cosa invalidare.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeasePartyAdded {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub party_id: LeasePartyId,
+    pub role: &'static str,
+}
+
+/// Nessuna email: è l'unico dato interessante dell'invito, ed è precisamente
+/// quello che un evento pubblicato su un broker non deve trasportare. Chi ha
+/// bisogno dell'indirizzo lo legge dall'aggregato.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TenantInvited {
+    pub invitation_id: InvitationId,
+    pub org_id: OrgId,
+    pub lease_id: Option<LeaseId>,
+    pub role: &'static str,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InvitationRevoked {
+    pub invitation_id: InvitationId,
+    pub org_id: OrgId,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InvitationAccepted {
+    pub invitation_id: InvitationId,
+    pub org_id: OrgId,
+    pub user_id: UserId,
+    pub lease_id: Option<LeaseId>,
+    pub role: &'static str,
 }

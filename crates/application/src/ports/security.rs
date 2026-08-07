@@ -69,3 +69,23 @@ pub trait RefreshTokenFactory: Send + Sync {
     fn hash(&self, plaintext: &str) -> TokenHash;
     fn lifetime(&self) -> Duration;
 }
+
+/// Un token opaco appena generato, non legato a una sessione.
+#[derive(Debug, Clone)]
+pub struct OpaqueToken {
+    pub plaintext: String,
+    pub hash: TokenHash,
+}
+
+/// Generazione di token opachi per gli inviti — e, in futuro, per la verifica
+/// dell'email e la reimpostazione della password.
+///
+/// Porta distinta da [`RefreshTokenFactory`] e non un suo riuso: quella dichiara
+/// anche una `lifetime`, e la durata di una sessione non è la durata di un invito.
+/// Riusarla significherebbe legare le due scadenze in un punto in cui non c'entrano
+/// nulla l'una con l'altra.
+pub trait OpaqueTokenFactory: Send + Sync {
+    fn generate(&self) -> Result<OpaqueToken, CryptoError>;
+    /// Calcola l'hash di un token presentato dal client, per cercarlo in database.
+    fn hash(&self, plaintext: &str) -> TokenHash;
+}

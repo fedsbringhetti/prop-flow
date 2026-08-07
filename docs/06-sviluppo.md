@@ -60,7 +60,7 @@ Quattro livelli, ciascuno con un compito diverso.
 | Integrazione persistenza | `crates/infrastructure/tests/` | query, contesto RLS, atomicità di comando ed evento | **sì** |
 | Contratto HTTP | `crates/api/tests/` | codici di stato, formato degli errori, autorizzazione | **sì** |
 
-Attualmente **54 test**.
+Attualmente **110 test**.
 
 ### Perché i test di integrazione usano un database reale
 
@@ -147,7 +147,8 @@ dell'astrazione **prima** di scrivere il primo adattatore.
 4. Configurazione in `AppConfig`, con il nome del provider come **dato**, non come
    ramo del codice.
 
-`ObjectStorage` è già dichiarata e non ancora implementata: è l'esempio da seguire.
+`ObjectStorage` e `Notifier` sono già dichiarate e non ancora implementate: sono gli
+esempi da seguire.
 
 ### Aggiungere un enum al database
 

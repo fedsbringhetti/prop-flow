@@ -123,6 +123,22 @@ SELECT 'bookkeeping-migration-duplicato', format('%s._sqlx_migrations', n.nspnam
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.relname = '_sqlx_migrations' AND n.nspname <> 'public';
 
+-- 11. Colonne che definiscono il confine di isolamento non devono essere
+--     aggiornabili dal ruolo applicativo. Le policy dell'invitato concedono
+--     scrittura a un non membro, e il `WITH CHECK` vincola solo le colonne che
+--     nomina: se `org_id` o `lease_id` tornassero scrivibili, un invito potrebbe
+--     essere ripuntato altrove. Vedi migrations/0019 e ADR-021.
+INSERT INTO invariant_violations
+SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
+  FROM (
+    VALUES ('org_invitations', 'org_id'),   ('org_invitations', 'email'),
+           ('org_invitations', 'role'),     ('org_invitations', 'token_hash'),
+           ('org_invitations', 'lease_id'), ('org_invitations', 'expires_at'),
+           ('lease_parties',   'org_id'),   ('lease_parties',   'lease_id')
+  ) AS t(tbl, col)
+ WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
+   AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
+
 -- ---------------------------------------------------------------------------
 \echo ''
 \echo 'Violazioni rilevate (vuoto = tutto in ordine):'

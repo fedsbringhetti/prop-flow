@@ -8,8 +8,9 @@
 //! nel SQL quale tipo si sta usando.
 
 use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, UserStatus};
+use propflow_domain::lease::{LeasePartyRole, LeaseStatus, LeaseType, RentFrequency};
 use propflow_domain::ports::RepositoryError;
-use propflow_domain::property::{EnergyClass, PropertyStatus, PropertyType};
+use propflow_domain::property::{EnergyClass, PropertyStatus, PropertyType, RoomStatus};
 
 fn unknown(kind: &'static str, value: &str) -> RepositoryError {
     RepositoryError::Backend {
@@ -88,6 +89,44 @@ string_enum!("property_status", PropertyStatus, property_status_to_db, property_
     Archived => "archived",
 });
 
+string_enum!("room_status", RoomStatus, room_status_to_db, room_status_from_db, {
+    Available => "available",
+    Occupied => "occupied",
+    Unavailable => "unavailable",
+});
+
+string_enum!("lease_type", LeaseType, lease_type_to_db, lease_type_from_db, {
+    WholeProperty => "whole_property",
+    Room => "room",
+});
+
+// `expiring` ed `expired` esistono nell'enum del database ma l'applicazione non li
+// scrive mai: sono derivati dalle date (ADR-019). Restano nella tabella di
+// conversione perché una riga scritta a mano potrebbe contenerli, e un valore
+// sconosciuto in lettura deve dare errore.
+string_enum!("lease_status", LeaseStatus, lease_status_to_db, lease_status_from_db, {
+    Draft => "draft",
+    PendingSignature => "pending_signature",
+    Active => "active",
+    Expiring => "expiring",
+    Expired => "expired",
+    Terminated => "terminated",
+    Cancelled => "cancelled",
+});
+
+string_enum!("rent_frequency", RentFrequency, rent_frequency_to_db, rent_frequency_from_db, {
+    Monthly => "monthly",
+    Quarterly => "quarterly",
+    Semiannual => "semiannual",
+    Annual => "annual",
+});
+
+string_enum!("lease_party_role", LeasePartyRole, lease_party_role_to_db, lease_party_role_from_db, {
+    Tenant => "tenant",
+    Cotenant => "cotenant",
+    Guarantor => "guarantor",
+});
+
 // Le classi energetiche restano maiuscole anche nel database: 'A4', 'B', 'G'.
 string_enum!("energy_class", EnergyClass, energy_class_to_db, energy_class_from_db, {
     A4 => "A4",
@@ -125,6 +164,52 @@ mod tests {
                 status
             );
         }
+        for status in [
+            RoomStatus::Available,
+            RoomStatus::Occupied,
+            RoomStatus::Unavailable,
+        ] {
+            assert_eq!(
+                room_status_from_db(room_status_to_db(status)).expect("noto"),
+                status
+            );
+        }
+        for status in [
+            LeaseStatus::Draft,
+            LeaseStatus::PendingSignature,
+            LeaseStatus::Active,
+            LeaseStatus::Expiring,
+            LeaseStatus::Expired,
+            LeaseStatus::Terminated,
+            LeaseStatus::Cancelled,
+        ] {
+            assert_eq!(
+                lease_status_from_db(lease_status_to_db(status)).expect("noto"),
+                status
+            );
+        }
+        for role in [
+            LeasePartyRole::Tenant,
+            LeasePartyRole::Cotenant,
+            LeasePartyRole::Guarantor,
+        ] {
+            assert_eq!(
+                lease_party_role_from_db(lease_party_role_to_db(role)).expect("noto"),
+                role
+            );
+        }
+        for frequency in [
+            RentFrequency::Monthly,
+            RentFrequency::Quarterly,
+            RentFrequency::Semiannual,
+            RentFrequency::Annual,
+        ] {
+            assert_eq!(
+                rent_frequency_from_db(rent_frequency_to_db(frequency)).expect("noto"),
+                frequency
+            );
+        }
+        assert_eq!(lease_type_to_db(LeaseType::WholeProperty), "whole_property");
         assert_eq!(energy_class_to_db(EnergyClass::A4), "A4");
     }
 

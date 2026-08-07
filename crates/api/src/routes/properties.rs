@@ -10,11 +10,12 @@ use propflow_domain::property::{
 };
 use propflow_domain::shared::{Address, CountryCode, PropertyId};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::Authenticated;
+use crate::routes::explicit_null;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -236,7 +237,7 @@ pub struct UpdatePropertyRequest {
     #[serde(default)]
     pub address: Option<AddressDto>,
     #[serde(default, deserialize_with = "explicit_null")]
-    #[schema(value_type = Option<f64>, nullable)]
+    #[schema(value_type = Option<String>, nullable)]
     pub size_sqm: Patch<Decimal>,
     #[serde(default, deserialize_with = "explicit_null")]
     #[schema(value_type = Option<i32>, nullable)]
@@ -256,18 +257,6 @@ pub struct UpdatePropertyRequest {
     #[serde(default, deserialize_with = "explicit_null")]
     #[schema(value_type = Option<String>, nullable)]
     pub notes: Patch<String>,
-}
-
-/// Distingue "campo assente" da "campo presente e null".
-///
-/// Con `Option<T>` semplice le due cose sono indistinguibili, e un PATCH non
-/// potrebbe mai cancellare un valore.
-fn explicit_null<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: Deserializer<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 impl UpdatePropertyRequest {
@@ -303,7 +292,8 @@ pub struct PropertyResponse {
     pub status: PropertyStatusDto,
     pub is_coliving: bool,
     pub address: AddressDto,
-    #[schema(value_type = Option<f64>)]
+    /// Stringa decimale: `Decimal` serializza come stringa, non come numero.
+    #[schema(value_type = Option<String>)]
     pub size_sqm: Option<Decimal>,
     pub rooms_count: Option<i16>,
     pub bathrooms_count: Option<i16>,

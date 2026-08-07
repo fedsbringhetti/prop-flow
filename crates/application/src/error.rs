@@ -1,5 +1,5 @@
 use propflow_domain::DomainError;
-use propflow_domain::ports::RepositoryError;
+use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 
 /// Errori del service layer. Sono la sola cosa che i bordi HTTP devono tradurre:
 /// né `DomainError` né `RepositoryError` arrivano fino agli handler.
@@ -22,6 +22,12 @@ pub enum AppError {
 
     #[error("{resource} già esistente")]
     Conflict { resource: &'static str },
+
+    /// Il periodo richiesto si sovrappone a una locazione già presente. Resta
+    /// distinto da [`Self::Integrity`] perché è un errore comprensibile del
+    /// chiamante, e merita una risposta che dica cosa è occupato.
+    #[error("esiste già una locazione attiva per {0} nel periodo indicato")]
+    OverlappingLease(LeaseOverlap),
 
     /// Un vincolo del database ha rifiutato la scrittura per un motivo che non
     /// sappiamo tradurre in un messaggio di dominio.
@@ -55,6 +61,7 @@ impl From<RepositoryError> for AppError {
                 details: format!("vincolo `{constraint}`"),
             },
             RepositoryError::Integrity { details } => Self::Integrity { details },
+            RepositoryError::OverlappingLease(target) => Self::OverlappingLease(target),
             // La RLS ha rifiutato una scrittura che il service layer aveva già
             // autorizzato: è un difetto nostro, non un errore del chiamante.
             RepositoryError::RowLevelSecurity => {

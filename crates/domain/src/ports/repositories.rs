@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 
 use crate::events::DomainEvent;
-use crate::identity::{OrgMember, Organization, RefreshSession, TokenHash, User};
-use crate::property::{Property, PropertyStatus};
-use crate::shared::{Email, OrgId, PropertyId, UserId};
+use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
+use crate::lease::{Lease, LeaseParty, LeaseStatus};
+use crate::property::{Property, PropertyStatus, Room};
+use crate::shared::{Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, UserId};
 
 /// Errori della persistenza espressi senza nominare la tecnologia.
 ///
@@ -21,6 +22,17 @@ pub enum RepositoryError {
     #[error("violazione di integrità: {details}")]
     Integrity { details: String },
 
+    /// Il periodo richiesto si sovrappone a una locazione già presente.
+    ///
+    /// Ha una variante propria e non finisce in [`Self::Integrity`] perché è
+    /// l'unico modo di rilevare questa invariante: una verifica applicativa
+    /// preventiva sarebbe soggetta a race condition fra due transazioni
+    /// concorrenti (ADR-015), quindi il conflitto arriva necessariamente dal
+    /// vincolo di esclusione — e chi chiama merita di sapere che ha chiesto un
+    /// periodo occupato, non "un vincolo violato".
+    #[error("periodo sovrapposto a una locazione già presente su {0}")]
+    OverlappingLease(LeaseOverlap),
+
     /// La scrittura è stata rifiutata dalle policy di riga. Segnala un difetto:
     /// il service layer avrebbe dovuto fermare la richiesta prima.
     #[error("scrittura rifiutata dalle policy di riga")]
@@ -31,6 +43,23 @@ pub enum RepositoryError {
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
+
+/// Oggetto della sovrapposizione. Distinguerli non è cosmetico: in un co-living
+/// "l'immobile è occupato" sarebbe sbagliato, perché le altre stanze sono libere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseOverlap {
+    Property,
+    Room,
+}
+
+impl std::fmt::Display for LeaseOverlap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Property => "questo immobile",
+            Self::Room => "questa stanza",
+        })
+    }
+}
 
 #[async_trait]
 pub trait UserRepository: Send {
@@ -115,6 +144,94 @@ pub trait PropertyRepository: Send {
     /// portato ad archiviato in un solo statement. Il ruolo applicativo non ha
     /// nemmeno il privilegio `DELETE`.
     async fn soft_delete(&mut self, property: &Property) -> RepositoryResult<()>;
+}
+
+/// Stanze di un immobile.
+///
+/// Non c'è un `list` generale né una paginazione: una stanza non ha vita propria
+/// e si legge sempre attraverso l'immobile che la contiene, dove il numero di
+/// righe è per costruzione piccolo.
+#[async_trait]
+pub trait RoomRepository: Send {
+    async fn find_by_id(&mut self, id: RoomId) -> RepositoryResult<Option<Room>>;
+    async fn list_for_property(&mut self, property_id: PropertyId) -> RepositoryResult<Vec<Room>>;
+    async fn insert(&mut self, room: &Room) -> RepositoryResult<()>;
+    async fn update(&mut self, room: &Room) -> RepositoryResult<()>;
+    /// Soft delete: la riga resta con `deleted_at` valorizzato, perché i
+    /// contratti per stanza continuano a riferirsi a essa.
+    async fn soft_delete(&mut self, room: &Room) -> RepositoryResult<()>;
+}
+
+/// Filtro di elenco dei contratti con paginazione keyset.
+#[derive(Debug, Clone)]
+pub struct LeaseQuery {
+    pub property_id: Option<PropertyId>,
+    pub status: Option<LeaseStatus>,
+    /// `Some(true)` = solo i contratti in essere oggi, `Some(false)` = solo quelli
+    /// che non lo sono. Il predicato è `app.lease_in_force`, la stessa funzione
+    /// usata dalle viste: due definizioni di "in essere" si contraddirebbero.
+    pub in_force: Option<bool>,
+    pub after: Option<LeaseId>,
+    pub limit: u16,
+}
+
+impl LeaseQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+impl Default for LeaseQuery {
+    fn default() -> Self {
+        Self {
+            property_id: None,
+            status: None,
+            in_force: None,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LeasePage {
+    pub items: Vec<Lease>,
+    pub next_cursor: Option<LeaseId>,
+}
+
+#[async_trait]
+pub trait LeaseRepository: Send {
+    async fn find_by_id(&mut self, id: LeaseId) -> RepositoryResult<Option<Lease>>;
+    async fn list(&mut self, query: &LeaseQuery) -> RepositoryResult<LeasePage>;
+    async fn insert(&mut self, lease: &Lease) -> RepositoryResult<()>;
+    async fn update(&mut self, lease: &Lease) -> RepositoryResult<()>;
+    async fn soft_delete(&mut self, lease: &Lease) -> RepositoryResult<()>;
+}
+
+/// Parti di un contratto.
+///
+/// Nessun `find_by_id`: una parte si raggiunge solo attraverso il proprio
+/// contratto, e caricarne una da sola non è un'operazione di dominio.
+#[async_trait]
+pub trait LeasePartyRepository: Send {
+    async fn list_for_lease(&mut self, lease_id: LeaseId) -> RepositoryResult<Vec<LeaseParty>>;
+    async fn insert(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
+    async fn update(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
+}
+
+/// Inviti a entrare in un'organizzazione.
+///
+/// La ricerca è per **hash del token** e non per email: chi accetta prova di
+/// possedere il token, non di conoscere un indirizzo. Cercare per email
+/// trasformerebbe l'invito in qualcosa di indovinabile.
+#[async_trait]
+pub trait InvitationRepository: Send {
+    async fn find_by_id(&mut self, id: InvitationId) -> RepositoryResult<Option<Invitation>>;
+    async fn find_by_token_hash(
+        &mut self,
+        token_hash: &TokenHash,
+    ) -> RepositoryResult<Option<Invitation>>;
+    async fn insert(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
+    async fn update(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa

@@ -17,7 +17,7 @@ specifica sbagliata è peggio di nessuna specifica.
 | Formato | JSON. Errori in `application/problem+json` |
 | Nomi | `snake_case` nei corpi, `kebab-case` nei percorsi |
 | Enum sul filo | `snake_case` (`apartment`, `partially_rented`) tranne le classi energetiche, maiuscole (`A4`, `G`) |
-| Importi | stringhe decimali (`"62.50"`), non float: un binario a virgola mobile non rappresenta esattamente 0.10 |
+| Importi | stringhe decimali (`"62.50"`), non float: un binario a virgola mobile non rappresenta esattamente 0.10. Vale per ogni valore decimale, comprese percentuali e metrature |
 | Date | ISO 8601 UTC |
 | Creazione | `201` con la risorsa nel corpo |
 | Eliminazione | `204` senza corpo (è un'archiviazione) |
@@ -148,6 +148,118 @@ organizzazione. Non può crearli né modificarli: `403`.
 
 Lo stato non si porta ad `archived` con un PATCH — l'archiviazione ha effetti propri
 (soft delete, evento dedicato) e ha il suo verbo. Il tentativo dà `409`.
+
+### Stanze
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/properties/{property_id}/rooms` | staff | `201`, stato iniziale `available` |
+| GET | `/api/v1/properties/{property_id}/rooms` | membro | `200` con `items`, `404` se l'immobile non è visibile |
+| PATCH | `/api/v1/rooms/{id}` | staff | `200`. `409` se archiviata o se il nome è già usato |
+| DELETE | `/api/v1/rooms/{id}` | staff | `204`. Archiviazione |
+
+Creazione ed elenco sono annidati sotto l'immobile perché una stanza non ha vita
+propria; modifica e archiviazione vanno per id, perché il percorso dell'immobile non
+aggiungerebbe nulla e obbligherebbe il client a portarselo dietro.
+
+Un `property_id` non visibile dà `404` e non `403`, anche in scrittura: senza il
+controllo la richiesta arriverebbe al trigger di coerenza o alle policy di riga, e il
+chiamante vedrebbe un `409` o un `403` dove la risposta corretta è "non esiste".
+
+`monthly_rent` è una stringa decimale (`"450.00"`) come tutti gli importi. Il nome è
+unico dentro l'immobile fra le stanze non archiviate: archiviarne una libera il nome.
+
+L'elenco delle stanze non è paginato — sono poche per costruzione — e la risposta ha
+la forma `{ "items": [ … ] }` senza `next_cursor`.
+
+### Contratti
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/leases` | staff | `201`, stato iniziale `draft` |
+| GET | `/api/v1/leases` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `in_force` |
+| GET | `/api/v1/leases/{id}` | membro | `200` con le parti contrattuali, o `404` |
+| POST | `/api/v1/leases/{id}/parties` | staff | `201`. `409` se esiste già un intestatario principale |
+| POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete |
+| POST | `/api/v1/leases/{id}/terminate` | staff | `200`. `409` se il contratto non è attivo |
+
+L'inquilino vede il **proprio** contratto con `GET`, non gli altri della stessa
+organizzazione: la distinzione la fa `app.can_access_lease` attraverso
+`lease_parties`, non un ramo applicativo sul ruolo.
+
+Attivazione e disdetta sono sotto-risorse e non un `PATCH` sullo stato: hanno
+effetti propri — firma, occupazione del periodo, data di fine rapporto — come già
+l'archiviazione degli immobili.
+
+Il tipo di contratto **non si dichiara**: si deduce dalla presenza di `room_id`.
+Dichiararlo a parte sarebbe soltanto un modo di contraddirlo, e il `CHECK`
+`leases_target_ck` lo rifiuterebbe.
+
+#### `status` ed `effective_status`
+
+La risposta porta due stati:
+
+- `status` è quello **memorizzato**, e cambia solo su azioni esplicite;
+- `effective_status` è quello **alla data odierna**, e può valere `expiring` o
+  `expired` mentre `status` resta `active`.
+
+Il client non ricalcola le date, e nessuno scheduler riscrive le righe: vedi
+[ADR-019](08-decisioni.md#adr-019). Per la stessa ragione `?status=expiring` e
+`?status=expired` danno `422` con l'indicazione di usare `?in_force=false`: quei
+valori non esistono in database, e rispondere con una pagina vuota sarebbe il modo
+peggiore di dirlo.
+
+`end_date` è **esclusiva**: un contratto valido fino al 31 dicembre 2026 si registra
+con `end_date` al 1° gennaio 2027.
+
+#### Periodo occupato
+
+Il `409` sulla sovrapposizione arriva dal vincolo di esclusione del database — una
+verifica applicativa sarebbe soggetta a race condition — ma il nome del vincolo
+resta nei log:
+
+```json
+{
+  "type": "https://propflow.dev/problems/conflict",
+  "title": "Periodo non disponibile",
+  "status": 409,
+  "detail": "esiste già una locazione attiva per questa stanza nel periodo indicato"
+}
+```
+
+Immobile e stanza sono distinti nel messaggio: in un co-living "l'immobile è
+occupato" sarebbe falso, perché le altre stanze restano libere.
+
+### Inviti
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/leases/{id}/invitations` | staff | `201` con il token da consegnare. `409` se c'è già un invito pendente per quell'email |
+| DELETE | `/api/v1/invitations/{id}` | staff | `204`. `409` se già accettato |
+| POST | `/api/v1/auth/accept-invitation` | autenticato | `200`. `401` se il token è sconosciuto, scaduto o revocato; `409` se già accettato |
+
+Emettere l'invito crea anche la **parte contrattuale** con `user_id` nullo, se non
+esiste già una riga con quella email: è ciò che l'invitato collegherà a sé, e senza
+di essa accettare non lo renderebbe parte di nulla.
+
+Il token in chiaro esiste **solo** nella risposta a `POST .../invitations`, come il
+refresh token: in database ne resta lo hash. L'invio dell'email non è implementato —
+la porta `Notifier` è dichiarata e senza adattatore — quindi è il proprietario a
+consegnare il token.
+
+`accept-invitation` richiede l'autenticazione ma **non** l'appartenenza: è
+l'operazione che la crea. Chi accetta non deve passare `X-Org-Id`, perché di quella
+organizzazione non è ancora membro; dopo l'accettazione sì, oppure attende il
+prossimo login.
+
+Un token sconosciuto e un token valido intestato a un'altra email danno lo stesso
+`401` con lo stesso corpo: distinguerli sarebbe un oracolo per capire quali inviti
+esistono. Un invito **già accettato** dà invece `409`, perché chi presenta quel token
+è la persona giusta e merita di sapere che l'operazione è già avvenuta.
+
+Un invito può conferire soltanto il ruolo `tenant`. Il vincolo è nel dominio e
+ripetuto nella policy di riga: nominare uno staff passa da chi amministra
+l'organizzazione, non da un token spedito per email.
 
 Esempio di creazione:
 

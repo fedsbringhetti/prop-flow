@@ -5,8 +5,8 @@ usano `security_invoker`, introdotto in 15, senza il quale una vista girerebbe c
 i diritti del proprietario e aggirerebbe la Row Level Security del chiamante.
 
 Numeri dello schema attuale: **23 tabelle** di business più `audit_log`
-partizionata, **35 enum**, **4 domini**, **169 indici**, **59 policy RLS**,
-**49 trigger**, **4 viste**, **25 funzioni**, **16 migration**.
+partizionata, **35 enum**, **6 domini**, **169 indici**, **64 policy RLS**,
+**49 trigger**, **4 viste**, **28 funzioni**, **18 migration**.
 
 ## Diagramma ER
 
@@ -118,7 +118,8 @@ un'organizzazione di cui l'utente non è membro e si aspetta zero righe.
 
 `app.member_role`, `app.is_org_member`, `app.is_org_staff`, `app.shares_org_with`,
 `app.can_access_property`, `app.can_access_lease`, `app.can_access_ticket`,
-`app.can_access_expense_group`, `app.can_access_attachment`.
+`app.can_access_expense_group`, `app.can_access_attachment`,
+`app.has_pending_invitation`, `app.current_user_email`.
 
 Sono `SECURITY DEFINER` per una ragione precisa: una policy che interroghi in linea
 una tabella a sua volta protetta da RLS ricorre su se stessa. Leggendo come
@@ -137,6 +138,22 @@ Ne seguono due conseguenze da non violare:
 Sono dichiarate `COST 500`: comunica al planner che sono costose, così i predicati
 indicizzabili vengono valutati prima. Verificato con `EXPLAIN`: il confronto su
 `org_id` diventa un *One-Time Filter* valutato una volta per query, non per riga.
+
+### Accettazione di un invito
+
+Accettare un invito richiede tre scritture in un'organizzazione di cui non si è
+ancora membri. Non passa dal pool privilegiato: `app.has_pending_invitation(org_id)`
+e `app.current_user_email()` abilitano cinque policy dedicate — `org_members` INSERT
+di sé stessi come `tenant`, `org_invitations` SELECT e UPDATE del proprio invito,
+`lease_parties` SELECT e UPDATE della riga con la propria email.
+
+Sono due controlli indipendenti: l'applicazione prova che chi chiama **possiede** il
+token confrontandone lo hash, la RLS prova che esiste un invito pendente per
+quell'email. Motivazioni e conseguenze in [ADR-020](08-decisioni.md#adr-020).
+
+Le policy di lettura dell'invitato si basano sull'email e **non** sullo stato
+"pendente": dipendere da quest'ultimo renderebbe invisibile la riga appena marcata
+accettata, che è la trappola di [ADR-008](08-decisioni.md#adr-008).
 
 ### Le policy non filtrano il soft delete
 
@@ -254,8 +271,19 @@ Contengono solo aggregazioni derivabili, nessuna regola di business.
 |---|---|
 | `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto |
 | `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living |
-| `v_property_occupancy` | Stanze totali e occupate, percentuale, canone attivo |
-| `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti attivi, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
+| `v_property_occupancy` | Stanze totali e occupate, percentuale, contratti in essere e loro canone |
+| `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
+
+Le due viste sui contratti non filtrano `status = 'active'` ma
+`app.lease_in_force(status, start_date, end_date)`: lo stato memorizzato resta
+`active` anche dopo la scadenza, perché nessuno lo aggiorna, e contarlo gonfiava
+occupazione e canone atteso. Storia in [ADR-019](08-decisioni.md#adr-019).
+
+`app.lease_in_force` è l'unica definizione di "in essere": la usano le viste e il
+filtro `in_force` dell'elenco dei contratti, e il dominio ripete la stessa formula
+in `Lease::is_in_force`. `end_date` è **esclusiva** — il contratto copre
+`[start_date, end_date)` — per coerenza con i vincoli di non sovrapposizione, che
+usano un `daterange` `[)`.
 
 ## Migrazioni
 
