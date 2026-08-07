@@ -5,6 +5,9 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Richiamabile dal workflow di rilascio: la verifica di un tag è *la stessa* di
+  # quella di una pull request, non una copia che col tempo diverge.
+  workflow_call:
 
 # Un push che arriva mentre la pipeline precedente sullo stesso ref è ancora in
 # corso la annulla: nessuno guarda l'esito di un commit già superato.

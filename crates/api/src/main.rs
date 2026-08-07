@@ -102,7 +102,11 @@ async fn main() -> Result<()> {
     let local = listener
         .local_addr()
         .context("indirizzo locale non disponibile")?;
-    tracing::info!(address = %local, "API in ascolto");
+    tracing::info!(
+        address = %local,
+        version = env!("CARGO_PKG_VERSION"),
+        "API in ascolto"
+    );
 
     axum::serve(
         listener,
