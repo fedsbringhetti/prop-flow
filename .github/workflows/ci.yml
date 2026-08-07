@@ -1,0 +1,208 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  # Richiamabile dal workflow di rilascio: la verifica di un tag è *la stessa* di
+  # quella di una pull request, non una copia che col tempo diverge.
+  workflow_call:
+
+# Un push che arriva mentre la pipeline precedente sullo stesso ref è ancora in
+# corso la annulla: nessuno guarda l'esito di un commit già superato.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # I job non compilano mai per il debugger: senza informazioni di debug la cache
+  # resta molto più piccola e il ripristino è più rapido.
+  CARGO_PROFILE_TEST_DEBUG: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Formato e lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nessuna action per il toolchain: la versione è fissata in
+      # rust-toolchain.toml, e rustup la installa da sé. Una seconda dichiarazione
+      # nel workflow sarebbe un secondo posto da tenere allineato.
+      - name: Toolchain
+        run: rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: Formato
+        run: cargo fmt --all --check
+
+      # I lint del workspace già negano unwrap/expect/panic/unsafe. `-D warnings`
+      # aggiunge tutto il resto: un avviso che nessuno legge è un avviso che non
+      # esiste.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  architecture:
+    name: Vincoli architetturali
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: architecture
+
+      # Il dominio non deve dipendere dall'infrastruttura, l'application layer non
+      # deve conoscere quella concreta, e negli handler HTTP non ci deve essere
+      # SQL. Sono i vincoli tassativi del progetto: verificati, non promessi.
+      - name: Purezza del dominio
+        run: ./ops/ci/check-domain-purity.sh
+
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test su PostgreSQL reale
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # locale C: ordinamenti e vincoli unique deterministici, come in locale
+          POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: Client PostgreSQL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # Stessa procedura del runner locale: database, tre ruoli con privilegi
+      # minimi, migration applicate dal binario di deploy e non da psql.
+      - name: Prepara il database
+        run: ./ops/ci/prepare-database.sh >> "$GITHUB_ENV"
+
+      - name: Invarianti dello schema
+        run: ./ops/ci/check-schema.sh "$PROPFLOW_TEST_MIGRATOR_URL"
+
+      # Il migratore deve essere idempotente: una seconda esecuzione su un
+      # database già migrato non deve riapplicare nulla né creare una seconda
+      # tabella di bookkeeping. È un errore che si manifesterebbe solo al primo
+      # redeploy, quindi va verificato qui.
+      - name: Migrazioni idempotenti
+        run: |
+          PROPFLOW__DATABASE__MIGRATOR_URL="$PROPFLOW_TEST_MIGRATOR_URL" \
+          PROPFLOW__DATABASE__MIGRATIONS_DIR="$PWD/migrations" \
+            cargo run --quiet --locked -p propflow-migrator
+          ./ops/ci/check-schema.sh "$PROPFLOW_TEST_MIGRATOR_URL"
+
+      - name: Chiavi di firma effimere
+        run: ./ops/dev/generate-jwt-keys.sh "${{ runner.temp }}/secrets"
+
+      # `--nocapture` serve al controllo che segue: senza di esso l'harness
+      # nasconde l'output dei test passati, compreso l'avviso di quelli saltati.
+      #
+      # Se le variabili del database non arrivassero, i test di integrazione si
+      # dichiarerebbero saltati e la suite passerebbe senza aver verificato nulla.
+      # Il grep rende impossibile un verde silenzioso.
+      - name: Suite
+        env:
+          PROPFLOW_TEST_JWT_PRIVATE_KEY: ${{ runner.temp }}/secrets/jwt_ed25519.pem
+          PROPFLOW_TEST_JWT_PUBLIC_KEY: ${{ runner.temp }}/secrets/jwt_ed25519.pub.pem
+        run: |
+          set -euo pipefail
+          cargo test --workspace --locked -- --test-threads=4 --nocapture \
+            | tee "${{ runner.temp }}/test-output.log"
+          if grep -q 'SALTATO' "${{ runner.temp }}/test-output.log"; then
+            echo "::error::test di integrazione saltati: ambiente di test incompleto"
+            grep 'SALTATO' "${{ runner.temp }}/test-output.log"
+            exit 1
+          fi
+          echo "nessun test saltato"
+
+  # ---------------------------------------------------------------------------
+  image:
+    name: Immagine container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # Si costruisce e non si pubblica: la pipeline verifica che l'immagine sia
+      # producibile, la pubblicazione è una decisione di release.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  dependencies:
+    name: Vulnerabilità e provenienza
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Il binario installato sul runner, non l'action containerizzata: quella gira
+      # in un'immagine Alpine con un Rust proprio, dove il pin di
+      # rust-toolchain.toml non esiste e rustup emette un errore fuorviante. Qui il
+      # toolchain si risolve normalmente, non serve il pull di un'immagine da
+      # 239 MB, e l'output di cargo-deny compare nel log del passo.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      # advisories: CVE note e crate ritirati. bans: versioni duplicate della
+      # stessa libreria e wildcard verso crates.io. sources: nessuna dipendenza da
+      # registry o git non attesi.
+      # Il controllo delle licenze richiede una allow-list curata e arriverà con
+      # quella: un gate che dà falsi rossi viene disattivato entro una settimana.
+      - name: cargo-deny
+        run: cargo deny --all-features check advisories bans sources
+
+  # ---------------------------------------------------------------------------
+  # Job di riepilogo: è l'unico che conviene richiedere nella protezione del
+  # branch, così aggiungere un job non richiede di riconfigurare GitHub.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [lint, architecture, test, image, dependencies]
+    if: always()
+    steps:
+      - name: Esito
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::almeno un job è fallito"
+            exit 1
+          fi
+          echo "tutti i job sono passati"

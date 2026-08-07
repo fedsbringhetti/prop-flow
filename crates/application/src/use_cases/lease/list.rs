@@ -1,0 +1,91 @@
+use std::sync::Arc;
+
+use propflow_domain::RequestContext;
+use propflow_domain::lease::LeaseStatus;
+use propflow_domain::ports::{Clock, LeaseQuery, UnitOfWorkFactory};
+use propflow_domain::shared::{LeaseId, PropertyId};
+
+use super::LeaseView;
+use crate::authorization;
+use crate::error::{AppError, AppResult};
+
+#[derive(Debug, Clone, Default)]
+pub struct ListLeasesQuery {
+    pub property_id: Option<PropertyId>,
+    pub status: Option<LeaseStatus>,
+    pub in_force: Option<bool>,
+    pub after: Option<LeaseId>,
+    pub limit: Option<u16>,
+}
+
+/// Pagina di contratti, ognuno con lo stato effettivo già calcolato.
+#[derive(Debug, Clone)]
+pub struct LeaseListPage {
+    pub items: Vec<LeaseView>,
+    pub next_cursor: Option<LeaseId>,
+}
+
+/// Elenca i contratti visibili al chiamante: tutti quelli dell'organizzazione per
+/// lo staff, i propri per l'inquilino.
+pub struct ListLeases {
+    unit_of_work: Arc<dyn UnitOfWorkFactory>,
+    clock: Arc<dyn Clock>,
+}
+
+impl ListLeases {
+    #[must_use]
+    pub const fn new(unit_of_work: Arc<dyn UnitOfWorkFactory>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            unit_of_work,
+            clock,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        context: &RequestContext,
+        query: ListLeasesQuery,
+    ) -> AppResult<LeaseListPage> {
+        authorization::ensure_member(context)?;
+
+        // `expiring` ed `expired` non sono memorizzati (ADR-019): filtrarci sopra
+        // restituirebbe sempre zero righe, che è il modo peggiore di dirlo. Meglio
+        // un 422 che indica il filtro corretto.
+        if query.status.is_some_and(LeaseStatus::is_derived) {
+            return Err(AppError::Validation(
+                propflow_domain::DomainError::validation(
+                    "status",
+                    "`expiring` ed `expired` sono stati derivati dalle date: usa il filtro `in_force`",
+                ),
+            ));
+        }
+
+        // Il limite si tronca invece di rifiutare: un client che chiede 10_000
+        // righe ottiene la pagina massima, non un errore da gestire.
+        let limit = query
+            .limit
+            .unwrap_or(LeaseQuery::DEFAULT_LIMIT)
+            .clamp(1, LeaseQuery::MAX_LIMIT);
+
+        let repository_query = LeaseQuery {
+            property_id: query.property_id,
+            status: query.status,
+            in_force: query.in_force,
+            after: query.after,
+            limit,
+        };
+
+        let mut uow = self.unit_of_work.begin(context).await?;
+        let page = uow.leases().list(&repository_query).await?;
+
+        let today = self.clock.now().date_naive();
+        Ok(LeaseListPage {
+            items: page
+                .items
+                .into_iter()
+                .map(|lease| LeaseView::new(lease, today))
+                .collect(),
+            next_cursor: page.next_cursor,
+        })
+    }
+}

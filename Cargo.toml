@@ -1,0 +1,78 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+# Una sola versione per tutto il workspace: i crate non hanno vita propria e non
+# vengono pubblicati su crates.io, quindi versionarli separatamente creerebbe sei
+# numeri da tenere allineati per nulla. Un rilascio tocca questa riga e basta.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "UNLICENSED"
+publish = false
+
+# Le versioni stanno tutte qui: i crate membri usano `dep.workspace = true`,
+# così non possono divergere fra loro.
+[workspace.dependencies]
+propflow-domain = { path = "crates/domain" }
+propflow-application = { path = "crates/application" }
+propflow-infrastructure = { path = "crates/infrastructure" }
+
+async-trait = "0.1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "request-id", "timeout", "limit", "cors"] }
+http = "1"
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "chrono", "rust_decimal", "json", "macros", "migrate",
+] }
+
+argon2 = "0.5"
+# `rust_crypto` e non `aws_lc_rs`: implementazione interamente in Rust, quindi
+# nessun toolchain C né cmake nell'immagine di build, e cross-compilazione senza
+# sorprese. jsonwebtoken 11 obbliga a scegliere, e non sceglie per noi.
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
+getrandom = "0.3"
+sha2 = "0.11"
+base64 = "0.23"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.33"
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono", "decimal"] }
+# `vendored`: gli asset di Swagger UI arrivano come crate invece di essere
+# scaricati dal build script. Senza questa feature la build richiede rete e
+# `curl` nell'immagine, quindi non è riproducibile né eseguibile in ambienti
+# isolati.
+utoipa-swagger-ui = { version = "9", default-features = false, features = ["axum", "vendored"] }
+
+anyhow = "1"
+figment = { version = "0.10", features = ["env", "toml"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Un unwrap/panic in un handler è un 500 servito al cliente: vietato in tutto il workspace.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

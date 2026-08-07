@@ -1,0 +1,92 @@
+# Stack di sviluppo locale.
+#
+# `migrate` gira come `propflow_migrator` e deve completare prima che `api` e
+# `worker` partano: applicare lo schema dal servizio che lo usa richiederebbe di
+# dargli privilegi DDL che non deve avere.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: propflow-postgres
+    environment:
+      POSTGRES_DB: propflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # collazione deterministica: i test su ORDER BY/unique non devono dipendere dall'host
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    command:
+      - postgres
+      - -c
+      - timezone=Europe/Rome
+      - -c
+      - log_min_duration_statement=200
+      # niente parametri di query nei log: i valori possono contenere PII
+      - -c
+      - log_statement=none
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d propflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    image: propflow:dev
+    command: ["propflow-migrator"]
+    environment:
+      PROPFLOW__DATABASE__MIGRATOR_URL: postgres://propflow_migrator:migrator@postgres:5432/propflow
+      PROPFLOW__DATABASE__MIGRATIONS_DIR: /app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    image: propflow:dev
+    command: ["propflow-api"]
+    environment:
+      # Ruolo soggetto a Row Level Security.
+      PROPFLOW__DATABASE__APPLICATION_URL: postgres://propflow_app:app@postgres:5432/propflow
+      # Ruolo con BYPASSRLS: solo flussi pre-autenticazione.
+      PROPFLOW__DATABASE__PRIVILEGED_URL: postgres://propflow_worker:worker@postgres:5432/propflow
+      PROPFLOW__AUTH__PRIVATE_KEY_PATH: /run/secrets/jwt_ed25519.pem
+      PROPFLOW__AUTH__PUBLIC_KEY_PATH: /run/secrets/jwt_ed25519.pub.pem
+      PROPFLOW__TELEMETRY__JSON_LOGS: "true"
+    volumes:
+      # Le chiavi arrivano come file in sola lettura, non da variabili d'ambiente:
+      # generarle con ./ops/dev/generate-jwt-keys.sh
+      - ./.secrets:/run/secrets:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "propflow-api --version >/dev/null 2>&1 || exit 0"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  worker:
+    build: .
+    image: propflow:dev
+    command: ["propflow-worker"]
+    environment:
+      PROPFLOW__DATABASE__PRIVILEGED_URL: postgres://propflow_worker:worker@postgres:5432/propflow
+      RUST_LOG: info
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:

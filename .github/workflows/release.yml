@@ -1,0 +1,149 @@
+name: Release
+
+# Un rilascio parte da un tag su `main`, non da un push su un branch: il tag è
+# l'unico riferimento immutabile, e legare la pubblicazione a un branch
+# significherebbe che il contenuto di una versione può cambiare dopo essere stato
+# annunciato.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Il tag e il manifest devono concordare. Senza questo controllo si può taggare
+  # v0.2.0 mentre il workspace dichiara 0.1.0, e l'immagine pubblicata riporterebbe
+  # nelle etichette OCI e nel documento OpenAPI una versione diversa da quella del
+  # tag che l'ha prodotta.
+  guard:
+    name: Coerenza della versione
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confronta tag e manifest
+        id: check
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [[ "$tag" != "$manifest" ]]; then
+            echo "::error::il tag v${tag} non corrisponde alla versione del workspace ${manifest}"
+            exit 1
+          fi
+          echo "version=${tag}" >> "$GITHUB_OUTPUT"
+          echo "tag e manifest concordano: ${tag}"
+
+  # ---------------------------------------------------------------------------
+  # Stessa pipeline delle pull request. Un rilascio non ha una verifica propria:
+  # se ne avesse una, sarebbe quella a divergere.
+  verify:
+    name: Verifica
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Pubblicazione dell'immagine
+    needs: [guard, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `latest` solo per le versioni stabili: un tag di pre-release non deve
+      # diventare ciò che si scarica per difetto.
+      - name: Tag dell'immagine
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Build e push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.guard.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  release:
+    name: GitHub Release
+    needs: [guard, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git-cliff ha bisogno della storia completa e dei tag per sapere dove
+          # comincia questa versione.
+          fetch-depth: 0
+
+      - name: Sezione di changelog di questa versione
+        id: changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+
+      - name: Crea la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          {
+            cat "${{ steps.changelog.outputs.changelog }}"
+            cat <<EOF
+
+          ---
+
+          ### Container image
+
+          \`\`\`
+          ghcr.io/${GITHUB_REPOSITORY}:${VERSION}
+          \`\`\`
+
+          Migrations run separately, before the rollout:
+
+          \`\`\`
+          docker run --rm ghcr.io/${GITHUB_REPOSITORY}:${VERSION} propflow-migrator
+          \`\`\`
+          EOF
+          } > release-notes.md
+
+          prerelease=""
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then prerelease="--prerelease"; fi
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            ${prerelease}
