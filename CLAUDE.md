@@ -104,21 +104,59 @@ possibile.
 
 ## 3. Metodo di lavoro
 
+### Su git si scrive in inglese. Tutto.
+
+**Senza eccezioni**: messaggi di commit, nomi dei branch, titoli e corpi delle PR,
+commenti di review, messaggi di tag, note di rilascio, `CHANGELOG.md`, titoli e
+descrizioni delle issue.
+
+Restano in italiano il codice, i commenti nel codice, `docs/` e questo file.
+
+Il criterio è dove vive il testo: ciò che finisce **dentro** i file del repository
+segue la lingua del progetto; ciò che finisce **nei metadati di git e di GitHub** è
+in inglese, perché è la parte che sopravvive ai contributori e che un lettore
+esterno — o uno strumento che genera un changelog — incontra per prima.
+
+Prima di scrivere un titolo di PR o un messaggio di commit, verifica di essere in
+inglese. È l'errore più facile da commettere e il più costoso da correggere dopo,
+perché richiede di riscrivere la storia o di riaprire le PR.
+
+### Commit
+
 - **Si verifica prima di committare, e i commit si concordano.** Implementa,
   esegui la suite completa, presenta il risultato, *poi* prepara i commit.
-- **Conventional Commits, scritti in inglese.** Messaggi di commit, titoli e corpi
-  delle PR vanno in inglese. Il codice, i commenti e `docs/` restano in italiano:
-  la cronologia git è la parte del progetto che sopravvive ai contributori e che
-  un lettore esterno incontra per prima. Vedi `git log` per il registro esistente.
-  Il corpo spiega il **perché**, non il cosa: il diff dice già cosa è cambiato.
+- **Conventional Commits.** Il corpo spiega il **perché**, non il cosa: il diff
+  dice già cosa è cambiato. Vedi `git log` per il registro esistente.
+- **Un commit per unità logica.** Un commit da 4.000 righe che introduce un modulo
+  intero non è rivedibile; si divide per livello (dominio, use case, infrastruttura,
+  bordo HTTP, test) o per capacità.
+
+### Pull request
+
+- **Il corpo di una PR è documentazione, non una nota di passaggio.** Deve bastare a
+  chi la rilegge fra un anno senza aprire il diff: cosa cambia e perché, quali
+  decisioni sono state prese e quali alternative scartate, quali invarianti e vincoli
+  vengono introdotti, come è stato verificato, cosa resta fuori. Tre righe buttate là
+  non sono accettabili.
+- Il file `.github/pull_request_template.md` riporta le sezioni attese. Compilarle
+  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla.
+- **Riferimenti puntuali**: numeri di migration, nomi di ADR, percorsi di file,
+  identificatori di vincoli e policy. Un corpo che dice "sistemata la RLS" non serve
+  a nessuno.
+- **PR in stack:** la base è il branch padre, non `dev`. Non usare *squash* sul
+  padre di uno stack: rompe i figli.
+
+### Altro
+
 - **Nessuna autoreferenza dell'assistente** nei messaggi di commit, nei corpi
   delle PR, nei commenti: né firme, né `Co-Authored-By`, né riferimenti a come il
   cambiamento è stato prodotto o a documenti di pianificazione esterni al
   repository. Un commit si spiega da sé a chi lo leggerà fra un anno.
-- **Branch:** `<tipo>/<descrizione-kebab>`. `dev` è il branch di integrazione,
-  `main` la linea stabile. Mai committare direttamente su `main` o `dev`.
-- **PR in stack:** la base è il branch padre, non `dev`. Non usare *squash* sul
-  padre di uno stack: rompe i figli.
+- **Branch:** `<tipo>/<descrizione-kebab>`, in inglese. `dev` è il branch di
+  integrazione, `main` la linea stabile. Mai committare direttamente su `main` o
+  `dev`.
+- **Non si cancellano branch altrui** senza chiedere, nemmeno quando il contenuto è
+  già altrove: chi non ha potuto verificare non ha modo di saperlo.
 - **I commenti spiegano il perché.** Un commento che riformula il codice è
   rumore; uno che spiega perché una via apparentemente più semplice non funziona
   vale il suo spazio.
