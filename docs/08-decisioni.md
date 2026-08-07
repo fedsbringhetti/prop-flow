@@ -492,3 +492,59 @@ dice "non si usa il pool privilegiato": è un test che fallisce se qualcuno lo u
 scrivere, e sarebbe stato il quarto uso di un percorso che ne ammette tre — dopo il
 quarto il criterio non esiste più, e la superficie di codice che gira con
 `BYPASSRLS` cresce senza che nessuno debba giustificarlo.
+
+---
+
+<a id="adr-021"></a>
+
+## ADR-021 — Il confine di isolamento si difende con i privilegi di colonna, non con il `WITH CHECK`
+
+**Difetto osservato.** Le policy introdotte da [ADR-020](#adr-020) permettevano a un
+utente autenticato con un invito pendente di iscriversi a **qualunque**
+organizzazione di cui conoscesse l'identificatore, e di leggere nome ed email di
+tutti i suoi membri. Riprodotto su database reale prima della correzione.
+
+**Causa.** Il `WITH CHECK` di una policy di UPDATE vincola **solo le colonne che
+nomina**; tutte le altre restano libere. Su `org_invitations_invitee_accept` il
+`WITH CHECK` era `email = app.current_user_email()`, quindi `org_id` non era
+vincolato:
+
+```sql
+UPDATE app.org_invitations SET org_id = '<altra org>' WHERE email = '<la mia>';
+```
+
+passava la `USING` — la riga *esistente* era un invito pendente e valido — e passava
+il `WITH CHECK`, perché l'email non cambiava. Da lì
+`has_pending_invitation(<altra org>)` diventava vero e
+`org_members_accept_invitation` ammetteva l'iscrizione come `tenant`.
+
+La stessa forma su `lease_parties_invitee_link`, dove il `WITH CHECK` fissava `email`
+e `user_id` ma non `lease_id`: l'invitato poteva agganciarsi a un contratto diverso
+da quello per cui era stato invitato.
+
+**Causa radice.** Queste due sono le uniche policy che concedono scrittura a un **non
+membro**, attraversando il confine dell'organizzazione. Altrove una colonna non
+vincolata resta dentro il perimetro di chi ha già accesso, e il danno massimo è
+spostare un proprio dato fra proprie organizzazioni. Qui la colonna non vincolata
+*è* il confine.
+
+**Decisione.** Non si irrigidisce il `WITH CHECK`. Una policy non può confrontare la
+riga nuova con quella vecchia — non esiste `OLD` — quindi ogni tentativo in quella
+direzione finirebbe per dipendere da sottigliezze di snapshot, che è esattamente il
+genere di ragionamento che ha prodotto il difetto. Si toglie invece al ruolo
+applicativo il privilegio di aggiornare le colonne di confine
+(`migrations/0019_invitation_column_privileges.sql`). Il permesso è verificato prima
+delle policy, quindi la manovra fallisce con `permission denied` qualunque cosa la
+policy ammetta.
+
+**Conseguenze.** L'elenco delle colonne concesse deve restare allineato a ciò che i
+repository aggiornano: aggiungerne una a una `SET` richiede di aggiungerla anche al
+`GRANT`. È voluto — è il punto in cui ci si ferma a chiedersi se quella colonna debba
+davvero essere scrivibile dall'applicazione. Il controllo 11 delle invarianti
+verifica che le colonne di confine restino non aggiornabili, e due test di
+integrazione riproducono i tentativi e li attendono respinti.
+
+**Regola generale che ne segue.** Quando una policy concede scrittura oltre il
+confine che il resto dello schema difende, il `WITH CHECK` non basta: va accompagnato
+da un privilegio di colonna che fissi le colonne del confine. Vale per ogni policy
+futura che ammetta un non membro.

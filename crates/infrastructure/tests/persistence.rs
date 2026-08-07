@@ -787,3 +787,65 @@ async fn accepting_an_invitation_never_touches_the_privileged_pool() {
         "l'inquilino non vede il contratto di cui è parte"
     );
 }
+
+/// Le colonne che definiscono il confine di isolamento non devono essere
+/// aggiornabili dal ruolo applicativo.
+///
+/// Prima della migration 0019 non lo erano: il `WITH CHECK` della policy
+/// `org_invitations_invitee_accept` vincolava solo l'email, quindi un utente con un
+/// invito pendente poteva ripuntarlo su un'altra organizzazione, farsi risultare
+/// invitato là e iscriversi come inquilino. Vedi ADR-021.
+///
+/// Il privilegio viene verificato prima delle policy e prima che le righe vengano
+/// esaminate, quindi il tentativo fallisce anche su un identificatore inesistente:
+/// il test non ha bisogno di ricostruire lo scenario dell'attacco per dimostrare che
+/// la strada è chiusa.
+#[tokio::test]
+async fn the_application_role_cannot_repoint_an_invitation_to_another_organization() {
+    let env = require_db!();
+
+    let attempt = sqlx::query("UPDATE app.org_invitations SET org_id = $1 WHERE id = $2")
+        .bind(uuid::Uuid::now_v7())
+        .bind(uuid::Uuid::now_v7())
+        .execute(env.pools.application())
+        .await;
+
+    let error = attempt.expect_err("l'aggiornamento di org_id doveva essere negato");
+    assert!(
+        error.to_string().contains("permission denied"),
+        "atteso un rifiuto per privilegi, ottenuto: {error}"
+    );
+}
+
+/// Stessa forma sulla parte contrattuale: `lease_id` decide *quale* contratto la riga
+/// collega, e l'invitato non deve poterlo cambiare per agganciarsi a un contratto
+/// diverso da quello per cui è stato invitato.
+#[tokio::test]
+async fn the_application_role_cannot_repoint_a_lease_party_to_another_lease() {
+    let env = require_db!();
+
+    let attempt = sqlx::query("UPDATE app.lease_parties SET lease_id = $1 WHERE id = $2")
+        .bind(uuid::Uuid::now_v7())
+        .bind(uuid::Uuid::now_v7())
+        .execute(env.pools.application())
+        .await;
+
+    let error = attempt.expect_err("l'aggiornamento di lease_id doveva essere negato");
+    assert!(
+        error.to_string().contains("permission denied"),
+        "atteso un rifiuto per privilegi, ottenuto: {error}"
+    );
+
+    // Il collegamento legittimo — `user_id` — resta invece concesso: la restrizione
+    // riguarda il confine, non l'operazione.
+    let allowed = sqlx::query("UPDATE app.lease_parties SET user_id = $1 WHERE id = $2")
+        .bind(uuid::Uuid::now_v7())
+        .bind(uuid::Uuid::now_v7())
+        .execute(env.pools.application())
+        .await;
+    assert!(
+        allowed.is_ok(),
+        "l'aggiornamento di user_id non doveva essere negato: {:?}",
+        allowed.err()
+    );
+}
