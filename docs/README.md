@@ -15,6 +15,7 @@ motivazioni.
 | [07 — Operazioni](07-operazioni.md) | Configurazione, deploy, migrazioni in produzione, osservabilità, CI |
 | [08 — Decisioni](08-decisioni.md) | Registro delle decisioni architetturali con le motivazioni |
 | [09 — Stato e roadmap](09-stato-e-roadmap.md) | Cosa è implementato, cosa manca, debiti tecnici noti |
+| [10 — Rilasci](10-rilasci.md) | Versionamento, changelog, flusso di rilascio, hotfix, rollback |
 
 ## Come leggere questa documentazione
 

@@ -3,6 +3,10 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
+# Una sola versione per tutto il workspace: i crate non hanno vita propria e non
+# vengono pubblicati su crates.io, quindi versionarli separatamente creerebbe sei
+# numeri da tenere allineati per nulla. Un rilascio tocca questa riga e basta.
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "UNLICENSED"

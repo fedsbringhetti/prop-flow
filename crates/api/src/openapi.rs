@@ -10,7 +10,10 @@ use utoipa::{Modify, OpenApi};
 #[openapi(
     info(
         title = "PropFlow API",
-        version = "0.1.0",
+        // Dal manifest: una versione scritta a mano qui diverge dal binario al primo
+        // rilascio, e il documento OpenAPI è la prima cosa che un client guarda per
+        // sapere con cosa sta parlando.
+        version = env!("CARGO_PKG_VERSION"),
         description = "Piattaforma PropTech bidirezionale: proprietari e inquilini."
     ),
     paths(

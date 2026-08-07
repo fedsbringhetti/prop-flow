@@ -49,6 +49,7 @@ difetto osservato, con il motivo registrato in
 | [Operazioni](docs/07-operazioni.md) | configurazione, deploy, osservabilità, CI |
 | [Decisioni](docs/08-decisioni.md) | registro delle scelte architetturali |
 | [Stato e roadmap](docs/09-stato-e-roadmap.md) | cosa c'è, cosa manca, debiti noti |
+| [Rilasci](docs/10-rilasci.md) | versionamento, changelog, flusso di rilascio |
 
 [`CLAUDE.md`](CLAUDE.md) contiene le regole operative in forma sintetica, per
 persone e assistenti che lavorano sul repository.

@@ -40,6 +40,17 @@ RUN set -eux; \
 # =============================================================================
 FROM debian:bookworm-slim AS runtime
 
+# Etichette OCI: permettono di risalire da un'immagine in esecuzione al commit che
+# l'ha prodotta. Senza, l'unico modo di sapere cosa gira è fidarsi del tag.
+ARG VERSION=0.0.0-dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="PropFlow" \
+      org.opencontainers.image.description="Piattaforma PropTech bidirezionale" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/fedsbringhetti/prop-flow" \
+      org.opencontainers.image.licenses="UNLICENSED"
+
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates; \
