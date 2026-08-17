@@ -94,6 +94,15 @@ Tre accorgimenti, tutti verificati da test:
 Analogamente, `404` e non `403` quando una risorsa non è visibile: un `403`
 confermerebbe che esiste.
 
+Il codice d'errore introdotto da [ADR-022](08-decisioni.md#adr-022) non riapre
+nessuna di queste porte: i due `401` del punto 1 portano anche lo **stesso `code`**
+(`auth.invalid_credentials`), ed è verificato da un test. L'unica distinzione
+concessa è fra access token scaduto (`auth.token_expired`) e non valido
+(`auth.token_invalid`), che non è un oracolo — per ottenere il primo bisogna
+presentare un token che abbiamo firmato noi, quindi si dice solo a chi già lo sapeva.
+Il **refresh** invece resta indistinto: lì separare "scaduto" da "riusato" direbbe a
+chi ha rubato un token se è ancora vivo.
+
 ### Blocco dopo tentativi falliti
 
 Dieci tentativi consecutivi bloccano l'account per **15 minuti**. Temporaneo e non
@@ -159,8 +168,11 @@ dell'utente corrente. Un invito può conferire solo il ruolo `tenant`, e la cond
 di staff nemmeno con una query scritta a mano.
 
 Un token sconosciuto e un token intestato a un'altra email danno lo stesso `401` con
-lo stesso corpo, per la ragione di [ADR-017](08-decisioni.md#adr-017): distinguerli
-sarebbe un oracolo per capire quali inviti esistono. La scadenza è di **sette
+lo stesso corpo — `code` compreso — per la ragione di
+[ADR-017](08-decisioni.md#adr-017): distinguerli sarebbe un oracolo per capire quali
+inviti esistono. Lo stesso vale per un invito scaduto o revocato: il dominio sa
+distinguerli e i codici esistono, ma il caso d'uso li ripiega tutti su
+`auth.invalid_credentials` prima della risposta ([ADR-022](08-decisioni.md#adr-022)). La scadenza è di **sette
 giorni**: abbastanza perché un'email non urgente venga letta, poco perché una casella
 compromessa mesi dopo valga ancora come credenziale.
 

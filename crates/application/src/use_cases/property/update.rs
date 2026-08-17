@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, PropertyUpdated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::property::{Property, PropertyChanges};
 use propflow_domain::shared::PropertyId;
+use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -44,7 +44,7 @@ impl UpdateProperty {
             .properties()
             .find_by_id(command.id)
             .await?
-            .ok_or(AppError::not_found("immobile"))?;
+            .ok_or(AppError::not_found(Entity::Property))?;
 
         let changed = property.apply(command.changes, now)?;
         if !changed {

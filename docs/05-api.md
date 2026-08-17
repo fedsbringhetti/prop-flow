@@ -30,16 +30,33 @@ indovinare la forma della risposta endpoint per endpoint.
 ```json
 {
   "type": "https://propflow.dev/problems/validation",
-  "title": "Dati non validi",
+  "title": "Validation failed",
   "status": 422,
-  "detail": "…",
+  "code": "validation.failed",
   "request_id": "9c9a0514-6dd6-4f40-ba71-74ab825e8a9d",
-  "errors": [{ "field": "password", "message": "deve contenere almeno 12 caratteri" }]
+  "errors": [{ "field": "password", "message": "must be at least 12 characters long" }]
 }
 ```
 
-`detail` ed `errors` sono presenti solo quando informano. `errors` compare sulle
-validazioni.
+`detail` ed `errors` sono presenti solo quando informano; `errors` compare sulle
+validazioni. `code` c'è sempre.
+
+I messaggi (`title`, `detail`, `errors[].message`) sono **in inglese**: sono
+superficie pubblica, e la documentazione interna resta italiana.
+
+### `type`, `code` e chi usa quale
+
+`type` è la **classe** del problema, `code` è la **condizione**. Servono a due cose
+diverse: `type` a gestire "tutti i conflitti" senza enumerarli, `code` a decidere
+cosa mostrare o cosa riprovare.
+
+**`code` è il contratto.** `title` e `detail` sono per un umano che legge i log e
+possono essere riscritti quando si trova una formulazione migliore; `code` no.
+Un client che confronti i messaggi si romperà, ed è il motivo per cui `code` esiste
+(ADR-022). La localizzazione è del client: il server non sa in quale lingua né in
+quale registro va mostrato l'errore.
+
+Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | Stato | `type` | Quando |
 |---|---|---|
@@ -47,18 +64,80 @@ validazioni.
 | 401 | `unauthorized` | token assente, non valido o scaduto; credenziali errate |
 | 403 | `forbidden` | autenticato ma senza il ruolo necessario |
 | 404 | `not-found` | risorsa inesistente **o non visibile**, e rotta sconosciuta |
-| 409 | `conflict` | vincolo di unicità violato |
+| 409 | `conflict` | vincolo di unicità violato, o periodo occupato |
 | 409 | `invariant` | operazione non ammessa nello stato attuale (es. immobile archiviato) |
 | 422 | `validation` | corpo sintatticamente valido, semanticamente no |
 | 500 | `internal` | errore non previsto: solo `request_id`, nessun dettaglio |
 | 503 | — | timeout della richiesta, o `/ready` con database non raggiungibile |
 
-Due scelte deliberate:
+### Codici
+
+**Richiesta e autenticazione**
+
+| `code` | Stato | Condizione |
+|---|---|---|
+| `request.invalid_header` | 400 | `X-Org-Id` non è testo valido o non è un UUID |
+| `auth.token_missing` | 401 | nessun header `Authorization: Bearer` |
+| `auth.token_invalid` | 401 | firma o forma del token rifiutate |
+| `auth.token_expired` | 401 | token nostro, `exp` superato — **rinnovare**, non rifare il login |
+| `auth.invalid_credentials` | 401 | login fallito, refresh non valido, token d'invito rifiutato |
+| `auth.required` | 403 | l'operazione richiede un utente autenticato |
+| `auth.denied_by_policy` | 403 | rifiutato da una policy di riga; se compare è un difetto nostro |
+| `org.not_selected` | 403 | manca l'organizzazione attiva |
+| `org.not_a_member` | 403 | non appartieni a questa organizzazione |
+| `org.staff_role_required` | 403 | serve il ruolo `owner` o `manager` |
+
+**Risorse non trovate**
+
+| `code` | Stato |
+|---|---|
+| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` | 404 |
+| `endpoint.not_found` | 404 (rotta sconosciuta) |
+
+**Conflitti**
+
+| `code` | Stato | Condizione |
+|---|---|---|
+| `auth.email_taken` | 409 | esiste già un account con questa email |
+| `room.name_taken` | 409 | nome di stanza già usato nell'immobile |
+| `invitation.already_pending` | 409 | esiste già un invito pendente per questa email |
+| `lease.primary_party_exists` | 409 | il contratto ha già un intestatario principale |
+| `membership.already_exists` | 409 | l'utente appartiene già all'organizzazione |
+| `lease.period_overlap` | 409 | il periodo si sovrappone a una locazione attiva |
+| `conflict.constraint_violated` | 409 | vincolo violato che l'API non sa ancora nominare |
+
+**Stato non ammesso**
+
+| `code` | Stato | Condizione |
+|---|---|---|
+| `property.archived` | 409 | immobile archiviato, non modificabile |
+| `property.archive_requires_dedicated_operation` | 409 | archiviare non si fa con un `PATCH` di stato |
+| `room.archived` | 409 | stanza archiviata, non modificabile |
+| `lease.invalid_transition` | 409 | attivazione, disdetta o annullamento non ammessi nello stato attuale |
+| `lease.party_already_linked` | 409 | la parte è già collegata a un altro utente |
+| `lease.no_tenant_party` | 409 | il contratto non ha inquilini fra le parti |
+| `lease.shares_not_hundred` | 409 | le quote degli inquilini non sommano a 100 |
+| `invitation.already_accepted` | 409 | l'invito è già stato accettato |
+| `session.refresh_token_reused` | 409 | refresh token già ruotato |
+
+**Validazione e interni**
+
+| `code` | Stato | Condizione |
+|---|---|---|
+| `validation.failed` | 422 | uno o più campi non validi; il dettaglio è in `errors[]` |
+| `lease.derived_status_filter` | 422 | filtro su uno stato derivato: usare `in_force` |
+| `internal.error` | 500 | errore non previsto |
+
+Tre scelte deliberate:
 
 - **404 e non 403** quando una risorsa non è visibile: un `403` confermerebbe che
   esiste. Sotto Row Level Security "non esiste" e "non è tua" sono indistinguibili,
   ed è corretto che lo restino anche in risposta.
-- **401 identico** per credenziali errate e account inesistente.
+- **401 identico** per credenziali errate e account inesistente — stesso stato,
+  stesso `title`, stesso `code`.
+- **`auth.token_expired` distinto** da `auth.token_invalid`, perché il rimedio è
+  diverso e la distinzione non rivela nulla: per ottenerlo bisogna già presentare un
+  token firmato da noi. Il *refresh* invece resta indistinto.
 
 ## Paginazione
 

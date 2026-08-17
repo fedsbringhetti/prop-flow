@@ -67,7 +67,9 @@ pub fn router(state: AppState, body_limit_bytes: usize, request_timeout: Duratio
 /// Anche il 404 esce come Problem Details: un client non deve incontrare due
 /// formati di errore diversi a seconda di quale rotta ha sbagliato.
 async fn not_found() -> crate::error::ApiError {
-    crate::error::ApiError::from(propflow_application::AppError::NotFound { entity: "endpoint" })
+    crate::error::ApiError::from(propflow_application::AppError::NotFound(
+        propflow_domain::Entity::Endpoint,
+    ))
 }
 
 /// Riesportato per i test dei bordi.

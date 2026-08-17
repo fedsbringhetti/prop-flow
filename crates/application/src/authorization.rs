@@ -1,6 +1,6 @@
-use propflow_domain::RequestContext;
 use propflow_domain::identity::OrgRole;
 use propflow_domain::shared::OrgId;
+use propflow_domain::{Denial, RequestContext};
 
 use crate::error::{AppError, AppResult};
 
@@ -14,19 +14,17 @@ pub fn ensure_authenticated(context: &RequestContext) -> AppResult<()> {
     context
         .user_id()
         .map(|_| ())
-        .ok_or(AppError::Forbidden("richiede autenticazione"))
+        .ok_or(AppError::Forbidden(Denial::AuthenticationRequired))
 }
 
 /// Richiede un'organizzazione selezionata e l'appartenenza a essa.
 pub fn ensure_member(context: &RequestContext) -> AppResult<OrgId> {
     ensure_authenticated(context)?;
-    let org_id = context.org_id().ok_or(AppError::Forbidden(
-        "richiede un'organizzazione selezionata",
-    ))?;
+    let org_id = context
+        .org_id()
+        .ok_or(AppError::Forbidden(Denial::OrgNotSelected))?;
     if context.org_role().is_none() && !context.platform_admin() {
-        return Err(AppError::Forbidden(
-            "non appartieni a questa organizzazione",
-        ));
+        return Err(AppError::Forbidden(Denial::NotAMember));
     }
     Ok(org_id)
 }
@@ -36,9 +34,7 @@ pub fn ensure_member(context: &RequestContext) -> AppResult<OrgId> {
 pub fn ensure_staff(context: &RequestContext) -> AppResult<OrgId> {
     let org_id = ensure_member(context)?;
     if !context.is_staff() {
-        return Err(AppError::Forbidden(
-            "richiede il ruolo di proprietario o gestore",
-        ));
+        return Err(AppError::Forbidden(Denial::StaffRoleRequired));
     }
     Ok(org_id)
 }

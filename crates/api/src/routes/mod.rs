@@ -30,7 +30,7 @@ where
 pub(crate) fn amount(field: &'static str, raw: &str) -> Result<Decimal, DomainError> {
     raw.trim()
         .parse::<Decimal>()
-        .map_err(|_| DomainError::validation(field, "deve essere un importo decimale"))
+        .map_err(|_| DomainError::validation(field, "must be a decimal amount"))
 }
 
 /// Formatta un importo per il filo: sempre due decimali.

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use crate::error::{DomainError, DomainResult};
+use crate::error::{Denial, DomainError, DomainResult};
 use crate::shared::{Email, UserId, text};
 
 /// Hash della password, opaco per il dominio.
@@ -14,10 +14,7 @@ impl PasswordHash {
     pub fn new(value: impl Into<String>) -> DomainResult<Self> {
         let value = value.into();
         if value.trim().is_empty() {
-            return Err(DomainError::validation(
-                "password_hash",
-                "non può essere vuoto",
-            ));
+            return Err(DomainError::validation("password_hash", "cannot be empty"));
         }
         Ok(Self(value))
     }
@@ -154,14 +151,14 @@ impl User {
     /// la password: quella la confronta l'infrastruttura, che conosce l'algoritmo.
     pub fn ensure_can_authenticate(&self, now: DateTime<Utc>) -> DomainResult<&PasswordHash> {
         if !self.status.can_authenticate() {
-            return Err(DomainError::Forbidden("account non attivo"));
+            return Err(DomainError::Forbidden(Denial::AccountInactive));
         }
         if self.locked_until.is_some_and(|until| until > now) {
-            return Err(DomainError::Forbidden("account temporaneamente bloccato"));
+            return Err(DomainError::Forbidden(Denial::AccountLocked));
         }
         self.password_hash
             .as_ref()
-            .ok_or(DomainError::Forbidden("account senza credenziali locali"))
+            .ok_or(DomainError::Forbidden(Denial::NoLocalCredentials))
     }
 
     pub fn record_successful_login(&mut self, now: DateTime<Utc>) {

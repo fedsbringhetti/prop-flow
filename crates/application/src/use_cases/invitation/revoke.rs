@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, InvitationRevoked};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::InvitationId;
+use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -44,7 +44,7 @@ impl RevokeInvitation {
             .invitations()
             .find_by_id(command.id)
             .await?
-            .ok_or(AppError::not_found("invito"))?;
+            .ok_or(AppError::not_found(Entity::Invitation))?;
 
         invitation.revoke(now)?;
         uow.invitations().update(&invitation).await?;

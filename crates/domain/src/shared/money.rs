@@ -18,7 +18,7 @@ impl Currency {
         if bytes.len() != 3 || !bytes.iter().all(u8::is_ascii_uppercase) {
             return Err(DomainError::validation(
                 "currency",
-                "deve essere un codice ISO 4217 di tre lettere",
+                "must be a three-letter ISO 4217 code",
             ));
         }
         Ok(Self([bytes[0], bytes[1], bytes[2]]))
@@ -78,11 +78,11 @@ impl Money {
         if amount.scale() > Self::MAX_SCALE {
             return Err(DomainError::validation(
                 "amount",
-                "ammessi al massimo due decimali",
+                "allows at most two decimal places",
             ));
         }
         if amount.abs() >= Decimal::from(Self::MAX_ABS) {
-            return Err(DomainError::validation("amount", "importo fuori scala"));
+            return Err(DomainError::validation("amount", "amount out of range"));
         }
         Ok(Self { amount, currency })
     }
@@ -91,7 +91,7 @@ impl Money {
     /// dove un importo negativo non ha significato di dominio.
     pub fn non_negative(amount: Decimal, currency: Currency) -> DomainResult<Self> {
         if amount.is_sign_negative() && !amount.is_zero() {
-            return Err(DomainError::validation("amount", "non può essere negativo"));
+            return Err(DomainError::validation("amount", "cannot be negative"));
         }
         Self::new(amount, currency)
     }

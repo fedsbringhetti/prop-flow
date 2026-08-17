@@ -1,7 +1,7 @@
 use chrono::{DateTime, Days, NaiveDate, Utc};
 
 use super::party::{LeaseParty, LeasePartyRole};
-use crate::error::{DomainError, DomainResult};
+use crate::error::{DomainError, DomainResult, Invariant};
 use crate::shared::{Currency, LeaseId, Money, OrgId, PropertyId, RoomId, text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +140,7 @@ impl Lease {
         {
             return Err(DomainError::validation(
                 "end_date",
-                "deve essere successiva alla data di inizio",
+                "must be later than the start date",
             ));
         }
         if !(1..=28).contains(&rent_due_day) {
@@ -148,7 +148,7 @@ impl Lease {
             // scadenza slitta a seconda del mese non è rappresentabile.
             return Err(DomainError::validation(
                 "rent_due_day",
-                "deve essere compreso fra 1 e 28",
+                "must be between 1 and 28",
             ));
         }
         if let Some(months) = notice_months
@@ -156,7 +156,7 @@ impl Lease {
         {
             return Err(DomainError::validation(
                 "notice_months",
-                "deve essere compreso fra 0 e 24",
+                "must be between 0 and 24",
             ));
         }
         if let Some(months) = renewal_months
@@ -164,7 +164,7 @@ impl Lease {
         {
             return Err(DomainError::validation(
                 "renewal_months",
-                "deve essere positivo",
+                "must be positive",
             ));
         }
 
@@ -178,7 +178,7 @@ impl Lease {
                 if deposit.currency() != rent.currency() {
                     return Err(DomainError::validation(
                         "deposit_amount",
-                        "deve essere nella stessa valuta del canone",
+                        "must be in the same currency as the rent",
                     ));
                 }
                 Money::non_negative(deposit.amount(), deposit.currency())?
@@ -228,9 +228,7 @@ impl Lease {
             self.status,
             LeaseStatus::Draft | LeaseStatus::PendingSignature
         ) {
-            return Err(DomainError::invariant(
-                "solo una bozza o un contratto in attesa di firma può essere attivato",
-            ));
+            return Err(DomainError::Invariant(Invariant::LeaseNotActivatable));
         }
         LeaseParty::ensure_tenancy_complete(parties)?;
 
@@ -245,9 +243,7 @@ impl Lease {
     /// direbbe quando è finito il rapporto.
     pub fn terminate(&mut self, reason: Option<String>, now: DateTime<Utc>) -> DomainResult<()> {
         if !matches!(self.status, LeaseStatus::Active) {
-            return Err(DomainError::invariant(
-                "solo un contratto attivo può essere disdetto",
-            ));
+            return Err(DomainError::Invariant(Invariant::LeaseNotTerminable));
         }
         self.status = LeaseStatus::Terminated;
         self.terminated_at = Some(now);
@@ -263,9 +259,7 @@ impl Lease {
             self.status,
             LeaseStatus::Draft | LeaseStatus::PendingSignature
         ) {
-            return Err(DomainError::invariant(
-                "solo una bozza o un contratto in attesa di firma può essere annullato",
-            ));
+            return Err(DomainError::Invariant(Invariant::LeaseNotCancellable));
         }
         self.status = LeaseStatus::Cancelled;
         self.updated_at = now;

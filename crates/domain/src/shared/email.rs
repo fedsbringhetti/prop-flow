@@ -16,13 +16,16 @@ impl Email {
         let normalized = raw.as_ref().trim().to_lowercase();
 
         if normalized.is_empty() {
-            return Err(DomainError::validation("email", "non può essere vuota"));
+            return Err(DomainError::validation("email", "cannot be empty"));
         }
         if normalized.len() > 254 {
-            return Err(DomainError::validation("email", "supera i 254 caratteri"));
+            return Err(DomainError::validation("email", "exceeds 254 characters"));
         }
         if normalized.chars().any(char::is_whitespace) {
-            return Err(DomainError::validation("email", "non può contenere spazi"));
+            return Err(DomainError::validation(
+                "email",
+                "cannot contain whitespace",
+            ));
         }
 
         // Stesso criterio del dominio `app.email_address` in migrations/0001:
@@ -31,15 +34,15 @@ impl Email {
         let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
             return Err(DomainError::validation(
                 "email",
-                "deve contenere una sola @",
+                "must contain exactly one @",
             ));
         };
         if local.is_empty() {
-            return Err(DomainError::validation("email", "parte locale mancante"));
+            return Err(DomainError::validation("email", "missing local part"));
         }
         match domain.rsplit_once('.') {
             Some((name, tld)) if !name.is_empty() && tld.len() >= 2 => {}
-            _ => return Err(DomainError::validation("email", "dominio non valido")),
+            _ => return Err(DomainError::validation("email", "invalid domain")),
         }
 
         Ok(Self(normalized))

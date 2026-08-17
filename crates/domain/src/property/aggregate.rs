@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
-use crate::error::{DomainError, DomainResult};
+use crate::error::{DomainError, DomainResult, Invariant};
 use crate::shared::{Address, Currency, Money, OrgId, PropertyId, UserId, text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,17 +269,15 @@ impl Property {
     /// transizione di dominio a sé, non un `PATCH`.
     fn ensure_mutable(&self) -> DomainResult<()> {
         if matches!(self.status, PropertyStatus::Archived) {
-            return Err(DomainError::invariant(
-                "un immobile archiviato non può essere modificato",
-            ));
+            return Err(DomainError::Invariant(Invariant::PropertyArchived));
         }
         Ok(())
     }
 
     fn set_status(&mut self, status: PropertyStatus) -> DomainResult<()> {
         if matches!(status, PropertyStatus::Archived) {
-            return Err(DomainError::invariant(
-                "l'archiviazione richiede l'operazione dedicata, non un aggiornamento di stato",
+            return Err(DomainError::Invariant(
+                Invariant::PropertyArchiveRequiresDedicatedOperation,
             ));
         }
         self.status = status;
@@ -463,12 +461,12 @@ pub struct PropertyParts {
 
 fn validate_size(value: Decimal) -> DomainResult<Decimal> {
     if value <= Decimal::ZERO {
-        return Err(DomainError::validation("size_sqm", "deve essere positiva"));
+        return Err(DomainError::validation("size_sqm", "must be positive"));
     }
     if value.scale() > 2 {
         return Err(DomainError::validation(
             "size_sqm",
-            "ammessi al massimo due decimali",
+            "allows at most two decimal places",
         ));
     }
     Ok(value)
@@ -476,7 +474,7 @@ fn validate_size(value: Decimal) -> DomainResult<Decimal> {
 
 fn non_negative(field: &'static str, value: i16) -> DomainResult<i16> {
     if value < 0 {
-        return Err(DomainError::validation(field, "non può essere negativo"));
+        return Err(DomainError::validation(field, "cannot be negative"));
     }
     Ok(value)
 }

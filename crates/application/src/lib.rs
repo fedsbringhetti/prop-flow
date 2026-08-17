@@ -15,4 +15,4 @@ pub mod password_policy;
 pub mod ports;
 pub mod use_cases;
 
-pub use error::{AppError, AppResult};
+pub use error::{AppError, AppResult, Conflict, UnsupportedQuery};

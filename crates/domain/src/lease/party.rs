@@ -1,7 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 
-use crate::error::{DomainError, DomainResult};
+use crate::error::{DomainError, DomainResult, Invariant};
 use crate::shared::{Email, LeaseId, LeasePartyId, OrgId, UserId, text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,9 +108,7 @@ impl LeaseParty {
             if existing == user_id {
                 return Ok(());
             }
-            return Err(DomainError::invariant(
-                "questa parte contrattuale è già collegata a un altro utente",
-            ));
+            return Err(DomainError::Invariant(Invariant::LeasePartyAlreadyLinked));
         }
         self.user_id = Some(user_id);
         self.joined_at = Some(now.date_naive());
@@ -132,16 +130,14 @@ impl LeaseParty {
             .collect();
 
         if tenancy.is_empty() {
-            return Err(DomainError::invariant(
-                "il contratto non ha nessun inquilino fra le parti",
-            ));
+            return Err(DomainError::Invariant(Invariant::LeaseWithoutTenantParty));
         }
 
         let total: Decimal = tenancy.iter().map(|party| party.share_percent).sum();
         if total != Decimal::from(100) {
-            return Err(DomainError::invariant(format!(
-                "le quote degli inquilini sommano a {total} invece di 100"
-            )));
+            return Err(DomainError::Invariant(Invariant::LeaseSharesNotHundred {
+                total,
+            }));
         }
         Ok(())
     }
@@ -273,13 +269,13 @@ fn validate_share(value: Decimal) -> DomainResult<Decimal> {
     if value < Decimal::ZERO || value > Decimal::from(100) {
         return Err(DomainError::validation(
             "share_percent",
-            "deve essere compresa fra 0 e 100",
+            "must be between 0 and 100",
         ));
     }
     if value.scale() > 2 {
         return Err(DomainError::validation(
             "share_percent",
-            "ammessi al massimo due decimali",
+            "allows at most two decimal places",
         ));
     }
     Ok(value)

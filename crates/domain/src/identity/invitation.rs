@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 
 use super::member::OrgRole;
 use super::session::TokenHash;
-use crate::error::{DomainError, DomainResult};
+use crate::error::{Denial, DomainError, DomainResult, Invariant};
 use crate::shared::{Email, InvitationId, LeaseId, OrgId, UserId};
 
 /// Invito a entrare in un'organizzazione, tipicamente come inquilino di un
@@ -67,7 +67,7 @@ impl Invitation {
         if !matches!(role, OrgRole::Tenant) {
             return Err(DomainError::validation(
                 "role",
-                "un invito può conferire soltanto il ruolo di inquilino",
+                "an invitation can only grant the tenant role",
             ));
         }
         Ok(Self {
@@ -95,13 +95,13 @@ impl Invitation {
     /// un rifiuto indistinguibile da un token sbagliato.
     pub fn ensure_acceptable(&self, now: DateTime<Utc>) -> DomainResult<()> {
         if self.accepted_at.is_some() {
-            return Err(DomainError::invariant("invito già accettato"));
+            return Err(DomainError::Invariant(Invariant::InvitationAlreadyAccepted));
         }
         if self.revoked_at.is_some() {
-            return Err(DomainError::Forbidden("invito revocato"));
+            return Err(DomainError::Forbidden(Denial::InvitationRevoked));
         }
         if self.expires_at <= now {
-            return Err(DomainError::Forbidden("invito scaduto"));
+            return Err(DomainError::Forbidden(Denial::InvitationExpired));
         }
         Ok(())
     }
@@ -118,8 +118,8 @@ impl Invitation {
     /// l'esito richiesto — quel token non vale più — è già vero.
     pub fn revoke(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
         if self.accepted_at.is_some() {
-            return Err(DomainError::invariant(
-                "un invito già accettato non può essere revocato",
+            return Err(DomainError::Invariant(
+                Invariant::AcceptedInvitationCannotBeRevoked,
             ));
         }
         if self.revoked_at.is_none() {

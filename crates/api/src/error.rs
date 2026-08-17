@@ -10,12 +10,18 @@ use propflow_domain::DomainError;
 /// gestire invece di indovinare la forma della risposta endpoint per endpoint.
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ProblemDetails {
-    /// URI che identifica il tipo di problema.
+    /// URI che identifica la **classe** del problema.
     #[schema(example = "https://propflow.dev/problems/validation")]
     pub r#type: String,
-    /// Riassunto leggibile, stabile per tipo di problema.
+    /// Riassunto leggibile, stabile per classe di problema.
     pub title: String,
     pub status: u16,
+    /// Codice stabile della **condizione**, sempre presente (ADR-022).
+    ///
+    /// È il campo su cui un client instrada e localizza: `title` e `detail` sono
+    /// per un umano che legge i log e possono essere riscritti, `code` no.
+    #[schema(example = "lease.period_overlap")]
+    pub code: String,
     /// Dettaglio specifico di questa occorrenza.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -39,6 +45,7 @@ pub struct ApiError {
     status: StatusCode,
     problem_type: &'static str,
     title: &'static str,
+    code: &'static str,
     detail: Option<String>,
     errors: Vec<FieldError>,
     request_id: Option<String>,
@@ -55,11 +62,17 @@ impl ApiError {
         self
     }
 
-    fn new(status: StatusCode, problem_type: &'static str, title: &'static str) -> Self {
+    fn new(
+        status: StatusCode,
+        problem_type: &'static str,
+        title: &'static str,
+        code: &'static str,
+    ) -> Self {
         Self {
             status,
             problem_type,
             title,
+            code,
             detail: None,
             errors: Vec::new(),
             request_id: None,
@@ -67,22 +80,43 @@ impl ApiError {
         }
     }
 
-    #[must_use]
-    pub fn unauthorized() -> Self {
+    fn unauthorized(code: &'static str) -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
-            "Autenticazione richiesta",
+            "Authentication required",
+            code,
         )
     }
 
+    /// Nessun header `Authorization`.
     #[must_use]
-    pub fn bad_request(detail: impl Into<String>) -> Self {
-        let mut error = Self::new(
-            StatusCode::BAD_REQUEST,
-            "bad-request",
-            "Richiesta non valida",
-        );
+    pub fn token_missing() -> Self {
+        Self::unauthorized("auth.token_missing")
+    }
+
+    /// Firma o forma del token rifiutate.
+    #[must_use]
+    pub fn token_invalid() -> Self {
+        Self::unauthorized("auth.token_invalid")
+    }
+
+    /// Token nostro, firma valida, `exp` superato.
+    ///
+    /// Distinto da [`Self::token_invalid`] di proposito: dice al client di
+    /// rinnovare invece di rimandare l'utente al login. Non è un oracolo — per
+    /// arrivare qui bisogna già presentare un token che abbiamo firmato noi,
+    /// quindi non si rivela nulla che il chiamante non sapesse. Il *refresh*
+    /// invece resta indistinto (ADR-022): lì "scaduto" contro "riusato" direbbe a
+    /// chi ha rubato un token che è ancora vivo.
+    #[must_use]
+    pub fn token_expired() -> Self {
+        Self::unauthorized("auth.token_expired")
+    }
+
+    #[must_use]
+    pub fn bad_request(code: &'static str, detail: impl Into<String>) -> Self {
+        let mut error = Self::new(StatusCode::BAD_REQUEST, "bad-request", "Bad request", code);
         error.detail = Some(detail.into());
         error
     }
@@ -90,12 +124,17 @@ impl ApiError {
 
 impl From<AppError> for ApiError {
     fn from(error: AppError) -> Self {
+        // Il codice si legge **una volta sola** dal service layer. Nessun ramo qui
+        // sotto può inventarne uno o dimenticarsene: il bordo trascrive (ADR-022).
+        let code = error.code();
+
         match error {
             AppError::Validation(DomainError::Validation { field, message }) => {
                 let mut api = Self::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "validation",
-                    "Dati non validi",
+                    "Validation failed",
+                    code,
                 );
                 api.errors.push(FieldError {
                     field: field.to_owned(),
@@ -103,53 +142,92 @@ impl From<AppError> for ApiError {
                 });
                 api
             }
-            AppError::Validation(DomainError::Invariant(message)) => {
+            AppError::Validation(DomainError::Invariant(invariant)) => {
                 let mut api = Self::new(
                     StatusCode::CONFLICT,
                     "invariant",
-                    "Operazione non ammessa nello stato attuale",
+                    "Operation not allowed in the current state",
+                    code,
                 );
-                api.detail = Some(message);
+                api.detail = Some(invariant.to_string());
                 api
             }
-            AppError::Validation(DomainError::NotFound { entity }) => {
-                let mut api = Self::new(StatusCode::NOT_FOUND, "not-found", "Risorsa non trovata");
-                api.detail = Some(format!("{entity} non trovato"));
+            AppError::Validation(DomainError::NotFound(entity)) | AppError::NotFound(entity) => {
+                let mut api = Self::new(
+                    StatusCode::NOT_FOUND,
+                    "not-found",
+                    "Resource not found",
+                    code,
+                );
+                api.detail = Some(entity.to_string());
                 api
             }
-            AppError::Validation(DomainError::Forbidden(reason)) | AppError::Forbidden(reason) => {
+            AppError::Validation(DomainError::Forbidden(denial)) | AppError::Forbidden(denial) => {
                 let mut api = Self::new(
                     StatusCode::FORBIDDEN,
                     "forbidden",
-                    "Operazione non consentita",
+                    "Operation not allowed",
+                    code,
                 );
-                api.detail = Some(reason.to_owned());
+                api.detail = Some(denial.to_string());
                 api
             }
-            AppError::Unauthenticated => Self::unauthorized(),
-            AppError::NotFound { entity } => {
-                let mut api = Self::new(StatusCode::NOT_FOUND, "not-found", "Risorsa non trovata");
-                api.detail = Some(format!("{entity} non trovato"));
+            AppError::Unauthenticated => Self::unauthorized(code),
+            // Non si dice al chiamante che è stata una policy a fermarlo: la
+            // diagnosi è nostra e sta nei log, correlata dal request_id.
+            AppError::DeniedByPolicy => {
+                let mut api = Self::new(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "Operation not allowed",
+                    code,
+                );
+                api.internal = Some("denied by a row level security policy".to_owned());
                 api
             }
-            AppError::Conflict { resource } => {
-                let mut api = Self::new(StatusCode::CONFLICT, "conflict", "Risorsa già esistente");
-                api.detail = Some(format!("{resource} già esistente"));
+            AppError::Conflict(conflict) => {
+                let mut api = Self::new(StatusCode::CONFLICT, "conflict", "Conflict", code);
+                api.detail = Some(conflict.to_string());
+                api
+            }
+            // La forma resta quella di una validazione — stesso `errors[]` di
+            // sempre — ma il codice dice *quale* rifiuto è, che con
+            // `validation.failed` si sarebbe perso.
+            AppError::UnsupportedQuery(query) => {
+                let mut api = Self::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "validation",
+                    "Validation failed",
+                    code,
+                );
+                api.errors.push(FieldError {
+                    field: query.field().to_owned(),
+                    message: query.to_string(),
+                });
                 api
             }
             // Il vincolo di esclusione è l'autorità su questa invariante, ma il
             // suo nome non dice niente a un client: la risposta nomina l'oggetto
             // occupato, non `leases_no_overlap_room`.
             AppError::OverlappingLease(target) => {
-                let mut api =
-                    Self::new(StatusCode::CONFLICT, "conflict", "Periodo non disponibile");
+                let mut api = Self::new(
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    "Period not available",
+                    code,
+                );
                 api.detail = Some(format!(
-                    "esiste già una locazione attiva per {target} nel periodo indicato"
+                    "an active lease already covers {target} for the given period"
                 ));
                 api
             }
             AppError::Integrity { details } => {
-                let mut api = Self::new(StatusCode::CONFLICT, "conflict", "Vincolo violato");
+                let mut api = Self::new(
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    "Constraint violated",
+                    code,
+                );
                 api.internal = Some(details);
                 api
             }
@@ -157,7 +235,8 @@ impl From<AppError> for ApiError {
                 let mut api = Self::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal",
-                    "Errore interno",
+                    "Internal error",
+                    code,
                 );
                 api.internal = Some(details);
                 api
@@ -174,6 +253,7 @@ impl IntoResponse for ApiError {
                 status = self.status.as_u16(),
                 request_id = self.request_id.as_deref().unwrap_or("-"),
                 problem = self.problem_type,
+                code = self.code,
                 details = %internal,
                 "richiesta terminata con errore"
             );
@@ -183,6 +263,7 @@ impl IntoResponse for ApiError {
             r#type: format!("https://propflow.dev/problems/{}", self.problem_type),
             title: self.title.to_owned(),
             status: self.status.as_u16(),
+            code: self.code.to_owned(),
             detail: self.detail,
             request_id: self.request_id,
             errors: self.errors,
@@ -203,3 +284,74 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use propflow_application::Conflict;
+    use propflow_domain::{Denial, Entity, Invariant};
+
+    /// Il bordo trascrive il codice del service layer. Se un ramo lo riscrivesse
+    /// a mano, questo test lo prende.
+    #[test]
+    fn the_edge_transcribes_the_service_layer_code() {
+        let cases: Vec<AppError> = vec![
+            AppError::Unauthenticated,
+            AppError::Forbidden(Denial::StaffRoleRequired),
+            AppError::DeniedByPolicy,
+            AppError::NotFound(Entity::Property),
+            AppError::Conflict(Conflict::EmailTaken),
+            AppError::Validation(DomainError::Invariant(Invariant::PropertyArchived)),
+            AppError::Validation(DomainError::validation("email", "invalid domain")),
+            AppError::Integrity {
+                details: "vincolo `x`".to_owned(),
+            },
+            AppError::internal("boom"),
+        ];
+
+        for error in cases {
+            let expected = error.code();
+            let api = ApiError::from(error);
+            assert_eq!(api.code, expected);
+        }
+    }
+
+    /// Un dettaglio tecnico non deve mai finire nel corpo: `Integrity` e
+    /// `DeniedByPolicy` parlano ai log, non al chiamante.
+    #[test]
+    fn technical_details_never_reach_the_body() {
+        for error in [
+            AppError::Integrity {
+                details: "vincolo `users_email`".to_owned(),
+            },
+            AppError::internal("connection refused"),
+            AppError::DeniedByPolicy,
+        ] {
+            let api = ApiError::from(error);
+            assert!(api.detail.is_none(), "code {}", api.code);
+            assert!(api.internal.is_some(), "code {}", api.code);
+        }
+    }
+
+    #[test]
+    fn an_unsupported_filter_keeps_the_validation_shape_with_its_own_code() {
+        let api = ApiError::from(AppError::UnsupportedQuery(
+            propflow_application::UnsupportedQuery::LeaseDerivedStatusFilter,
+        ));
+        assert_eq!(api.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(api.code, "lease.derived_status_filter");
+        assert_eq!(api.errors.first().map(|e| e.field.as_str()), Some("status"));
+    }
+
+    #[test]
+    fn an_expired_token_is_distinguishable_from_an_invalid_one() {
+        assert_eq!(ApiError::token_expired().code, "auth.token_expired");
+        assert_eq!(ApiError::token_invalid().code, "auth.token_invalid");
+        assert_eq!(ApiError::token_missing().code, "auth.token_missing");
+        // Le credenziali sbagliate restano indistinte da un account inesistente.
+        assert_eq!(
+            ApiError::from(AppError::Unauthenticated).code,
+            "auth.invalid_credentials"
+        );
+    }
+}
