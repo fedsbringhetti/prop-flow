@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, RoomUpdated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::property::{Room, RoomChanges};
 use propflow_domain::shared::RoomId;
+use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -46,7 +46,7 @@ impl UpdateRoom {
             .rooms()
             .find_by_id(command.id)
             .await?
-            .ok_or(AppError::not_found("stanza"))?;
+            .ok_or(AppError::not_found(Entity::Room))?;
 
         let changed = room.apply(command.changes, now)?;
         if !changed {

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
 use super::aggregate::Patch;
-use crate::error::{DomainError, DomainResult};
+use crate::error::{DomainError, DomainResult, Invariant};
 use crate::shared::{Currency, Money, OrgId, PropertyId, RoomId, text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,9 +183,7 @@ impl Room {
 
     fn ensure_mutable(&self) -> DomainResult<()> {
         if self.archived_at.is_some() {
-            return Err(DomainError::invariant(
-                "una stanza archiviata non può essere modificata",
-            ));
+            return Err(DomainError::Invariant(Invariant::RoomArchived));
         }
         Ok(())
     }
@@ -315,12 +313,12 @@ pub struct RoomParts {
 
 fn validate_size(value: Decimal) -> DomainResult<Decimal> {
     if value <= Decimal::ZERO {
-        return Err(DomainError::validation("size_sqm", "deve essere positiva"));
+        return Err(DomainError::validation("size_sqm", "must be positive"));
     }
     if value.scale() > 2 {
         return Err(DomainError::validation(
             "size_sqm",
-            "ammessi al massimo due decimali",
+            "allows at most two decimal places",
         ));
     }
     Ok(value)
@@ -332,13 +330,13 @@ fn validate_percentage(value: Decimal) -> DomainResult<Decimal> {
     if value < Decimal::ZERO || value > Decimal::from(100) {
         return Err(DomainError::validation(
             "utility_share_percent",
-            "deve essere compresa fra 0 e 100",
+            "must be between 0 and 100",
         ));
     }
     if value.scale() > 2 {
         return Err(DomainError::validation(
             "utility_share_percent",
-            "ammessi al massimo due decimali",
+            "allows at most two decimal places",
         ));
     }
     Ok(value)

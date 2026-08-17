@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use crate::error::{DomainError, DomainResult};
+use crate::error::{Denial, DomainError, DomainResult, Invariant};
 use crate::shared::{SessionId, UserId};
 
 /// Hash SHA-256 di un refresh token.
@@ -20,7 +20,7 @@ impl TokenHash {
     pub fn from_slice(bytes: &[u8]) -> DomainResult<Self> {
         let sized: [u8; 32] = bytes
             .try_into()
-            .map_err(|_| DomainError::validation("token_hash", "attesi 32 byte"))?;
+            .map_err(|_| DomainError::validation("token_hash", "must be exactly 32 bytes"))?;
         Ok(Self(sized))
     }
 
@@ -57,7 +57,7 @@ impl RefreshSession {
         lifetime: chrono::Duration,
     ) -> DomainResult<Self> {
         if lifetime <= chrono::Duration::zero() {
-            return Err(DomainError::validation("lifetime", "deve essere positiva"));
+            return Err(DomainError::validation("lifetime", "must be positive"));
         }
         Ok(Self {
             id,
@@ -98,15 +98,13 @@ impl RefreshSession {
     /// catena, non solo rifiutare la richiesta.
     pub fn ensure_usable(&self, now: DateTime<Utc>) -> DomainResult<()> {
         if self.rotated_to.is_some() {
-            return Err(DomainError::invariant(
-                "refresh token già ruotato: possibile riuso, revocare la catena",
-            ));
+            return Err(DomainError::Invariant(Invariant::RefreshTokenReused));
         }
         if self.revoked_at.is_some() {
-            return Err(DomainError::Forbidden("sessione revocata"));
+            return Err(DomainError::Forbidden(Denial::SessionRevoked));
         }
         if self.expires_at <= now {
-            return Err(DomainError::Forbidden("sessione scaduta"));
+            return Err(DomainError::Forbidden(Denial::SessionExpired));
         }
         Ok(())
     }

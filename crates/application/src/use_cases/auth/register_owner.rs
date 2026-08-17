@@ -8,7 +8,7 @@ use propflow_domain::identity::{OrgMember, OrgRole, Organization, User};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::{Email, OrgId, UserId};
 
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, Conflict};
 use crate::password_policy;
 use crate::ports::PasswordHasher;
 
@@ -87,9 +87,7 @@ impl RegisterOwner {
         // Il controllo esplicito dà un 409 parlante; il vincolo unique sul
         // database resta l'autorità in caso di richieste concorrenti.
         if uow.users().find_by_email(user.email()).await?.is_some() {
-            return Err(AppError::Conflict {
-                resource: "utente con questa email",
-            });
+            return Err(AppError::Conflict(Conflict::EmailTaken));
         }
 
         uow.users()
@@ -131,9 +129,9 @@ impl RegisterOwner {
 /// Una violazione di unicità sull'email è un conflitto comprensibile, non un 500.
 fn map_email_conflict(error: AppError) -> AppError {
     match &error {
-        AppError::Integrity { details } if details.contains("users_email") => AppError::Conflict {
-            resource: "utente con questa email",
-        },
+        AppError::Integrity { details } if details.contains("users_email") => {
+            AppError::Conflict(Conflict::EmailTaken)
+        }
         _ => error,
     }
 }

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_domain::property::Room;
 use propflow_domain::shared::PropertyId;
+use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -37,7 +37,7 @@ impl ListRooms {
         uow.properties()
             .find_by_id(property_id)
             .await?
-            .ok_or(AppError::not_found("immobile"))?;
+            .ok_or(AppError::not_found(Entity::Property))?;
         let rooms = uow.rooms().list_for_property(property_id).await?;
         Ok(rooms)
     }

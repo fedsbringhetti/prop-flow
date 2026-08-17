@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, LeaseDrafted};
 use propflow_domain::lease::{Lease, LeaseDraft as LeaseDraftInput, RentFrequency};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::{LeaseId, Money, PropertyId, RoomId};
+use propflow_domain::{Entity, RequestContext};
 
 use super::LeaseView;
 use crate::authorization;
@@ -66,14 +66,14 @@ impl DraftLease {
             .properties()
             .find_by_id(command.property_id)
             .await?
-            .ok_or(AppError::not_found("immobile"))?;
+            .ok_or(AppError::not_found(Entity::Property))?;
 
         if let Some(room_id) = command.room_id {
             let room = uow
                 .rooms()
                 .find_by_id(room_id)
                 .await?
-                .ok_or(AppError::not_found("stanza"))?;
+                .ok_or(AppError::not_found(Entity::Room))?;
             // Una stanza di un altro immobile della stessa organizzazione è
             // visibile, quindi la RLS non la fermerebbe: il legame va verificato
             // qui, altrimenti si potrebbe affittare la stanza di casa altrui.
@@ -81,7 +81,7 @@ impl DraftLease {
                 return Err(AppError::Validation(
                     propflow_domain::DomainError::validation(
                         "room_id",
-                        "la stanza non appartiene all'immobile indicato",
+                        "the room does not belong to the given property",
                     ),
                 ));
             }

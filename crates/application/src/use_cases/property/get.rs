@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_domain::property::Property;
 use propflow_domain::shared::PropertyId;
+use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -27,6 +27,6 @@ impl GetProperty {
         authorization::ensure_member(context)?;
         let mut uow = self.unit_of_work.begin(context).await?;
         let property = uow.properties().find_by_id(id).await?;
-        property.ok_or(AppError::not_found("immobile"))
+        property.ok_or(AppError::not_found(Entity::Property))
     }
 }

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, RoomCreated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::property::{Room, RoomChanges};
 use propflow_domain::shared::{PropertyId, RoomId};
+use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, Conflict};
 
 #[derive(Debug, Clone)]
 pub struct CreateRoomCommand {
@@ -53,7 +53,7 @@ impl CreateRoom {
             .properties()
             .find_by_id(command.property_id)
             .await?
-            .ok_or(AppError::not_found("immobile"))?;
+            .ok_or(AppError::not_found(Entity::Property))?;
 
         let mut room = Room::create(
             RoomId::generate(),
@@ -91,9 +91,7 @@ impl CreateRoom {
 pub(super) fn map_name_conflict(error: AppError) -> AppError {
     match &error {
         AppError::Integrity { details } if details.contains("rooms_property_name") => {
-            AppError::Conflict {
-                resource: "stanza con questo nome nell'immobile",
-            }
+            AppError::Conflict(Conflict::RoomNameTaken)
         }
         _ => error,
     }

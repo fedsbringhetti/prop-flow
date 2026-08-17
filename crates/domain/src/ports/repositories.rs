@@ -54,9 +54,10 @@ pub enum LeaseOverlap {
 
 impl std::fmt::Display for LeaseOverlap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // In inglese perché finisce nel `detail` della risposta, che è pubblico.
         f.write_str(match self {
-            Self::Property => "questo immobile",
-            Self::Room => "questa stanza",
+            Self::Property => "this property",
+            Self::Room => "this room",
         })
     }
 }

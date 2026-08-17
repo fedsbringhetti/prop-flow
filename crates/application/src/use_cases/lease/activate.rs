@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, LeaseActivated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::LeaseId;
+use propflow_domain::{Entity, RequestContext};
 
 use super::LeaseView;
 use crate::authorization;
@@ -51,7 +51,7 @@ impl ActivateLease {
             .leases()
             .find_by_id(command.id)
             .await?
-            .ok_or(AppError::not_found("contratto"))?;
+            .ok_or(AppError::not_found(Entity::Lease))?;
 
         // Le parti servono all'invariante: un contratto attivo senza inquilino, o
         // con quote che non coprono il canone, non sarebbe addebitabile.

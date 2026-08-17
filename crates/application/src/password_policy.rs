@@ -15,7 +15,7 @@ pub fn validate(plaintext: &str) -> AppResult<()> {
     if length < MIN_LENGTH {
         return Err(AppError::Validation(DomainError::validation(
             "password",
-            format!("deve contenere almeno {MIN_LENGTH} caratteri"),
+            format!("must be at least {MIN_LENGTH} characters long"),
         )));
     }
     // Il limite alto non è estetico: Argon2 lavora sull'intero input, e una
@@ -23,13 +23,13 @@ pub fn validate(plaintext: &str) -> AppResult<()> {
     if length > MAX_LENGTH {
         return Err(AppError::Validation(DomainError::validation(
             "password",
-            format!("supera i {MAX_LENGTH} caratteri"),
+            format!("exceeds {MAX_LENGTH} characters"),
         )));
     }
     if plaintext.trim().is_empty() {
         return Err(AppError::Validation(DomainError::validation(
             "password",
-            "non può essere composta da soli spazi",
+            "cannot consist of whitespace only",
         )));
     }
     Ok(())
