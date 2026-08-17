@@ -1,7 +1,8 @@
 <!--
-Write the title and this body in English. Everything that lands in git or GitHub
-metadata is English: commits, branch names, PR titles and bodies, tags, release
-notes. Code, code comments and docs/ stay in Italian.
+Write the title and this body in English. Anything a stranger meets without opening
+a file is English: commits, branch names, PR titles and bodies, tags, README.md,
+CHANGELOG.md and release notes, job and step names in the workflows. Code, code
+comments and docs/ stay in Italian.
 
 Fill in every section. If one does not apply, say so explicitly instead of
 deleting it — an absent section reads as an oversight, "not applicable" reads as a
