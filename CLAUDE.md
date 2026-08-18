@@ -179,7 +179,10 @@ perché richiede di riscrivere la storia o di riaprire le PR.
   rumore; uno che spiega perché una via apparentemente più semplice non funziona
   vale il suo spazio.
 - **La documentazione si aggiorna insieme al codice.** Una decisione nuova o
-  cambiata è una voce in `docs/08-decisioni.md`.
+  cambiata è una voce in `docs/08-decisioni.md`. Per la configurazione non è un
+  invito: `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
+  `AppConfig` e dal migratore, e un'impostazione aggiunta senza la riga
+  corrispondente in `docs/07-operazioni.md` fa fallire `cargo test`.
 
 ---
 

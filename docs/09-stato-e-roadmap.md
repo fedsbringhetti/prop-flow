@@ -36,8 +36,9 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-110 test: 63 unitari di dominio, 8 applicativi, 5 di infrastruttura, 11 di
-integrazione sulla persistenza, 23 di contratto HTTP.
+125 test: 65 unitari di dominio, 11 applicativi, 5 di infrastruttura, 4 unitari
+del bordo HTTP, 13 di integrazione sulla persistenza, 24 di contratto HTTP, 3 di
+guardia sulla documentazione della configurazione.
 
 ## Non implementato
 

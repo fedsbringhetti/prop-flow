@@ -58,6 +58,11 @@ La colonna dei default riporta ciò che il progetto **spedisce**, cioè i valori
 che possono essere più conservativi: il filtro di log, per esempio, ripiega su
 `info,propflow_api=debug`.
 
+Le due tabelle di questa sezione sono verificate da un test
+(`crates/api/tests/docs_config_reference.rs`), che deriva l'elenco dal sorgente:
+un'impostazione nuova non documentata, o una riga qui che nel codice non esiste più,
+fanno fallire la suite.
+
 ### Impostazioni del migratore
 
 Non passano da `AppConfig`: `crates/migrator/src/main.rs` le legge direttamente con
