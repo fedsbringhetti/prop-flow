@@ -1,12 +1,12 @@
 # 09 — Stato e roadmap
 
-Stato al **5 agosto 2026**.
+Stato al **18 agosto 2026**.
 
 ## Implementato
 
 ### Layer dati — completo per l'MVP
 
-Le 18 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 19 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 23 tabelle di business più `audit_log` partizionata, 35 enum,
 6 domini, 169 indici, 64 policy RLS, 49 trigger, 4 viste, 28 funzioni.
 
@@ -63,7 +63,7 @@ porta → use case → repository → endpoint → test.
 | Ambito | Cosa manca |
 |---|---|
 | Sicurezza | rate limiting per IP; verifica email bloccante; MFA (colonna presente); CORS non montato; `kid` nei token per la rotazione delle chiavi |
-| Operazioni | manifest Kubernetes; pubblicazione dell'immagine; backup e restore; metriche; alerting; cron per le partizioni di audit |
+| Operazioni | manifest Kubernetes; backup e restore; metriche; alerting; cron per le partizioni di audit |
 | Qualità | gate sulle licenze delle dipendenze; test di carico; benchmark |
 | Prodotto | client mobile (Flutter o React Native), fuori perimetro backend |
 
