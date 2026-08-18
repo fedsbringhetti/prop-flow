@@ -175,6 +175,14 @@ per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
 - **Un commit per unità logica.** Un commit da 4.000 righe che introduce un modulo
   intero non è rivedibile; si divide per livello (dominio, use case, infrastruttura,
   bordo HTTP, test) o per capacità.
+- **Creare un branch non richiede permesso; committare sì.** Quando il lavoro è
+  pronto, i commit si propongono come **tabella** — una riga per commit, con tipo,
+  scope, oggetto e cosa copre — e poi ci si ferma ad aspettare. La tabella è il punto
+  di revisione: rimodellare una proposta costa poco, riscrivere una storia già
+  pubblicata no.
+- **Il push è una conferma a parte.** Il via libera a committare non è il via libera
+  a pubblicare, e quello dato per un push non vale per il successivo: si chiede ogni
+  volta.
 
 ### Pull request
 
@@ -183,8 +191,12 @@ per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
   decisioni sono state prese e quali alternative scartate, quali invarianti e vincoli
   vengono introdotti, come è stato verificato, cosa resta fuori. Tre righe buttate là
   non sono accettabili.
+- **Le PR non si aprono se non richieste.** Aprirne una è pubblicare: la decisione è
+  di chi ha chiesto il lavoro, non di chi lo ha fatto.
 - Il file `.github/pull_request_template.md` riporta le sezioni attese. Compilarle
-  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla.
+  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla. **Il
+  template da solo non vincola nessuno**: `gh pr create --body` lo scavalca senza
+  dire niente, e per questo la regola sta scritta anche qui e non solo lì.
 - **Riferimenti puntuali**: numeri di migration, nomi di ADR, percorsi di file,
   identificatori di vincoli e policy. Un corpo che dice "sistemata la RLS" non serve
   a nessuno.
