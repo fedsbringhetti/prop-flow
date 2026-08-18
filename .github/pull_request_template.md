@@ -37,6 +37,20 @@ append-only, and a SELECT policy must never filter deleted_at (ADR-008). -->
 <!-- New or changed endpoints, request/response shape, status codes, required role.
 "None" if the PR does not touch the HTTP edge. -->
 
+## Breaking changes
+
+<!-- Anything a client, an operator or a deployment has to change because of this
+PR: a renamed or removed error code, a changed status code, a setting that becomes
+required, a migration that must run before the rollout, a privilege a role now
+needs.
+
+Write "None" instead of deleting the heading. An absent section reads as "nothing
+to do", and that has to be a statement someone made, not an omission nobody
+noticed.
+
+On the 0.x line a break is allowed, but it is announced: it goes in the commit
+that causes it and from there into the changelog (docs/10-rilasci.md). -->
+
 ## Verification
 
 <!-- What was run and what it produced. Numbers, not adjectives:
@@ -47,7 +61,9 @@ append-only, and a SELECT policy must never filter deleted_at (ADR-008). -->
 - `./ops/ci/check-domain-purity.sh` — 3/3
 - schema invariants — N/N
 
-Include anything verified by hand, and say how. -->
+Include anything verified by hand, and say how. For a fix, the evidence that
+counts is the test failing without the change: a suite that is green afterwards
+proves nothing on its own. -->
 
 ## Out of scope
 

@@ -2,6 +2,20 @@
 
 Stato al **18 agosto 2026**.
 
+## Come si usa questo documento
+
+Qui atterrano i piani **prima** di essere implementati, con il dettaglio con cui
+sono stati pensati: la scomposizione in passi, le decisioni con il perché, le
+alternative scartate e le trappole trovate. Un piano che resta nella conversazione
+in cui è nato non esiste per la sessione successiva, che riparte da zero.
+
+Il documento può essere lungo, ed è previsto che lo sia: accorciarlo per ordine
+toglie esattamente ciò per cui esiste. Ciò che è rinviato va segnato come rinviato,
+**con la ragione** — senza, si rilegge come lavoro pendente e qualcuno lo prende in
+mano credendo che sia solo rimasto indietro.
+
+La regola sta anche in `CLAUDE.md` §3.
+
 ## Implementato
 
 ### Layer dati — completo per l'MVP
@@ -81,6 +95,7 @@ cambia il contesto.
 | Chiamata di risoluzione del ruolo per richiesta con `X-Org-Id` | Una query in più quando il client cambia organizzazione | Se il cambio organizzazione diventa frequente |
 | Nessuna cache | Ogni lettura va al database | Con dati reali sul profilo di carico |
 | `audit_log` senza rotazione automatica | Le partizioni si creano con un cron da configurare | Prima del primo deploy in produzione |
+| `auth.denied_by_policy` risponde `403` | Rinviato in [ADR-022](08-decisioni.md#adr-022). Se la RLS rifiuta una scrittura che il service layer aveva già autorizzato è un difetto nostro, non un errore del chiamante: `500` sarebbe più onesto. Fuori da quel cambiamento perché è una decisione sul comportamento, non sulla tassonomia | Quando si tocca il comportamento degli errori al bordo, o se il codice compare nei log |
 
 ## Prossimo passo suggerito
 

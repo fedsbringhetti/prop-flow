@@ -33,6 +33,11 @@ Partenza: **`docs/README.md`**, che è la mappa. Poi, in base al compito:
 | capire perché una cosa è fatta così | `docs/08-decisioni.md` |
 | sapere cosa manca | `docs/09-stato-e-roadmap.md` |
 
+Se la domanda è «cosa faccio adesso», la risposta è `docs/09-stato-e-roadmap.md`:
+stato attuale, prossimo passo suggerito, debiti noti e ciò che è deliberatamente
+fuori perimetro. È anche il posto dove un piano deve atterrare prima di essere
+implementato — vedi §3.
+
 Se dopo aver letto resta un'ambiguità, chiedila invece di inventare una
 convenzione nuova.
 
@@ -139,6 +144,28 @@ Prima di scrivere un titolo di PR o un messaggio di commit, verifica di essere i
 inglese. È l'errore più facile da commettere e il più costoso da correggere dopo,
 perché richiede di riscrivere la storia o di riaprire le PR.
 
+### I piani atterrano nella roadmap, prima dell'implementazione
+
+Quando in una sessione si progetta un lavoro, **quel piano si scrive in
+`docs/09-stato-e-roadmap.md` prima di implementarlo**, con lo stesso dettaglio con
+cui è stato pensato. Non un riassunto e non un rimando: la decomposizione, così che
+chi non era in quella conversazione possa eseguirla.
+
+Tre cose devono sopravvivere, e sono quelle che si perdono per prime:
+
+1. la scomposizione in passi eseguibili singolarmente;
+2. le decisioni **con il perché**, e le alternative scartate;
+3. le **trappole**: le vie che sembrano corrette e non lo sono. Sono la conoscenza
+   più cara da riacquistare, perché per riscoprirne una bisogna prima sbagliare.
+
+La roadmap **può essere lunga**: l'istinto di accorciarla per ordine è esattamente
+ciò che cancella il dettaglio per cui esiste. Ciò che è rinviato si segna come
+rinviato, con la ragione, altrimenti si rilegge come lavoro pendente e qualcuno lo
+prende in mano.
+
+Il motivo è semplice e costoso: un piano che vive fuori dal repository non esiste
+per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
+
 ### Commit
 
 - **Si verifica prima di committare, e i commit si concordano.** Implementa,
@@ -148,6 +175,14 @@ perché richiede di riscrivere la storia o di riaprire le PR.
 - **Un commit per unità logica.** Un commit da 4.000 righe che introduce un modulo
   intero non è rivedibile; si divide per livello (dominio, use case, infrastruttura,
   bordo HTTP, test) o per capacità.
+- **Creare un branch non richiede permesso; committare sì.** Quando il lavoro è
+  pronto, i commit si propongono come **tabella** — una riga per commit, con tipo,
+  scope, oggetto e cosa copre — e poi ci si ferma ad aspettare. La tabella è il punto
+  di revisione: rimodellare una proposta costa poco, riscrivere una storia già
+  pubblicata no.
+- **Il push è una conferma a parte.** Il via libera a committare non è il via libera
+  a pubblicare, e quello dato per un push non vale per il successivo: si chiede ogni
+  volta.
 
 ### Pull request
 
@@ -156,8 +191,12 @@ perché richiede di riscrivere la storia o di riaprire le PR.
   decisioni sono state prese e quali alternative scartate, quali invarianti e vincoli
   vengono introdotti, come è stato verificato, cosa resta fuori. Tre righe buttate là
   non sono accettabili.
+- **Le PR non si aprono se non richieste.** Aprirne una è pubblicare: la decisione è
+  di chi ha chiesto il lavoro, non di chi lo ha fatto.
 - Il file `.github/pull_request_template.md` riporta le sezioni attese. Compilarle
-  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla.
+  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla. **Il
+  template da solo non vincola nessuno**: `gh pr create --body` lo scavalca senza
+  dire niente, e per questo la regola sta scritta anche qui e non solo lì.
 - **Riferimenti puntuali**: numeri di migration, nomi di ADR, percorsi di file,
   identificatori di vincoli e policy. Un corpo che dice "sistemata la RLS" non serve
   a nessuno.
