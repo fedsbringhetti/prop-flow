@@ -14,7 +14,10 @@ and adapters architecture.
 ```bash
 docker compose up -d postgres
 ./ops/dev/generate-jwt-keys.sh          # requires OpenSSL 3
+
+# Nothing loads .env on its own: copy it, adapt it, then hand it to the shell.
 cp .env.example .env
+set -a; source .env; set +a
 
 # Database roles, once per cluster
 docker compose exec -T postgres psql -U postgres -d postgres \

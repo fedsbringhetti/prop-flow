@@ -15,6 +15,7 @@
 docker compose up -d postgres
 ./ops/dev/generate-jwt-keys.sh        # crea .secrets/, che è ignorato da git
 cp .env.example .env                  # adattare se serve
+set -a; source .env; set +a           # il file lo carica la shell, non il codice
 
 # I ruoli si creano una volta per cluster
 docker compose exec -T postgres psql -U postgres -d postgres \
@@ -171,3 +172,5 @@ database e non nel codice deve essere rumoroso, non silenzioso.
 | Il migratore riapplica tutto | Bookkeeping duplicato: controllo 10 delle invarianti, [ADR-009](08-decisioni.md#adr-009) |
 | `expect_used` fallisce in un test | Manca l'`allow` in testa al crate di test |
 | Il test di integrazione si salta | Variabili d'ambiente assenti: usare `./ops/ci/test-integration.sh` |
+| `missing field private_key_path` all'avvio | `.env` non lo carica nessuno: `set -a; source .env; set +a` ([ADR-023](08-decisioni.md#adr-023)) |
+| L'API parte, ma con bind, timeout o TTL diversi da quelli documentati | `config/default.toml` si risolve rispetto alla directory di lavoro: avviarla dalla radice del repository ([ADR-023](08-decisioni.md#adr-023)) |

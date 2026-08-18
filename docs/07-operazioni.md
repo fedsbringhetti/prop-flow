@@ -17,6 +17,18 @@ pre-autenticazione. Vedi [04 — Sicurezza](04-sicurezza.md#il-pool-privilegiato
 doppio underscore separa i livelli. L'ambiente vince sul file, così un deploy non
 deve riscriverlo. Nessun segreto nel file.
 
+Due avvertenze che nascono da come il file viene caricato, entrambe in
+[ADR-023](08-decisioni.md#adr-023):
+
+- **`config/default.toml` si risolve rispetto alla directory di lavoro.** L'API va
+  avviata dalla radice del repository, o dall'immagine, dove il file sta in
+  `/app/config`. Avviata altrove il file semplicemente non c'è: le quattro
+  impostazioni obbligatorie falliscono rumorosamente, tutte le altre ripiegano in
+  silenzio sui default del codice, che non sono per forza quelli di questa tabella.
+- **`.env` non lo legge nessuno.** Nessun crate dipende da `dotenvy` e
+  `docker-compose.yml` dichiara le variabili inline. È un file da dare alla shell —
+  `set -a; source .env; set +a` — non una sorgente di configurazione.
+
 | Variabile | Default | Note |
 |---|---|---|
 | `PROPFLOW__SERVER__BIND` | `0.0.0.0:8080` | |

@@ -10,6 +10,15 @@ use figment::providers::{Env, Format, Toml};
 /// prefisso `PROPFLOW__`, dove il doppio underscore separa i livelli:
 /// `PROPFLOW__DATABASE__APPLICATION_URL`. L'ambiente vince sul file, così un
 /// deploy Kubernetes non ha bisogno di riscrivere il file.
+///
+/// Il percorso del file è **relativo alla directory di lavoro**: l'API va avviata
+/// dalla radice del repository, o dall'immagine, dove sta in `/app/config`.
+/// Altrove figment lo salta in silenzio — è dichiarato opzionale — e valgono i
+/// default qui sotto. Non c'è un avviso perché la configurazione si carica prima
+/// della telemetria: vedi `docs/08-decisioni.md#adr-023`.
+///
+/// `.env` non lo legge nessuno: lo carica la shell (`set -a; source .env; set +a`),
+/// stesso ADR.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
