@@ -179,7 +179,10 @@ perché richiede di riscrivere la storia o di riaprire le PR.
   rumore; uno che spiega perché una via apparentemente più semplice non funziona
   vale il suo spazio.
 - **La documentazione si aggiorna insieme al codice.** Una decisione nuova o
-  cambiata è una voce in `docs/08-decisioni.md`.
+  cambiata è una voce in `docs/08-decisioni.md`. Per la configurazione non è un
+  invito: `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
+  `AppConfig` e dal migratore, e un'impostazione aggiunta senza la riga
+  corrispondente in `docs/07-operazioni.md` fa fallire `cargo test`.
 
 ---
 
@@ -203,6 +206,7 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 docker compose up -d postgres
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
 cp .env.example .env                    # poi adattare
+set -a; source .env; set +a             # nessuno lo carica da solo: lo fa la shell
 cargo run -p propflow-migrator
 cargo run -p propflow-api               # Swagger UI su http://localhost:8080/docs
 cargo run -p propflow-worker            # dispatcher dell'outbox

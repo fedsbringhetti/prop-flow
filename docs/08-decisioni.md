@@ -668,3 +668,62 @@ stringhe, che è esattamente il motivo per cui `code` esiste: sulla linea 0.x è
 ammesso, e va nel changelog come cambiamento visibile. La tabella dei codici in
 [05 — API](05-api.md) è da qui in poi parte del contratto pubblico: aggiungere un
 codice è additivo, rinominarne uno è una rottura.
+
+---
+
+<a id="adr-023"></a>
+
+## ADR-023 — La configurazione locale la carica la shell, non `.env`
+
+**Difetto osservato.** `README.md`, `CLAUDE.md` e [06 — Sviluppo](06-sviluppo.md)
+indicavano `cp .env.example .env` come passo del primo avvio, e il passo successivo
+falliva:
+
+```
+$ cp .env.example .env && cargo run -p propflow-api
+Error: configurazione non valida
+Caused by: missing field `private_key_path` for key "default.auth"
+```
+
+Nessun crate dipende da `dotenvy` — compare in `Cargo.lock` solo come dipendenza
+transitiva di sqlx — e `docker-compose.yml` dichiara le variabili inline sotto
+`environment:`, senza `env_file:`. Il file `.env` non lo leggeva nessuno. Era il
+primo comando che un contributore nuovo esegue, ed era sbagliato in tre punti
+contemporaneamente.
+
+**Decisione.** `.env` resta un file per la **shell**, non una sorgente di
+configurazione, e la documentazione riporta il passo che lo carica:
+
+```bash
+set -a; source .env; set +a
+```
+
+Le sorgenti restano due, quelle che `AppConfig::load` dichiara: `config/default.toml`
+e l'ambiente, con l'ambiente che vince.
+
+**Alternativa scartata: aggiungere `dotenvy` ai binari.** Sarebbe una terza sorgente
+di configurazione, con una precedenza in più da definire e da documentare, presente
+in produzione per servire solo lo sviluppo: un `.env` finito per sbaglio nella
+directory di lavoro di un container cambierebbe il comportamento del servizio senza
+comparire da nessuna parte. `source` è esplicito, non entra nei binari, e ciò che
+produce sono variabili d'ambiente come tutte le altre.
+
+**Conseguenza accettata: `config/default.toml` si risolve rispetto alla directory di
+lavoro.** L'API va avviata dalla radice del repository o dall'immagine, dove il file
+sta in `/app/config`. Altrove il file non viene trovato e figment lo salta senza
+protestare, perché è dichiarato opzionale: le quattro impostazioni obbligatorie
+falliscono rumorosamente, le altre ripiegano sui default del codice.
+
+Non c'è un avviso perché non c'è ancora dove scriverlo: la configurazione si carica
+**prima** della telemetria — è la configurazione a dire come inizializzarla — quindi
+un `warn!` non avrebbe alcun subscriber, e scrivere su stderr da una funzione di
+libreria significa stampare anche quando chi chiama ha scelto i log JSON. Un percorso
+assoluto risolto da `CARGO_MANIFEST_DIR` sistemerebbe lo sviluppo e sarebbe falso
+nell'immagine, dove non esiste alcun manifest.
+
+**Conseguenze.** Il difetto vero non era il passo mancante: era che la documentazione
+poteva sbagliare senza che nulla se ne accorgesse. Le impostazioni sono ora verificate
+da `crates/api/tests/docs_config_reference.rs`, che deriva l'elenco dal sorgente di
+`AppConfig` e del migratore e lo confronta con le tabelle di
+[07 — Operazioni](07-operazioni.md#configurazione), compresi i default dichiarati.
+Gira senza database, quindi in ogni `cargo test`.

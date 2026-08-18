@@ -15,6 +15,7 @@
 docker compose up -d postgres
 ./ops/dev/generate-jwt-keys.sh        # crea .secrets/, che è ignorato da git
 cp .env.example .env                  # adattare se serve
+set -a; source .env; set +a           # il file lo carica la shell, non il codice
 
 # I ruoli si creano una volta per cluster
 docker compose exec -T postgres psql -U postgres -d postgres \
@@ -51,7 +52,7 @@ cargo test --workspace           # i test che richiedono il DB si dichiarano sal
 
 ## Strategia di test
 
-Quattro livelli, ciascuno con un compito diverso.
+Quattro livelli sul codice, più una guardia sulla documentazione.
 
 | Livello | Dove | Verifica | Database |
 |---|---|---|---|
@@ -59,8 +60,15 @@ Quattro livelli, ciascuno con un compito diverso.
 | Unitari applicativi | `crates/application/src/**` | autorizzazione, policy sulle password | no |
 | Integrazione persistenza | `crates/infrastructure/tests/` | query, contesto RLS, atomicità di comando ed evento | **sì** |
 | Contratto HTTP | `crates/api/tests/` | codici di stato, formato degli errori, autorizzazione | **sì** |
+| Guardie sulla documentazione | `crates/api/tests/docs_config_reference.rs` | che le tabelle di [07 — Operazioni](07-operazioni.md#configurazione) non restino indietro rispetto al codice | no |
 
-Attualmente **110 test**.
+Attualmente **125 test**.
+
+L'ultimo livello non verifica il codice ma la documentazione: deriva le
+impostazioni dai sorgenti di `AppConfig` e del migratore e fallisce se una manca
+dalla tabella, se una riga della tabella non esiste più, o se un default
+documentato non è quello che il progetto spedisce. È l'unico controllo che una
+riscrittura della documentazione può rompere, ed è voluto ([ADR-023](08-decisioni.md#adr-023)).
 
 ### Perché i test di integrazione usano un database reale
 
@@ -171,3 +179,5 @@ database e non nel codice deve essere rumoroso, non silenzioso.
 | Il migratore riapplica tutto | Bookkeeping duplicato: controllo 10 delle invarianti, [ADR-009](08-decisioni.md#adr-009) |
 | `expect_used` fallisce in un test | Manca l'`allow` in testa al crate di test |
 | Il test di integrazione si salta | Variabili d'ambiente assenti: usare `./ops/ci/test-integration.sh` |
+| `missing field private_key_path` all'avvio | `.env` non lo carica nessuno: `set -a; source .env; set +a` ([ADR-023](08-decisioni.md#adr-023)) |
+| L'API parte, ma con bind, timeout o TTL diversi da quelli documentati | `config/default.toml` si risolve rispetto alla directory di lavoro: avviarla dalla radice del repository ([ADR-023](08-decisioni.md#adr-023)) |
