@@ -2,6 +2,20 @@
 
 Stato al **18 agosto 2026**.
 
+## Come si usa questo documento
+
+Qui atterrano i piani **prima** di essere implementati, con il dettaglio con cui
+sono stati pensati: la scomposizione in passi, le decisioni con il perché, le
+alternative scartate e le trappole trovate. Un piano che resta nella conversazione
+in cui è nato non esiste per la sessione successiva, che riparte da zero.
+
+Il documento può essere lungo, ed è previsto che lo sia: accorciarlo per ordine
+toglie esattamente ciò per cui esiste. Ciò che è rinviato va segnato come rinviato,
+**con la ragione** — senza, si rilegge come lavoro pendente e qualcuno lo prende in
+mano credendo che sia solo rimasto indietro.
+
+La regola sta anche in `CLAUDE.md` §3.
+
 ## Implementato
 
 ### Layer dati — completo per l'MVP
