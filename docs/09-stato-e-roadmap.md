@@ -62,7 +62,8 @@ In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: domin
 porta → use case → repository → endpoint → test.
 
 1. **Documenti** (`documents`) — richiede l'implementazione di `ObjectStorage`, già
-   dichiarata come porta.
+   dichiarata come porta. Il piano è scritto in fondo a questo documento:
+   [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
 2. **Segnalazioni** (`tickets`) — thread, storico, assegnazione.
 3. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
    `v_charge_balances` già disponibile.
@@ -106,7 +107,164 @@ end-to-end. Da qui i moduli successivi non hanno più dipendenze bloccanti fra l
 i documenti vengono per primi perché richiedono l'unica porta già dichiarata e non
 implementata, `ObjectStorage`, e la stessa forma serve poi alle bollette.
 
+Il piano della prima fetta è in fondo: [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
+
 Manca invece l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
 proprietario. Va implementata prima di considerare l'onboarding pronto per utenti
 reali.
+
+---
+
+<a id="piano-documenti-fetta-1"></a>
+
+## Piano — Documenti, fetta 1
+
+Pianificato il **18 agosto 2026**, non ancora implementato. Scritto qui prima di
+scrivere codice, come chiede `CLAUDE.md` §3: quello che segue è la decomposizione,
+non un riassunto.
+
+### Obiettivo
+
+Allegare file a immobili, stanze e contratti, e riscaricarli. Chiude la porta
+`ObjectStorage`, dichiarata dal primo giorno e senza adattatore, e la stessa forma
+servirà poi alle bollette.
+
+**Dentro:** upload, elenco per owner, metadati, download, archiviazione.
+**Fuori, e non per dimenticanza:**
+
+- **il versionamento** (`version`, `supersedes_document_id`, `is_current`): le
+  colonne esistono, ma [01 — Prodotto](01-prodotto.md) lo colloca in V2. Lo schema
+  è avanti al perimetro, e vedere le colonne non è una ragione per riempirle;
+- **l'OCR** (`extracted_data`, `status`): è il punto 6 della lista, e i trait dei
+  provider vanno definiti allora. In questa fetta un documento resta `uploaded` e
+  `extracted_data` resta `{}`;
+- **avatar utente, ticket, bollette, spese**: `can_access_attachment` copre undici
+  tipi di owner, ma qui se ne espongono tre — quelli i cui aggregati hanno già
+  dominio, use case ed endpoint. Allargare dopo è additivo. Conseguenza da dire ad
+  alta voce: `users.avatar_document_id` e `leases.contract_document_id` restano
+  non popolati dall'API.
+
+### Decisioni prese, con il perché
+
+**Storage: MinIO nel compose, adattatore S3 con `rusty-s3` sopra `reqwest`.**
+`rusty-s3` fa solo la firma SigV4 e non porta un client HTTP proprio; il presigning
+è esattamente il suo scopo, ed è ciò che serve a `presigned_get_url`. In produzione
+lo stesso adattatore punta a S3 cambiando endpoint. Scartato `aws-sdk-s3`: corretto
+per costruzione ma decine di crate in più e un rischio concreto sul controllo `bans`
+di cargo-deny, che fallisce sulle versioni duplicate. Scartato un adattatore su
+filesystem: `presigned_get_url` non ha senso lì, e la porta — già decisa e motivata —
+andrebbe riscritta per accomodare un ripiego.
+
+**Upload multipart attraverso l'API, download pre-firmato.** L'asimmetria è
+deliberata: `checksum_sha256` è `NOT NULL` nello schema e un checksum dichiarato dal
+client non è un checksum, quindi il contenuto deve passare da noi almeno una volta.
+In download il contenuto non ha bisogno di transitare, e un URL pre-firmato toglie
+dall'API il traffico più pesante. Scartato il `PUT` pre-firmato in upload: scala
+meglio ma rende MIME e checksum dichiarazioni del client, e impone uno stato
+intermedio con oggetti orfani da ripulire.
+
+**Cifratura a riposo lato bucket (SSE), non applicativa.** `is_encrypted` nasce
+`true` e con SSE la colonna dice il vero al costo di una configurazione;
+`encryption_key_ref` registra la modalità, non una chiave. Scartata la cifratura a
+busta: è il livello che la colonna lascia immaginare, ma porta con sé gestione e
+rotazione delle chiavi ed è un modulo a sé. **Limite da non nascondere:** con SSE la
+chiave è del provider, quindi non protegge da un accesso amministrativo al bucket.
+
+### Decomposizione
+
+Ogni passo è eseguibile e verificabile da solo, nell'ordine di `docs/06` §Aggiungere
+un caso d'uso.
+
+1. **Dipendenze.** `axum` con la feature `multipart`, `rusty-s3` e `reqwest` in
+   `[workspace.dependencies]`. Verificare l'API di `rusty-s3` sulla sua reference
+   corrente invece di assumerla: è un crate piccolo e la firma dei metodi è cambiata
+   fra versioni minori.
+2. **Dominio.** Entità `Document` con i value object per MIME, dimensione e
+   checksum, e `DocumentKind`/`AttachmentOwner` come enum di dominio. La riga nella
+   macro `string_enum!` per i due enum del database (`docs/06` §Aggiungere un enum).
+   Evento `DocumentUploaded` che trasporta identificatori e non il nome del file.
+3. **Porta di persistenza.** `DocumentRepository` in `domain::ports`: `insert`,
+   `find_by_id`, `list_by_owner`, `archive`. Nessun metodo che restituisca il
+   contenuto: quello è `ObjectStorage`.
+4. **Use case.** `upload_document`, `list_documents`, `download_document`,
+   `archive_document` in `crates/application/src/use_cases/document/`, con la
+   sequenza canonica: autorizza → costruisci → transazione → persisti → evento →
+   commit. L'oggetto va scritto **prima** della transazione: se il commit fallisce
+   resta un oggetto orfano, che è recuperabile; l'ordine inverso lascerebbe una riga
+   che punta al nulla, che non lo è.
+5. **Adattatore S3.** `S3ObjectStorage` in `crates/infrastructure/src/storage/`, con
+   `put`, `get` e `presigned_get_url`. Chiave dell'oggetto derivata:
+   `{org_id}/{document_id}`, mai il nome originale — vedi le trappole.
+6. **Configurazione.** Sezione `[storage]` in `AppConfig` e in `config/default.toml`:
+   endpoint, regione, bucket, credenziali dall'ambiente, TTL dell'URL pre-firmato.
+   Documentarla in `docs/07-operazioni.md` **nello stesso commit**, altrimenti
+   `crates/api/tests/docs_config_reference.rs` fa fallire la suite.
+7. **Bordo HTTP.** `POST /api/v1/{owner_type}/{owner_id}/documents` (multipart),
+   `GET .../documents`, `GET /api/v1/documents/{id}/content` che risponde `307` verso
+   l'URL pre-firmato, `DELETE /api/v1/documents/{id}` che archivia. DTO e OpenAPI
+   secondo `docs/05-api.md`.
+8. **Limite del corpo per rotta.** Vedi le trappole: non è una riga di
+   configurazione, è una modifica alla struttura del router.
+9. **Test.** Unitari di dominio sulle validazioni; un doppio in memoria di
+   `ObjectStorage` per i test di contratto; test di persistenza sul repository con
+   database reale; un test che verifichi il rifiuto quando l'owner non è accessibile.
+   Un test contro MinIO vero solo se la variabile d'ambiente c'è, con il marcatore
+   `SALTATO` come gli altri.
+10. **Documentazione.** Endpoint in `docs/05-api.md`, il modulo in questa roadmap
+    spostato da "non implementato" a "implementato", e un ADR se una di queste
+    decisioni viene cambiata strada facendo.
+
+### Trappole
+
+Sono le vie che sembrano corrette e non lo sono. Costano una giornata ciascuna se le
+si scopre sbagliando.
+
+**Il limite del corpo è globale e sta fuori da tutto.**
+`RequestBodyLimitLayer::new(body_limit_bytes)` è montato sull'intero router in
+`crates/api/src/lib.rs:60`, con default 1 MiB. Aggiungere un limite più largo sulla
+rotta di upload **non funziona**: il layer esterno rifiuta per primo, e il sintomo è
+un `413` che nessun limite per-rotta sembra spiegare. Alzare quello globale
+funzionerebbe, ed è la trappola vera: indebolisce ogni endpoint per servirne uno. La
+via corretta è montare il limite globale sul gruppo di rotte che non comprende
+l'upload, e dare a quella il proprio.
+
+**`documents_update` non lascia toccare una riga archiviata.** La policy ha
+`deleted_at IS NULL` nella `USING`: archiviare funziona, **ripristinare no**, e un
+update su una riga già archiviata non dà errore — aggiorna zero righe. Se serve un
+ripristino, è una migration nuova sulla policy, non un `WHERE` diverso nella query.
+
+**L'autorizzazione va scritta due volte, ed è voluto.** `documents_insert` pretende
+in `WITH CHECK` che il chiamante sia staff oppure passi `can_access_attachment`. Lo
+use case deve autorizzare con lo stesso criterio: se lo salta, il rifiuto arriva
+dalla RLS come `403 auth.denied_by_policy`, che è il codice che significa "difetto
+nostro" ([ADR-016](08-decisioni.md#adr-016), e il debito registrato sopra).
+
+**Il nome del file è un dato personale.** `original_filename` finisce spesso per
+essere `contratto-mario-rossi.pdf`. Non va nei log, non va negli eventi di dominio
+(regola 18) e **non va nella chiave dell'oggetto**: la chiave si deriva da
+`{org_id}/{document_id}`, che è anche il modo di non violare mai l'indice unico
+`documents_object_uk`.
+
+**Il ruolo applicativo non può cancellare.** Ha `SELECT, INSERT, UPDATE` e basta,
+quindi la cancellazione è solo soft — ma l'oggetto nel bucket sopravvive alla riga.
+In questa fetta nessuno lo rimuove: è un debito da registrare, insieme al purge di
+`retention_until`, che lo schema prevede come job applicativo e non come trigger.
+
+**L'indice per owner filtra `is_current`.** `documents_owner_ix` è parziale su
+`deleted_at IS NULL AND is_current`: una query di elenco che non filtra entrambi non
+lo usa. Vale anche se il versionamento resta fuori perimetro, perché `is_current`
+nasce `true` per tutti.
+
+**`reqwest` oggi è solo transitivo.** Arriva da `opentelemetry-otlp` alla versione
+`0.13.4`. Dichiararlo diretto a una versione diversa fa fallire
+`cargo deny check bans` sulle versioni duplicate — che è esattamente il controllo che
+oggi passa e che nessuno guarda finché non diventa rosso.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde con i test nuovi; un `curl` che carica un PDF su
+un contratto, lo rilegge nell'elenco e lo scarica seguendo il `307`; il documento
+invisibile a un utente di un'altra organizzazione e a un inquilino senza accesso a
+quel contratto; `docs/05-api.md` che descrive i quattro endpoint e la guardia della
+configurazione verde con la sezione `[storage]` documentata.
