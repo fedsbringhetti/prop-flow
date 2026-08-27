@@ -12,7 +12,8 @@
 ## Primo avvio
 
 ```bash
-docker compose up -d postgres
+# MinIO è lo storage oggetti dei documenti; `minio-setup` crea il bucket una volta.
+docker compose up -d postgres minio minio-setup
 ./ops/dev/generate-jwt-keys.sh        # crea .secrets/, che è ignorato da git
 cp .env.example .env                  # adattare se serve
 set -a; source .env; set +a           # il file lo carica la shell, non il codice
@@ -58,11 +59,12 @@ Quattro livelli sul codice, più una guardia sulla documentazione.
 |---|---|---|---|
 | Unitari di dominio | `crates/domain/src/**` | invarianti, validazioni, transizioni | no |
 | Unitari applicativi | `crates/application/src/**` | autorizzazione, policy sulle password | no |
-| Integrazione persistenza | `crates/infrastructure/tests/` | query, contesto RLS, atomicità di comando ed evento | **sì** |
+| Integrazione persistenza | `crates/infrastructure/tests/persistence.rs` | query, contesto RLS, atomicità di comando ed evento | **sì** |
+| Integrazione storage | `crates/infrastructure/tests/object_storage.rs` | firma SigV4, URL pre-firmati, digest, contro un MinIO vero | no, ma serve MinIO |
 | Contratto HTTP | `crates/api/tests/` | codici di stato, formato degli errori, autorizzazione | **sì** |
 | Guardie sulla documentazione | `crates/api/tests/docs_config_reference.rs` | che le tabelle di [07 — Operazioni](07-operazioni.md#configurazione) non restino indietro rispetto al codice | no |
 
-Attualmente **126 test**.
+Attualmente **155 test**.
 
 L'ultimo livello non verifica il codice ma la documentazione: deriva le
 impostazioni dai sorgenti di `AppConfig` e del migratore e fallisce se una manca
@@ -84,10 +86,15 @@ database funziona, non che il nostro layer lo usa correttamente.
 
 Senza `PROPFLOW_TEST_APP_URL` e `PROPFLOW_TEST_PRIVILEGED_URL`, i test che
 richiedono il database stampano `SALTATO` e ritornano, così `cargo test` resta
-eseguibile su una macchina senza Docker.
+eseguibile su una macchina senza Docker. Lo stesso vale per i test dell'adattatore S3
+senza `PROPFLOW_TEST_S3_ENDPOINT` e affini.
 
 Il rischio è un verde silenzioso, e la CI lo chiude: un passo cerca `SALTATO`
-nell'output e fallisce se lo trova.
+nell'output e fallisce se lo trova. **Ne segue che ogni servizio richiesto da un test
+deve essere disponibile in CI**, non che il marcatore possa essere tollerato: sono
+`ops/ci/prepare-database.sh` e `ops/ci/prepare-object-storage.sh` a fornirli, ed
+entrambi girano anche in locale da `ops/ci/test-integration.sh`, così le due procedure
+non divergono.
 
 ### Convenzioni
 
@@ -155,8 +162,10 @@ dell'astrazione **prima** di scrivere il primo adattatore.
 4. Configurazione in `AppConfig`, con il nome del provider come **dato**, non come
    ramo del codice.
 
-`ObjectStorage` e `Notifier` sono già dichiarate e non ancora implementate: sono gli
-esempi da seguire.
+`ObjectStorage` è l'esempio completo: porta dichiarata dal primo giorno, adattatore
+scritto molto dopo in `crates/infrastructure/src/storage/`, e nessuna riga della porta
+riscritta per accomodarlo — che è il punto di deciderne la forma prima. `Notifier` è
+ancora dichiarata e senza adattatore: è la prossima.
 
 ### Aggiungere un enum al database
 

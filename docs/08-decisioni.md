@@ -727,3 +727,99 @@ da `crates/api/tests/docs_config_reference.rs`, che deriva l'elenco dal sorgente
 `AppConfig` e del migratore e lo confronta con le tabelle di
 [07 — Operazioni](07-operazioni.md#configurazione), compresi i default dichiarati.
 Gira senza database, quindi in ogni `cargo test`.
+
+---
+
+<a id="adr-024"></a>
+
+## ADR-024 — Lo storage oggetti: firma nostra, trasporto altrui, cifratura letta e non dichiarata
+
+**Contesto.** La porta `ObjectStorage` era dichiarata dal primo giorno e senza
+adattatore. Il piano della prima fetta dei documenti
+([09 — Stato e roadmap](09-stato-e-roadmap.md#piano-documenti-fetta-1)) aveva già
+deciso `rusty-s3` sopra `reqwest`, l'upload multipart attraverso l'API con download
+pre-firmato, e la cifratura a riposo lato bucket. Tre punti si sono decisi
+implementando, e stanno qui perché nessuno dei tre è deducibile dal codice.
+
+**Decisione 1: `reqwest` con `rustls-no-provider` e il provider `ring` installato
+all'avvio.** La feature `rustls` di reqwest 0.13 implica `__rustls-aws-lc-rs`, cioè
+`aws-lc-rs`, cioè il toolchain C e cmake nell'immagine di build — esattamente ciò che
+[ADR-012](#adr-012) evita scegliendo `rust_crypto` per `jsonwebtoken`. Con
+`rustls-no-provider` il provider non c'è, e reqwest **va in panico** costruendo il
+client se nessuno ha installato un default. Lo installa `S3ObjectStorage::new`:
+
+```rust
+let _ = rustls::crypto::ring::default_provider().install_default();
+```
+
+`ring` è già nell'albero, portato da sqlx con `tls-rustls-ring`: nessun crate in più,
+nessuna versione duplicata. Il risultato dell'installazione si ignora di proposito —
+fallisce solo se un provider c'è già, che è il caso in cui non c'è nulla da fare.
+
+**Decisione 2: la cifratura si legge dalla risposta, non si dichiara.** Il piano
+diceva «`is_encrypted` nasce `true`». Nasce invece dall'header
+`x-amz-server-side-encryption` che il fornitore restituisce sulla `PUT`, e
+`encryption_key_ref` registra quel valore. Su un bucket senza cifratura predefinita la
+colonna dice `false`.
+
+Il motivo è che l'alternativa è una colonna che mente. `is_encrypted = true` scritto a
+priori è vero solo se qualcuno ha configurato il bucket, e la configurazione del bucket
+non sta in questo repository: è un passo di provisioning che si può dimenticare, e
+l'unico posto dove ce ne accorgeremmo è proprio quella colonna. Leggerlo dalla risposta
+costa zero — l'header è già lì — e trasforma una speranza in un fatto verificabile.
+
+Resta il limite già dichiarato nel piano, che nessuna di queste righe risolve: con SSE
+la chiave è del fornitore, quindi non protegge da un accesso amministrativo al bucket.
+
+**Decisione 3: il bucket lo crea il provisioning, non l'applicazione.** La porta non
+ha un `create_bucket` e non deve averlo: darglielo significherebbe darlo all'API anche
+in produzione, dove creare bucket non è un'operazione che un servizio HTTP debba poter
+fare. Lo creano `docker-compose.yml` (servizio `minio-setup`) in sviluppo e
+`ops/ci/prepare-object-storage.sh` nei test.
+
+**Conseguenza operativa.** La cifratura a riposo è un passo di configurazione del
+bucket, documentato in [07 — Operazioni](07-operazioni.md#configurazione). Se manca,
+non fallisce nulla: i documenti si caricano e si scaricano, e `documents.is_encrypted`
+resta `false`. È il modo di accorgersene interrogando il database invece di credere a
+una riga di configurazione.
+
+---
+
+<a id="adr-025"></a>
+
+## ADR-025 — Il limite del corpo è doppio, e le rotte di caricamento stanno in un gruppo a parte
+
+**Difetto anticipato dal piano, e più grande del previsto.** Il piano avvertiva che
+`RequestBodyLimitLayer` è montato sull'intero router in `crates/api/src/lib.rs` e non
+ammette deroghe per rotta: un limite più largo dichiarato sopra la rotta di upload non
+viene mai raggiunto, perché il layer esterno rifiuta per primo. Alzare quello generale
+funzionerebbe, ed è la trappola vera — indebolisce ogni endpoint per servirne uno.
+
+Implementando è emerso che i limiti sono **due**, e il secondo non è un layer.
+`Multipart` di axum applica anche `DefaultBodyLimit`, che vale **2 MiB** e non
+compare fra i layer del router: alzando solo `RequestBodyLimitLayer` un file da 3 MiB
+fallisce lo stesso, e l'errore arriva dal parser multipart mentre si legge il corpo.
+Cercarlo fra i layer non lo trova, ed è il modo di perderci una giornata.
+
+**Decisione.** Il router si compone in due gruppi:
+
+- il gruppo generale — tutto tranne il caricamento — porta
+  `RequestBodyLimitLayer::new(body_limit_bytes)`, con il default di 1 MiB invariato;
+- `routes::documents::upload_router` porta **entrambi** i limiti a
+  `upload_body_limit_bytes` (25 MiB di default): `RequestBodyLimitLayer` per i byte in
+  transito e `DefaultBodyLimit::max` per il parser multipart.
+
+I due limiti sono due impostazioni distinte, `PROPFLOW__SERVER__BODY_LIMIT_BYTES` e
+`PROPFLOW__SERVER__UPLOAD_BODY_LIMIT_BYTES`, entrambe in
+[07 — Operazioni](07-operazioni.md#configurazione).
+
+**Conseguenza sul modello di errore.** Il superamento del limite può manifestarsi in
+due punti — il layer, oppure il parser multipart mentre legge — e il chiamante non
+deve vedere due codici diversi a seconda di quale ha incontrato per primo: entrambi
+diventano `413` con `request.payload_too_large`.
+
+**Verificato da due test che si tengono a vicenda**
+(`crates/api/tests/http_contract.rs`): un caricamento da 3 MiB deve **passare** —
+sopra entrambi i limiti, quindi fallirebbe se se ne fosse alzato uno solo — e un
+corpo JSON oltre 1 MiB su `POST /api/v1/properties` deve **fallire** con `413`, che è
+ciò che si romperebbe alzando il limite generale invece di separare i gruppi.
