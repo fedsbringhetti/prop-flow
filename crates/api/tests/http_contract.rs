@@ -1104,3 +1104,408 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
         "corpo: {problem}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Documenti
+// ---------------------------------------------------------------------------
+
+/// Un PDF minimo ma riconoscibile: i byte non contano, conta che siano gli stessi
+/// che il checksum deve coprire.
+const PDF: &[u8] = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n";
+
+/// Il giro completo: si carica, si rilegge nell'elenco, si scarica seguendo il
+/// `307`, si archivia. È il criterio con cui il piano dichiara finita la fetta.
+#[tokio::test]
+async fn full_document_lifecycle() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "documenti").await;
+    let property = create_property(&app, &owner, "Immobile con documenti").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (status, created) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/leases/{lease}/documents"),
+            token: &owner,
+            org: None,
+            filename: "contratto-mario-rossi.pdf",
+            content_type: "application/pdf",
+            content: PDF,
+            kind: Some("lease_contract"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["kind"], "lease_contract", "corpo: {created}");
+    assert_eq!(created["owner_type"], "lease", "corpo: {created}");
+    assert_eq!(created["owner_id"], lease, "corpo: {created}");
+    assert_eq!(created["mime_type"], "application/pdf", "corpo: {created}");
+    assert_eq!(created["size_bytes"], PDF.len(), "corpo: {created}");
+    assert_eq!(
+        created["original_filename"], "contratto-mario-rossi.pdf",
+        "corpo: {created}"
+    );
+    // Il checksum lo calcola l'API sui byte ricevuti, non il client: 64 caratteri
+    // esadecimali di SHA-256.
+    let checksum = created["checksum_sha256"].as_str().expect("checksum");
+    assert_eq!(checksum.len(), 64, "corpo: {created}");
+    assert!(checksum.chars().all(|c| c.is_ascii_hexdigit()));
+    // Il bucket non è configurato per la cifratura, e la colonna lo dice.
+    assert_eq!(created["is_encrypted"], false, "corpo: {created}");
+    let document = created["id"].as_str().expect("id").to_owned();
+
+    // La trappola più cara del modulo, verificata anche da qui: la chiave
+    // dell'oggetto si deriva dagli identificatori, e il nome del file — che è un
+    // dato personale — non ci compare.
+    let keys = app.storage.keys();
+    assert_eq!(keys.len(), 1, "chiavi: {keys:?}");
+    assert!(
+        !keys[0].contains("mario") && !keys[0].contains(".pdf"),
+        "il nome del file è finito nella chiave: {keys:?}"
+    );
+
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}/documents"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed: Vec<&str> = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(listed, vec![document.as_str()], "corpo: {page}");
+
+    // Download: `307` verso l'URL pre-firmato, che sta in `Location` e non nel
+    // corpo — il contenuto non transita dall'API.
+    let (status, response) = app
+        .send_raw(
+            "GET",
+            &format!("/api/v1/documents/{document}/content"),
+            &owner,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("intestazione Location");
+    assert!(location.contains("X-Amz-Signature="), "{location}");
+    assert!(
+        location.contains(&format!("X-Amz-Expires={}", common::PRESIGN_TTL_SECONDS)),
+        "{location}"
+    );
+    // Un permesso a tempo non va messo in cache da nessuno.
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, private")
+    );
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/documents/{document}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // Archiviato è invisibile all'elenco, ma **l'oggetto resta nel bucket**: la
+    // cancellazione dello storage è un debito dichiarato, non una dimenticanza.
+    let (_, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}/documents"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(0),
+        "corpo: {page}"
+    );
+    assert_eq!(
+        app.storage.len(),
+        1,
+        "l'oggetto non deve essere stato rimosso"
+    );
+
+    // Un documento archiviato non si scarica più: sotto RLS "archiviato" e "non
+    // esiste" sono la stessa cosa per il chiamante.
+    let (status, problem) = app
+        .send(
+            "GET",
+            &format!("/api/v1/documents/{document}/content"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "document.not_found", "corpo: {problem}");
+}
+
+/// Un contratto di un'altra organizzazione dà `404` e **non lascia byte nel
+/// bucket**: se l'owner si verificasse dopo la scrittura, chiunque potrebbe
+/// riempire lo storage puntando a identificatori a caso.
+#[tokio::test]
+async fn an_upload_to_an_invisible_owner_leaves_no_object_behind() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "proprietario-doc").await;
+    let (stranger, _) = common::register_and_login(&app, "estraneo-doc").await;
+
+    let property = create_property(&app, &owner, "Immobile riservato").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let before = app.storage.len();
+    let (status, problem) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/leases/{lease}/documents"),
+            token: &stranger,
+            org: None,
+            filename: "curioso.pdf",
+            content_type: "application/pdf",
+            content: PDF,
+            kind: None,
+        })
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.not_found", "corpo: {problem}");
+    assert_eq!(
+        app.storage.len(),
+        before,
+        "un caricamento rifiutato ha lasciato un oggetto orfano"
+    );
+}
+
+/// L'inquilino allega al **proprio** contratto e vede solo i propri documenti.
+///
+/// È il ramo `can_access_attachment` delle policy: senza, `documents_insert`
+/// pretenderebbe il ruolo di staff e l'inquilino non potrebbe allegare nulla.
+#[tokio::test]
+async fn a_tenant_attaches_to_their_own_lease_and_sees_nothing_else() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-doc2").await;
+
+    let property = create_property(&app, &owner, "Immobile dell'inquilino").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let other_property = create_property(&app, &owner, "Immobile estraneo").await;
+    let other_lease = draft_lease(&app, &owner, &other_property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("inquilino-doc");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    // Il proprietario allega un documento al contratto dell'inquilino.
+    let (status, by_owner) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/leases/{lease}/documents"),
+            token: &owner,
+            org: None,
+            filename: "regolamento.pdf",
+            content_type: "application/pdf",
+            content: PDF,
+            kind: Some("other"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {by_owner}");
+    let owner_document = by_owner["id"].as_str().expect("id").to_owned();
+
+    // L'inquilino allega il proprio. Serve `X-Org-Id`: la sua organizzazione
+    // predefinita resta quella personale (debito noto in docs/09).
+    let (status, by_tenant) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/leases/{lease}/documents"),
+            token: &tenant,
+            org: Some(&owner_org),
+            filename: "carta-identita.pdf",
+            content_type: "application/pdf",
+            content: PDF,
+            kind: Some("id_document"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {by_tenant}");
+    let tenant_document = by_tenant["id"].as_str().expect("id").to_owned();
+    assert_eq!(by_tenant["kind"], "id_document", "corpo: {by_tenant}");
+
+    // Entrambi i documenti sono visibili all'inquilino: sono del suo contratto.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{lease}/documents"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let mut visible: Vec<&str> = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    visible.sort_unstable();
+    let mut expected = vec![owner_document.as_str(), tenant_document.as_str()];
+    expected.sort_unstable();
+    assert_eq!(visible, expected, "corpo: {page}");
+
+    // Il contratto di un altro non esiste, per lui.
+    let (status, problem) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{other_lease}/documents"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.not_found", "corpo: {problem}");
+
+    // Può archiviare ciò che ha caricato — è la `USING` di `documents_update` —
+    // ma non il documento del proprietario.
+    let (status, problem) = app
+        .send_in_org(
+            "DELETE",
+            &format!("/api/v1/documents/{owner_document}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    // `org.staff_role_required` e non `auth.denied_by_policy`: quest'ultimo
+    // significa "difetto nostro", e qui il rifiuto è corretto e previsto.
+    assert_eq!(
+        problem["code"], "org.staff_role_required",
+        "corpo: {problem}"
+    );
+
+    let (status, body) = app
+        .send_in_org(
+            "DELETE",
+            &format!("/api/v1/documents/{tenant_document}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+}
+
+/// Il limite di corpo delle rotte di caricamento è **più largo** di quello
+/// generale, e non è un limite dichiarato e mai raggiunto.
+///
+/// Tre MiB: oltre il limite generale (1 MiB) e oltre il `DefaultBodyLimit` di
+/// `Multipart` (2 MiB). Un caricamento che passa dimostra che sono stati alzati
+/// entrambi — alzarne uno solo lo farebbe fallire.
+#[tokio::test]
+async fn the_upload_route_accepts_more_than_the_general_body_limit() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "documenti-grandi").await;
+    let property = create_property(&app, &owner, "Immobile con foto").await;
+
+    let big = vec![b'x'; 3 * 1024 * 1024];
+    assert!(big.len() > common::BODY_LIMIT_BYTES);
+
+    let (status, created) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/properties/{property}/documents"),
+            token: &owner,
+            org: None,
+            filename: "planimetria.png",
+            content_type: "image/png",
+            content: &big,
+            kind: Some("photo"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["size_bytes"], big.len(), "corpo: {created}");
+}
+
+/// …e il limite generale resta stretto su tutto il resto: alzarlo per servire
+/// l'upload avrebbe indebolito ogni endpoint, ed è la via che il piano indica
+/// come sbagliata.
+#[tokio::test]
+async fn the_general_body_limit_still_applies_outside_the_upload_routes() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "corpo-grande").await;
+
+    let oversized = "x".repeat(common::BODY_LIMIT_BYTES + 1024);
+    let (status, _) = app
+        .post_auth(
+            "/api/v1/properties",
+            &owner,
+            serde_json::json!({
+                "label": oversized,
+                "property_type": "apartment",
+                "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI", "postal_code": "20121" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// Un corpo multipart senza la parte `file` è una validazione, non un `500`.
+#[tokio::test]
+async fn an_upload_without_a_file_part_is_a_validation_error() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "senza-file").await;
+    let property = create_property(&app, &owner, "Immobile senza allegati").await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/properties/{property}/documents"))
+        .header("content-type", "multipart/form-data; boundary=xyz")
+        .header("authorization", format!("Bearer {owner}"))
+        .body(axum::body::Body::from(
+            "--xyz\r\nContent-Disposition: form-data; name=\"kind\"\r\n\r\nphoto\r\n--xyz--\r\n",
+        ))
+        .expect("richiesta costruita");
+    let (status, problem, _) = app.request(request).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["code"], "validation.failed", "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "file", "corpo: {problem}");
+}
+
+/// Una classificazione sconosciuta è un `422` con il campo che la nomina, non un
+/// ripiego silenzioso su `other`: un enum esteso altrove e non qui deve essere
+/// rumoroso.
+#[tokio::test]
+async fn an_unknown_document_kind_is_refused() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "tipo-ignoto").await;
+    let property = create_property(&app, &owner, "Immobile con tipo ignoto").await;
+
+    let (status, problem) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/properties/{property}/documents"),
+            token: &owner,
+            org: None,
+            filename: "qualcosa.pdf",
+            content_type: "application/pdf",
+            content: PDF,
+            kind: Some("perizia_giurata"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "kind", "corpo: {problem}");
+}
