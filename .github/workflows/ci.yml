@@ -109,6 +109,12 @@ jobs:
       - name: Prepare the database
         run: ./ops/ci/prepare-database.sh >> "$GITHUB_ENV"
 
+      # MinIO non è un service container: la sua immagine vuole `server /data`
+      # come comando, e i service di GitHub Actions non lo permettono. Lo script è
+      # lo stesso che usa il runner locale.
+      - name: Prepare the object storage
+        run: ./ops/ci/prepare-object-storage.sh >> "$GITHUB_ENV"
+
       - name: Schema invariants
         run: ./ops/ci/check-schema.sh "$PROPFLOW_TEST_MIGRATOR_URL"
 
