@@ -32,6 +32,11 @@ uuid.workspace = true
 tower = { workspace = true, features = ["util"] }
 serde_json.workspace = true
 uuid.workspace = true
+# Il doppio in memoria di `ObjectStorage` implementa un trait `async_trait` e
+# calcola lo stesso digest dell'adattatore vero: senza, verificherebbe un
+# checksum inventato.
+async-trait.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

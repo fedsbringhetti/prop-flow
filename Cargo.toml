@@ -28,13 +28,31 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "request-id", "timeout", "limit", "cors"] }
 http = "1"
 sqlx = { version = "0.9", default-features = false, features = [
     "runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "chrono", "rust_decimal", "json", "macros", "migrate",
 ] }
+
+# Storage oggetti. `rusty-s3` firma le richieste e non porta un client HTTP proprio
+# (Sans-IO): il presigning è il suo scopo, ed è ciò che serve a `presigned_get_url`.
+# `default-features = false` toglie XML, serde_json e md-5, che servono solo alle
+# azioni fuori perimetro (list, multipart, delete-objects).
+rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto"] }
+url = "2"
+# `reqwest` era già nell'albero come dipendenza transitiva di `opentelemetry-otlp`,
+# alla stessa versione: dichiararlo a una versione diversa duplicherebbe l'albero e
+# accenderebbe `cargo deny check bans`.
+#
+# TLS: `rustls-no-provider` e non `rustls`, perché quest'ultima tira `aws-lc-rs`, cioè
+# esattamente il toolchain C e cmake che il progetto evita — è la stessa ragione per
+# cui `jsonwebtoken` usa `rust_crypto`. Senza provider di default reqwest va in panico
+# alla costruzione del client, quindi `rustls` è dichiarata anche qui e il provider
+# `ring` viene installato all'avvio (`S3ObjectStorage::new`).
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "charset", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 
 argon2 = "0.5"
 # `rust_crypto` e non `aws_lc_rs`: implementazione interamente in Rust, quindi
