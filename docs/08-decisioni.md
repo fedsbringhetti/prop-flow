@@ -548,3 +548,182 @@ integrazione riproducono i tentativi e li attendono respinti.
 confine che il resto dello schema difende, il `WITH CHECK` non basta: va accompagnato
 da un privilegio di colonna che fissi le colonne del confine. Vale per ogni policy
 futura che ammetta un non membro.
+
+---
+
+<a id="adr-022"></a>
+
+## ADR-022 — Un codice stabile per ogni errore, e i messaggi passano in inglese
+
+**Problema.** Ogni risposta d'errore portava `type`, `title` e `detail`, tutti e tre
+in italiano e nessuno dei tre stabile. `type` dice la *classe* del problema
+(`conflict`, `validation`), che è troppo grossolana: sotto `conflict` stavano email
+già registrata, nome di stanza duplicato, invito già pendente e sovrapposizione di
+locazione, che per un client sono quattro cose diverse. Restava `detail`, cioè una
+frase in prosa. Un client che volesse mostrare un messaggio proprio — o
+semplicemente decidere se riprovare — non aveva altro appiglio che confrontare
+stringhe italiane destinate a cambiare alla prima riscrittura.
+
+**Decisione.** Ogni risposta acquista un campo `code` stabile, nella forma
+`<dominio>.<condizione>`, e i messaggi rivolti al client passano in inglese.
+
+```json
+{
+  "type": "https://propflow.dev/problems/conflict",
+  "title": "Period not available",
+  "status": 409,
+  "code": "lease.period_overlap",
+  "detail": "an active lease already covers this property for the given period",
+  "request_id": "…"
+}
+```
+
+La divisione dei ruoli è netta: `title` e `detail` sono per un umano che legge i
+log e possono essere riscritti quando si trova una formulazione migliore; `code` è
+il contratto e non cambia. `type` resta la classe e serve a chi vuole gestire
+"tutti i conflitti" senza enumerarli.
+
+**Perché un codice e non il testo.** Perché il testo è l'unica parte che vogliamo
+poter migliorare. Legare un client alla prosa significa scegliere fra un messaggio
+scritto male per sempre e un client che si rompe: il codice toglie il dilemma.
+
+**Perché la localizzazione è del client.** Il server non sa in quale lingua va
+mostrato l'errore — dipende dall'utente finale, non dalla richiesta — e non sa in
+quale registro: la stessa condizione si dice diversamente in un'app per inquilini e
+in un cruscotto per gestori. Un `Accept-Language` sul server sposterebbe le
+traduzioni qui dentro senza risolvere il secondo problema.
+
+**Perché adesso.** I punti d'errore sono 128. Al primo client esterno sarebbero
+qualche centinaio, e sarebbero da cambiare con qualcuno che già dipende dalle
+stringhe.
+
+### Il codice nasce dal tipo, non dal bordo
+
+È la parte che decide se la tassonomia serve o è decorazione. Quattro payload erano
+stringhe libere — `Conflict { resource: "utente con questa email" }`,
+`Invariant(String)`, `Forbidden(&'static str)`, `NotFound { entity: "immobile" }` —
+e da una stringa libera un codice si può solo indovinare confrontando testo, con un
+refuso in un letterale che cambia il contratto pubblico senza che nulla se ne
+accorga. Sono diventati quattro enum:
+
+| Prima | Ora | Dove |
+|---|---|---|
+| `Invariant(String)` | `Invariant(Invariant)` | `domain::error` |
+| `Forbidden(&'static str)` | `Forbidden(Denial)` | `domain::error` |
+| `NotFound { entity: &'static str }` | `NotFound(Entity)` | `domain::error`, `application::error` |
+| `Conflict { resource: &'static str }` | `Conflict(Conflict)` | `application::error` |
+
+`DomainError::code()` e `AppError::code()` delegano al tipo che porta la
+condizione. Il bordo HTTP legge `error.code()` **una volta sola**, prima del match,
+e lo trascrive in ogni ramo: nessun ramo può inventarne uno o dimenticarsene.
+`AppError::Integrity { details }` resta una stringa perché è per definizione il
+vincolo che non sappiamo tradurre, e il suo codice —
+`conflict.constraint_violated` — è deliberatamente muto. Vederlo ripetutamente nei
+log sullo stesso vincolo è il segnale che serve una variante di `Conflict`.
+
+### Quattro scelte non ovvie
+
+**Le varianti possono condividere un codice, e alcune lo fanno.** Le tre transizioni
+di contratto rifiutate danno tutte `lease.invalid_transition`, e le due operazioni
+su un invito già accettato danno `invitation.already_accepted`. Il criterio è il
+rimedio del client: se è lo stesso, il codice è lo stesso, e il `detail` distingue
+il caso per chi legge. Un test lo fissa, così separarle resterebbe una scelta e non
+una svista.
+
+**`auth.token_expired` è distinto da `auth.token_invalid`.** Al primo il client
+risponde rinnovando, al secondo rimandando al login, e senza la distinzione
+riautenticherebbe l'utente a ogni scadenza. Non è un oracolo: per ottenere
+`token_expired` bisogna presentare un token che abbiamo firmato noi. Il **refresh**
+invece resta indistinto su `auth.invalid_credentials` — lì separare "scaduto" da
+"riusato" direbbe a chi ha rubato un token se è ancora vivo. Per lo stesso motivo
+login con password errata e login su account inesistente condividono il codice: la
+scelta di ADR-017 sul `404` vale identica qui.
+
+**Il filtro su uno stato derivato ha un codice proprio.** `?status=expired` era una
+`Validation` sul campo `status`, quindi avrebbe dato `validation.failed` —
+indistinguibile da "`status` non è un valore ammesso", che è un errore diverso sullo
+stesso campo. È diventato `AppError::UnsupportedQuery`, `422` come prima e con lo
+stesso `errors[]`, ma con codice `lease.derived_status_filter`. Il valore non è
+malformato: è derivato (ADR-019), ed è una condizione a sé.
+
+**Undici motivi di rifiuto, quattro pubblicati.** `Denial` contiene anche
+`account.inactive`, `account.locked`, `session.expired`, `invitation.revoked` e
+simili, che login, refresh e accettazione ripiegano su `auth.invalid_credentials`
+prima del bordo. I codici esistono perché il tipo li richiede e perché nei log la
+distinzione serve, ma **non compaiono in `docs/05-api.md`**: un codice che l'API non
+può produrre non è parte del contratto, e pubblicarlo prometterebbe una distinzione
+che rifiutiamo di fare.
+
+### Cosa resta fuori
+
+`auth.denied_by_policy` — la RLS che rifiuta una scrittura già autorizzata dal
+service layer — mantiene lo stato `403`. Se scatta è un difetto nostro e non un
+errore del chiamante, quindi `500` sarebbe più onesto; portarcelo è una decisione
+sul comportamento e non sulla tassonomia, e non entra in un cambiamento che
+introduce i codici. Il codice serve intanto a renderlo cercabile nei log.
+
+**Conseguenze sul contratto.** Aggiungere `code` è additivo e non rompe nessuno. Il
+passaggio dei `detail` all'inglese romperebbe un client che confrontasse le
+stringhe, che è esattamente il motivo per cui `code` esiste: sulla linea 0.x è
+ammesso, e va nel changelog come cambiamento visibile. La tabella dei codici in
+[05 — API](05-api.md) è da qui in poi parte del contratto pubblico: aggiungere un
+codice è additivo, rinominarne uno è una rottura.
+
+---
+
+<a id="adr-023"></a>
+
+## ADR-023 — La configurazione locale la carica la shell, non `.env`
+
+**Difetto osservato.** `README.md`, `CLAUDE.md` e [06 — Sviluppo](06-sviluppo.md)
+indicavano `cp .env.example .env` come passo del primo avvio, e il passo successivo
+falliva:
+
+```
+$ cp .env.example .env && cargo run -p propflow-api
+Error: configurazione non valida
+Caused by: missing field `private_key_path` for key "default.auth"
+```
+
+Nessun crate dipende da `dotenvy` — compare in `Cargo.lock` solo come dipendenza
+transitiva di sqlx — e `docker-compose.yml` dichiara le variabili inline sotto
+`environment:`, senza `env_file:`. Il file `.env` non lo leggeva nessuno. Era il
+primo comando che un contributore nuovo esegue, ed era sbagliato in tre punti
+contemporaneamente.
+
+**Decisione.** `.env` resta un file per la **shell**, non una sorgente di
+configurazione, e la documentazione riporta il passo che lo carica:
+
+```bash
+set -a; source .env; set +a
+```
+
+Le sorgenti restano due, quelle che `AppConfig::load` dichiara: `config/default.toml`
+e l'ambiente, con l'ambiente che vince.
+
+**Alternativa scartata: aggiungere `dotenvy` ai binari.** Sarebbe una terza sorgente
+di configurazione, con una precedenza in più da definire e da documentare, presente
+in produzione per servire solo lo sviluppo: un `.env` finito per sbaglio nella
+directory di lavoro di un container cambierebbe il comportamento del servizio senza
+comparire da nessuna parte. `source` è esplicito, non entra nei binari, e ciò che
+produce sono variabili d'ambiente come tutte le altre.
+
+**Conseguenza accettata: `config/default.toml` si risolve rispetto alla directory di
+lavoro.** L'API va avviata dalla radice del repository o dall'immagine, dove il file
+sta in `/app/config`. Altrove il file non viene trovato e figment lo salta senza
+protestare, perché è dichiarato opzionale: le quattro impostazioni obbligatorie
+falliscono rumorosamente, le altre ripiegano sui default del codice.
+
+Non c'è un avviso perché non c'è ancora dove scriverlo: la configurazione si carica
+**prima** della telemetria — è la configurazione a dire come inizializzarla — quindi
+un `warn!` non avrebbe alcun subscriber, e scrivere su stderr da una funzione di
+libreria significa stampare anche quando chi chiama ha scelto i log JSON. Un percorso
+assoluto risolto da `CARGO_MANIFEST_DIR` sistemerebbe lo sviluppo e sarebbe falso
+nell'immagine, dove non esiste alcun manifest.
+
+**Conseguenze.** Il difetto vero non era il passo mancante: era che la documentazione
+poteva sbagliare senza che nulla se ne accorgesse. Le impostazioni sono ora verificate
+da `crates/api/tests/docs_config_reference.rs`, che deriva l'elenco dal sorgente di
+`AppConfig` e del migratore e lo confronta con le tabelle di
+[07 — Operazioni](07-operazioni.md#configurazione), compresi i default dichiarati.
+Gira senza database, quindi in ogni `cargo test`.

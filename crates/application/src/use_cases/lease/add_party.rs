@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, LeasePartyAdded};
 use propflow_domain::lease::{LeaseParty, LeasePartyRole, NewLeaseParty};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::{Email, LeaseId, LeasePartyId};
+use propflow_domain::{Entity, RequestContext};
 use rust_decimal::Decimal;
 
 use crate::authorization;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, Conflict};
 
 #[derive(Debug, Clone)]
 pub struct AddLeasePartyCommand {
@@ -54,7 +54,7 @@ impl AddLeaseParty {
             .leases()
             .find_by_id(command.lease_id)
             .await?
-            .ok_or(AppError::not_found("contratto"))?;
+            .ok_or(AppError::not_found(Entity::Lease))?;
 
         let party = LeaseParty::new(
             NewLeaseParty {
@@ -98,9 +98,7 @@ impl AddLeaseParty {
 fn map_primary_conflict(error: AppError) -> AppError {
     match &error {
         AppError::Integrity { details } if details.contains("lease_parties_primary") => {
-            AppError::Conflict {
-                resource: "intestatario principale del contratto",
-            }
+            AppError::Conflict(Conflict::LeasePrimaryPartyExists)
         }
         _ => error,
     }

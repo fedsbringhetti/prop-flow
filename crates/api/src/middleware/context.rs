@@ -14,6 +14,9 @@ use crate::state::AppState;
 
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 const ORG_HEADER: &str = "x-org-id";
+/// Un header malformato è sempre la stessa condizione per il client: rimandare
+/// la richiesta corretta. Il `detail` dice quale header e cosa non andava.
+const INVALID_HEADER: &str = "request.invalid_header";
 
 /// Contesto di una richiesta autenticata.
 ///
@@ -35,11 +38,18 @@ impl FromRequestParts<AppState> for Authenticated {
     ) -> Result<Self, Self::Rejection> {
         let request_id = extract_request_id(&parts.headers);
         let token = bearer_token(&parts.headers)
-            .ok_or_else(|| ApiError::unauthorized().with_request_id(request_id.clone()))?;
+            .ok_or_else(|| ApiError::token_missing().with_request_id(request_id.clone()))?;
 
+        // Scaduto e non valido si distinguono: al primo il client risponde
+        // rinnovando, al secondo rimandando al login. Per ottenere
+        // `auth.token_expired` bisogna presentare un token che abbiamo firmato
+        // noi, quindi la distinzione non regala nulla a chi tira a indovinare.
         let claims = state.tokens.verify(token).map_err(|error| match error {
-            CryptoError::ExpiredToken | CryptoError::InvalidToken => {
-                ApiError::unauthorized().with_request_id(request_id.clone())
+            CryptoError::ExpiredToken => {
+                ApiError::token_expired().with_request_id(request_id.clone())
+            }
+            CryptoError::InvalidToken => {
+                ApiError::token_invalid().with_request_id(request_id.clone())
             }
             CryptoError::Backend { details } => {
                 ApiError::from(propflow_application::AppError::Internal { details })
@@ -104,7 +114,7 @@ async fn resolve_role(
     context: &RequestContext,
     org_id: OrgId,
 ) -> Result<propflow_domain::identity::OrgRole, ApiError> {
-    let user_id = context.user_id().ok_or_else(ApiError::unauthorized)?;
+    let user_id = context.user_id().ok_or_else(ApiError::token_invalid)?;
 
     // Il contesto passato qui ha solo l'utente: basta, perché la policy su
     // `org_members` mostra a ciascuno le proprie appartenenze
@@ -125,7 +135,7 @@ async fn resolve_role(
         // Non si distingue "organizzazione inesistente" da "non ne fai parte":
         // la differenza rivelerebbe l'esistenza di organizzazioni altrui.
         _ => Err(ApiError::from(propflow_application::AppError::Forbidden(
-            "non appartieni a questa organizzazione",
+            propflow_domain::Denial::NotAMember,
         ))),
     }
 }
@@ -144,11 +154,11 @@ fn requested_org_id(headers: &HeaderMap) -> Result<Option<OrgId>, ApiError> {
     let Some(raw) = headers.get(ORG_HEADER) else {
         return Ok(None);
     };
-    let value = raw
-        .to_str()
-        .map_err(|_| ApiError::bad_request("header X-Org-Id non è testo valido"))?;
+    let value = raw.to_str().map_err(|_| {
+        ApiError::bad_request(INVALID_HEADER, "The X-Org-Id header is not valid text")
+    })?;
     let uuid = Uuid::parse_str(value.trim())
-        .map_err(|_| ApiError::bad_request("header X-Org-Id non è un UUID"))?;
+        .map_err(|_| ApiError::bad_request(INVALID_HEADER, "The X-Org-Id header is not a UUID"))?;
     Ok(Some(OrgId::from_uuid(uuid)))
 }
 

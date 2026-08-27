@@ -28,7 +28,7 @@ env:
 jobs:
   # ---------------------------------------------------------------------------
   lint:
-    name: Formato e lint
+    name: Format and lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
         with:
           key: lint
 
-      - name: Formato
+      - name: Format
         run: cargo fmt --all --check
 
       # I lint del workspace già negano unwrap/expect/panic/unsafe. `-D warnings`
@@ -54,7 +54,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   architecture:
-    name: Vincoli architetturali
+    name: Architecture constraints
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,12 +67,12 @@ jobs:
       # Il dominio non deve dipendere dall'infrastruttura, l'application layer non
       # deve conoscere quella concreta, e negli handler HTTP non ci deve essere
       # SQL. Sono i vincoli tassativi del progetto: verificati, non promessi.
-      - name: Purezza del dominio
+      - name: Domain purity
         run: ./ops/ci/check-domain-purity.sh
 
   # ---------------------------------------------------------------------------
   test:
-    name: Test su PostgreSQL reale
+    name: Tests on a real PostgreSQL
     runs-on: ubuntu-latest
 
     services:
@@ -99,31 +99,31 @@ jobs:
         with:
           key: test
 
-      - name: Client PostgreSQL
+      - name: PostgreSQL client
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends postgresql-client
 
       # Stessa procedura del runner locale: database, tre ruoli con privilegi
       # minimi, migration applicate dal binario di deploy e non da psql.
-      - name: Prepara il database
+      - name: Prepare the database
         run: ./ops/ci/prepare-database.sh >> "$GITHUB_ENV"
 
-      - name: Invarianti dello schema
+      - name: Schema invariants
         run: ./ops/ci/check-schema.sh "$PROPFLOW_TEST_MIGRATOR_URL"
 
       # Il migratore deve essere idempotente: una seconda esecuzione su un
       # database già migrato non deve riapplicare nulla né creare una seconda
       # tabella di bookkeeping. È un errore che si manifesterebbe solo al primo
       # redeploy, quindi va verificato qui.
-      - name: Migrazioni idempotenti
+      - name: Idempotent migrations
         run: |
           PROPFLOW__DATABASE__MIGRATOR_URL="$PROPFLOW_TEST_MIGRATOR_URL" \
           PROPFLOW__DATABASE__MIGRATIONS_DIR="$PWD/migrations" \
             cargo run --quiet --locked -p propflow-migrator
           ./ops/ci/check-schema.sh "$PROPFLOW_TEST_MIGRATOR_URL"
 
-      - name: Chiavi di firma effimere
+      - name: Ephemeral signing keys
         run: ./ops/dev/generate-jwt-keys.sh "${{ runner.temp }}/secrets"
 
       # `--nocapture` serve al controllo che segue: senza di esso l'harness
@@ -140,16 +140,19 @@ jobs:
           set -euo pipefail
           cargo test --workspace --locked -- --test-threads=4 --nocapture \
             | tee "${{ runner.temp }}/test-output.log"
+          # `SALTATO` è la parola che stampa l'harness dei test, che è in italiano
+          # come il resto del codice: è un contratto con i test, non una stringa
+          # rivolta a chi legge la pipeline.
           if grep -q 'SALTATO' "${{ runner.temp }}/test-output.log"; then
-            echo "::error::test di integrazione saltati: ambiente di test incompleto"
+            echo "::error::integration tests were skipped: incomplete test environment"
             grep 'SALTATO' "${{ runner.temp }}/test-output.log"
             exit 1
           fi
-          echo "nessun test saltato"
+          echo "no test was skipped"
 
   # ---------------------------------------------------------------------------
   image:
-    name: Immagine container
+    name: Container image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -168,7 +171,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   dependencies:
-    name: Vulnerabilità e provenienza
+    name: Vulnerabilities and provenance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -193,16 +196,20 @@ jobs:
   # ---------------------------------------------------------------------------
   # Job di riepilogo: è l'unico che conviene richiedere nella protezione del
   # branch, così aggiungere un job non richiede di riconfigurare GitHub.
+  #
+  # Il nome `CI` è il check richiesto dalla protezione di `main` e `dev`:
+  # rinominarlo la farebbe cercare un check che non esiste più, bloccando ogni
+  # merge finché non la si riconfigura via `gh api`.
   ci:
     name: CI
     runs-on: ubuntu-latest
     needs: [lint, architecture, test, image, dependencies]
     if: always()
     steps:
-      - name: Esito
+      - name: Outcome
         run: |
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
-            echo "::error::almeno un job è fallito"
+            echo "::error::at least one job failed"
             exit 1
           fi
-          echo "tutti i job sono passati"
+          echo "every job passed"

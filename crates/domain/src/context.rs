@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use crate::error::{DomainError, DomainResult};
+use crate::error::{Denial, DomainError, DomainResult};
 use crate::identity::OrgRole;
 use crate::shared::{OrgId, UserId};
 
@@ -95,13 +95,12 @@ impl RequestContext {
 
     pub fn require_user(&self) -> DomainResult<UserId> {
         self.user_id
-            .ok_or(DomainError::Forbidden("richiede autenticazione"))
+            .ok_or(DomainError::Forbidden(Denial::AuthenticationRequired))
     }
 
     pub fn require_org(&self) -> DomainResult<OrgId> {
-        self.org_id.ok_or(DomainError::Forbidden(
-            "richiede un'organizzazione selezionata",
-        ))
+        self.org_id
+            .ok_or(DomainError::Forbidden(Denial::OrgNotSelected))
     }
 
     /// `true` per owner e manager dell'organizzazione, o per un amministratore

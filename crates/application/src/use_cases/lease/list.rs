@@ -7,7 +7,7 @@ use propflow_domain::shared::{LeaseId, PropertyId};
 
 use super::LeaseView;
 use crate::authorization;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, UnsupportedQuery};
 
 #[derive(Debug, Clone, Default)]
 pub struct ListLeasesQuery {
@@ -51,12 +51,13 @@ impl ListLeases {
         // `expiring` ed `expired` non sono memorizzati (ADR-019): filtrarci sopra
         // restituirebbe sempre zero righe, che è il modo peggiore di dirlo. Meglio
         // un 422 che indica il filtro corretto.
+        //
+        // Non è una `Validation`: il valore non è malformato, è derivato. Il codice
+        // distinto lo separa da "`status` non è un valore ammesso", che è un errore
+        // diverso sullo stesso campo (ADR-022).
         if query.status.is_some_and(LeaseStatus::is_derived) {
-            return Err(AppError::Validation(
-                propflow_domain::DomainError::validation(
-                    "status",
-                    "`expiring` ed `expired` sono stati derivati dalle date: usa il filtro `in_force`",
-                ),
+            return Err(AppError::UnsupportedQuery(
+                UnsupportedQuery::LeaseDerivedStatusFilter,
             ));
         }
 

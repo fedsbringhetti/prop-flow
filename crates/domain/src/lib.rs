@@ -20,4 +20,4 @@ pub mod property;
 pub mod shared;
 
 pub use context::RequestContext;
-pub use error::{DomainError, DomainResult};
+pub use error::{Denial, DomainError, DomainResult, Entity, Invariant};

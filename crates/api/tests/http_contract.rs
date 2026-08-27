@@ -25,6 +25,7 @@ async fn protected_routes_require_a_token() {
     let (status, body) = app.send("GET", "/api/v1/properties", None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["status"], 401);
+    assert_eq!(body["code"], "auth.token_missing", "corpo: {body}");
     assert!(
         body["type"]
             .as_str()
@@ -36,10 +37,13 @@ async fn protected_routes_require_a_token() {
 #[tokio::test]
 async fn an_invalid_token_is_refused() {
     let app = require_app!();
-    let (status, _) = app
+    let (status, body) = app
         .send("GET", "/api/v1/properties", Some("non-un-jwt"), None)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Non `auth.token_expired`: un token che non abbiamo firmato noi non può
+    // ottenere la diagnosi riservata a chi ne aveva uno legittimo (ADR-022).
+    assert_eq!(body["code"], "auth.token_invalid", "corpo: {body}");
 }
 
 #[tokio::test]
@@ -56,6 +60,7 @@ async fn weak_passwords_are_rejected_with_field_errors() {
         )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "validation.failed", "corpo: {body}");
     assert_eq!(body["errors"][0]["field"], "password", "corpo: {body}");
 }
 
@@ -125,6 +130,9 @@ async fn wrong_credentials_are_indistinguishable_from_an_unknown_account() {
     assert_eq!(existing_user, StatusCode::UNAUTHORIZED);
     assert_eq!(unknown_user, StatusCode::UNAUTHORIZED);
     assert_eq!(body_existing["title"], body_unknown["title"]);
+    // Il codice non deve reintrodurre l'oracolo che il titolo unico evita.
+    assert_eq!(body_existing["code"], body_unknown["code"]);
+    assert_eq!(body_existing["code"], "auth.invalid_credentials");
 }
 
 #[tokio::test]
@@ -289,6 +297,43 @@ async fn unknown_routes_return_problem_details_too() {
     let (status, body) = app.send("GET", "/api/v1/non-esiste", None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["status"], 404, "corpo: {body}");
+    // Una rotta sconosciuta ha la stessa forma di una risorsa non trovata, ma un
+    // codice suo: un client non deve scambiare un errore di indirizzo per una
+    // risorsa cancellata.
+    assert_eq!(body["code"], "endpoint.not_found", "corpo: {body}");
+}
+
+/// Ogni risposta d'errore porta un `code`, e ogni `code` è nella forma
+/// `<dominio>.<condizione>`. Senza questo, una variante nuova può nascere senza
+/// codice e nessuno se ne accorge finché non lo cerca un client.
+#[tokio::test]
+async fn every_error_response_carries_a_dotted_code() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "codici").await;
+
+    let cases: Vec<(StatusCode, serde_json::Value)> = vec![
+        app.send("GET", "/api/v1/properties", None, None).await,
+        app.send("GET", "/api/v1/non-esiste", None, None).await,
+        app.send("GET", "/api/v1/leases?status=expired", Some(&token), None)
+            .await,
+        app.send(
+            "GET",
+            &format!("/api/v1/properties/{}", uuid::Uuid::now_v7()),
+            Some(&token),
+            None,
+        )
+        .await,
+    ];
+
+    for (status, body) in cases {
+        let code = body["code"]
+            .as_str()
+            .unwrap_or_else(|| panic!("risposta {status} senza `code`: {body}"));
+        let (domain, condition) = code
+            .split_once('.')
+            .unwrap_or_else(|| panic!("`{code}` non è <dominio>.<condizione>"));
+        assert!(!domain.is_empty() && !condition.is_empty(), "`{code}`");
+    }
 }
 
 #[tokio::test]
@@ -300,6 +345,28 @@ async fn openapi_document_is_served() {
     assert!(
         body["paths"]["/api/v1/properties"]["post"].is_object(),
         "rotta assente dal documento"
+    );
+
+    // `code` è parte del contratto, quindi deve stare nello schema pubblicato e
+    // non solo nelle risposte: un client che genera il proprio modello dallo
+    // OpenAPI non lo vedrebbe mai.
+    let problem = &body["components"]["schemas"]["ProblemDetails"];
+    assert!(
+        problem["properties"]["code"].is_object(),
+        "ProblemDetails senza `code`: {problem}"
+    );
+    let required = problem["required"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        required.contains(&"code"),
+        "`code` deve essere obbligatorio: {problem}"
     );
 }
 
@@ -443,12 +510,9 @@ async fn two_rooms_cannot_share_a_name_in_the_same_property() {
         )
         .await;
     assert_eq!(second, StatusCode::CONFLICT, "corpo: {problem}");
-    assert!(
-        problem["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("stanza")),
-        "il conflitto deve dire cosa è duplicato: {problem}"
-    );
+    // Sul codice e non sul testo: il `detail` può essere riscritto, `code` no
+    // (ADR-022). Un test che confronta prosa si rompe alla prima riformulazione.
+    assert_eq!(problem["code"], "room.name_taken", "corpo: {problem}");
 }
 
 fn day(offset: i64) -> String {
@@ -609,10 +673,11 @@ async fn an_overlapping_activation_says_what_is_occupied() {
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.period_overlap", "corpo: {problem}");
     // Il nome del vincolo resta nei log: la risposta dice cosa è occupato.
     let detail = problem["detail"].as_str().unwrap_or_default();
     assert!(
-        detail.contains("immobile") && detail.contains("periodo"),
+        detail.contains("property") && detail.contains("period"),
         "il 409 deve essere parlante: {problem}"
     );
 }
@@ -669,13 +734,13 @@ async fn filtering_by_a_derived_status_is_refused_with_a_hint() {
         .send("GET", "/api/v1/leases?status=expired", Some(&token), None)
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
-    assert_eq!(problem["errors"][0]["field"], "status");
-    assert!(
-        problem["errors"][0]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("in_force")),
-        "l'errore deve indicare il filtro corretto: {problem}"
+    // Codice proprio, non `validation.failed`: un valore derivato rifiutato è una
+    // condizione diversa da un valore non ammesso, e sullo stesso campo.
+    assert_eq!(
+        problem["code"], "lease.derived_status_filter",
+        "corpo: {problem}"
     );
+    assert_eq!(problem["errors"][0]["field"], "status");
 }
 
 #[tokio::test]
@@ -737,6 +802,7 @@ async fn a_room_of_another_property_cannot_be_let() {
         )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["code"], "validation.failed", "corpo: {problem}");
     assert_eq!(problem["errors"][0]["field"], "room_id");
 }
 
@@ -966,6 +1032,10 @@ async fn an_unknown_token_is_indistinguishable_from_someone_elses() {
     assert_eq!(with_stolen_token, StatusCode::UNAUTHORIZED, "corpo: {body}");
     assert_eq!(with_invented_token, StatusCode::UNAUTHORIZED);
     assert_eq!(body["title"], other_body["title"]);
+    // Un token altrui e uno mai emesso danno lo stesso codice: distinguerli
+    // direbbe a chi prova se un invito esiste.
+    assert_eq!(body["code"], other_body["code"]);
+    assert_eq!(body["code"], "auth.invalid_credentials");
 }
 
 #[tokio::test]
@@ -1029,10 +1099,8 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
-    assert!(
-        problem["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("invito")),
-        "il conflitto deve dire cosa è duplicato: {problem}"
+    assert_eq!(
+        problem["code"], "invitation.already_pending",
+        "corpo: {problem}"
     );
 }

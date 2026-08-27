@@ -17,6 +17,22 @@ pre-autenticazione. Vedi [04 — Sicurezza](04-sicurezza.md#il-pool-privilegiato
 doppio underscore separa i livelli. L'ambiente vince sul file, così un deploy non
 deve riscriverlo. Nessun segreto nel file.
 
+Due avvertenze che nascono da come il file viene caricato, entrambe in
+[ADR-023](08-decisioni.md#adr-023):
+
+- **`config/default.toml` si risolve rispetto alla directory di lavoro.** L'API va
+  avviata dalla radice del repository, o dall'immagine, dove il file sta in
+  `/app/config`. Avviata altrove il file semplicemente non c'è: le quattro
+  impostazioni obbligatorie falliscono rumorosamente, tutte le altre ripiegano in
+  silenzio sui default del codice, che non sono per forza quelli di questa tabella.
+- **`.env` non lo legge nessuno.** Nessun crate dipende da `dotenvy` e
+  `docker-compose.yml` dichiara le variabili inline. È un file da dare alla shell —
+  `set -a; source .env; set +a` — non una sorgente di configurazione.
+
+### Impostazioni dell'API e del worker
+
+Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
+
 | Variabile | Default | Note |
 |---|---|---|
 | `PROPFLOW__SERVER__BIND` | `0.0.0.0:8080` | |
@@ -24,18 +40,41 @@ deve riscriverlo. Nessun segreto nel file.
 | `PROPFLOW__SERVER__BODY_LIMIT_BYTES` | `1048576` | |
 | `PROPFLOW__DATABASE__APPLICATION_URL` | — | **obbligatoria**, ruolo `propflow_app` |
 | `PROPFLOW__DATABASE__PRIVILEGED_URL` | — | **obbligatoria**, ruolo `propflow_worker` |
-| `PROPFLOW__DATABASE__MIGRATOR_URL` | — | solo per il migratore |
-| `PROPFLOW__DATABASE__MIGRATIONS_DIR` | `migrations` | |
 | `PROPFLOW__DATABASE__MAX_CONNECTIONS` | `16` | per pool |
 | `PROPFLOW__DATABASE__STATEMENT_TIMEOUT_SECONDS` | `10` | per connessione |
 | `PROPFLOW__AUTH__PRIVATE_KEY_PATH` | — | **obbligatoria**, PEM PKCS#8 Ed25519 |
 | `PROPFLOW__AUTH__PUBLIC_KEY_PATH` | — | **obbligatoria**, PEM SPKI |
-| `PROPFLOW__AUTH__ISSUER` / `AUDIENCE` | `propflow` / `propflow-api` | |
+| `PROPFLOW__AUTH__ISSUER` | `propflow` | |
+| `PROPFLOW__AUTH__AUDIENCE` | `propflow-api` | |
 | `PROPFLOW__AUTH__ACCESS_TOKEN_TTL_SECONDS` | `900` | |
 | `PROPFLOW__AUTH__REFRESH_TOKEN_TTL_DAYS` | `30` | |
+| `PROPFLOW__TELEMETRY__SERVICE_NAME` | `propflow-api` | nome del servizio nelle tracce e negli span |
 | `PROPFLOW__TELEMETRY__OTLP_ENDPOINT` | — | assente: solo stdout |
-| `PROPFLOW__TELEMETRY__FILTER` | `info,propflow_api=debug` | direttiva `EnvFilter` |
+| `PROPFLOW__TELEMETRY__FILTER` | `info,propflow_api=debug,propflow_application=debug` | direttiva `EnvFilter` |
 | `PROPFLOW__TELEMETRY__JSON_LOGS` | `false` | `true` in produzione |
+
+La colonna dei default riporta ciò che il progetto **spedisce**, cioè i valori di
+`config/default.toml`. Dove il file non viene trovato valgono i default del codice,
+che possono essere più conservativi: il filtro di log, per esempio, ripiega su
+`info,propflow_api=debug`.
+
+Le due tabelle di questa sezione sono verificate da un test
+(`crates/api/tests/docs_config_reference.rs`), che deriva l'elenco dal sorgente:
+un'impostazione nuova non documentata, o una riga qui che nel codice non esiste più,
+fanno fallire la suite.
+
+### Impostazioni del migratore
+
+Non passano da `AppConfig`: `crates/migrator/src/main.rs` le legge direttamente con
+`std::env::var`. Il migratore è un binario di deploy che gira come un altro ruolo e
+non ha bisogno del resto della configurazione — pretendere l'intero `AppConfig` gli
+chiederebbe le URL dei pool applicativi e i percorsi delle chiavi di firma, che non
+usa.
+
+| Variabile | Default | Note |
+|---|---|---|
+| `PROPFLOW__DATABASE__MIGRATOR_URL` | — | **obbligatoria**, ruolo `propflow_migrator` |
+| `PROPFLOW__DATABASE__MIGRATIONS_DIR` | `migrations` | nell'immagine `/app/migrations` |
 
 Le chiavi sono **percorsi**, non contenuti: una chiave privata in una variabile
 d'ambiente è leggibile da `/proc`, dai dump di crash e da `docker inspect`.
@@ -111,9 +150,15 @@ interrompendo le richieste in volo. Le connessioni vengono chiuse ordinatamente.
 - Tracce OTLP su gRPC quando è configurato un endpoint. L'handle di telemetria
   svuota la coda al `Drop`: perderla allo shutdown significa non avere le tracce
   degli errori che hanno causato lo shutdown.
-- `X-Request-Id` propagato e presente in ogni riga di log della richiesta, e nel
-  corpo di ogni errore: un utente che segnala un problema porta con sé la chiave di
-  ricerca.
+- **Una riga di log per richiesta**, a livello `INFO`, con metodo, URI, stato,
+  latenza e `request_id`. Lo span è costruito a mano in `crates/api/src/lib.rs`:
+  `DefaultMakeSpan` di `TraceLayer` registra metodo, URI e versione ma non l'id, e
+  la risposta la logga a `DEBUG`, che con il filtro spedito dal progetto non
+  produce **alcuna** riga per nessuna richiesta. Un test unitario fallisce se il
+  campo `request_id` sparisce dallo span.
+- `X-Request-Id` è propagato in risposta e compare nel corpo di ogni errore: un
+  utente che segnala un problema porta con sé la chiave di ricerca. Se il client
+  non lo fornisce ne viene generato uno.
 - `ai_jobs` registra token, costo e latenza per ogni chiamata a un provider AI, con
   `trace_id` per correlare allo span.
 - PostgreSQL con `log_min_duration_statement=200` e `log_statement=none`: si vedono
@@ -128,7 +173,7 @@ interrompendo le richieste in volo. Le connessioni vengono chiuse ordinatamente.
 | `lint` | `cargo fmt --check`, `clippy` con `-D warnings` |
 | `architecture` | `check-domain-purity.sh`: il dominio non dipende dall'infrastruttura, nessun SQL negli handler |
 | `test` | PostgreSQL 16 come service, ruoli, migrazioni dal binario, invarianti dello schema, idempotenza del migratore, suite completa, e un controllo che nessun test si sia dichiarato saltato |
-| `image` | Costruisce l'immagine con cache GHA. Non pubblica: la pubblicazione è una decisione di release |
+| `image` | Costruisce l'immagine con cache GHA. Non pubblica: la pubblicazione è una decisione di release, e la fa il workflow di rilascio ([10 — Rilasci](10-rilasci.md#cosa-fa-il-workflow-al-tag)) |
 | `dependencies` | `cargo-deny`: vulnerabilità note, crate ritirati, versioni duplicate, provenienza |
 | `ci` | Riepilogo. È l'unico da richiedere nella protezione del branch, così aggiungere un job non richiede di riconfigurare GitHub |
 
@@ -150,7 +195,6 @@ cambiamento, e poi "in locale funziona".
 ## Cosa manca
 
 - Manifest Kubernetes: non ci sono ancora.
-- Pubblicazione dell'immagine su un registry.
 - Backup e restore del database.
 - Metriche (esistono log e tracce, non metriche).
 - Alerting.

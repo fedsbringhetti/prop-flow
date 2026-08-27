@@ -17,7 +17,7 @@ impl CountryCode {
         if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_uppercase) {
             return Err(DomainError::validation(
                 "country",
-                "deve essere un codice ISO 3166-1 alpha-2",
+                "must be an ISO 3166-1 alpha-2 code",
             ));
         }
         Ok(Self([bytes[0], bytes[1]]))

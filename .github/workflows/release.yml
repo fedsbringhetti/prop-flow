@@ -18,37 +18,37 @@ jobs:
   # nelle etichette OCI e nel documento OpenAPI una versione diversa da quella del
   # tag che l'ha prodotta.
   guard:
-    name: Coerenza della versione
+    name: Version consistency
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Confronta tag e manifest
+      - name: Compare tag and manifest
         id: check
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
           manifest=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           if [[ "$tag" != "$manifest" ]]; then
-            echo "::error::il tag v${tag} non corrisponde alla versione del workspace ${manifest}"
+            echo "::error::tag v${tag} does not match the workspace version ${manifest}"
             exit 1
           fi
           echo "version=${tag}" >> "$GITHUB_OUTPUT"
-          echo "tag e manifest concordano: ${tag}"
+          echo "tag and manifest agree: ${tag}"
 
   # ---------------------------------------------------------------------------
   # Stessa pipeline delle pull request. Un rilascio non ha una verifica propria:
   # se ne avesse una, sarebbe quella a divergere.
   verify:
-    name: Verifica
+    name: Verification
     needs: guard
     uses: ./.github/workflows/ci.yml
 
   # ---------------------------------------------------------------------------
   publish:
-    name: Pubblicazione dell'immagine
+    name: Image publishing
     needs: [guard, verify]
     runs-on: ubuntu-latest
     permissions:
@@ -66,7 +66,7 @@ jobs:
 
       # `latest` solo per le versioni stabili: un tag di pre-release non deve
       # diventare ciò che si scarica per difetto.
-      - name: Tag dell'immagine
+      - name: Image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -77,7 +77,7 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
-      - name: Build e push
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -105,14 +105,14 @@ jobs:
           # comincia questa versione.
           fetch-depth: 0
 
-      - name: Sezione di changelog di questa versione
+      - name: Changelog section for this version
         id: changelog
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
           args: --latest --strip header
 
-      - name: Crea la release
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.guard.outputs.version }}

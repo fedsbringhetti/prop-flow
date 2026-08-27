@@ -7,7 +7,7 @@ use propflow_domain::shared::{LeaseId, OrgId};
 use propflow_domain::{DomainError, RequestContext};
 
 use crate::authorization;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, Conflict};
 use crate::ports::OpaqueTokenFactory;
 
 #[derive(Debug, Clone)]
@@ -163,9 +163,7 @@ impl AcceptInvitation {
 fn map_membership_conflict(error: AppError) -> AppError {
     match &error {
         AppError::Integrity { details } if details.contains("org_members_org_user") => {
-            AppError::Conflict {
-                resource: "appartenenza a questa organizzazione",
-            }
+            AppError::Conflict(Conflict::MembershipAlreadyExists)
         }
         _ => error,
     }

@@ -33,6 +33,11 @@ Partenza: **`docs/README.md`**, che è la mappa. Poi, in base al compito:
 | capire perché una cosa è fatta così | `docs/08-decisioni.md` |
 | sapere cosa manca | `docs/09-stato-e-roadmap.md` |
 
+Se la domanda è «cosa faccio adesso», la risposta è `docs/09-stato-e-roadmap.md`:
+stato attuale, prossimo passo suggerito, debiti noti e ciò che è deliberatamente
+fuori perimetro. È anche il posto dove un piano deve atterrare prima di essere
+implementato — vedi §3.
+
 Se dopo aver letto resta un'ambiguità, chiedila invece di inventare una
 convenzione nuova.
 
@@ -104,22 +109,62 @@ possibile.
 
 ## 3. Metodo di lavoro
 
-### Su git si scrive in inglese. Tutto.
+### Lingua: inglese su ciò che si vede da fuori
 
-**Senza eccezioni**: messaggi di commit, nomi dei branch, titoli e corpi delle PR,
-commenti di review, messaggi di tag, note di rilascio, `CHANGELOG.md`, titoli e
-descrizioni delle issue.
+Il criterio, unico e da applicare anche ai casi non elencati qui: **ciò che un
+estraneo incontra senza aprire un file è in inglese; la prosa interna del progetto
+resta in italiano.** Non conta se il testo vive dentro o fuori dal repository: conta
+se lo si legge dall'interfaccia di GitHub, da un changelog o da una pagina di
+progetto senza mai entrare nel codice.
 
-Restano in italiano il codice, i commenti nel codice, `docs/` e questo file.
+**In inglese, senza eccezioni:**
 
-Il criterio è dove vive il testo: ciò che finisce **dentro** i file del repository
-segue la lingua del progetto; ciò che finisce **nei metadati di git e di GitHub** è
-in inglese, perché è la parte che sopravvive ai contributori e che un lettore
-esterno — o uno strumento che genera un changelog — incontra per prima.
+- messaggi di commit, nomi dei branch, messaggi di tag;
+- titoli e corpi delle PR, commenti di review, titoli e descrizioni delle issue;
+- `README.md` — è la prima pagina del repository;
+- `cliff.toml` e tutto ciò che ne deriva: `CHANGELOG.md` e il corpo delle GitHub
+  Release, che da lì sono generati. Sbagliare qui sbaglia due superfici in una;
+- nei workflow in `.github/workflows/`: i nomi dei **job** e degli **step**, e le
+  annotazioni `::error::` e `::warning::`. I job compaiono come nomi dei check nelle
+  PR, gli step nel log di esecuzione, le annotazioni in cima al riepilogo.
+
+**In italiano:** `docs/`, questo file, i commenti nel codice Rust, nelle migration,
+negli script `ops/` e nei workflow. Sono prosa interna: in italiano è più precisa e
+più veloce da scrivere, e tradurre diciotto ADR densi di ragionamento rischia di
+perdere esattamente ciò per cui esistono. L'italiano resta anche nelle stringhe che
+il codice produce per sé, come il marcatore `SALTATO` dell'harness dei test su cui
+la CI fa `grep`: è un contratto interno, non un messaggio per chi legge la pipeline.
+
+**I nomi dei job sono un contratto con la protezione dei branch.** Il job di
+riepilogo si chiama `CI` ed è il check richiesto su `main` e `dev`: rinominarlo fa
+cercare a GitHub un check che non esiste più e blocca ogni merge finché non si
+aggiorna anche la protezione via `gh api`. Gli altri job si rinominano liberamente.
 
 Prima di scrivere un titolo di PR o un messaggio di commit, verifica di essere in
 inglese. È l'errore più facile da commettere e il più costoso da correggere dopo,
 perché richiede di riscrivere la storia o di riaprire le PR.
+
+### I piani atterrano nella roadmap, prima dell'implementazione
+
+Quando in una sessione si progetta un lavoro, **quel piano si scrive in
+`docs/09-stato-e-roadmap.md` prima di implementarlo**, con lo stesso dettaglio con
+cui è stato pensato. Non un riassunto e non un rimando: la decomposizione, così che
+chi non era in quella conversazione possa eseguirla.
+
+Tre cose devono sopravvivere, e sono quelle che si perdono per prime:
+
+1. la scomposizione in passi eseguibili singolarmente;
+2. le decisioni **con il perché**, e le alternative scartate;
+3. le **trappole**: le vie che sembrano corrette e non lo sono. Sono la conoscenza
+   più cara da riacquistare, perché per riscoprirne una bisogna prima sbagliare.
+
+La roadmap **può essere lunga**: l'istinto di accorciarla per ordine è esattamente
+ciò che cancella il dettaglio per cui esiste. Ciò che è rinviato si segna come
+rinviato, con la ragione, altrimenti si rilegge come lavoro pendente e qualcuno lo
+prende in mano.
+
+Il motivo è semplice e costoso: un piano che vive fuori dal repository non esiste
+per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
 
 ### Commit
 
@@ -130,6 +175,14 @@ perché richiede di riscrivere la storia o di riaprire le PR.
 - **Un commit per unità logica.** Un commit da 4.000 righe che introduce un modulo
   intero non è rivedibile; si divide per livello (dominio, use case, infrastruttura,
   bordo HTTP, test) o per capacità.
+- **Creare un branch non richiede permesso; committare sì.** Quando il lavoro è
+  pronto, i commit si propongono come **tabella** — una riga per commit, con tipo,
+  scope, oggetto e cosa copre — e poi ci si ferma ad aspettare. La tabella è il punto
+  di revisione: rimodellare una proposta costa poco, riscrivere una storia già
+  pubblicata no.
+- **Il push è una conferma a parte.** Il via libera a committare non è il via libera
+  a pubblicare, e quello dato per un push non vale per il successivo: si chiede ogni
+  volta.
 
 ### Pull request
 
@@ -138,8 +191,12 @@ perché richiede di riscrivere la storia o di riaprire le PR.
   decisioni sono state prese e quali alternative scartate, quali invarianti e vincoli
   vengono introdotti, come è stato verificato, cosa resta fuori. Tre righe buttate là
   non sono accettabili.
+- **Le PR non si aprono se non richieste.** Aprirne una è pubblicare: la decisione è
+  di chi ha chiesto il lavoro, non di chi lo ha fatto.
 - Il file `.github/pull_request_template.md` riporta le sezioni attese. Compilarle
-  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla.
+  tutte; se una non si applica, dirlo esplicitamente invece di cancellarla. **Il
+  template da solo non vincola nessuno**: `gh pr create --body` lo scavalca senza
+  dire niente, e per questo la regola sta scritta anche qui e non solo lì.
 - **Riferimenti puntuali**: numeri di migration, nomi di ADR, percorsi di file,
   identificatori di vincoli e policy. Un corpo che dice "sistemata la RLS" non serve
   a nessuno.
@@ -161,7 +218,10 @@ perché richiede di riscrivere la storia o di riaprire le PR.
   rumore; uno che spiega perché una via apparentemente più semplice non funziona
   vale il suo spazio.
 - **La documentazione si aggiorna insieme al codice.** Una decisione nuova o
-  cambiata è una voce in `docs/08-decisioni.md`.
+  cambiata è una voce in `docs/08-decisioni.md`. Per la configurazione non è un
+  invito: `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
+  `AppConfig` e dal migratore, e un'impostazione aggiunta senza la riga
+  corrispondente in `docs/07-operazioni.md` fa fallire `cargo test`.
 
 ---
 
@@ -185,6 +245,7 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 docker compose up -d postgres
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
 cp .env.example .env                    # poi adattare
+set -a; source .env; set +a             # nessuno lo carica da solo: lo fa la shell
 cargo run -p propflow-migrator
 cargo run -p propflow-api               # Swagger UI su http://localhost:8080/docs
 cargo run -p propflow-worker            # dispatcher dell'outbox

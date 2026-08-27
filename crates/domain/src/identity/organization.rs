@@ -48,7 +48,7 @@ impl Slug {
         if !(valid_length && valid_start && valid_body) {
             return Err(DomainError::validation(
                 "slug",
-                "ammessi minuscole, cifre e trattini, da 2 a 63 caratteri",
+                "allows lowercase letters, digits and hyphens, 2 to 63 characters",
             ));
         }
         Ok(Self(value))

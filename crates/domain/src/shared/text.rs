@@ -6,12 +6,12 @@ use crate::error::{DomainError, DomainResult};
 pub(crate) fn required(field: &'static str, value: &str, max: usize) -> DomainResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(DomainError::validation(field, "obbligatorio"));
+        return Err(DomainError::validation(field, "is required"));
     }
     if trimmed.chars().count() > max {
         return Err(DomainError::validation(
             field,
-            format!("supera i {max} caratteri"),
+            format!("exceeds {max} characters"),
         ));
     }
     Ok(trimmed.to_owned())
@@ -34,7 +34,7 @@ pub(crate) fn optional(
             if trimmed.chars().count() > max {
                 return Err(DomainError::validation(
                     field,
-                    format!("supera i {max} caratteri"),
+                    format!("exceeds {max} characters"),
                 ));
             }
             Ok(Some(trimmed.to_owned()))

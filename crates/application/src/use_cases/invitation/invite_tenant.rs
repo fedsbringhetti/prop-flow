@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use propflow_domain::RequestContext;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, TenantInvited};
 use propflow_domain::identity::{Invitation, NewInvitation, OrgRole};
 use propflow_domain::lease::{LeaseParty, LeasePartyRole, NewLeaseParty};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::{Email, InvitationId, LeaseId, LeasePartyId};
+use propflow_domain::{Entity, RequestContext};
 use rust_decimal::Decimal;
 
 use crate::authorization;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, Conflict};
 use crate::ports::OpaqueTokenFactory;
 
 #[derive(Debug, Clone)]
@@ -72,7 +72,7 @@ impl InviteTenant {
             .leases()
             .find_by_id(command.lease_id)
             .await?
-            .ok_or(AppError::not_found("contratto"))?;
+            .ok_or(AppError::not_found(Entity::Lease))?;
 
         // La parte contrattuale deve esistere prima dell'accettazione: è la riga
         // che l'invitato collegherà a sé, e senza di essa accettare non lo
@@ -158,9 +158,7 @@ fn remaining_share(parties: &[LeaseParty]) -> Decimal {
 fn map_pending_conflict(error: AppError) -> AppError {
     match &error {
         AppError::Integrity { details } if details.contains("org_invitations_pending") => {
-            AppError::Conflict {
-                resource: "invito pendente per questa email",
-            }
+            AppError::Conflict(Conflict::InvitationAlreadyPending)
         }
         _ => error,
     }
