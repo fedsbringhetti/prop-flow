@@ -12,7 +12,9 @@
 pub mod clock;
 pub mod db;
 pub mod security;
+pub mod storage;
 pub mod telemetry;
 
 pub use clock::SystemClock;
 pub use db::{DatabasePools, PgUnitOfWorkFactory};
+pub use storage::{S3ObjectStorage, S3Settings};
