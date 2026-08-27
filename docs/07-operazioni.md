@@ -150,9 +150,15 @@ interrompendo le richieste in volo. Le connessioni vengono chiuse ordinatamente.
 - Tracce OTLP su gRPC quando è configurato un endpoint. L'handle di telemetria
   svuota la coda al `Drop`: perderla allo shutdown significa non avere le tracce
   degli errori che hanno causato lo shutdown.
-- `X-Request-Id` propagato e presente in ogni riga di log della richiesta, e nel
-  corpo di ogni errore: un utente che segnala un problema porta con sé la chiave di
-  ricerca.
+- **Una riga di log per richiesta**, a livello `INFO`, con metodo, URI, stato,
+  latenza e `request_id`. Lo span è costruito a mano in `crates/api/src/lib.rs`:
+  `DefaultMakeSpan` di `TraceLayer` registra metodo, URI e versione ma non l'id, e
+  la risposta la logga a `DEBUG`, che con il filtro spedito dal progetto non
+  produce **alcuna** riga per nessuna richiesta. Un test unitario fallisce se il
+  campo `request_id` sparisce dallo span.
+- `X-Request-Id` è propagato in risposta e compare nel corpo di ogni errore: un
+  utente che segnala un problema porta con sé la chiave di ricerca. Se il client
+  non lo fornisce ne viene generato uno.
 - `ai_jobs` registra token, costo e latenza per ogni chiamata a un provider AI, con
   `trace_id` per correlare allo span.
 - PostgreSQL con `log_min_duration_statement=200` e `log_statement=none`: si vedono
