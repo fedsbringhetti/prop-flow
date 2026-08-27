@@ -18,6 +18,8 @@ pub enum Entity {
     Lease,
     #[error("Invitation not found")]
     Invitation,
+    #[error("Document not found")]
+    Document,
     /// Rotta sconosciuta. Sta qui e non nel bordo HTTP perché un `404` di rotta e
     /// un `404` di risorsa devono avere la stessa forma per il client.
     #[error("Endpoint not found")]
@@ -32,6 +34,7 @@ impl Entity {
             Self::Room => "room.not_found",
             Self::Lease => "lease.not_found",
             Self::Invitation => "invitation.not_found",
+            Self::Document => "document.not_found",
             Self::Endpoint => "endpoint.not_found",
         }
     }
@@ -127,6 +130,9 @@ pub enum Invariant {
     #[error("An invitation that was already accepted cannot be revoked")]
     AcceptedInvitationCannotBeRevoked,
 
+    #[error("The document is already archived")]
+    DocumentArchived,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -149,6 +155,7 @@ impl Invariant {
             Self::InvitationAlreadyAccepted | Self::AcceptedInvitationCannotBeRevoked => {
                 "invitation.already_accepted"
             }
+            Self::DocumentArchived => "document.archived",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }
@@ -224,6 +231,7 @@ mod tests {
             Entity::Room.code(),
             Entity::Lease.code(),
             Entity::Invitation.code(),
+            Entity::Document.code(),
             Entity::Endpoint.code(),
             Denial::AuthenticationRequired.code(),
             Denial::OrgNotSelected.code(),
@@ -247,6 +255,7 @@ mod tests {
             }
             .code(),
             Invariant::InvitationAlreadyAccepted.code(),
+            Invariant::DocumentArchived.code(),
             Invariant::RefreshTokenReused.code(),
             DomainError::validation("field", "message").code(),
         ]
