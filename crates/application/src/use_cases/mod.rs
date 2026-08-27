@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod document;
 pub mod invitation;
 pub mod lease;
 pub mod property;
