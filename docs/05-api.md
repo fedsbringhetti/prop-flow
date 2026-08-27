@@ -328,8 +328,16 @@ consegnare il token.
 
 `accept-invitation` richiede l'autenticazione ma **non** l'appartenenza: è
 l'operazione che la crea. Chi accetta non deve passare `X-Org-Id`, perché di quella
-organizzazione non è ancora membro; dopo l'accettazione sì, oppure attende il
-prossimo login.
+organizzazione non è ancora membro.
+
+**Dopo l'accettazione `X-Org-Id` serve, e non basta rifare il login.** La
+registrazione crea sempre un'organizzazione personale di cui l'utente è owner, e
+l'organizzazione predefinita all'accesso è quella con il ruolo più alto — owner,
+poi manager, poi tenant (`pick_default_membership` in `application::use_cases::auth`).
+Un inquilino che si è registrato da sé ha quindi sempre la propria organizzazione in
+testa, e senza `X-Org-Id` un `GET /api/v1/leases` gli risponde `200` con zero
+elementi: nessun errore, nessun indizio. È registrato fra i debiti noti in
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
 
 Un token sconosciuto e un token valido intestato a un'altra email danno lo stesso
 `401` con lo stesso corpo: distinguerli sarebbe un oracolo per capire quali inviti
