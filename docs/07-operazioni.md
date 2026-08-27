@@ -117,6 +117,47 @@ La cartella `migrations/` è nell'immagine perché il migratore le legge a runti
 docker build --target runtime -t propflow:dev .
 ```
 
+## Prerequisiti del rollout
+
+Due cose devono esistere **prima** che l'API parta, e nessuna delle due la crea
+l'applicazione.
+
+**Lo schema**, applicato dal migratore: sotto, in [Migrazioni in
+produzione](#migrazioni-in-produzione).
+
+**Il bucket dello storage oggetti.** `ObjectStorage` non espone una creazione e non
+deve esporla: darla all'applicazione significherebbe darle in produzione il
+privilegio di creare bucket, che un servizio HTTP non deve avere
+([ADR-024](08-decisioni.md#adr-024)). Il bucket si crea con il provisioning — in
+sviluppo lo fa il servizio `minio-setup` di `docker-compose.yml`, in CI
+`ops/ci/prepare-object-storage.sh`.
+
+Le tre impostazioni `PROPFLOW__STORAGE__ENDPOINT`, `__ACCESS_KEY_ID` e
+`__SECRET_ACCESS_KEY` non hanno un default e sono **obbligatorie**: senza, l'API
+non parte e dice `configurazione non valida`. È deliberato — un servizio che entra
+in esercizio e fallisce al primo caricamento di un utente è peggio di uno che non
+parte.
+
+Il fallimento che invece **non** è rumoroso è il bucket che non esiste o non è
+raggiungibile: `S3ObjectStorage::new` valida endpoint e nome, non l'esistenza
+remota. Verificato puntando l'API a un bucket inesistente: l'avvio riesce, `/ready`
+risponde `200`, e il primo `POST .../documents` risponde `500 internal.error`. Il
+motivo resta nei log come `richiesta terminata con errore`, correlato dal
+`request_id` della risposta — nel corpo non c'è, perché un messaggio del fornitore
+di storage in una risposta HTTP è ricognizione gratuita.
+
+Ne segue che **il caricamento di un documento va nel giro di collaudo**: è l'unica
+operazione che tocca lo storage, e nessuna sonda la copre. `/ready` interroga solo
+il database (`pools.ping()`), perché è stata scritta quando lo storage non
+esisteva; estenderla non è ovvio e per ora resta com'è, dato che una sonda che
+fallisse per il bucket toglierebbe dal servizio un'istanza che continua a servire
+correttamente ogni altro endpoint. Il collaudo copre quindi ciò che la sonda non
+copre.
+
+Se il bucket non ha la cifratura predefinita, nulla fallisce e
+`documents.is_encrypted` resta `false`: vedi la nota in
+[Configurazione](#configurazione).
+
 ## Migrazioni in produzione
 
 Job separato, **prima** del rollout. In Kubernetes un `Job` o un initContainer:
