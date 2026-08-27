@@ -1,6 +1,8 @@
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::{Denial, DomainError, Entity};
 
+use crate::ports::StorageError;
+
 /// Condizione di unicità violata, nominata.
 ///
 /// Sostituisce la stringa libera che c'era prima (`resource: "utente con questa
@@ -126,6 +128,24 @@ pub enum AppError {
 
     #[error("internal error")]
     Internal { details: String },
+}
+
+/// Lo storage oggetti che non risponde è un errore **nostro**, non del chiamante:
+/// nulla di ciò che ha inviato può averlo causato. Per questo confluisce in
+/// [`AppError::Internal`] invece di avere un codice proprio da gestire lato client.
+///
+/// `NotFound` compreso: un documento la cui riga esiste e il cui oggetto non c'è è
+/// un'incoerenza fra database e bucket, che al chiamante non si può spiegare e a
+/// noi serve nei log. Un `404` direbbe "non esiste", che è falso.
+impl From<StorageError> for AppError {
+    fn from(error: StorageError) -> Self {
+        match error {
+            StorageError::NotFound => Self::Internal {
+                details: "oggetto assente nello storage per un documento esistente".to_owned(),
+            },
+            StorageError::Backend { details } => Self::Internal { details },
+        }
+    }
 }
 
 impl AppError {

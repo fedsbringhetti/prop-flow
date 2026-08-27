@@ -16,14 +16,28 @@ pub struct StoredObject {
     pub bucket: String,
     pub key: String,
     pub size_bytes: u64,
+    /// Digest calcolato **da chi ha scritto l'oggetto**, non dichiarato dal
+    /// chiamante: è la ragione per cui l'upload passa dall'API invece di usare un
+    /// `PUT` pre-firmato.
     pub checksum_sha256: [u8; 32],
+    /// Modalità di cifratura a riposo **confermata dal fornitore** (`AES256`,
+    /// `aws:kms`), oppure `None` se l'oggetto non è cifrato.
+    ///
+    /// È una risposta e non una richiesta: la cifratura è configurata sul bucket,
+    /// e leggere ciò che il fornitore dichiara di aver fatto è l'unico modo perché
+    /// la colonna `documents.is_encrypted` dica il vero anche quando il bucket non
+    /// è configurato come si crede. **Limite da non nascondere:** con SSE la
+    /// chiave è del fornitore, quindi non protegge da un accesso amministrativo al
+    /// bucket.
+    pub encryption: Option<String>,
 }
 
 /// Storage oggetti per i documenti.
 ///
-/// Dichiarata ora e implementata allo step dei documenti: la porta esiste perché
-/// il vincolo "nessun vendor lock-in" si rispetta decidendo la forma
-/// dell'astrazione prima di scrivere il primo adapter, non dopo.
+/// La porta è stata dichiarata prima di avere un adattatore, come chiede
+/// `docs/06-sviluppo.md` §Aggiungere un provider esterno: decidere la forma
+/// dell'astrazione dopo il primo adattatore significa modellarla su quel
+/// fornitore.
 #[async_trait]
 pub trait ObjectStorage: Send + Sync {
     async fn put(
