@@ -12,7 +12,8 @@ and adapters architecture.
 ## Quick start
 
 ```bash
-docker compose up -d postgres
+# MinIO backs document storage; `minio-setup` creates the bucket once.
+docker compose up -d postgres minio minio-setup
 ./ops/dev/generate-jwt-keys.sh          # requires OpenSSL 3
 
 # Nothing loads .env on its own: copy it, adapt it, then hand it to the shell.
@@ -28,7 +29,8 @@ cargo run -p propflow-migrator          # applies the schema
 cargo run -p propflow-api               # http://localhost:8080/docs
 ```
 
-Full suite (ephemeral PostgreSQL container, migrations, invariants, every test):
+Full suite (ephemeral PostgreSQL and MinIO containers, migrations, invariants, every
+test):
 
 ```bash
 ./ops/ci/test-integration.sh

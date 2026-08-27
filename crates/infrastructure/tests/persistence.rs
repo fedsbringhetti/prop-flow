@@ -14,6 +14,10 @@ mod common;
 use std::sync::Arc;
 
 use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
+use propflow_application::use_cases::document::{
+    ArchiveDocument, ArchiveDocumentCommand, ListDocuments, ListDocumentsCommand, UploadDocument,
+    UploadDocumentCommand,
+};
 use propflow_application::use_cases::invitation::{
     AcceptInvitation, AcceptInvitationCommand, InviteTenant, InviteTenantCommand,
 };
@@ -27,6 +31,7 @@ use propflow_application::use_cases::property::{
 };
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_domain::RequestContext;
+use propflow_domain::document::{AttachmentOwner, DocumentKind};
 use propflow_domain::identity::OrgRole;
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
@@ -848,4 +853,361 @@ async fn the_application_role_cannot_repoint_a_lease_party_to_another_lease() {
         "l'aggiornamento di user_id non doveva essere negato: {:?}",
         allowed.err()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Documenti
+// ---------------------------------------------------------------------------
+
+/// Doppio in memoria di `ObjectStorage` per i test di persistenza.
+///
+/// Qui si verifica il **repository**, non S3: legare questi test a un MinIO
+/// acceso significherebbe non poterli eseguire quando lo storage manca, e la
+/// query non ha nulla da guadagnarne.
+#[derive(Default)]
+struct MemoryStorage {
+    objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+}
+
+#[async_trait::async_trait]
+impl propflow_application::ports::ObjectStorage for MemoryStorage {
+    async fn put(
+        &self,
+        key: &str,
+        _content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<propflow_application::ports::StoredObject, propflow_application::ports::StorageError>
+    {
+        use sha2::{Digest as _, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let checksum: [u8; 32] = hasher.finalize().into();
+        let size_bytes = bytes.len() as u64;
+        self.objects
+            .lock()
+            .expect("lock")
+            .insert(key.to_owned(), bytes);
+        Ok(propflow_application::ports::StoredObject {
+            provider: "memory".to_owned(),
+            bucket: "test".to_owned(),
+            key: key.to_owned(),
+            size_bytes,
+            checksum_sha256: checksum,
+            encryption: Some("AES256".to_owned()),
+        })
+    }
+
+    async fn get(&self, key: &str) -> Result<Vec<u8>, propflow_application::ports::StorageError> {
+        self.objects
+            .lock()
+            .expect("lock")
+            .get(key)
+            .cloned()
+            .ok_or(propflow_application::ports::StorageError::NotFound)
+    }
+
+    async fn presigned_get_url(
+        &self,
+        key: &str,
+        ttl_seconds: u32,
+    ) -> Result<String, propflow_application::ports::StorageError> {
+        Ok(format!("https://storage.test/{key}?ttl={ttl_seconds}"))
+    }
+}
+
+/// Crea immobile e contratto, e restituisce l'owner del documento.
+async fn lease_owner(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    city: &str,
+) -> AttachmentOwner {
+    let property = CreateProperty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            CreatePropertyCommand {
+                label: format!("Immobile {city}"),
+                property_type: PropertyType::Apartment,
+                address: address(city),
+            },
+        )
+        .await
+        .expect("immobile creato");
+
+    let lease = draft_lease(
+        env,
+        context,
+        property.id(),
+        None,
+        days_from_today(0),
+        Some(days_from_today(365)),
+    )
+    .await;
+    AttachmentOwner::Lease(lease.id())
+}
+
+async fn upload(
+    env: &common::TestEnv,
+    storage: &Arc<MemoryStorage>,
+    context: &RequestContext,
+    owner: AttachmentOwner,
+    filename: &str,
+) -> propflow_domain::document::Document {
+    UploadDocument::new(
+        Arc::clone(&env.factory),
+        Arc::clone(storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        context,
+        UploadDocumentCommand {
+            owner,
+            kind: DocumentKind::LeaseContract,
+            original_filename: filename.to_owned(),
+            mime_type: "application/pdf".to_owned(),
+            content: b"%PDF-1.7 contenuto".to_vec(),
+        },
+    )
+    .await
+    .expect("caricamento riuscito")
+}
+
+/// Il giro completo sul repository: la riga si rilegge identica, e i campi che
+/// arrivano dallo storage — dimensione, digest, modalità di cifratura — non sono
+/// dichiarati dal chiamante.
+#[tokio::test]
+async fn a_document_survives_a_round_trip_through_the_repository() {
+    let env = require_db!();
+    let context = register_owner(&env, "doc-round-trip").await;
+    let owner = lease_owner(&env, &context, "Bologna").await;
+    let storage = Arc::new(MemoryStorage::default());
+
+    let saved = upload(&env, &storage, &context, owner, "contratto-mario-rossi.pdf").await;
+
+    let mut uow = env.factory.begin(&context).await.expect("transazione");
+    let read = uow
+        .documents()
+        .find_by_id(saved.id())
+        .await
+        .expect("query riuscita")
+        .expect("documento visibile a chi lo ha caricato");
+
+    assert_eq!(read.id(), saved.id());
+    assert_eq!(read.org_id(), saved.org_id());
+    assert_eq!(read.owner(), owner);
+    assert_eq!(read.kind(), DocumentKind::LeaseContract);
+    assert_eq!(read.mime_type().as_str(), "application/pdf");
+    assert_eq!(read.size_bytes(), saved.size_bytes());
+    assert_eq!(read.checksum(), saved.checksum());
+    assert_eq!(
+        read.original_filename().as_str(),
+        "contratto-mario-rossi.pdf"
+    );
+    assert_eq!(read.uploaded_by(), context.user_id());
+    // Il doppio dichiara `AES256`: la colonna registra la modalità, non una chiave.
+    assert!(read.is_encrypted());
+    assert_eq!(read.encryption_key_ref(), Some("AES256"));
+
+    // La chiave dell'oggetto si deriva dagli identificatori: è la sola garanzia
+    // che il nome del file non finisca nei log del fornitore di storage, e che
+    // due omonimi non si scontrino sull'indice unico `documents_object_uk`.
+    assert_eq!(
+        read.storage().object_key(),
+        format!("{}/{}", read.org_id(), read.id())
+    );
+}
+
+/// Un documento di un'altra organizzazione non esiste, e il caso d'uso lo dice
+/// con un `404` sull'owner invece di lasciarlo arrivare alle policy di riga.
+#[tokio::test]
+async fn documents_are_isolated_between_organizations() {
+    let env = require_db!();
+    let alfa = register_owner(&env, "doc-alfa").await;
+    let beta = register_owner(&env, "doc-beta").await;
+    let storage = Arc::new(MemoryStorage::default());
+
+    let owner = lease_owner(&env, &alfa, "Torino").await;
+    let document = upload(&env, &storage, &alfa, owner, "riservato.pdf").await;
+
+    let mut uow = env.factory.begin(&beta).await.expect("transazione");
+    let visible = uow
+        .documents()
+        .find_by_id(document.id())
+        .await
+        .expect("query riuscita");
+    assert!(
+        visible.is_none(),
+        "il documento di un'altra organizzazione non deve essere visibile"
+    );
+    drop(uow);
+
+    // Il caso d'uso si ferma prima, sull'owner: `lease.not_found` e non
+    // `auth.denied_by_policy`, che segnalerebbe un difetto nostro.
+    let error = UploadDocument::new(
+        Arc::clone(&env.factory),
+        Arc::clone(&storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        &beta,
+        UploadDocumentCommand {
+            owner,
+            kind: DocumentKind::Other,
+            original_filename: "intruso.pdf".to_owned(),
+            mime_type: "application/pdf".to_owned(),
+            content: b"x".to_vec(),
+        },
+    )
+    .await
+    .expect_err("deve rifiutare");
+    assert_eq!(error.code(), "lease.not_found");
+}
+
+/// L'elenco è paginato con cursore keyset e filtra `deleted_at IS NULL` e
+/// `is_current`, che è ciò che rende utilizzabile l'indice parziale
+/// `documents_owner_ix`.
+#[tokio::test]
+async fn listing_by_owner_paginates_and_hides_archived_documents() {
+    let env = require_db!();
+    let context = register_owner(&env, "doc-elenco").await;
+    let owner = lease_owner(&env, &context, "Genova").await;
+    let storage = Arc::new(MemoryStorage::default());
+
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        ids.push(
+            upload(
+                &env,
+                &storage,
+                &context,
+                owner,
+                &format!("allegato-{index}.pdf"),
+            )
+            .await,
+        );
+    }
+
+    let list = ListDocuments::new(Arc::clone(&env.factory));
+
+    // Prima pagina da due: il cursore c'è perché ne resta una.
+    let page = list
+        .execute(
+            &context,
+            ListDocumentsCommand {
+                owner,
+                after: None,
+                limit: Some(2),
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.next_cursor, Some(page.items[1].id()));
+
+    // Seconda pagina: l'ultima, senza cursore. Gli id sono UUIDv7, quindi
+    // l'ordine per id è quello di creazione.
+    let page = list
+        .execute(
+            &context,
+            ListDocumentsCommand {
+                owner,
+                after: page.next_cursor,
+                limit: Some(2),
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id(), ids[2].id());
+    assert_eq!(page.next_cursor, None);
+
+    // Archiviato sparisce dall'elenco. **L'oggetto resta nel bucket**: nessuno lo
+    // rimuove, ed è un debito dichiarato, non una dimenticanza.
+    ArchiveDocument::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&context, ArchiveDocumentCommand { id: ids[0].id() })
+        .await
+        .expect("archiviazione riuscita");
+
+    let page = list
+        .execute(
+            &context,
+            ListDocumentsCommand {
+                owner,
+                after: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    let remaining: Vec<_> = page
+        .items
+        .iter()
+        .map(propflow_domain::document::Document::id)
+        .collect();
+    assert_eq!(remaining, vec![ids[1].id(), ids[2].id()]);
+    assert_eq!(
+        storage.objects.lock().expect("lock").len(),
+        3,
+        "l'archiviazione non deve toccare lo storage"
+    );
+}
+
+/// Non esiste un ripristino, e riarchiviare non è un no-op silenzioso.
+///
+/// La policy `documents_update` ha `deleted_at IS NULL` nella `USING`: un update
+/// su una riga già archiviata non dà errore dal database — aggiorna **zero
+/// righe**. L'invariante di dominio ferma la richiesta prima, così il chiamante
+/// riceve un `409` invece di un successo che non ha cambiato nulla.
+#[tokio::test]
+async fn an_archived_document_cannot_be_archived_twice() {
+    let env = require_db!();
+    let context = register_owner(&env, "doc-riarchivio").await;
+    let owner = lease_owner(&env, &context, "Verona").await;
+    let storage = Arc::new(MemoryStorage::default());
+    let document = upload(&env, &storage, &context, owner, "unico.pdf").await;
+
+    let archive = ArchiveDocument::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    archive
+        .execute(&context, ArchiveDocumentCommand { id: document.id() })
+        .await
+        .expect("prima archiviazione riuscita");
+
+    // La seconda non trova più la riga: archiviata è invisibile alla policy di
+    // SELECT, e per il chiamante "archiviato" e "non esiste" coincidono.
+    let error = archive
+        .execute(&context, ArchiveDocumentCommand { id: document.id() })
+        .await
+        .expect_err("deve rifiutare");
+    assert_eq!(error.code(), "document.not_found");
+}
+
+/// Comando ed evento sono atomici, come per ogni altro aggregato: l'outbox riceve
+/// `document.uploaded` nella stessa transazione dell'inserimento.
+#[tokio::test]
+async fn uploading_a_document_writes_the_event_in_the_same_transaction() {
+    let env = require_db!();
+    let context = register_owner(&env, "doc-evento").await;
+    let owner = lease_owner(&env, &context, "Padova").await;
+    let storage = Arc::new(MemoryStorage::default());
+    let document = upload(&env, &storage, &context, owner, "con-evento.pdf").await;
+
+    let row: (String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT event_type, aggregate_type, payload
+           FROM app.domain_events
+          WHERE aggregate_id = $1",
+    )
+    .bind(document.id().as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("evento presente");
+
+    assert_eq!(row.0, "document.uploaded");
+    assert_eq!(row.1, "Document");
+    // Regola 18: nessun dato personale nell'evento. Il nome del file è il dato
+    // personale di questo aggregato, e non deve comparire nel payload.
+    let payload = row.2.to_string();
+    assert!(
+        !payload.contains("con-evento"),
+        "il nome del file è finito nell'evento: {payload}"
+    );
+    assert!(payload.contains("lease"), "payload: {payload}");
 }

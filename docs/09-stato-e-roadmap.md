@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **18 agosto 2026**.
+Stato al **27 agosto 2026**.
 
 ## Come si usa questo documento
 
@@ -34,9 +34,9 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Componente | Stato |
 |---|---|
 | Workspace a 6 crate, vincoli verificati in CI | completo |
-| Dominio: value object, identità, immobili, stanze, contratti, inviti, eventi, porte | completo per la fetta |
+| Dominio: value object, identità, immobili, stanze, contratti, inviti, documenti, eventi, porte | completo per la fetta |
 | Unit of Work con contesto RLS, due pool | completo |
-| Repository: utenti, organizzazioni, membership, sessioni, immobili, stanze, contratti, inviti | completi |
+| Repository: utenti, organizzazioni, membership, sessioni, immobili, stanze, contratti, inviti, documenti | completi |
 | Outbox | completo |
 | Argon2id, EdDSA, refresh opachi con rotazione | completo |
 | Telemetria: log strutturati, OTLP | completo |
@@ -46,13 +46,15 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | CRUD stanze annidate sull'immobile | completo |
 | Contratti: bozza, parti, attivazione, disdetta, stati derivati | completo |
 | Inviti: emissione, revoca, accettazione senza pool privilegiato | completo |
+| Documenti: caricamento multipart, elenco, download pre-firmato, archiviazione | completo per la fetta 1 |
+| Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-126 test: 65 unitari di dominio, 11 applicativi, 5 di infrastruttura, 5 unitari
-del bordo HTTP, 13 di integrazione sulla persistenza, 24 di contratto HTTP, 3 di
-guardia sulla documentazione della configurazione.
+155 test: 75 unitari di dominio, 11 applicativi, 8 di infrastruttura, 6 unitari
+del bordo HTTP, 18 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 31 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -61,18 +63,21 @@ guardia sulla documentazione della configurazione.
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Documenti** (`documents`) — richiede l'implementazione di `ObjectStorage`, già
-   dichiarata come porta. Il piano è scritto in fondo a questo documento:
-   [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
-2. **Segnalazioni** (`tickets`) — thread, storico, assegnazione.
-3. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
+1. **Segnalazioni** (`tickets`) — thread, storico, assegnazione.
+2. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
    `v_charge_balances` già disponibile.
-4. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
-5. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+3. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
+4. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
    `settlements`) — la vista dei saldi esiste già.
-6. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+5. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento.
-7. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
+6. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
+
+**Documenti** è implementato nella fetta 1: caricamento, elenco, download e
+archiviazione su immobili, stanze e contratti. Restano fuori, e non per
+dimenticanza, il versionamento (V2) e l'OCR (punto 5); allargare gli owner ad
+avatar, ticket, bollette e spese è additivo e si fa quando quei moduli esistono.
+Il resoconto è in fondo: [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
 
 ### Trasversali mancanti
 
@@ -99,23 +104,25 @@ cambia il contesto.
 | `auth.denied_by_policy` risponde `403` | Rinviato in [ADR-022](08-decisioni.md#adr-022). Se la RLS rifiuta una scrittura che il service layer aveva già autorizzato è un difetto nostro, non un errore del chiamante: `500` sarebbe più onesto. Fuori da quel cambiamento perché è una decisione sul comportamento, non sulla tassonomia | Quando si tocca il comportamento degli errori al bordo, o se il codice compare nei log |
 | L'organizzazione dell'invito non diventa mai predefinita | `pick_default_membership` preferisce il ruolo più alto (owner → manager → tenant) e la registrazione crea sempre un'organizzazione personale di cui l'utente è owner. Un inquilino registrato da sé deve quindi passare `X-Org-Id` per sempre; senza, gli elenchi rispondono `200` con zero elementi. Osservato percorrendo l'MVP a mano | Con il primo client: è lì che il carico si vede, ed è lì che si decide se l'accettazione debba spostare la predefinita |
 | Il pacchetto su GHCR non è raggiungibile | `docker pull ghcr.io/fedsbringhetti/prop-flow:0.2.0` risponde `403` senza `read:packages`, e le note di rilascio invitano a eseguirlo. Coerente finché il repository è privato — il pacchetto ne eredita la visibilità — e rotto per tutti il giorno in cui non lo sarà. Si cambia nelle impostazioni del pacchetto, non nel workflow | Prima di rendere pubblico il repository, o al primo utente esterno |
+| L'oggetto nel bucket sopravvive alla riga archiviata | La cancellazione è soft e il ruolo applicativo non ha `DELETE`; `ObjectStorage` non espone una rimozione, di proposito. Un documento archiviato lascia i suoi byte nello storage a tempo indeterminato | Insieme al purge di `retention_until`: sono lo stesso lavoro — un job applicativo che cancella righe e oggetti, che lo schema prevede e che nessuno ha ancora scritto |
+| `retention_until` non viene applicato da nessuno | La colonna esiste e nessuna riga la valorizza; anche valorizzata, nessun job la legge. Lo schema la prevede come job applicativo e non come trigger, deliberatamente | Prima del primo dato reale soggetto a un obbligo di conservazione |
+| Il caricamento tiene il file intero in memoria | `UploadDocument` riceve `Vec<u8>` e lo passa allo storage. Con il limite di 25 MiB e poche richieste concorrenti è sostenibile; non lo è con caricamenti grandi e concorrenza alta | Quando i caricamenti superano le decine di MiB, o quando il profilo di memoria dell'API lo mostra. Lo streaming verso lo storage richiede di cambiare la firma della porta |
+| Il caricamento apre due transazioni | La prima verifica che l'owner sia visibile prima di scrivere l'oggetto, la seconda registra la riga: l'oggetto va scritto fuori transazione, e senza la verifica preliminare chiunque potrebbe riempire il bucket puntando a identificatori a caso | Se il costo si vede sul pool di connessioni. La verifica non si toglie: è ciò che impedisce di scrivere byte per una richiesta che finirà `404` |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-**Documenti** (punto 1). L'anello bidirezionale è chiuso: il proprietario crea
-immobile, stanze e contratto, invita l'inquilino, e l'inquilino accetta e vede il
-proprio contratto e il proprio immobile — coperto da un test di contratto HTTP
-end-to-end. Da qui i moduli successivi non hanno più dipendenze bloccanti fra loro:
-i documenti vengono per primi perché richiedono l'unica porta già dichiarata e non
-implementata, `ObjectStorage`, e la stessa forma serve poi alle bollette.
+**Segnalazioni** (`tickets`). I documenti sono chiusi per la fetta 1, e con loro la
+porta `ObjectStorage`: da qui i moduli rimasti non hanno più dipendenze bloccanti fra
+loro. I ticket vengono per primi perché sono l'altra metà del rapporto bidirezionale —
+finora l'inquilino può solo leggere — e perché `can_access_attachment` copre già
+`ticket` e `ticket_message`, quindi allegare un documento a una segnalazione sarà
+additivo e non richiederà di ripensare nulla.
 
-Il piano della prima fetta è in fondo: [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
-
-Manca invece l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
+Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
 proprietario. Va implementata prima di considerare l'onboarding pronto per utenti
-reali.
+reali, ed è oggi l'ultima porta senza implementazione.
 
 ---
 
@@ -123,9 +130,11 @@ reali.
 
 ## Piano — Documenti, fetta 1
 
-Pianificato il **18 agosto 2026**, non ancora implementato. Scritto qui prima di
-scrivere codice, come chiede `CLAUDE.md` §3: quello che segue è la decomposizione,
-non un riassunto.
+Pianificato il **18 agosto 2026**, **implementato il 27 agosto 2026**. Il piano resta
+sotto come è stato scritto: quello che segue serviva a eseguirlo, e serve ancora a
+capire perché il codice è com'è. Ciò che l'esecuzione ha confermato, cambiato e
+scoperto è in fondo, in [Esito](#esito-documenti-fetta-1) — letto per primo se la
+domanda è «cosa è successo», per secondo se la domanda è «perché».
 
 ### Obiettivo
 
@@ -271,3 +280,150 @@ un contratto, lo rilegge nell'elenco e lo scarica seguendo il `307`; il document
 invisibile a un utente di un'altra organizzazione e a un inquilino senza accesso a
 quel contratto; `docs/05-api.md` che descrive i quattro endpoint e la guardia della
 configurazione verde con la sezione `[storage]` documentata.
+
+
+<a id="esito-documenti-fetta-1"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Scritto il **27 agosto 2026**, a fetta conclusa. I dieci passi sono stati eseguiti
+tutti; le sette trappole si sono presentate come descritte, tranne due, e ne sono
+emerse quattro nuove.
+
+#### Le trappole, verificate una per una
+
+| Trappola del piano | Si è presentata? |
+|---|---|
+| Il limite del corpo è globale | **Sì, e più grande.** I limiti sono due, non uno: vedi la trappola nuova qui sotto e [ADR-025](08-decisioni.md#adr-025) |
+| `documents_update` non lascia toccare una riga archiviata | Sì. L'invariante di dominio `Invariant::DocumentArchived` ferma la richiesta prima che diventi un update a zero righe, e un test di persistenza lo fissa |
+| L'autorizzazione va scritta due volte | Sì. `ensure_owner_is_visible` la ripete leggendo l'aggregato dal proprio repository, che gira sotto le stesse policy: riscriverla come condizione applicativa la farebbe divergere dalla policy alla prima modifica di una delle due |
+| Il nome del file è un dato personale | Sì. `FileName` ha un `Debug` che stampa `<redatto>`, non entra negli eventi, e la chiave è `{org_id}/{document_id}`. Tre test lo verificano, in tre livelli diversi |
+| Il ruolo applicativo non può cancellare | Sì. L'oggetto resta nel bucket dopo l'archiviazione: registrato fra i debiti, insieme al purge di `retention_until` |
+| L'indice per owner filtra `is_current` | Sì. `list_by_owner` filtra `deleted_at IS NULL AND is_current` anche se il versionamento è fuori perimetro, con il commento che spiega perché |
+| `reqwest` è solo transitivo | **In parte.** Vedi sotto: la versione non era il problema |
+
+#### Le due trappole che non si sono presentate come descritte
+
+**`reqwest` transitivo: la versione non era il problema, il provider TLS sì.**
+Il piano temeva che dichiarare `reqwest` come dipendenza diretta facesse fallire
+`cargo deny check bans` sulle versioni duplicate. Dichiararlo alla stessa versione
+(`0.13`) non duplica nulla — e comunque `deny.toml` ha `multiple-versions = "warn"`,
+quindi un duplicato **non farebbe fallire** il controllo: lo segnalerebbe fra gli
+altri sedici che già ci sono. La trappola era mal calibrata in due modi
+contemporaneamente.
+
+Il problema vero era un altro, ed era più grave: la feature `rustls` di reqwest 0.13
+implica `aws-lc-rs`, cioè il toolchain C e cmake nell'immagine di build — esattamente
+ciò che [ADR-012](08-decisioni.md#adr-012) evita per `jsonwebtoken`. La via è
+`rustls-no-provider` più il provider `ring` installato all'avvio, e senza quel
+`install_default` reqwest **va in panico** costruendo il client, non restituisce un
+errore. Motivato in [ADR-024](08-decisioni.md#adr-024).
+
+Il solo effetto sulle dipendenze è **un** avviso di duplicato in più rispetto a
+prima — `core-foundation`, tirato da `rustls-platform-verifier` e limitato al target
+macOS. `cargo deny check advisories bans sources` passa.
+
+**`is_encrypted` non nasce `true`.** Il piano diceva che la colonna nasce `true` e che
+con SSE dice il vero «al costo di una configurazione». Il costo di quella
+configurazione è precisamente il problema: sta nel provisioning del bucket, che non è
+in questo repository, e se qualcuno lo dimentica la colonna mente senza che nulla lo
+riveli. L'adattatore legge invece l'header `x-amz-server-side-encryption` dalla
+risposta della `PUT` e registra ciò che il fornitore dichiara di aver fatto: su un
+bucket non configurato `is_encrypted` vale `false`. Costa zero — l'header è già lì — e
+trasforma una speranza in un fatto interrogabile. [ADR-024](08-decisioni.md#adr-024).
+
+#### Le quattro trappole nuove
+
+Sono le cose che costano una giornata e che il piano non poteva sapere.
+
+**1. I limiti del corpo sono due, e il secondo non è un layer.** Oltre a
+`RequestBodyLimitLayer`, `Multipart` di axum applica `DefaultBodyLimit`, che vale
+**2 MiB** e non compare fra i layer del router. Alzando solo il primo, un file da
+3 MiB fallisce lo stesso, e l'errore arriva dal parser multipart mentre legge il
+corpo: cercarlo fra i layer non lo trova. Le rotte di caricamento montano entrambi.
+Il test che lo tiene fermo carica **3 MiB** proprio perché è sopra tutti e due:
+alzarne uno solo lo farebbe fallire. [ADR-025](08-decisioni.md#adr-025).
+
+**2. Il marcatore `SALTATO` e la CI si contraddicevano.** Il piano chiedeva un test
+contro MinIO «solo se la variabile d'ambiente c'è, con il marcatore `SALTATO` come gli
+altri». Ma la pipeline **fallisce** se trova quella parola nell'output (`.github/workflows/ci.yml`,
+passo `Suite`): il marcatore esiste perché un verde non possa significare «non ho
+verificato niente». Un test che si salta sempre in CI avrebbe rotto la CI, oppure —
+peggio — avrebbe costretto a indebolire il grep.
+
+La via presa è la terza: rendere lo storage **disponibile** invece di rendere il
+marcatore accettabile. `ops/ci/prepare-object-storage.sh` avvia MinIO e crea il
+bucket, ed è chiamato sia da `ops/ci/test-integration.sh` sia dal job `tests`, come
+già fa `prepare-database.sh` per il database e per la stessa ragione: due procedure di
+preparazione divergono al primo cambiamento. Il marcatore resta, per chi esegue
+`cargo test` a mano senza Docker.
+
+MinIO **non** è un service container del runner: la sua immagine vuole `server /data`
+come comando, e i service di GitHub Actions non permettono di sovrascriverlo. Un
+`docker run` esplicito è la stessa riga in locale e in CI.
+
+**3. Il caricamento vuole due transazioni, e la prima non è ridondante.** L'oggetto va
+scritto fuori dalla transazione — tenerla aperta durante una chiamata di rete occupa
+una connessione del pool per tutta la durata dell'upload — ma l'owner va verificato
+**prima** di scrivere l'oggetto: senza, un membro qualsiasi potrebbe riempire il
+bucket puntando a identificatori a caso, e il `404` arriverebbe dopo aver già scritto
+i byte. Quindi: transazione breve per verificare, `put`, transazione per registrare —
+con la verifica ripetuta dentro, perché fra le due l'owner può essere archiviato. Un
+test di contratto verifica che un caricamento rifiutato non lasci **nessun** oggetto
+orfano.
+
+**4. `content-type` deve stare fra gli header firmati.** Se resta fuori dalla firma
+SigV4, il fornitore lo tratta come un header qualsiasi e può ignorarlo: il documento
+torna come `application/octet-stream` al download, e la causa è a due giorni di
+distanza dal sintomo. `rusty_s3` lo firma se lo si mette in `headers_mut()`, e allora
+la richiesta HTTP **deve** portarlo con lo stesso identico valore, altrimenti la firma
+non torna.
+
+#### Scelte prese eseguendo, che il piano lasciava aperte
+
+- **Il percorso è `/api/v1/{collezione}/{id}/documents`** con tre rotte concrete
+  (`properties`, `rooms`, `leases`) invece di una sola con `{owner_type}` come
+  parametro. Costa tre handler sottili e tre annotazioni `utoipa`, e in cambio non
+  c'è ambiguità di routing con `/api/v1/documents/{id}/content` né un parametro di
+  percorso da validare a mano; la specifica OpenAPI nomina il parametro vero
+  (`lease_id`) invece di un generico `owner_id`.
+- **L'elenco è paginato con cursore keyset**, come immobili e contratti e non come le
+  stanze: i documenti di un contratto non sono limitati per costruzione, e un solo
+  `GET` non deve poter esaurire memoria e connessione.
+- **`DocumentArchived` esiste**, benché il piano nominasse solo `DocumentUploaded`.
+  Archiviare senza evento avrebbe rotto la proprietà per cui non esiste una modifica
+  senza l'evento che la descrive ([02 — Architettura](02-architettura.md)), e reso i
+  documenti l'unico aggregato con un'archiviazione muta.
+- **`status` ed `extracted_data` non si leggono nemmeno.** Il piano diceva che restano
+  ai default; la query non li seleziona affatto, perché il dominio non li modella e
+  leggere una colonna che nessuno sa interpretare significa doverla mappare su un tipo
+  inventato per l'occasione.
+- **`PROPFLOW__SERVER__UPLOAD_BODY_LIMIT_BYTES` è un'impostazione in più** rispetto
+  alle cinque che il piano elencava per `[storage]`. Sta in `[server]` e non in
+  `[storage]` perché è un limite di trasporto: riguarda quanti byte l'API accetta, non
+  dove finiscono.
+- **`AttachmentOwnerType` nel dominio ha tre valori su undici.** Un documento allegato
+  a un ticket dà **errore** in lettura invece di sparire dall'elenco: è la regola degli
+  enum di `docs/06`, e qui vale a maggior ragione — un documento che l'API non sa
+  mostrare non deve svanire in silenzio.
+
+#### Come si è verificato
+
+`./ops/ci/test-integration.sh` verde con 155 test (erano 126), di cui 3 contro un
+MinIO vero. Riprodotto anche il controllo della pipeline — `cargo test --nocapture`
+più il grep di `SALTATO` — che non trova nulla: nessun test si salta.
+
+A mano, contro PostgreSQL e MinIO reali: caricato un PDF su un contratto, riletto
+nell'elenco, scaricato seguendo il `307` e confrontato byte a byte con l'originale;
+verificato che la chiave nel bucket sia `{org_id}/{document_id}` e non contenga il
+nome del file; che un utente di un'altra organizzazione riceva `404 document.not_found`;
+che dopo il `DELETE` l'elenco sia vuoto e l'oggetto sia ancora nel bucket, che è il
+debito dichiarato e non un difetto.
+
+#### Cosa resta fuori, e resta fuori apposta
+
+Versionamento (V2), OCR (modulo AI), owner diversi da immobile/stanza/contratto,
+cancellazione dei byte dallo storage, purge di `retention_until`, streaming del
+caricamento. I primi tre erano già dichiarati fuori perimetro dal piano; gli ultimi
+tre sono registrati fra i [debiti noti](#debiti-tecnici-noti) con la ragione e il
+momento in cui affrontarli.

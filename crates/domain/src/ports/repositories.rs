@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 
+use crate::document::{AttachmentOwner, Document};
 use crate::events::DomainEvent;
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::property::{Property, PropertyStatus, Room};
-use crate::shared::{Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, UserId};
+use crate::shared::{DocumentId, Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, UserId};
 
 /// Errori della persistenza espressi senza nominare la tecnologia.
 ///
@@ -233,6 +234,57 @@ pub trait InvitationRepository: Send {
     ) -> RepositoryResult<Option<Invitation>>;
     async fn insert(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
     async fn update(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
+}
+
+/// Filtro di elenco dei documenti di un owner, con paginazione keyset.
+///
+/// Il filtro sull'owner non è opzionale: un elenco di *tutti* i documenti
+/// dell'organizzazione non è un'operazione che l'API espone, e renderlo possibile
+/// nella porta significherebbe scriverne l'implementazione perché "prima o poi
+/// servirà". Un documento si raggiunge dall'oggetto a cui è allegato.
+#[derive(Debug, Clone)]
+pub struct DocumentQuery {
+    pub owner: AttachmentOwner,
+    pub after: Option<DocumentId>,
+    pub limit: u16,
+}
+
+impl DocumentQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+
+    #[must_use]
+    pub const fn for_owner(owner: AttachmentOwner) -> Self {
+        Self {
+            owner,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DocumentPage {
+    pub items: Vec<Document>,
+    pub next_cursor: Option<DocumentId>,
+}
+
+/// Metadati dei documenti.
+///
+/// Nessun metodo restituisce il contenuto: quello sta dietro `ObjectStorage`, ed è
+/// il confine che permette di cambiare fornitore di storage senza toccare la
+/// persistenza. Nessun `update` generico: in questa fetta un documento nasce e
+/// viene archiviato, non si modifica — il versionamento è V2.
+#[async_trait]
+pub trait DocumentRepository: Send {
+    async fn find_by_id(&mut self, id: DocumentId) -> RepositoryResult<Option<Document>>;
+    async fn list_by_owner(&mut self, query: &DocumentQuery) -> RepositoryResult<DocumentPage>;
+    async fn insert(&mut self, document: &Document) -> RepositoryResult<()>;
+    /// Soft delete: la riga resta con `deleted_at` valorizzato. **L'oggetto nello
+    /// storage non viene toccato** — il ruolo applicativo non ha nemmeno il
+    /// privilegio `DELETE`, e rimuovere i byte è un lavoro a parte, insieme al
+    /// purge di `retention_until`.
+    async fn archive(&mut self, document: &Document) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa

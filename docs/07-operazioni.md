@@ -37,7 +37,8 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 |---|---|---|
 | `PROPFLOW__SERVER__BIND` | `0.0.0.0:8080` | |
 | `PROPFLOW__SERVER__REQUEST_TIMEOUT_SECONDS` | `30` | risposta `503` allo scadere |
-| `PROPFLOW__SERVER__BODY_LIMIT_BYTES` | `1048576` | |
+| `PROPFLOW__SERVER__BODY_LIMIT_BYTES` | `1048576` | limite generale, montato sull'intero router |
+| `PROPFLOW__SERVER__UPLOAD_BODY_LIMIT_BYTES` | `26214400` | solo le rotte di caricamento dei documenti |
 | `PROPFLOW__DATABASE__APPLICATION_URL` | — | **obbligatoria**, ruolo `propflow_app` |
 | `PROPFLOW__DATABASE__PRIVILEGED_URL` | — | **obbligatoria**, ruolo `propflow_worker` |
 | `PROPFLOW__DATABASE__MAX_CONNECTIONS` | `16` | per pool |
@@ -48,10 +49,32 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 | `PROPFLOW__AUTH__AUDIENCE` | `propflow-api` | |
 | `PROPFLOW__AUTH__ACCESS_TOKEN_TTL_SECONDS` | `900` | |
 | `PROPFLOW__AUTH__REFRESH_TOKEN_TTL_DAYS` | `30` | |
+| `PROPFLOW__STORAGE__ENDPOINT` | `http://localhost:9000` | MinIO in sviluppo, `https://s3.<regione>.amazonaws.com` in produzione |
+| `PROPFLOW__STORAGE__REGION` | `us-east-1` | |
+| `PROPFLOW__STORAGE__BUCKET` | `propflow-documents` | |
+| `PROPFLOW__STORAGE__ACCESS_KEY_ID` | — | **obbligatoria** |
+| `PROPFLOW__STORAGE__SECRET_ACCESS_KEY` | — | **obbligatoria**, dal gestore dei segreti |
+| `PROPFLOW__STORAGE__PATH_STYLE` | `true` | bucket nel percorso; `false` solo con un DNS `<bucket>.<host>` |
+| `PROPFLOW__STORAGE__PRESIGN_TTL_SECONDS` | `300` | vita dell'URL di download pre-firmato |
+| `PROPFLOW__STORAGE__REQUEST_TIMEOUT_SECONDS` | `30` | per richiesta verso lo storage |
 | `PROPFLOW__TELEMETRY__SERVICE_NAME` | `propflow-api` | nome del servizio nelle tracce e negli span |
 | `PROPFLOW__TELEMETRY__OTLP_ENDPOINT` | — | assente: solo stdout |
 | `PROPFLOW__TELEMETRY__FILTER` | `info,propflow_api=debug,propflow_application=debug` | direttiva `EnvFilter` |
 | `PROPFLOW__TELEMETRY__JSON_LOGS` | `false` | `true` in produzione |
+
+Le due impostazioni di limite del corpo sono **due** perché
+`RequestBodyLimitLayer` è montato sull'intero router: un limite più largo dichiarato
+sulla sola rotta di upload non verrebbe mai raggiunto, perché il layer esterno
+rifiuta per primo. Il router monta quindi il limite generale sul gruppo di rotte che
+**non** comprende l'upload, e a quella dà il proprio. Alzare il limite generale
+funzionerebbe ed è la via da non prendere: indebolisce ogni endpoint per servirne uno.
+
+**Cifratura a riposo.** Il bucket va configurato con la cifratura predefinita (SSE):
+l'applicazione non la richiede a ogni oggetto, **legge** dalla risposta del fornitore
+se l'oggetto è stato cifrato e registra la modalità in `documents.encryption_key_ref`.
+Su un bucket non configurato la colonna `documents.is_encrypted` risulta `false`, ed è
+il comportamento voluto — dice il vero invece di dire ciò che si spera. Con SSE la
+chiave è del fornitore: non protegge da un accesso amministrativo al bucket.
 
 La colonna dei default riporta ciò che il progetto **spedisce**, cioè i valori di
 `config/default.toml`. Dove il file non viene trovato valgono i default del codice,

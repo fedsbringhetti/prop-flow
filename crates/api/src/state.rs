@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use propflow_application::ports::{
-    OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
+    ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::document::{
+    ArchiveDocument, DownloadDocument, ListDocuments, UploadDocument,
+};
 use propflow_application::use_cases::invitation::{
     AcceptInvitation, InviteTenant, RevokeInvitation,
 };
@@ -47,6 +50,11 @@ pub struct AppState {
     pub activate_lease: Arc<ActivateLease>,
     pub terminate_lease: Arc<TerminateLease>,
 
+    pub upload_document: Arc<UploadDocument>,
+    pub list_documents: Arc<ListDocuments>,
+    pub download_document: Arc<DownloadDocument>,
+    pub archive_document: Arc<ArchiveDocument>,
+
     pub invite_tenant: Arc<InviteTenant>,
     pub revoke_invitation: Arc<RevokeInvitation>,
     pub accept_invitation: Arc<AcceptInvitation>,
@@ -68,6 +76,11 @@ pub struct Dependencies {
     pub refresh_tokens: Arc<dyn RefreshTokenFactory>,
     pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,
     pub clock: Arc<dyn propflow_domain::ports::Clock>,
+    pub object_storage: Arc<dyn ObjectStorage>,
+    /// Vita dell'URL di download pre-firmato. Vive qui e non dentro l'adattatore
+    /// perché è una decisione applicativa — quanto a lungo vale un permesso — e non
+    /// un dettaglio del fornitore.
+    pub presign_ttl_seconds: u32,
     pub pools: DatabasePools,
 }
 
@@ -81,6 +94,8 @@ impl AppState {
             refresh_tokens,
             invitation_tokens,
             clock,
+            object_storage,
+            presign_ttl_seconds,
             pools,
         } = dependencies;
 
@@ -153,6 +168,21 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             terminate_lease: Arc::new(TerminateLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            upload_document: Arc::new(UploadDocument::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&object_storage),
+                Arc::clone(&clock),
+            )),
+            list_documents: Arc::new(ListDocuments::new(Arc::clone(&unit_of_work))),
+            download_document: Arc::new(DownloadDocument::new(
+                Arc::clone(&unit_of_work),
+                object_storage,
+                presign_ttl_seconds,
+            )),
+            archive_document: Arc::new(ArchiveDocument::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),

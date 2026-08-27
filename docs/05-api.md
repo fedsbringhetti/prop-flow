@@ -66,6 +66,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | 404 | `not-found` | risorsa inesistente **o non visibile**, e rotta sconosciuta |
 | 409 | `conflict` | vincolo di unicità violato, o periodo occupato |
 | 409 | `invariant` | operazione non ammessa nello stato attuale (es. immobile archiviato) |
+| 413 | `payload-too-large` | corpo oltre il limite della rotta |
 | 422 | `validation` | corpo sintatticamente valido, semanticamente no |
 | 500 | `internal` | errore non previsto: solo `request_id`, nessun dettaglio |
 | 503 | — | timeout della richiesta, o `/ready` con database non raggiungibile |
@@ -77,6 +78,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `code` | Stato | Condizione |
 |---|---|---|
 | `request.invalid_header` | 400 | `X-Org-Id` non è testo valido o non è un UUID |
+| `request.payload_too_large` | 413 | corpo oltre il limite della rotta |
 | `auth.token_missing` | 401 | nessun header `Authorization: Bearer` |
 | `auth.token_invalid` | 401 | firma o forma del token rifiutate |
 | `auth.token_expired` | 401 | token nostro, `exp` superato — **rinnovare**, non rifare il login |
@@ -91,7 +93,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -118,6 +120,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `lease.no_tenant_party` | 409 | il contratto non ha inquilini fra le parti |
 | `lease.shares_not_hundred` | 409 | le quote degli inquilini non sommano a 100 |
 | `invitation.already_accepted` | 409 | l'invito è già stato accettato |
+| `document.archived` | 409 | il documento è già archiviato |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -308,6 +311,93 @@ resta nei log:
 
 Immobile e stanza sono distinti nel messaggio: in un co-living "l'immobile è
 occupato" sarebbe falso, perché le altre stanze restano libere.
+
+### Documenti
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/properties/{property_id}/documents` | membro | `201` con i metadati. `multipart/form-data` |
+| POST | `/api/v1/rooms/{room_id}/documents` | membro | come sopra |
+| POST | `/api/v1/leases/{lease_id}/documents` | membro | come sopra |
+| GET | `/api/v1/properties/{property_id}/documents` | membro | `200`, pagina keyset |
+| GET | `/api/v1/rooms/{room_id}/documents` | membro | come sopra |
+| GET | `/api/v1/leases/{lease_id}/documents` | membro | come sopra |
+| GET | `/api/v1/documents/{id}/content` | membro | `307` verso l'URL pre-firmato, in `Location` |
+| DELETE | `/api/v1/documents/{id}` | membro, e staff **o** chi lo ha caricato | `204`. Archiviazione |
+
+Elenco e caricamento sono annidati sotto l'oggetto a cui il documento è allegato,
+perché un documento non ha vita propria; download e archiviazione vanno per id,
+perché il percorso dell'owner non aggiungerebbe nulla. È la stessa scelta delle
+stanze.
+
+**Ruolo minimo `membro` e non `staff`.** L'inquilino allega al **proprio** contratto
+— la carta d'identità, una ricevuta — e vede i documenti del proprio immobile. Quali
+oggetti siano suoi lo decide `app.can_access_attachment` attraverso le policy, non un
+ramo applicativo sul ruolo. Un owner non visibile dà `404`, non `403`: sotto Row Level
+Security «non è tuo» e «non esiste» sono indistinguibili.
+
+**Archiviare** richiede il ruolo di staff **oppure** essere chi ha caricato il
+documento — la stessa condizione della policy `documents_update`. A chi non è né l'uno
+né l'altro risponde `403 org.staff_role_required`.
+
+#### Il caricamento passa dall'API, il download no
+
+L'asimmetria è deliberata. In caricamento i byte devono passare da noi almeno una
+volta, perché `checksum_sha256` è `NOT NULL` e un checksum dichiarato dal client
+certifica solo che il client sa calcolare uno SHA-256. In download non c'è nulla da
+verificare, e un URL pre-firmato toglie dall'API il traffico più pesante.
+
+Il corpo del caricamento è `multipart/form-data` con due campi:
+
+| Campo | Obbligatorio | Note |
+|---|---|---|
+| `file` | sì | Nome e tipo MIME si leggono dalle **intestazioni della parte**, non da campi separati: sono ciò che il browser manda da sé, e chiederli due volte vorrebbe dire poterli ricevere in disaccordo. Senza `Content-Type` sulla parte vale `application/octet-stream` |
+| `kind` | no | Classificazione. Assente vale `other`; un valore sconosciuto dà `422` invece di ripiegare in silenzio |
+
+Il limite del corpo su queste rotte è `PROPFLOW__SERVER__UPLOAD_BODY_LIMIT_BYTES`
+(25 MiB), separato dal limite generale di 1 MiB che vale su tutto il resto. Oltre il
+limite la risposta è `413` con `request.payload_too_large`. Vedi
+[ADR-025](08-decisioni.md#adr-025) per il motivo per cui i limiti sono due.
+
+`GET /api/v1/documents/{id}/content` risponde `307` e non `302`: preserva il metodo e
+dichiara la redirezione temporanea. La risposta porta `Cache-Control: no-store,
+private`, perché l'URL firmato è un **permesso trasferibile** e a tempo — chi lo
+intercetta lo usa fino alla scadenza senza presentare un token. Il TTL è
+`PROPFLOW__STORAGE__PRESIGN_TTL_SECONDS`, 5 minuti di default.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/leases/$LEASE/documents \
+  -H "authorization: Bearer $TOKEN" \
+  -F "kind=lease_contract" \
+  -F "file=@contratto.pdf;type=application/pdf"
+
+# Il download segue la redirezione fino allo storage.
+curl -L http://localhost:8080/api/v1/documents/$DOC/content \
+  -H "authorization: Bearer $TOKEN" -o contratto.pdf
+```
+
+#### Cosa la risposta non dice, e perché
+
+`checksum_sha256` è calcolato dall'API sui byte ricevuti. `is_encrypted` riporta la
+cifratura a riposo **confermata dal fornitore di storage**, non richiesta: su un
+bucket senza cifratura predefinita vale `false`, ed è la verità
+([ADR-024](08-decisioni.md#adr-024)).
+
+Non compaiono `status` né `version`: OCR e versionamento sono fuori dal perimetro di
+questa fetta. Le colonne esistono nello schema e restano ai loro default — vedere una
+colonna non è una ragione per riempirla.
+
+**L'archiviazione è soft, e l'oggetto nel bucket sopravvive alla riga.** Il ruolo
+applicativo non ha il privilegio `DELETE`, e rimuovere i byte è un lavoro separato, da
+pensare insieme al purge di `retention_until`. È registrato fra i debiti noti in
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti). Non esiste un
+ripristino: la policy `documents_update` ha `deleted_at IS NULL` nella `USING`, quindi
+un update su una riga archiviata aggiorna zero righe senza dare errore, e ripristinare
+richiederebbe una migration sulla policy.
+
+`users.avatar_document_id` e `leases.contract_document_id` restano **non popolati
+dall'API**: gli allegati ad avatar, ticket, bollette e spese sono fuori perimetro,
+anche se `can_access_attachment` li copre già a livello di policy.
 
 ### Inviti
 

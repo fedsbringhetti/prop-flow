@@ -7,6 +7,7 @@
 //! testuale ha lo stesso comportamento su qualunque connessione e rende visibile
 //! nel SQL quale tipo si sta usando.
 
+use propflow_domain::document::{AttachmentOwnerType, DocumentKind};
 use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, UserStatus};
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, LeaseType, RentFrequency};
 use propflow_domain::ports::RepositoryError;
@@ -127,6 +128,32 @@ string_enum!("lease_party_role", LeasePartyRole, lease_party_role_to_db, lease_p
     Guarantor => "guarantor",
 });
 
+string_enum!("document_kind", DocumentKind, document_kind_to_db, document_kind_from_db, {
+    LeaseContract => "lease_contract",
+    IdDocument => "id_document",
+    UtilityBill => "utility_bill",
+    Invoice => "invoice",
+    Receipt => "receipt",
+    Photo => "photo",
+    InspectionReport => "inspection_report",
+    EnergyCertificate => "energy_certificate",
+    CadastralExtract => "cadastral_extract",
+    InsurancePolicy => "insurance_policy",
+    Other => "other",
+});
+
+// `app.attachment_owner_type` ha undici valori, il dominio tre: sono gli unici
+// aggregati che hanno già dominio, caso d'uso ed endpoint. La conseguenza è che un
+// documento allegato a un ticket dà **errore** in lettura invece di essere
+// silenziosamente ignorato — è la stessa regola degli altri enum, e qui vale a
+// maggior ragione: un documento che l'API non sa mostrare non deve sparire
+// dall'elenco senza che nessuno se ne accorga.
+string_enum!("attachment_owner_type", AttachmentOwnerType, attachment_owner_type_to_db, attachment_owner_type_from_db, {
+    Property => "property",
+    Room => "room",
+    Lease => "lease",
+});
+
 // Le classi energetiche restano maiuscole anche nel database: 'A4', 'B', 'G'.
 string_enum!("energy_class", EnergyClass, energy_class_to_db, energy_class_from_db, {
     A4 => "A4",
@@ -209,6 +236,38 @@ mod tests {
                 frequency
             );
         }
+        for kind in [
+            DocumentKind::LeaseContract,
+            DocumentKind::IdDocument,
+            DocumentKind::UtilityBill,
+            DocumentKind::Invoice,
+            DocumentKind::Receipt,
+            DocumentKind::Photo,
+            DocumentKind::InspectionReport,
+            DocumentKind::EnergyCertificate,
+            DocumentKind::CadastralExtract,
+            DocumentKind::InsurancePolicy,
+            DocumentKind::Other,
+        ] {
+            assert_eq!(
+                document_kind_from_db(document_kind_to_db(kind)).expect("noto"),
+                kind
+            );
+            // Il nome sul filo degli eventi e quello del database coincidono oggi,
+            // e il test lo fissa: se qualcuno cambiasse l'uno per una rinomina
+            // cosmetica, l'altro non lo seguirebbe in silenzio.
+            assert_eq!(document_kind_to_db(kind), kind.as_str());
+        }
+        for owner in [
+            AttachmentOwnerType::Property,
+            AttachmentOwnerType::Room,
+            AttachmentOwnerType::Lease,
+        ] {
+            assert_eq!(
+                attachment_owner_type_from_db(attachment_owner_type_to_db(owner)).expect("noto"),
+                owner
+            );
+        }
         assert_eq!(lease_type_to_db(LeaseType::WholeProperty), "whole_property");
         assert_eq!(energy_class_to_db(EnergyClass::A4), "A4");
     }
@@ -219,5 +278,8 @@ mod tests {
         // ricadere silenziosamente su un valore plausibile.
         assert!(org_role_from_db("accountant").is_err());
         assert!(property_status_from_db("").is_err());
+        // Un owner fuori perimetro non ricade su un valore plausibile: nessuno dei
+        // tre che l'API espone è "abbastanza vicino" a un ticket.
+        assert!(attachment_owner_type_from_db("ticket").is_err());
     }
 }

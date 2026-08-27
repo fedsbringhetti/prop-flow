@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 
+use crate::document::{AttachmentOwner, DocumentKind};
 use crate::identity::OrgRole;
 use crate::shared::{
-    EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, UserId,
+    DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, UserId,
 };
 
 /// Evento di dominio pronto per l'outbox.
@@ -115,6 +116,8 @@ pub enum DomainEventPayload {
     TenantInvited(TenantInvited),
     InvitationRevoked(InvitationRevoked),
     InvitationAccepted(InvitationAccepted),
+    DocumentUploaded(DocumentUploaded),
+    DocumentArchived(DocumentArchived),
 }
 
 impl DomainEventPayload {
@@ -136,6 +139,8 @@ impl DomainEventPayload {
             Self::TenantInvited(_) => "identity.invitation.issued",
             Self::InvitationRevoked(_) => "identity.invitation.revoked",
             Self::InvitationAccepted(_) => "identity.invitation.accepted",
+            Self::DocumentUploaded(_) => "document.uploaded",
+            Self::DocumentArchived(_) => "document.archived",
         }
     }
 
@@ -157,6 +162,7 @@ impl DomainEventPayload {
             Self::TenantInvited(_) | Self::InvitationRevoked(_) | Self::InvitationAccepted(_) => {
                 "Invitation"
             }
+            Self::DocumentUploaded(_) | Self::DocumentArchived(_) => "Document",
         }
     }
 
@@ -178,6 +184,8 @@ impl DomainEventPayload {
             Self::TenantInvited(event) => event.invitation_id.as_uuid(),
             Self::InvitationRevoked(event) => event.invitation_id.as_uuid(),
             Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
+            Self::DocumentUploaded(event) => event.document_id.as_uuid(),
+            Self::DocumentArchived(event) => event.document_id.as_uuid(),
         }
     }
 
@@ -199,6 +207,8 @@ impl DomainEventPayload {
             Self::TenantInvited(event) => Some(event.org_id),
             Self::InvitationRevoked(event) => Some(event.org_id),
             Self::InvitationAccepted(event) => Some(event.org_id),
+            Self::DocumentUploaded(event) => Some(event.org_id),
+            Self::DocumentArchived(event) => Some(event.org_id),
         }
     }
 }
@@ -358,4 +368,83 @@ pub struct InvitationAccepted {
     pub user_id: UserId,
     pub lease_id: Option<LeaseId>,
     pub role: &'static str,
+}
+
+/// Documento caricato.
+///
+/// Nessun `original_filename`, nessun MIME, nessun checksum: il nome del file è un
+/// dato personale — `contratto-mario-rossi.pdf` nomina una persona — e un evento
+/// pubblicato su un broker è un dato che viaggia e si conserva. Viaggiano gli
+/// identificatori e la classificazione, che è ciò che serve a chi consuma per
+/// sapere **cosa invalidare**; il resto si legge dall'aggregato.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocumentUploaded {
+    pub document_id: DocumentId,
+    pub org_id: OrgId,
+    /// Tipo dell'oggetto a cui è allegato (`property`, `room`, `lease`).
+    pub owner_type: &'static str,
+    pub owner_id: uuid::Uuid,
+    pub kind: &'static str,
+}
+
+impl DocumentUploaded {
+    #[must_use]
+    pub const fn new(
+        document_id: DocumentId,
+        org_id: OrgId,
+        owner: AttachmentOwner,
+        kind: DocumentKind,
+    ) -> Self {
+        Self {
+            document_id,
+            org_id,
+            owner_type: owner_type_name(owner),
+            owner_id: owner.owner_id(),
+            kind: kind.as_str(),
+        }
+    }
+}
+
+/// Documento archiviato: soft delete della riga.
+///
+/// **L'oggetto nello storage sopravvive all'evento.** In questa fetta nessuno lo
+/// rimuove: chi consuma non deve dedurre da qui che i byte siano spariti.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocumentArchived {
+    pub document_id: DocumentId,
+    pub org_id: OrgId,
+    pub owner_type: &'static str,
+    pub owner_id: uuid::Uuid,
+    pub archived_by_role: &'static str,
+}
+
+impl DocumentArchived {
+    #[must_use]
+    pub const fn new(
+        document_id: DocumentId,
+        org_id: OrgId,
+        owner: AttachmentOwner,
+        role: OrgRole,
+    ) -> Self {
+        Self {
+            document_id,
+            org_id,
+            owner_type: owner_type_name(owner),
+            owner_id: owner.owner_id(),
+            archived_by_role: role.as_str(),
+        }
+    }
+}
+
+/// Nome dell'owner sul filo dell'evento.
+///
+/// Vive qui e non su [`AttachmentOwner`] perché è il contratto verso chi consuma
+/// l'outbox: coincide oggi con il valore del database, ma le due cose possono
+/// divergere e devono poterlo fare separatamente.
+const fn owner_type_name(owner: AttachmentOwner) -> &'static str {
+    match owner {
+        AttachmentOwner::Property(_) => "property",
+        AttachmentOwner::Room(_) => "room",
+        AttachmentOwner::Lease(_) => "lease",
+    }
 }

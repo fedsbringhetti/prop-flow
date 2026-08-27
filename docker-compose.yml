@@ -32,6 +32,43 @@ services:
       timeout: 5s
       retries: 10
 
+  # Storage oggetti per i documenti. In produzione al suo posto c'è S3: stesso
+  # protocollo, stesso adattatore, cambia l'endpoint.
+  minio:
+    image: minio/minio:latest
+    container_name: propflow-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: propflow
+      MINIO_ROOT_PASSWORD: propflow-dev-secret
+    ports:
+      - "9000:9000"
+      # Console web, comoda per guardare cosa c'è nel bucket.
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Crea il bucket una volta sola. Non lo fa l'API: creare un bucket è
+  # un'operazione di provisioning, e darle il privilegio significherebbe darglielo
+  # anche in produzione.
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set propflow http://minio:9000 propflow propflow-dev-secret
+        mc mb --ignore-existing propflow/propflow-documents
+    restart: "no"
+
   migrate:
     build: .
     image: propflow:dev
@@ -55,6 +92,10 @@ services:
       PROPFLOW__DATABASE__PRIVILEGED_URL: postgres://propflow_worker:worker@postgres:5432/propflow
       PROPFLOW__AUTH__PRIVATE_KEY_PATH: /run/secrets/jwt_ed25519.pem
       PROPFLOW__AUTH__PUBLIC_KEY_PATH: /run/secrets/jwt_ed25519.pub.pem
+      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__BUCKET: propflow-documents
+      PROPFLOW__STORAGE__ACCESS_KEY_ID: propflow
+      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: propflow-dev-secret
       PROPFLOW__TELEMETRY__JSON_LOGS: "true"
     volumes:
       # Le chiavi arrivano come file in sola lettura, non da variabili d'ambiente:
@@ -64,6 +105,8 @@ services:
       - "8080:8080"
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      minio-setup:
         condition: service_completed_successfully
     read_only: true
     security_opt:
@@ -90,3 +133,4 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:

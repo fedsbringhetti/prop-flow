@@ -11,6 +11,7 @@
 //! non lasciato alla code review.
 
 pub mod context;
+pub mod document;
 pub mod error;
 pub mod events;
 pub mod identity;
