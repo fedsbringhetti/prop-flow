@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "propflow-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1862,7 +1862,7 @@ dependencies = [
 
 [[package]]
 name = "propflow-application"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1876,7 +1876,7 @@ dependencies = [
 
 [[package]]
 name = "propflow-domain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "propflow-infrastructure"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1916,7 +1916,7 @@ dependencies = [
 
 [[package]]
 name = "propflow-migrator"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "sqlx",
@@ -1927,7 +1927,7 @@ dependencies = [
 
 [[package]]
 name = "propflow-worker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "propflow-infrastructure",
