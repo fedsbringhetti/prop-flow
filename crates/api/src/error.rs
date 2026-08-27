@@ -114,6 +114,22 @@ impl ApiError {
         Self::unauthorized("auth.token_expired")
     }
 
+    /// Corpo oltre il limite consentito dalla rotta.
+    ///
+    /// Nasce qui e non dal service layer perché è una condizione del **trasporto**:
+    /// il dominio non sa quanti byte l'API accetti, e non deve saperlo.
+    #[must_use]
+    pub fn payload_too_large() -> Self {
+        let mut error = Self::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload-too-large",
+            "Payload too large",
+            "request.payload_too_large",
+        );
+        error.detail = Some("the request body exceeds the limit for this route".to_owned());
+        error
+    }
+
     #[must_use]
     pub fn bad_request(code: &'static str, detail: impl Into<String>) -> Self {
         let mut error = Self::new(StatusCode::BAD_REQUEST, "bad-request", "Bad request", code);
@@ -341,6 +357,17 @@ mod tests {
         assert_eq!(api.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(api.code, "lease.derived_status_filter");
         assert_eq!(api.errors.first().map(|e| e.field.as_str()), Some("status"));
+    }
+
+    /// Il `413` è una condizione del trasporto e non del dominio: deve avere un
+    /// codice proprio, altrimenti un client non distingue "file troppo grande" da
+    /// "file non valido".
+    #[test]
+    fn an_oversized_body_has_its_own_code() {
+        let error = ApiError::payload_too_large();
+        assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(error.code, "request.payload_too_large");
+        assert!(error.internal.is_none());
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub auth: AuthConfig,
+    pub storage: StorageConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
 }
@@ -38,6 +39,15 @@ pub struct ServerConfig {
     /// Dimensione massima del corpo di una richiesta, in byte.
     #[serde(default = "default_body_limit_bytes")]
     pub body_limit_bytes: usize,
+    /// Dimensione massima del corpo sulle rotte di caricamento dei documenti.
+    ///
+    /// Esiste separata perché il limite generale è montato sull'**intero** router
+    /// e non ammette deroghe per rotta: il layer esterno rifiuta per primo, e un
+    /// limite per rotta più largo non verrebbe mai raggiunto. Alzare quello
+    /// generale funzionerebbe, ed è la via sbagliata — indebolirebbe ogni endpoint
+    /// per servirne uno. Vedi `crates/api/src/lib.rs`.
+    #[serde(default = "default_upload_body_limit_bytes")]
+    pub upload_body_limit_bytes: usize,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -71,6 +81,39 @@ pub struct AuthConfig {
     /// Vita del refresh token: lunga, ma revocabile e a rotazione singola.
     #[serde(default = "default_refresh_ttl_days")]
     pub refresh_token_ttl_days: i64,
+}
+
+/// Storage oggetti per i documenti.
+///
+/// Un solo adattatore, S3, che parla anche con MinIO: il fornitore è un **dato**
+/// di configurazione e non un ramo del codice (`docs/06-sviluppo.md` §Aggiungere
+/// un provider esterno). In sviluppo l'endpoint è il MinIO del compose, in
+/// produzione quello di S3.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StorageConfig {
+    pub endpoint: String,
+    #[serde(default = "default_storage_region")]
+    pub region: String,
+    #[serde(default = "default_storage_bucket")]
+    pub bucket: String,
+    /// Credenziali: **obbligatorie e dall'ambiente**, mai dal file. Il file è
+    /// versionato, e una chiave nel repository è una chiave compromessa.
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    /// `true` mette il bucket nel percorso invece che nel sottodominio. Serve a
+    /// MinIO e a ogni endpoint personalizzato, dove un DNS
+    /// `<bucket>.<host>` non esiste.
+    #[serde(default = "default_storage_path_style")]
+    pub path_style: bool,
+    /// Vita dell'URL pre-firmato di download.
+    ///
+    /// Corta: l'URL firmato è un permesso **trasferibile**, e chi lo intercetta lo
+    /// può usare fino alla scadenza senza presentare un token.
+    #[serde(default = "default_presign_ttl_seconds")]
+    pub presign_ttl_seconds: u32,
+    /// Timeout di una singola richiesta verso lo storage.
+    #[serde(default = "default_storage_timeout_seconds")]
+    pub request_timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -121,6 +164,24 @@ const fn default_request_timeout_seconds() -> u64 {
 }
 const fn default_body_limit_bytes() -> usize {
     1024 * 1024
+}
+const fn default_upload_body_limit_bytes() -> usize {
+    25 * 1024 * 1024
+}
+fn default_storage_region() -> String {
+    "us-east-1".to_owned()
+}
+fn default_storage_bucket() -> String {
+    "propflow-documents".to_owned()
+}
+const fn default_storage_path_style() -> bool {
+    true
+}
+const fn default_presign_ttl_seconds() -> u32 {
+    300
+}
+const fn default_storage_timeout_seconds() -> u64 {
+    30
 }
 const fn default_max_connections() -> u32 {
     16

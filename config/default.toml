@@ -9,6 +9,9 @@
 bind = "0.0.0.0:8080"
 request_timeout_seconds = 30
 body_limit_bytes = 1048576
+# 25 MiB, solo sulle rotte di caricamento dei documenti. Il limite generale resta
+# 1 MiB: alzarlo per servire l'upload indebolirebbe ogni altro endpoint.
+upload_body_limit_bytes = 26214400
 
 [database]
 max_connections = 16
@@ -21,6 +24,19 @@ audience = "propflow-api"
 access_token_ttl_seconds = 900
 # 30 giorni: il refresh token è revocabile e a rotazione singola.
 refresh_token_ttl_days = 30
+
+[storage]
+# MinIO del compose. In produzione: https://s3.<regione>.amazonaws.com
+endpoint = "http://localhost:9000"
+region = "us-east-1"
+bucket = "propflow-documents"
+# MinIO e ogni endpoint personalizzato richiedono il bucket nel percorso: lo stile
+# virtual-host vorrebbe un DNS `<bucket>.<host>` che in locale non esiste.
+path_style = true
+# 5 minuti: l'URL pre-firmato è un permesso trasferibile, chi lo intercetta lo usa.
+presign_ttl_seconds = 300
+request_timeout_seconds = 30
+# access_key_id e secret_access_key arrivano dall'ambiente: vedi la nota in testa.
 
 [telemetry]
 service_name = "propflow-api"

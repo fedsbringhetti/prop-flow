@@ -47,24 +47,44 @@ use crate::state::AppState;
 /// si logga a `INFO` per lo stesso motivo: a `DEBUG`, che è il default di
 /// `TraceLayer`, con il filtro che il progetto spedisce non compare alcuna riga per
 /// nessuna richiesta.
-pub fn router(state: AppState, body_limit_bytes: usize, request_timeout: Duration) -> Router {
+///
+/// # Perché due gruppi di rotte
+///
+/// `RequestBodyLimitLayer` non ammette deroghe per rotta: montato sull'intero
+/// router rifiuta **per primo**, e un limite più largo dichiarato sopra la rotta di
+/// caricamento non verrebbe mai raggiunto — il sintomo è un `413` che nessun limite
+/// per rotta sembra spiegare. Alzare quello generale funzionerebbe ed è la via da
+/// non prendere: indebolisce ogni endpoint per servirne uno.
+///
+/// Quindi il limite generale si monta sul gruppo che **non** comprende le rotte di
+/// caricamento, e quelle portano il proprio (`routes::documents::upload_router`).
+pub fn router(
+    state: AppState,
+    body_limit_bytes: usize,
+    upload_body_limit_bytes: usize,
+    request_timeout: Duration,
+) -> Router {
     let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
 
-    Router::new()
+    let limited = Router::new()
         .merge(routes::health::router())
         .merge(routes::auth::router())
         .merge(routes::properties::router())
         .merge(routes::rooms::router())
         .merge(routes::leases::router())
         .merge(routes::invitations::router())
+        .merge(routes::documents::router())
         .merge(SwaggerUi::new("/docs").url("/openapi.json", openapi::ApiDoc::openapi()))
+        .layer(RequestBodyLimitLayer::new(body_limit_bytes));
+
+    limited
+        .merge(routes::documents::upload_router(upload_body_limit_bytes))
         .fallback(not_found)
         // 503 e non 408: il timeout scade per lentezza del server, non del client.
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
             request_timeout,
         ))
-        .layer(RequestBodyLimitLayer::new(body_limit_bytes))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(request_span)

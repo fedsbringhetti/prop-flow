@@ -10,6 +10,7 @@ use propflow_infrastructure::security::{
     Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
     OpaqueTokenGenerator,
 };
+use propflow_infrastructure::storage::{S3ObjectStorage, S3Settings};
 use propflow_infrastructure::telemetry::{self, TelemetrySettings};
 use propflow_infrastructure::{DatabasePools, PgUnitOfWorkFactory, SystemClock};
 use tokio::signal;
@@ -86,6 +87,24 @@ async fn main() -> Result<()> {
         ))),
         invitation_tokens: Arc::new(OpaqueTokenGenerator),
         clock: Arc::new(SystemClock),
+        // Costruito qui e non alla prima richiesta: un endpoint sbagliato o un
+        // bucket inesistente devono impedire l'avvio, non far fallire il primo
+        // caricamento di un utente.
+        object_storage: Arc::new(
+            S3ObjectStorage::new(&S3Settings {
+                endpoint: config.storage.endpoint.clone(),
+                region: config.storage.region.clone(),
+                bucket: config.storage.bucket.clone(),
+                access_key_id: config.storage.access_key_id.clone(),
+                secret_access_key: config.storage.secret_access_key.clone(),
+                path_style: config.storage.path_style,
+                request_timeout: std::time::Duration::from_secs(
+                    config.storage.request_timeout_seconds,
+                ),
+            })
+            .context("configurazione dello storage oggetti non valida")?,
+        ),
+        presign_ttl_seconds: config.storage.presign_ttl_seconds,
         pools: pools.clone(),
     };
 
@@ -93,6 +112,7 @@ async fn main() -> Result<()> {
     let app = propflow_api::router(
         state,
         config.server.body_limit_bytes,
+        config.server.upload_body_limit_bytes,
         config.request_timeout(),
     );
 
