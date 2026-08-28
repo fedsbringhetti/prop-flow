@@ -569,9 +569,20 @@ colonna alla `tickets` — vedi la trappola sulla `WITH CHECK`, dove è spiegato
 ### Decomposizione
 
 Ogni passo è eseguibile e verificabile da solo, nell'ordine di `docs/06`
-§Aggiungere un caso d'uso. I passi 9 e 10 sono additivi: se la fetta risulta troppo
-grande in esecuzione, **il punto di taglio è dopo il passo 8** — costi e allegati
-diventano una fetta 1b e il modulo resta utile senza.
+§Aggiungere un caso d'uso.
+
+**Il punto di taglio è il passo 10**, se la fetta risulta troppo grande in
+esecuzione: è l'unico additivo, e tolto lascia un modulo completo — apertura, thread,
+transizioni, endpoint, test. Tagliare più in alto non è un'opzione, perché il passo 9
+è il bordo HTTP e senza quello non c'è niente da usare.
+
+Dentro il passo 10 ci sono però **due cose di natura diversa**, e se si taglia
+conviene tagliarle separatamente. Gli allegati sono additivi e chiusi: una variante
+d'enum e due rotte che riusano gli use case dei documenti senza toccarli. I costi no:
+`estimated_cost` e `actual_cost` sono il primo denaro su un aggregato che non è
+contabile, e prima o poi qualcuno chiederà se il costo di una riparazione diventi un
+addebito all'inquilino — domanda che appartiene al modulo delle bollette e degli
+addebiti, non a questo. Se una delle due deve scivolare, scivolano i costi.
 
 1. **Dominio: gli enum e i value object.** `TicketCategory`, `TicketPriority`,
    `TicketStatus`, `TicketActor` come enum di dominio, con le righe nella macro
