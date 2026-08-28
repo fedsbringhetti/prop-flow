@@ -63,7 +63,9 @@ MinIO, 31 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Segnalazioni** (`tickets`) — thread, storico, assegnazione.
+1. **Segnalazioni** (`tickets`) — thread, storico, assegnazione. Il piano della
+   prima fetta è in fondo a questo documento:
+   [Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
 2. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
    `v_charge_balances` già disponibile.
 3. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
@@ -119,6 +121,9 @@ loro. I ticket vengono per primi perché sono l'altra metà del rapporto bidirez
 finora l'inquilino può solo leggere — e perché `can_access_attachment` copre già
 `ticket` e `ticket_message`, quindi allegare un documento a una segnalazione sarà
 additivo e non richiederà di ripensare nulla.
+
+Il piano della prima fetta è in fondo:
+[Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
 
 Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
@@ -428,3 +433,304 @@ cancellazione dei byte dallo storage, purge di `retention_until`, streaming del
 caricamento. I primi tre erano già dichiarati fuori perimetro dal piano; gli ultimi
 tre sono registrati fra i [debiti noti](#debiti-tecnici-noti) con la ragione e il
 momento in cui affrontarli.
+
+---
+
+<a id="piano-segnalazioni-fetta-1"></a>
+
+## Piano — Segnalazioni, fetta 1
+
+Pianificato il **27 agosto 2026**, non ancora implementato. Scritto qui prima di
+scrivere codice, come chiede `CLAUDE.md` §3: quello che segue è la decomposizione,
+non un riassunto.
+
+### Obiettivo
+
+Chiudere l'anello nell'altro verso. Oggi l'inquilino accetta un invito e **legge**:
+il proprio contratto, il proprio immobile, i documenti che lo riguardano. Non ha un
+modo di dire che il boiler perde. Le segnalazioni sono la prima capacità che gli dà
+voce, ed è la ragione per cui vengono prima di bollette, pagamenti e spese, che sono
+tutti flussi dal proprietario verso il basso.
+
+**Dentro:** apertura di una segnalazione da parte dell'inquilino o dello staff,
+elenco filtrato, dettaglio con il thread e lo storico degli stati, messaggi pubblici
+e note interne allo staff, il ciclo di vita degli stati, assegnazione, costi
+stimati e sostenuti, allegati sul ticket.
+
+**Fuori, e non per dimenticanza:**
+
+- **il triage AI** (`ai_job_id`, `ai_suggested_category`, `ai_suggested_priority`,
+  `ai_confidence`, `ai_analysis`): è il punto 5 della lista dei moduli, e i trait dei
+  provider vanno definiti allora, verificando la reference del fornitore scelto in
+  quel momento. Le colonne restano ai loro default. Lo schema tiene i suggerimenti
+  del modello separati dai valori decisi da una persona proprio perché si possa
+  misurare l'accuratezza dopo: riempirle con valori umani distruggerebbe quel dato
+  prima ancora di raccoglierlo;
+- **la ricerca full-text**: `search_vector` esiste con il suo indice GIN, ma
+  `docs/01-prodotto.md` colloca Meilisearch in V2 e la colonna è pensata per essere
+  alimentata dall'outbox. Esporre una `?q=` che interroga `tsvector` ora significa
+  costruire un contratto che poi va rotto;
+- **gli SLA** (`sla_due_at`): la colonna c'è e l'indice pure, ma non esiste una
+  politica che dica quanto tempo ha una categoria per essere risolta, e nessuno
+  scheduler che guardi le scadenze. Una data di scadenza che nessuno controlla è
+  peggio di nessuna data;
+- **la programmazione** (`scheduled_at`): il calendario è V2;
+- **gli allegati sui messaggi** (`ticket_message` come owner): il ticket sì, il
+  singolo messaggio no. Allargare dopo è additivo, e nella fetta 1 la foto del
+  guasto sta sulla segnalazione, dove chi la cerca la trova;
+- **il ruolo `manager`**: `docs/01-prodotto.md` lo dà come predisposto e non ancora
+  esposto. Le segnalazioni non lo cambiano: `is_org_staff` copre owner e manager
+  insieme, come ovunque.
+
+### Decisioni prese, con il perché
+
+**Il ciclo di vita: `open → triaged → assigned → in_progress → closed`, con la
+riapertura in mano a chi ha segnalato.**
+
+```
+open ──► triaged ──► assigned ──► in_progress ──► closed
+  │         │           │              │             │
+  │         └───────────┴──────────────┤             │
+  │                          waiting_tenant          │
+  │                          waiting_owner           │
+  │                                                  │
+  └──────────── cancelled ◄──────────────────────────┘
+                                                     │
+                            open ◄───── riapertura ──┘
+```
+
+Lo staff guida la lavorazione; l'inquilino apre, commenta, e **riapre** se il guasto
+si ripresenta. La riapertura è ciò che rende la segnalazione un rapporto invece di
+una casella postale: senza, un guasto ricorrente diventa una segnalazione nuova ogni
+volta e lo storico si frantuma proprio dove servirebbe intero.
+
+`waiting_tenant` e `waiting_owner` non sono una fase a sé ma una sospensione della
+lavorazione: si entra e si esce da `in_progress`, e servono a dire perché un ticket
+è fermo — «aspetto che tu sia in casa» è lo stato più comune di una manutenzione
+reale, e senza un nome resta un ticket che sembra abbandonato.
+
+**Alternativa scartata: `resolved` come passo separato, con conferma dell'inquilino.**
+È ciò che la coppia `resolved`/`closed` distinta nello schema lascia intendere, ed è
+il flusso più fedele alla bidirezionalità. Scartata perché introduce un'attesa che
+senza scheduler non si chiude mai da sé: un ticket risolto e mai confermato resta
+appeso per sempre, e la chiusura automatica dopo N giorni è precisamente lo scheduler
+che non abbiamo. La riapertura ottiene lo stesso risultato — l'inquilino ha voce
+sulla risoluzione — senza richiedere un orologio.
+
+**Conseguenza da dire ad alta voce: `resolved` non lo scrive mai l'applicazione.**
+Resta un valore dell'enum del database che il codice sa leggere e non produce, come
+`expiring` ed `expired` per i contratti ([ADR-019](08-decisioni.md#adr-019)). Va
+comunque nella tabella di conversione di `string_enum!`, perché una riga scritta a
+mano potrebbe contenerlo e un valore sconosciuto in lettura deve dare errore.
+Aggiungerlo poi come transizione è additivo, non è una rottura.
+
+**Le transizioni sono sotto-risorse, non un `PATCH` sullo stato.** Stessa scelta di
+attivazione e disdetta dei contratti e dell'archiviazione degli immobili, e per la
+stessa ragione: ognuna ha effetti propri — `closed_at`, una riga di storico, un
+evento — e un `PATCH` che li produce di soppiatto rende invisibile che siano
+avvenuti. Il `PATCH` resta per ciò che è davvero un attributo: i costi.
+
+**Il `PATCH` è solo per i costi, e solo allo staff.** Titolo e descrizione non si
+modificano: sono il testo con cui una persona ha descritto un guasto in un momento
+preciso, e il thread esiste apposta per correggere il tiro. Un titolo riscritto dopo
+tre messaggi rende incomprensibili i tre messaggi.
+
+**Categoria e priorità si impostano con il triage, non con il `PATCH`.** Sono ciò che
+`triaged` *significa* — qualcuno ha guardato la segnalazione e l'ha classificata — e
+lasciarle modificabili da un `PATCH` renderebbe lo stato `triaged` una dichiarazione
+non verificabile.
+
+**L'inquilino può annullare solo finché nessuno ci ha messo mano.** `cancelled` da
+`open` se è chi ha segnalato; da qualunque stato non terminale se è staff. Un
+inquilino che annulla un ticket già in lavorazione butterebbe via il lavoro di
+qualcun altro.
+
+**Il thread è paginato a parte dal dettaglio.** `GET /tickets/{id}` restituisce la
+segnalazione e lo storico degli stati — che è corto e limitato per costruzione — e i
+messaggi stanno su `GET /tickets/{id}/messages` con cursore keyset. Una conversazione
+non ha un tetto: incorporarla nel dettaglio significa che il giorno in cui qualcuno
+scrive duecento messaggi il dettaglio smette di rispondere.
+
+**Le note interne sono un campo del messaggio, non una risorsa separata.**
+`is_internal` esiste già e la policy di SELECT lo filtra per l'inquilino. Una tabella
+separata avrebbe due thread da fondere in lettura e due punti dove sbagliare l'ordine.
+
+**Gli allegati riusano `AttachmentOwner`, senza migration.** L'enum
+`app.attachment_owner_type` ha già `ticket`, e `can_access_attachment` lo risolve su
+`can_access_ticket`. Aggiungere la variante al dominio e le due rotte è tutto ciò che
+serve: è il dividendo di aver fatto i documenti per primi, ed è la ragione per cui
+erano primi.
+
+**Nessuna migration.** Lo schema copre l'intero modulo dalla `0007_tickets.sql`, e
+questa fetta si limita a usarlo. In particolare **non** si aggiungono privilegi di
+colonna alla `tickets` — vedi la trappola sulla `WITH CHECK`, dove è spiegato perché
+[ADR-021](08-decisioni.md#adr-021) non si applica qui.
+
+### Decomposizione
+
+Ogni passo è eseguibile e verificabile da solo, nell'ordine di `docs/06`
+§Aggiungere un caso d'uso. I passi 9 e 10 sono additivi: se la fetta risulta troppo
+grande in esecuzione, **il punto di taglio è dopo il passo 8** — costi e allegati
+diventano una fetta 1b e il modulo resta utile senza.
+
+1. **Dominio: gli enum e i value object.** `TicketCategory`, `TicketPriority`,
+   `TicketStatus`, `TicketActor` come enum di dominio, con le righe nella macro
+   `string_enum!` (`docs/06` §Aggiungere un enum). Value object per titolo e
+   descrizione con i limiti dello schema (`title` fra 1 e 200 caratteri dopo il trim,
+   `description` obbligatoria e non vuota). `TicketReference` come tipo che il
+   dominio sa **leggere** e non costruire — vedi la trappola.
+2. **Dominio: l'aggregato e la macchina a stati.** `Ticket` con i campi privati e i
+   metodi di transizione (`triage`, `assign`, `start`, `wait_for`, `close`, `reopen`,
+   `cancel`), ognuno che rifiuta le transizioni non ammesse con una variante di
+   `Invariant`. `TicketMessage` come entità del thread. Test unitari puri sulla
+   macchina: è il punto in cui una tabella delle transizioni si verifica senza
+   database, e va coperta per intero — le transizioni ammesse **e** quelle rifiutate.
+3. **Dominio: gli eventi.** `TicketOpened`, `TicketStatusChanged`, `TicketAssigned`,
+   `TicketMessagePosted`. Nessuno trasporta titolo, descrizione o corpo del
+   messaggio: è testo libero scritto da una persona su un guasto in casa propria, e
+   un evento pubblicato su un broker è un dato che viaggia e si conserva (regola 18,
+   stessa ragione per cui `LeaseTerminated` non porta `termination_reason`).
+4. **Porte di persistenza.** `TicketRepository` (`insert`, `find_by_id`, `list`,
+   `update`), `TicketMessageRepository` (`insert`, `list_for_ticket`) e la lettura
+   dello storico (`list_status_history`). Nessun metodo di scrittura sullo storico:
+   lo scrive un trigger, e una porta che lasciasse scriverlo inviterebbe a farlo.
+5. **Use case: apertura ed elenco.** `open_ticket`, `list_tickets`, `get_ticket`, con
+   la sequenza canonica. L'apertura risolve immobile, stanza e contratto attraverso i
+   rispettivi repository — è lo stesso controllo che i documenti fanno con
+   `ensure_owner_is_visible`, e per la stessa ragione: senza, il rifiuto arriva dalla
+   RLS come `403 auth.denied_by_policy`.
+6. **Use case: il thread.** `post_message`, `list_messages`. `is_internal` richiede
+   `ensure_staff`; la policy lo ripete, e il service layer deve rifiutare prima.
+7. **Use case: le transizioni.** Uno use case per transizione, ognuno che autorizza,
+   carica l'aggregato, chiama il metodo di dominio, persiste ed emette l'evento.
+   `reopen` è l'unico che un inquilino può eseguire, e solo se è chi ha segnalato.
+8. **Infrastruttura.** `PgTicketRepository` e la lettura dello storico. La `INSERT`
+   usa `RETURNING reference`: è la prima del progetto a farlo, e la trappola spiega
+   perché non c'è alternativa. Query come letterali statici con `concat!`, cast
+   espliciti sugli enum.
+9. **Bordo HTTP.** Le rotte, i DTO, le annotazioni `utoipa`, la registrazione in
+   `openapi.rs` e nel router. `POST /api/v1/properties/{property_id}/tickets` per
+   l'apertura — annidata come le stanze, perché una segnalazione nasce sempre su un
+   immobile — e tutto il resto per id.
+10. **Costi e allegati.** `PATCH /api/v1/tickets/{id}` per `estimated_cost` e
+    `actual_cost`, con la semantica del `Patch<T>` già in uso. `AttachmentOwner::Ticket`
+    più `POST`/`GET /api/v1/tickets/{id}/documents`, che riusano gli use case dei
+    documenti senza modificarli.
+11. **Test.** Unitari di dominio sulla macchina a stati; di persistenza sul
+    repository con database reale, compreso che lo storico si popoli da sé; di
+    contratto HTTP sull'intero giro, con l'inquilino che apre, allega una foto,
+    commenta, non vede le note interne, e riapre dopo la chiusura.
+12. **Documentazione.** Endpoint in `docs/05-api.md`, il modulo spostato da «non
+    implementato» a «implementato» in questa roadmap, un ADR se una di queste
+    decisioni viene cambiata strada facendo, e l'esito del piano come per i documenti.
+
+### Trappole
+
+Sono le vie che sembrano corrette e non lo sono. Tutte verificate contro lo schema
+prima di scriverle qui.
+
+**`reference` la assegna il database, e nessun repository sa ancora farlo.**
+`tickets.reference` ha come `DEFAULT` `'TK-' || to_char(nextval('app.ticket_reference_seq'), 'FM000000')`.
+È il primo campo del progetto che l'aggregato **non** può produrre: ogni altro
+identificatore nasce nel dominio con `generate()`. Ne segue che la `INSERT` deve
+usare `RETURNING reference` e che `Ticket::open` non può restituire un aggregato
+completo prima di aver scritto — o si accetta un `Option<TicketReference>` che si
+riempie alla persistenza, o si legge la riga dopo l'inserimento. Nessun repository
+del progetto usa `RETURNING` oggi, quindi non c'è un esempio da copiare.
+
+Generare la reference nell'applicazione **non** è la scorciatoia che sembra: si
+metterebbe in competizione con la sequenza, e il primo `INSERT` che non la specifica
+la farebbe avanzare comunque, producendo collisioni sull'indice unico
+`tickets_reference_uk` a distanza di mesi dal cambiamento.
+
+**La sequenza è globale, non per organizzazione.** `TK-000042` dice a chiunque quante
+segnalazioni esistono sull'intera piattaforma, non nella propria organizzazione. Non
+è un dato sensibile ma è un dato che non intendevamo dare, e cambiarlo dopo significa
+rinumerare o convivere con due formati. Da registrare fra i debiti alla fine della
+fetta, non da risolvere dentro.
+
+**Non esiste alcun vincolo fra `room_id`, `lease_id` e `property_id`.** Il trigger
+`assert_org_matches_property` verifica soltanto che l'`org_id` del ticket coincida
+con quello dell'immobile. Una stanza di **un altro immobile** o un contratto di un
+altro immobile sono accettati dallo schema senza protestare, e il risultato è una
+segnalazione che nei report appare sotto un immobile e nell'interfaccia sotto un
+altro. Il service layer deve verificarlo, come già fa `CreateRoom` con l'immobile
+padre: leggerli dai rispettivi repository e confrontare, non fidarsi.
+
+**`ticket_messages` non ha una policy di `UPDATE`.** Ce ne sono due, `_select` e
+`_insert`, e basta. Ne segue che un messaggio **non si modifica e non si cancella**,
+nemmeno in modo soft: la colonna `deleted_at` esiste sulla tabella e nessuno può
+valorizzarla. Non è una svista da correggere di passaggio — un thread di conversazione
+in cui le righe non si riscrivono è una proprietà, non un limite. Ma qualunque cosa
+prometta «cancella il messaggio» sta promettendo ciò che il database rifiuta, e
+servirebbe una migration nuova sulla policy.
+
+**La `WITH CHECK` di `tickets_update` vincola solo `org_id`.** La `USING` lascia
+passare staff, chi ha segnalato **e** chi è assegnato; la `WITH CHECK` non nomina
+nessun'altra colonna. La Row Level Security quindi **non** impedisce a un inquilino
+di impostare `actual_cost`, `assigned_to`, `priority` o `property_id` sulla
+segnalazione che ha aperto lui. Deve farlo il service layer, transizione per
+transizione.
+
+E qui la via che sembra corretta e non lo è: **non si aggiungono privilegi di
+colonna** come ha fatto la `0019` per inviti e parti contrattuali.
+[ADR-021](08-decisioni.md#adr-021) dichiara il proprio criterio, ed è preciso —
+quello strumento serve alle policy che concedono scrittura a un **non membro**,
+attraversando il confine dell'organizzazione. Qui chi scrive è già membro e il danno
+resta dentro il perimetro di chi ha già accesso: muovere la propria segnalazione fra
+due immobili della propria organizzazione è un fastidio, non una violazione.
+Applicare lo strumento fuori dal suo criterio significa pagarne il costo — ogni
+colonna nuova da aggiungere alla `GRANT` — senza il pericolo che lo giustifica.
+
+**Lo storico lo scrive un trigger, e scriverlo anche noi lo raddoppia.**
+`tg_ticket_status_history` scatta `AFTER INSERT OR UPDATE OF status` e inserisce da
+sé. Due conseguenze: l'inserimento di una segnalazione produce già la riga
+`NULL → open`, quindi il caso d'uso di apertura non deve aggiungerne una; e
+`ticket_status_history` **non ha una policy di INSERT**, quindi una scrittura
+applicativa verrebbe rifiutata — funziona solo perché il trigger è `SECURITY DEFINER`
+e gira come proprietario della tabella. Il campo `changed_by` lo riempie
+`app.current_user_id()`, che fuori da un contesto di richiesta è nullo.
+
+**`closed_at` non si azzera da solo alla riapertura.** Il vincolo
+`tickets_closed_ck` è `status <> 'closed' OR closed_at IS NOT NULL`: constringe una
+sola direzione. Riaprire lascia quindi un `closed_at` nel passato su una segnalazione
+che risulta `open`, e il database lo accetta senza dire niente. Deve azzerarlo il
+dominio, nel metodo `reopen`. Lo stesso varrebbe per `resolved_at` il giorno in cui
+`resolved` entrasse in uso.
+
+**Solo chi ha segnalato può riaprire, e non è una scelta di prodotto.** La `USING` di
+`tickets_update` è staff **oppure** `reported_by` **oppure** `assigned_to`: non passa
+dal contratto. Un coinquilino sullo stesso contratto *vede* la segnalazione — glielo
+concede `can_access_ticket` attraverso `lease_id` — ma non può aggiornarla. Se il
+prodotto volesse che chiunque sul contratto possa riaprire, è una migration nuova
+sulla policy, non un ramo applicativo.
+
+**Una segnalazione senza `lease_id` è invisibile all'inquilino che ci abita.**
+`can_access_ticket` concede l'accesso a staff, a chi ha segnalato, a chi è assegnato,
+e solo poi — se `lease_id` non è nullo — a chi è parte di quel contratto. Una
+segnalazione aperta dallo staff su un immobile, senza contratto indicato, non la vede
+nessun inquilino. Quando si apre per conto di qualcuno, `lease_id` va valorizzato, o
+la persona che dovrebbe seguirla non sa che esiste.
+
+**`search_vector` è `GENERATED ALWAYS`.** Non va mai nominata in una `INSERT` o in
+una `UPDATE`: PostgreSQL rifiuta la scrittura. È il genere di errore che non compare
+finché qualcuno non aggiunge una colonna elencando i campi «tutti quanti».
+
+**`tickets_open_ix` è parziale sui sei stati di lavorazione.** L'elenco della coda —
+quello che la dashboard del proprietario legge — usa l'indice solo se filtra
+`status` dentro `('open','triaged','assigned','in_progress','waiting_tenant','waiting_owner')`.
+Un elenco «tutti i ticket non chiusi» scritto come `status <> 'closed'` non lo usa.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde con i test nuovi. Un giro a mano che percorre il
+rapporto nei due versi: l'inquilino apre una segnalazione sul proprio immobile con
+una foto allegata, il proprietario la classifica e la assegna, si scambiano due
+messaggi, il proprietario scrive una nota interna che **l'inquilino non vede**,
+registra il costo sostenuto e chiude; l'inquilino riapre perché il guasto torna, e lo
+storico degli stati mostra la catena intera compresa la riapertura. Un utente di
+un'altra organizzazione non vede nulla di tutto questo, e un inquilino di un altro
+contratto nemmeno.
+
+`docs/05-api.md` che descrive gli endpoint, e la guardia della configurazione verde —
+questa fetta non aggiunge impostazioni, quindi deve restare verde senza toccarla.
