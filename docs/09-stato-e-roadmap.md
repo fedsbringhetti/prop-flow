@@ -561,22 +561,32 @@ separata avrebbe due thread da fondere in lettura e due punti dove sbagliare l'o
 serve: è il dividendo di aver fatto i documenti per primi, ed è la ragione per cui
 erano primi.
 
-**Nessuna migration.** Lo schema copre l'intero modulo dalla `0007_tickets.sql`, e
-questa fetta si limita a usarlo. In particolare **non** si aggiungono privilegi di
-colonna alla `tickets` — vedi la trappola sulla `WITH CHECK`, dove è spiegato perché
-[ADR-021](08-decisioni.md#adr-021) non si applica qui.
+**Una migration sola, e sono privilegi di colonna.** Lo schema copre l'intero modulo
+dalla `0007_tickets.sql` e questa fetta si limita a usarlo, con un'eccezione: la
+`0020` toglie a `propflow_app` l'`UPDATE` sull'intera tabella `tickets` e gliela
+riconcede sulle sole colonne che i repository scrivono. Stessa forma della `0019`.
+
+La ragione sta nella trappola sulla `WITH CHECK`, insieme a ciò che si è visto
+riproducendola. Ne discende la conseguenza che rende la migration quasi gratuita:
+`property_id`, `room_id`, `lease_id`, `reported_by`, `title`, `description` e
+`reference` restano **fuori** dalla `GRANT`, cioè non sono più scrivibili
+dall'applicazione dopo l'inserimento. È accettabile perché una segnalazione aperta
+sull'immobile sbagliato **si annulla e si riapre** — `cancelled` esiste per questo — e
+non si corregge spostandola. Il giorno in cui servisse correggerla, è una migration
+nuova, ed è il punto in cui ci si ferma a chiedersi se quella colonna debba davvero
+essere scrivibile.
 
 ### Decomposizione
 
 Ogni passo è eseguibile e verificabile da solo, nell'ordine di `docs/06`
 §Aggiungere un caso d'uso.
 
-**Il punto di taglio è il passo 10**, se la fetta risulta troppo grande in
+**Il punto di taglio è il passo 11**, se la fetta risulta troppo grande in
 esecuzione: è l'unico additivo, e tolto lascia un modulo completo — apertura, thread,
-transizioni, endpoint, test. Tagliare più in alto non è un'opzione, perché il passo 9
+transizioni, endpoint, test. Tagliare più in alto non è un'opzione, perché il passo 10
 è il bordo HTTP e senza quello non c'è niente da usare.
 
-Dentro il passo 10 ci sono però **due cose di natura diversa**, e se si taglia
+Dentro il passo 11 ci sono però **due cose di natura diversa**, e se si taglia
 conviene tagliarle separatamente. Gli allegati sono additivi e chiusi: una variante
 d'enum e due rotte che riusano gli use case dei documenti senza toccarli. I costi no:
 `estimated_cost` e `actual_cost` sono il primo denaro su un aggregato che non è
@@ -615,25 +625,37 @@ addebiti, non a questo. Se una delle due deve scivolare, scivolano i costi.
 7. **Use case: le transizioni.** Uno use case per transizione, ognuno che autorizza,
    carica l'aggregato, chiama il metodo di dominio, persiste ed emette l'evento.
    `reopen` è l'unico che un inquilino può eseguire, e solo se è chi ha segnalato.
-8. **Infrastruttura.** `PgTicketRepository` e la lettura dello storico. La `INSERT`
+8. **Migration `0020`: i privilegi di colonna.** `REVOKE UPDATE ON app.tickets FROM
+   propflow_app`, poi `GRANT UPDATE (…)` sulle sole colonne che i repository
+   scrivono. Stessa forma della `0019`, guardia compresa per l'ambiente in cui il
+   ruolo non esiste. Viene **prima** dell'infrastruttura, non dopo: le colonne
+   concesse e quelle scritte dalle query sono la stessa lista, e scriverla due volte
+   in ordine inverso è il modo di farle divergere. Un test di persistenza fissa il
+   rifiuto, come già fa quello sulle parti contrattuali.
+9. **Infrastruttura.** `PgTicketRepository` e la lettura dello storico. La `INSERT`
    usa `RETURNING reference`: è la prima del progetto a farlo, e la trappola spiega
    perché non c'è alternativa. Query come letterali statici con `concat!`, cast
-   espliciti sugli enum.
-9. **Bordo HTTP.** Le rotte, i DTO, le annotazioni `utoipa`, la registrazione in
-   `openapi.rs` e nel router. `POST /api/v1/properties/{property_id}/tickets` per
-   l'apertura — annidata come le stanze, perché una segnalazione nasce sempre su un
-   immobile — e tutto il resto per id.
-10. **Costi e allegati.** `PATCH /api/v1/tickets/{id}` per `estimated_cost` e
+   espliciti sugli enum. Ogni colonna che compare in una `UPDATE` deve comparire
+   nella `GRANT` del passo 8.
+10. **Bordo HTTP.** Le rotte, i DTO, le annotazioni `utoipa`, la registrazione in
+    `openapi.rs` e nel router. `POST /api/v1/properties/{property_id}/tickets` per
+    l'apertura — annidata come le stanze, perché una segnalazione nasce sempre su un
+    immobile — e tutto il resto per id.
+11. **Costi e allegati.** `PATCH /api/v1/tickets/{id}` per `estimated_cost` e
     `actual_cost`, con la semantica del `Patch<T>` già in uso. `AttachmentOwner::Ticket`
     più `POST`/`GET /api/v1/tickets/{id}/documents`, che riusano gli use case dei
     documenti senza modificarli.
-11. **Test.** Unitari di dominio sulla macchina a stati; di persistenza sul
-    repository con database reale, compreso che lo storico si popoli da sé; di
-    contratto HTTP sull'intero giro, con l'inquilino che apre, allega una foto,
-    commenta, non vede le note interne, e riapre dopo la chiusura.
-12. **Documentazione.** Endpoint in `docs/05-api.md`, il modulo spostato da «non
-    implementato» a «implementato» in questa roadmap, un ADR se una di queste
-    decisioni viene cambiata strada facendo, e l'esito del piano come per i documenti.
+12. **Test.** Unitari di dominio sulla macchina a stati; di persistenza sul
+    repository con database reale, compreso che lo storico si popoli da sé e che le
+    colonne strutturali diano `permission denied`; di contratto HTTP sull'intero
+    giro, con l'inquilino che apre, allega una foto, commenta, non vede le note
+    interne, e riapre dopo la chiusura.
+13. **Documentazione.** Endpoint in `docs/05-api.md`, il modulo spostato da «non
+    implementato» a «implementato» in questa roadmap, l'esito del piano come per i
+    documenti, e **un ADR per la `0020`**: estende a un caso nuovo lo strumento di
+    [ADR-021](08-decisioni.md#adr-021) con un criterio diverso da quello che
+    quell'ADR dichiara, e una scelta del genere non può restare in una riga di
+    migration.
 
 ### Trappole
 
@@ -668,6 +690,16 @@ segnalazione che nei report appare sotto un immobile e nell'interfaccia sotto un
 altro. Il service layer deve verificarlo, come già fa `CreateRoom` con l'immobile
 padre: leggerli dai rispettivi repository e confrontare, non fidarsi.
 
+**Osservato, non ipotizzato:** riproducendo la trappola sulla `WITH CHECK` si è
+ottenuta esattamente questa riga — una segnalazione spostata su un immobile, con il
+`lease_id` che continuava a puntare al contratto del primo. Lo schema l'ha accettata
+senza una parola.
+
+La `0020` cambia dove va fatto il controllo, non se: `property_id`, `room_id` e
+`lease_id` restano fuori dalla `GRANT`, quindi dopo l'inserimento non sono più
+scrivibili e l'incoerenza può nascere **solo all'apertura**. Il controllo va lì, una
+volta sola, e non su ogni transizione.
+
 **`ticket_messages` non ha una policy di `UPDATE`.** Ce ne sono due, `_select` e
 `_insert`, e basta. Ne segue che un messaggio **non si modifica e non si cancella**,
 nemmeno in modo soft: la colonna `deleted_at` esiste sulla tabella e nessuno può
@@ -678,20 +710,56 @@ servirebbe una migration nuova sulla policy.
 
 **La `WITH CHECK` di `tickets_update` vincola solo `org_id`.** La `USING` lascia
 passare staff, chi ha segnalato **e** chi è assegnato; la `WITH CHECK` non nomina
-nessun'altra colonna. La Row Level Security quindi **non** impedisce a un inquilino
-di impostare `actual_cost`, `assigned_to`, `priority` o `property_id` sulla
-segnalazione che ha aperto lui. Deve farlo il service layer, transizione per
-transizione.
+nessun'altra colonna. Ogni colonna diversa da `org_id` è quindi libera per chiunque
+la `USING` ammetta — e ammette l'inquilino che ha aperto la segnalazione.
 
-E qui la via che sembra corretta e non lo è: **non si aggiungono privilegi di
-colonna** come ha fatto la `0019` per inviti e parti contrattuali.
-[ADR-021](08-decisioni.md#adr-021) dichiara il proprio criterio, ed è preciso —
-quello strumento serve alle policy che concedono scrittura a un **non membro**,
-attraversando il confine dell'organizzazione. Qui chi scrive è già membro e il danno
-resta dentro il perimetro di chi ha già accesso: muovere la propria segnalazione fra
-due immobili della propria organizzazione è un fastidio, non una violazione.
-Applicare lo strumento fuori dal suo criterio significa pagarne il costo — ogni
-colonna nuova da aggiungere alla `GRANT` — senza il pericolo che lo giustifica.
+**Riprodotto su database reale**, come ha fatto [ADR-021](08-decisioni.md#adr-021)
+prima di esistere. Con `UPDATE` scritte a mano, come inquilino sotto RLS, sulla
+segnalazione che ha aperto lui:
+
+| Tentativo | Esito |
+|---|---|
+| `actual_cost = 9999.00` | riuscito |
+| `assigned_to` = un altro utente | riuscito |
+| `status = 'closed'`, saltando il flusso | riuscito |
+| `priority = 'urgent'` | riuscito |
+| spostarlo su un immobile in cui non abita | riuscito |
+| toccare la segnalazione di un altro | rifiutato dalla `USING` |
+| spostarlo in un'altra organizzazione | rifiutato dal trigger `assert_org_matches_property` |
+
+Due cose che l'esperimento ha stabilito e che il ragionamento da solo non dava.
+**Il confine di isolamento tiene:** dopo tutte le scritture l'inquilino vede ancora
+una sola segnalazione, non ha guadagnato visibilità su niente. **Il danno è
+registrato:** lo storico annota `open → closed` con lui come autore, e `tickets` è
+nella lista dei trigger di audit, quindi ogni `UPDATE` finisce in `audit_log`.
+
+Non è quindi una violazione dell'isolamento come quella che ha prodotto ADR-021 — è
+**corruzione di dati dentro la propria organizzazione**, tracciata.
+
+**E si è deciso lo stesso di usare i privilegi di colonna** (la migration `0020`, vedi
+le decisioni). Il criterio di ADR-021 — «policy che concedono scrittura a un non
+membro attraversando il confine» — descrive perché *quelle due* ne avevano bisogno,
+non esaurisce i casi in cui lo strumento conviene. Qui conviene per una ragione
+diversa e più modesta: non proteggere un confine, ma togliere di mezzo una classe di
+incoerenze che nessuna policy può esprimere, perché **una policy non può confrontare
+la riga nuova con quella vecchia** — è la stessa constatazione che sta in ADR-021 e
+che vale qui identica.
+
+Ciò che rende la scelta quasi gratuita è che le colonne strutturali non hanno un
+motivo legittimo di cambiare: un ticket mal classificato si annulla e si riapre.
+
+**L'onere di manutenzione non è un rischio silenzioso.** Ogni colonna aggiunta in
+futuro a una `UPDATE` va aggiunta anche alla `GRANT`, altrimenti la scrittura fallisce
+con `permission denied` — ma fallisce **nei test di integrazione**, che girano come
+`propflow_app` con le stesse concessioni. Il precedente esiste ed è verde:
+`the_application_role_cannot_repoint_a_lease_party_to_another_lease` in
+`crates/infrastructure/tests/persistence.rs`.
+
+**Il service layer restringe comunque.** I privilegi rendono impossibile l'incoerenza
+strutturale; non dicono nulla su chi possa chiudere un ticket o valorizzarne il costo,
+perché `status` e `actual_cost` restano concesse — devono esserlo, è il lavoro
+dell'applicazione. Quella parte resta autorizzazione applicativa, transizione per
+transizione.
 
 **Lo storico lo scrive un trigger, e scriverlo anche noi lo raddoppia.**
 `tg_ticket_status_history` scatta `AFTER INSERT OR UPDATE OF status` e inserisce da
