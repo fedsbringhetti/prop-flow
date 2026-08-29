@@ -5,7 +5,8 @@ use propflow_domain::RequestContext;
 use propflow_domain::ports::{
     DocumentRepository, EventSink, InvitationRepository, LeasePartyRepository, LeaseRepository,
     OrgMemberRepository, OrganizationRepository, PropertyRepository, RepositoryResult,
-    RoomRepository, SessionRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
+    RoomRepository, SessionRepository, TicketMessageRepository, TicketRepository, UnitOfWork,
+    UnitOfWorkFactory, UserRepository,
 };
 
 use super::db_enums;
@@ -54,6 +55,12 @@ impl UnitOfWork for PgUnitOfWork {
         self
     }
     fn documents(&mut self) -> &mut dyn DocumentRepository {
+        self
+    }
+    fn tickets(&mut self) -> &mut dyn TicketRepository {
+        self
+    }
+    fn ticket_messages(&mut self) -> &mut dyn TicketMessageRepository {
         self
     }
     fn events(&mut self) -> &mut dyn EventSink {

@@ -12,6 +12,7 @@ use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, Us
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, LeaseType, RentFrequency};
 use propflow_domain::ports::RepositoryError;
 use propflow_domain::property::{EnergyClass, PropertyStatus, PropertyType, RoomStatus};
+use propflow_domain::ticket::{TicketActor, TicketCategory, TicketPriority, TicketStatus};
 
 fn unknown(kind: &'static str, value: &str) -> RepositoryError {
     RepositoryError::Backend {
@@ -154,6 +155,53 @@ string_enum!("attachment_owner_type", AttachmentOwnerType, attachment_owner_type
     Lease => "lease",
 });
 
+string_enum!("ticket_category", TicketCategory, ticket_category_to_db, ticket_category_from_db, {
+    Plumbing => "plumbing",
+    Electrical => "electrical",
+    HeatingCooling => "heating_cooling",
+    Appliance => "appliance",
+    Structural => "structural",
+    Pest => "pest",
+    Cleaning => "cleaning",
+    Connectivity => "connectivity",
+    Security => "security",
+    Other => "other",
+});
+
+string_enum!("ticket_priority", TicketPriority, ticket_priority_to_db, ticket_priority_from_db, {
+    Low => "low",
+    Medium => "medium",
+    High => "high",
+    Urgent => "urgent",
+});
+
+// `resolved` esiste nell'enum del database e l'applicazione non lo scrive mai: il
+// flusso con conferma dell'inquilino è stato scartato perché senza scheduler non si
+// chiude mai da sé, e la riapertura ottiene lo stesso risultato senza un orologio.
+// Resta nella tabella di conversione perché una riga scritta a mano potrebbe
+// contenerlo, e un valore sconosciuto in lettura deve dare errore.
+string_enum!("ticket_status", TicketStatus, ticket_status_to_db, ticket_status_from_db, {
+    Open => "open",
+    Triaged => "triaged",
+    Assigned => "assigned",
+    InProgress => "in_progress",
+    WaitingTenant => "waiting_tenant",
+    WaitingOwner => "waiting_owner",
+    Resolved => "resolved",
+    Closed => "closed",
+    Cancelled => "cancelled",
+});
+
+// `system` e `ai` valgono come `resolved`: nell'enum ci sono, l'applicazione non li
+// produce finché il triage AI non esiste.
+string_enum!("ticket_actor", TicketActor, ticket_actor_to_db, ticket_actor_from_db, {
+    Tenant => "tenant",
+    Owner => "owner",
+    Manager => "manager",
+    System => "system",
+    Ai => "ai",
+});
+
 // Le classi energetiche restano maiuscole anche nel database: 'A4', 'B', 'G'.
 string_enum!("energy_class", EnergyClass, energy_class_to_db, energy_class_from_db, {
     A4 => "A4",
@@ -268,6 +316,68 @@ mod tests {
                 owner
             );
         }
+        for status in [
+            TicketStatus::Open,
+            TicketStatus::Triaged,
+            TicketStatus::Assigned,
+            TicketStatus::InProgress,
+            TicketStatus::WaitingTenant,
+            TicketStatus::WaitingOwner,
+            TicketStatus::Resolved,
+            TicketStatus::Closed,
+            TicketStatus::Cancelled,
+        ] {
+            assert_eq!(
+                ticket_status_from_db(ticket_status_to_db(status)).expect("noto"),
+                status
+            );
+            // Il nome sul filo degli eventi e quello del database coincidono, e il
+            // test lo fissa: la costante `TicketStatus::WORKING` compare come
+            // letterale SQL nel repository, e una rinomina che tocchi solo uno dei
+            // due farebbe smettere la coda di usare `tickets_open_ix`.
+            assert_eq!(ticket_status_to_db(status), status.as_str());
+        }
+        for category in [
+            TicketCategory::Plumbing,
+            TicketCategory::Electrical,
+            TicketCategory::HeatingCooling,
+            TicketCategory::Appliance,
+            TicketCategory::Structural,
+            TicketCategory::Pest,
+            TicketCategory::Cleaning,
+            TicketCategory::Connectivity,
+            TicketCategory::Security,
+            TicketCategory::Other,
+        ] {
+            assert_eq!(
+                ticket_category_from_db(ticket_category_to_db(category)).expect("noto"),
+                category
+            );
+            assert_eq!(ticket_category_to_db(category), category.as_str());
+        }
+        for priority in [
+            TicketPriority::Low,
+            TicketPriority::Medium,
+            TicketPriority::High,
+            TicketPriority::Urgent,
+        ] {
+            assert_eq!(
+                ticket_priority_from_db(ticket_priority_to_db(priority)).expect("noto"),
+                priority
+            );
+        }
+        for actor in [
+            TicketActor::Tenant,
+            TicketActor::Owner,
+            TicketActor::Manager,
+            TicketActor::System,
+            TicketActor::Ai,
+        ] {
+            assert_eq!(
+                ticket_actor_from_db(ticket_actor_to_db(actor)).expect("noto"),
+                actor
+            );
+        }
         assert_eq!(lease_type_to_db(LeaseType::WholeProperty), "whole_property");
         assert_eq!(energy_class_to_db(EnergyClass::A4), "A4");
     }
@@ -281,5 +391,7 @@ mod tests {
         // Un owner fuori perimetro non ricade su un valore plausibile: nessuno dei
         // tre che l'API espone è "abbastanza vicino" a un ticket.
         assert!(attachment_owner_type_from_db("ticket").is_err());
+        assert!(ticket_status_from_db("escalated").is_err());
+        assert!(ticket_actor_from_db("vendor").is_err());
     }
 }

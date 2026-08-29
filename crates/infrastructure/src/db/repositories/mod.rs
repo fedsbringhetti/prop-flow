@@ -18,4 +18,5 @@ mod organization;
 mod property;
 mod room;
 mod session;
+mod ticket;
 mod user;
