@@ -2,6 +2,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use propflow_application::authorization::discloses_estimated_cost;
 use propflow_application::use_cases::ticket::{
     AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, ListTicketMessagesCommand,
     ListTicketsQuery, OpenTicketCommand, PostTicketMessageCommand, ReopenTicketCommand,
@@ -347,6 +348,10 @@ pub struct TicketResponse {
     pub assigned_to: Option<Uuid>,
     pub assigned_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stringhe decimali, come tutti gli importi dell'API.
+    ///
+    /// **`estimated_cost` è `null` per chi non è staff**, anche quando un valore
+    /// c'è: è la cifra di una trattativa con un fornitore e non riguarda chi
+    /// abita la casa. `actual_cost` invece lo vede chiunque veda la segnalazione.
     pub estimated_cost: Option<String>,
     pub actual_cost: Option<String>,
     pub currency: String,
@@ -359,7 +364,9 @@ pub struct TicketResponse {
 }
 
 impl TicketResponse {
-    fn from_domain(ticket: &Ticket) -> Self {
+    /// `discloses_estimated_cost` arriva dal service layer, che è dove la regola
+    /// è scritta: qui la si applica alla proiezione, non la si decide.
+    fn from_domain(ticket: &Ticket, discloses_estimated_cost: bool) -> Self {
         Self {
             id: ticket.id().as_uuid(),
             organization_id: ticket.org_id().as_uuid(),
@@ -378,9 +385,13 @@ impl TicketResponse {
             reported_by_kind: ticket.reported_by_kind().into(),
             assigned_to: ticket.assigned_to().map(|id| id.as_uuid()),
             assigned_at: ticket.assigned_at(),
-            estimated_cost: ticket
-                .estimated_cost()
-                .map(|money| format_amount(money.amount())),
+            estimated_cost: discloses_estimated_cost
+                .then(|| {
+                    ticket
+                        .estimated_cost()
+                        .map(|money| format_amount(money.amount()))
+                })
+                .flatten(),
             actual_cost: ticket
                 .actual_cost()
                 .map(|money| format_amount(money.amount())),
@@ -536,7 +547,10 @@ async fn open(
 
     Ok((
         StatusCode::CREATED,
-        Json(TicketResponse::from_domain(&ticket)),
+        Json(TicketResponse::from_domain(
+            &ticket,
+            discloses_estimated_cost(&context),
+        )),
     ))
 }
 
@@ -552,6 +566,7 @@ async fn list(
     Query(params): Query<ListTicketsParams>,
 ) -> ApiResult<Json<TicketPageResponse>> {
     let request_id = context.request_id().map(str::to_owned);
+    let discloses = discloses_estimated_cost(&context);
     let page = state
         .list_tickets
         .execute(
@@ -568,7 +583,11 @@ async fn list(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(TicketPageResponse {
-        items: page.items.iter().map(TicketResponse::from_domain).collect(),
+        items: page
+            .items
+            .iter()
+            .map(|ticket| TicketResponse::from_domain(ticket, discloses))
+            .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
 }
@@ -595,7 +614,7 @@ async fn detail(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(TicketDetailResponse {
-        ticket: TicketResponse::from_domain(&ticket),
+        ticket: TicketResponse::from_domain(&ticket, discloses_estimated_cost(&context)),
         history: history
             .iter()
             .map(TicketStatusChangeResponse::from_domain)
@@ -638,7 +657,10 @@ async fn update_costs(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -754,7 +776,10 @@ async fn triage(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -787,7 +812,10 @@ async fn assign(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -817,7 +845,10 @@ async fn start(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -850,7 +881,10 @@ async fn suspend(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -883,7 +917,10 @@ async fn close(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -913,7 +950,10 @@ async fn reopen(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -943,5 +983,8 @@ async fn cancel(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(&ticket)))
+    Ok(Json(TicketResponse::from_domain(
+        &ticket,
+        discloses_estimated_cost(&context),
+    )))
 }
