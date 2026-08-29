@@ -117,6 +117,7 @@ cambia il contesto.
 | `retention_until` non viene applicato da nessuno | La colonna esiste e nessuna riga la valorizza; anche valorizzata, nessun job la legge. Lo schema la prevede come job applicativo e non come trigger, deliberatamente | Prima del primo dato reale soggetto a un obbligo di conservazione |
 | Il caricamento tiene il file intero in memoria | `UploadDocument` riceve `Vec<u8>` e lo passa allo storage. Con il limite di 25 MiB e poche richieste concorrenti è sostenibile; non lo è con caricamenti grandi e concorrenza alta | Quando i caricamenti superano le decine di MiB, o quando il profilo di memoria dell'API lo mostra. Lo streaming verso lo storage richiede di cambiare la firma della porta |
 | Il caricamento apre due transazioni | La prima verifica che l'owner sia visibile prima di scrivere l'oggetto, la seconda registra la riga: l'oggetto va scritto fuori transazione, e senza la verifica preliminare chiunque potrebbe riempire il bucket puntando a identificatori a caso | Se il costo si vede sul pool di connessioni. La verifica non si toglie: è ciò che impedisce di scrivere byte per una richiesta che finirà `404` |
+| `ops/ci/prepare-database.sh` accetta un nome di database che poi non funziona | Lo script parametrizza `PROPFLOW_DB_NAME`, ma `ops/sql/roles.sql` fissa `propflow` nel `GRANT CONNECT` e nell'`ALTER DATABASE … OWNER`. Con un nome diverso il database viene creato, i ruoli non ricevono nulla, e il migratore fallisce con `permission denied for schema public` — un messaggio che non nomina la causa. Non si è mai visto perché la CI e il runner locale usano sempre `propflow`. Trovato provando a preparare un secondo database per un giro a mano | Quando servirà davvero un secondo database sullo stesso cluster — un ambiente di staging accanto a uno di sviluppo, o due giri in parallelo. La correzione è passare il nome anche a `roles.sql` con una variabile `psql`, come già si fa per le password |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
@@ -964,10 +965,11 @@ l'applicazione decide.
 
 #### Come si è verificato
 
-`./ops/ci/test-integration.sh` verde con **197 test** (erano 155): 21 unitari di
-dominio in più sulla macchina a stati e sui value object, 4 applicativi
-sull'autorizzazione delle transizioni, 1 di infrastruttura sul letterale SQL, 8 di
-persistenza e 8 di contratto HTTP.
+`./ops/ci/test-integration.sh` verde con **204 test** (erano 155), contando anche le
+quattro decisioni prese subito dopo: 23 unitari di dominio in più sulla macchina a
+stati e sui value object, 5 applicativi sull'autorizzazione delle transizioni e sulla
+divulgazione dei costi, 1 di infrastruttura sul letterale SQL, 10 di persistenza e 10
+di contratto HTTP.
 
 Il test `the_relationship_runs_in_both_directions` percorre il giro che il piano
 descriveva a parole: l'inquilino apre una segnalazione sul proprio immobile con una
@@ -979,10 +981,44 @@ con la prima riga senza stato di partenza.
 
 Su database reale, oltre alla suite: riprodotto che lo schema accetta una segnalazione
 con la stanza di un altro immobile; che il trigger scrive `NULL → open` da sé; che
-`propflow_app` non ha più `UPDATE` a livello di tabella su `app.tickets` e ne ha nove a
-livello di colonna, esattamente quelle che il repository scrive; che il controllo 12
+`propflow_app` non ha più `UPDATE` a livello di tabella su `app.tickets` e ne ha dieci
+a livello di colonna, esattamente quelle che il repository scrive; che il controllo 12
 fallisce se una colonna strutturale torna concessa; e che `INSERT … RETURNING` è
 rifiutato mentre lo stesso `INSERT` senza `RETURNING` passa.
+
+**E a mano, contro il binario vero, PostgreSQL vero e MinIO vero** — che è la parte che
+i test di contratto non coprono, perché montano il router in-process con un doppio in
+memoria dello storage. Quarantasette richieste, nessun `5xx`, nessun panic, nessun
+`WARN`; i soli quattro `404` sono gli accessi dell'estraneo, che devono darlo.
+
+Il giro: l'inquilino apre la segnalazione — `TK-000001`, la prima della sua
+organizzazione — e vi allega una foto JPEG di 6822 byte. `checksum_sha256` nella
+risposta coincide con lo `sha256sum` dell'originale, perché lo calcola l'API sui byte
+ricevuti e non lo dichiara il client. Il download segue il `307` fino a MinIO e torna
+identico byte a byte. Nel bucket la chiave è `{org_id}/{document_id}`: `mc ls` non
+trova né `boiler` né `.jpg`, cioè il nome del file non è finito nei log del fornitore
+di storage.
+
+Poi il rapporto nei due versi: triage, assegnazione, avvio, sospensione
+`waiting_tenant`, ripresa, due messaggi, una nota interna che nel thread del
+proprietario compare e in quello dell'inquilino no. Costi: il proprietario vede
+`stima=200.00 sostenuto=180.00`, l'inquilino `stima=None sostenuto=180.00` sulla
+**stessa** segnalazione. Chiusura con la nota di risoluzione, che l'inquilino legge;
+riapertura fatta da lui, dopo la quale `closed_at` e la nota sono spariti entrambi. Lo
+storico mostra le otto righe della catena, la prima senza stato di partenza.
+
+Un'organizzazione nuova riparte da `TK-000001` mentre la prima è ferma a uno: due
+contatori indipendenti, verificati anche in tabella. L'estraneo riceve `404` su
+dettaglio, thread, allegati e contenuto del documento, e l'elenco vuoto. L'outbox ha
+ricevuto 7 `ticket.status_changed` — uno per transizione — più `ticket.opened`,
+`ticket.assigned`, `ticket.costs_updated` e 3 `ticket.message.posted`, e **nessun
+payload contiene** «boiler», «gonfiato», «valvola» o «idraulico»: il testo libero non
+viaggia. `audit_log` ha registrato un `insert` e otto `update` sulla segnalazione.
+
+Infine, sul database vivo: `UPDATE app.tickets SET property_id = …` e
+`SET title = …` come `propflow_app` danno entrambi `permission denied for table
+tickets`, e l'inserimento nel contatore dà `new row violates row-level security
+policy`.
 
 #### Cosa resta fuori, e resta fuori apposta
 
