@@ -143,9 +143,9 @@ string_enum!("document_kind", DocumentKind, document_kind_to_db, document_kind_f
     Other => "other",
 });
 
-// `app.attachment_owner_type` ha undici valori, il dominio tre: sono gli unici
+// `app.attachment_owner_type` ha undici valori, il dominio quattro: sono gli unici
 // aggregati che hanno già dominio, caso d'uso ed endpoint. La conseguenza è che un
-// documento allegato a un ticket dà **errore** in lettura invece di essere
+// documento allegato a una bolletta dà **errore** in lettura invece di essere
 // silenziosamente ignorato — è la stessa regola degli altri enum, e qui vale a
 // maggior ragione: un documento che l'API non sa mostrare non deve sparire
 // dall'elenco senza che nessuno se ne accorga.
@@ -153,6 +153,7 @@ string_enum!("attachment_owner_type", AttachmentOwnerType, attachment_owner_type
     Property => "property",
     Room => "room",
     Lease => "lease",
+    Ticket => "ticket",
 });
 
 string_enum!("ticket_category", TicketCategory, ticket_category_to_db, ticket_category_from_db, {
@@ -310,6 +311,7 @@ mod tests {
             AttachmentOwnerType::Property,
             AttachmentOwnerType::Room,
             AttachmentOwnerType::Lease,
+            AttachmentOwnerType::Ticket,
         ] {
             assert_eq!(
                 attachment_owner_type_from_db(attachment_owner_type_to_db(owner)).expect("noto"),
@@ -389,8 +391,8 @@ mod tests {
         assert!(org_role_from_db("accountant").is_err());
         assert!(property_status_from_db("").is_err());
         // Un owner fuori perimetro non ricade su un valore plausibile: nessuno dei
-        // tre che l'API espone è "abbastanza vicino" a un ticket.
-        assert!(attachment_owner_type_from_db("ticket").is_err());
+        // quattro che l'API espone è "abbastanza vicino" a una bolletta.
+        assert!(attachment_owner_type_from_db("utility_bill").is_err());
         assert!(ticket_status_from_db("escalated").is_err());
         assert!(ticket_actor_from_db("vendor").is_err());
     }

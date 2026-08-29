@@ -476,6 +476,7 @@ const fn owner_type_name(owner: AttachmentOwner) -> &'static str {
         AttachmentOwner::Property(_) => "property",
         AttachmentOwner::Room(_) => "room",
         AttachmentOwner::Lease(_) => "lease",
+        AttachmentOwner::Ticket(_) => "ticket",
     }
 }
 

@@ -8,7 +8,7 @@ use propflow_application::use_cases::document::{
 };
 use propflow_domain::DomainError;
 use propflow_domain::document::{AttachmentOwner, Document, DocumentKind};
-use propflow_domain::shared::{DocumentId, LeaseId, PropertyId, RoomId};
+use propflow_domain::shared::{DocumentId, LeaseId, PropertyId, RoomId, TicketId};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -22,6 +22,10 @@ use crate::state::AppState;
 /// allegato, perché un documento non ha vita propria; download e archiviazione
 /// vanno per id, perché il percorso dell'owner non aggiungerebbe nulla e
 /// obbligherebbe il client a portarselo dietro. È la stessa scelta delle stanze.
+///
+/// Le rotte sulle segnalazioni sono arrivate con il modulo dei ticket **senza
+/// toccare gli use case dei documenti**: `app.attachment_owner_type` aveva già
+/// `ticket`, e `can_access_attachment` lo risolveva già su `can_access_ticket`.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -30,6 +34,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/rooms/{room_id}/documents", get(list_for_room))
         .route("/api/v1/leases/{lease_id}/documents", get(list_for_lease))
+        .route(
+            "/api/v1/tickets/{ticket_id}/documents",
+            get(list_for_ticket),
+        )
         .route("/api/v1/documents/{id}/content", get(content))
         .route("/api/v1/documents/{id}", delete(archive))
 }
@@ -56,6 +64,10 @@ pub fn upload_router(limit_bytes: usize) -> Router<AppState> {
         )
         .route("/api/v1/rooms/{room_id}/documents", post(upload_to_room))
         .route("/api/v1/leases/{lease_id}/documents", post(upload_to_lease))
+        .route(
+            "/api/v1/tickets/{ticket_id}/documents",
+            post(upload_to_ticket),
+        )
         .layer(DefaultBodyLimit::max(limit_bytes))
         .layer(tower_http::limit::RequestBodyLimitLayer::new(limit_bytes))
 }
@@ -146,6 +158,7 @@ pub enum AttachmentOwnerDto {
     Property,
     Room,
     Lease,
+    Ticket,
 }
 
 /// Corpo `multipart/form-data` del caricamento.
@@ -193,6 +206,7 @@ impl DocumentResponse {
                 AttachmentOwner::Property(_) => AttachmentOwnerDto::Property,
                 AttachmentOwner::Room(_) => AttachmentOwnerDto::Room,
                 AttachmentOwner::Lease(_) => AttachmentOwnerDto::Lease,
+                AttachmentOwner::Ticket(_) => AttachmentOwnerDto::Ticket,
             },
             owner_id: owner.owner_id(),
             original_filename: document.original_filename().as_str().to_owned(),
@@ -304,6 +318,33 @@ async fn upload_to_lease(
         state,
         context,
         AttachmentOwner::Lease(LeaseId::from_uuid(lease_id)),
+        multipart,
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/tickets/{ticket_id}/documents", tag = "documenti",
+    params(("ticket_id" = Uuid, Path, description = "Identificatore della segnalazione")),
+    request_body(content = UploadDocumentForm, content_type = "multipart/form-data"),
+    security(("bearer" = [])),
+    responses(
+        (status = 201, description = "Documento caricato", body = DocumentResponse),
+        (status = 404, description = "Segnalazione non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 413, description = "Corpo oltre il limite di caricamento", body = crate::error::ProblemDetails),
+        (status = 422, description = "Dati non validi", body = crate::error::ProblemDetails),
+    )
+)]
+async fn upload_to_ticket(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(ticket_id): Path<Uuid>,
+    multipart: Multipart,
+) -> ApiResult<(StatusCode, Json<DocumentResponse>)> {
+    upload(
+        state,
+        context,
+        AttachmentOwner::Ticket(TicketId::from_uuid(ticket_id)),
         multipart,
     )
     .await
@@ -502,6 +543,30 @@ async fn list_for_lease(
         state,
         context,
         AttachmentOwner::Lease(LeaseId::from_uuid(lease_id)),
+        params,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/tickets/{ticket_id}/documents", tag = "documenti",
+    params(("ticket_id" = Uuid, Path, description = "Identificatore della segnalazione"), ListQueryParams),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Pagina di documenti", body = DocumentPageResponse),
+        (status = 404, description = "Segnalazione non trovata o non visibile", body = crate::error::ProblemDetails),
+    )
+)]
+async fn list_for_ticket(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(ticket_id): Path<Uuid>,
+    Query(params): Query<ListQueryParams>,
+) -> ApiResult<Json<DocumentPageResponse>> {
+    list(
+        state,
+        context,
+        AttachmentOwner::Ticket(TicketId::from_uuid(ticket_id)),
         params,
     )
     .await
