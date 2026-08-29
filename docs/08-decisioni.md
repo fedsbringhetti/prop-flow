@@ -929,3 +929,71 @@ restare scrivibili in qualche caso. Non è così: non devono cambiare mai, e tog
 privilegio esprime *questo*, mentre un trigger esprimerebbe «può cambiare, ma solo
 così». Un trigger in più è anche un trigger in più su ogni `UPDATE` di ogni
 segnalazione, mentre il controllo dei privilegi è già nel percorso.
+
+---
+
+<a id="adr-027"></a>
+
+## ADR-027 — Il riferimento di una segnalazione si numera per organizzazione
+
+**Difetto osservato.** `tickets.reference` nasceva da `app.ticket_reference_seq`, una
+sola sequenza per il cluster. La prima segnalazione di qualunque organizzazione era
+`TK-000001`; la millesima della piattaforma era `TK-001000` anche se per il suo
+proprietario era la seconda. Il numero rivelava quante segnalazioni esistono
+sull'intera piattaforma.
+
+Non è un dato sensibile e la fuga è modesta. È però un dato che non si intendeva
+dare, e la ragione per cui si è corretto subito non è la gravità ma **la forma del
+costo**: finché nessuno ha dati reali è una migration su tabelle vuote, dopo sarebbe
+rinumerare o convivere con due formati per sempre. È una delle poche decisioni la cui
+finestra si chiude da sola.
+
+**Decisione.** Un contatore per organizzazione — `app.ticket_reference_counters`,
+una riga per `org_id` con l'ultimo numero usato — riempito da un trigger
+`BEFORE INSERT` su `app.tickets` (`migrations/0021_ticket_reference_per_org.sql`).
+
+L'unicità cambia forma insieme alla numerazione: `tickets_reference_uk` era su
+`(reference)` e diventa su `(org_id, reference)`, perché due `TK-000001` in due
+organizzazioni diverse sono ora legittimi.
+
+**Perché un contatore e non una sequenza per organizzazione.** Una sequenza per org
+richiederebbe DDL dinamico a ogni registrazione — `CREATE SEQUENCE` dentro un
+trigger — e lascerebbe dietro di sé oggetti di schema che nessuna migration ha creato
+e che nessuno cancella. Una riga in una tabella si crea, si legge, si ispeziona e se
+ne va con l'organizzazione a cui appartiene.
+
+**Perché un trigger e non l'applicazione.** Così `reference` resta fuori dalla
+`GRANT UPDATE` della `0020` e fuori dalla portata del ruolo applicativo, che è ciò
+che il controllo 12 delle invarianti protegge. Il repository non nomina la colonna e
+non deve saperne nulla; se un giorno la nominasse, il trigger la sovrascriverebbe
+comunque. Calcolare il numero nell'applicazione avrebbe richiesto di concedere la
+colonna in scrittura, cioè di disfare la 0020 per un contatore.
+
+**Conseguenza sulla concorrenza, da dire ad alta voce.** `ON CONFLICT DO UPDATE`
+prende un lock di riga: due aperture concorrenti **nella stessa organizzazione** si
+serializzano fino al commit. Per un'azione umana su una casa è irrilevante, e in
+cambio la numerazione non ha buchi — una transazione annullata non consuma un numero,
+cosa che una sequenza invece fa. Se un giorno esistesse un'organizzazione che apre
+segnalazioni a ritmo di macchina, questa è la riga da guardare per prima.
+
+**Conseguenza sul contratto pubblico.** Il riferimento **non è più un identificatore
+globale**. Per raggiungere una segnalazione serve il suo `id`, e un client che
+indicizzasse per `reference` senza l'organizzazione fonderebbe righe diverse. È
+documentato in [05 — API](05-api.md#reference).
+
+**Il contatore non è manipolabile dall'applicazione.** La tabella ha la RLS attiva e
+una sola policy, di `SELECT`: al ruolo applicativo i privilegi predefiniti lasciano
+`INSERT` e `UPDATE` a livello di tabella, ma nessuna policy li ammette, quindi
+l'inserimento è rifiutato e l'aggiornamento non trova righe. Senza questa asimmetria
+un membro qualsiasi potrebbe riportare il contatore indietro e far collidere il
+prossimo riferimento con uno già emesso. Due test di persistenza lo fissano.
+
+**Le righe già presenti non si rinumerano.** Il contatore parte dal numero più alto
+già usato in quell'organizzazione — non dal conteggio delle righe, che con un'org
+avente `TK-000001` e `TK-000005` ripartirebbe da 3 e si scontrerebbe con `TK-000005`
+due aperture dopo.
+
+**Alternativa scartata: non esporre affatto il riferimento.** Avrebbe rimandato la
+decisione senza pagarla, ma toglie al proprietario un numero corto da citare al
+telefono, che è l'unica ragione per cui una colonna del genere esiste accanto a un
+UUID.

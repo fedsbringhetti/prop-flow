@@ -88,6 +88,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `org.not_selected` | 403 | manca l'organizzazione attiva |
 | `org.not_a_member` | 403 | non appartieni a questa organizzazione |
 | `org.staff_role_required` | 403 | serve il ruolo `owner` o `manager` |
+| `ticket.not_yours` | 403 | riaprire o annullare una segnalazione spetta a chi l'ha aperta, e nessun ruolo lo sostituisce |
 
 **Risorse non trovate**
 
@@ -423,8 +424,8 @@ dall'API**.
 | POST | `/api/v1/tickets/{id}/assign` | staff | `200`. Corpo: `assignee_id` |
 | POST | `/api/v1/tickets/{id}/start` | staff | `200`. Avvia la lavorazione, o la riprende |
 | POST | `/api/v1/tickets/{id}/wait` | staff | `200`. Corpo: `waiting_on` (`tenant` o `owner`) |
-| POST | `/api/v1/tickets/{id}/close` | staff | `200`. Valorizza `closed_at` |
-| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Riporta a `open` e azzera `closed_at` |
+| POST | `/api/v1/tickets/{id}/close` | staff | `200`. Valorizza `closed_at` e, se inviato, `resolution_notes` |
+| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Riporta a `open` e azzera `closed_at` e `resolution_notes` |
 | POST | `/api/v1/tickets/{id}/cancel` | staff, o chi ha segnalato finché è `open` | `200` |
 
 L'apertura è annidata sotto l'immobile perché una segnalazione nasce **sempre** su un
@@ -462,6 +463,20 @@ ha segnalato** può riaprire, e non è una scelta di prodotto: la `USING` di
 contratto. Un coinquilino *vede* la segnalazione ma non può aggiornarla; allargare
 richiederebbe una migration sulla policy.
 
+A lui l'API risponde `403 ticket.not_yours` e **non** `org.staff_role_required`: non
+gli manca un ruolo — nessun ruolo gli darebbe questa operazione — gli manca l'essere
+stato lui a segnalare, e i due rimedi sono diversi. `org.staff_role_required` resta
+invece corretto in un caso: chi ha segnalato prova ad **annullare** una segnalazione
+già in lavorazione, dove il ruolo di staff serve davvero.
+
+Chiudere accetta un corpo con `resolution_notes`, facoltativo: è la risposta a «com'è
+andata a finire», che altrimenti andrebbe dedotta rileggendo il thread. La vede
+chiunque veda la segnalazione, l'inquilino compreso. **Una riapertura la cancella**,
+insieme a `closed_at`: riaprire disfa la chiusura, e la nota fa parte della chiusura —
+una segnalazione `open` che dichiara come è stata risolta direbbe il falso sul proprio
+stato. Se quel testo deve sopravvivere alla riapertura, il posto è il thread, che non
+si riscrive mai.
+
 `resolved` esiste nell'enum e **l'API non lo produce mai**. Il flusso `resolved` con
 conferma dell'inquilino è stato scartato: introdurrebbe un'attesa che senza scheduler
 non si chiude mai da sé, e un ticket risolto e mai confermato resterebbe appeso per
@@ -489,7 +504,21 @@ non è modificabile, e non per dimenticanza:
 
 I costi sono nella valuta della segnalazione, che nasce `EUR` e non è modificabile: la
 colonna `currency` è una sola per entrambi, e due importi in valute diverse non
-sarebbero rappresentabili.
+sarebbero rappresentabili. Renderla dichiarabile è rinviato al modulo delle bollette e
+degli addebiti, dove il problema si pone davvero.
+
+#### Chi vede quale costo
+
+`actual_cost` lo vede **chiunque veda la segnalazione**, l'inquilino compreso: chi ha
+subito il guasto sa quanto è costato ripararlo.
+
+`estimated_cost` è `null` per chi non è staff, **anche quando un valore c'è**. È la
+cifra di una trattativa con un fornitore e non riguarda chi abita la casa. La
+distinzione non è un confine di sicurezza — la Row Level Security lascia comunque
+leggere la riga a chi ha segnalato — ma una regola del contratto dell'API, decisa nel
+service layer (`authorization::discloses_estimated_cost`) e applicata alla proiezione.
+La direzione è deliberata: aggiungere un campo a una risposta è additivo, toglierlo è
+una rottura.
 
 #### Il dettaglio, lo storico e il thread
 
@@ -526,19 +555,24 @@ dashboard del proprietario legge.
 
 Ogni segnalazione porta un riferimento leggibile, `TK-000042`, **assegnato dal
 database**: è l'unico identificatore del progetto che non nasce nell'applicazione.
-La sequenza è **globale**, non per organizzazione, quindi il numero dice quante
-segnalazioni esistono sull'intera piattaforma. Non è un dato sensibile ma non è un
-dato che si intendeva dare: è registrato fra i debiti noti in
-[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+La numerazione è **per organizzazione**: la prima segnalazione di ognuna è
+`TK-000001`, e due organizzazioni diverse hanno legittimamente lo stesso riferimento.
+Il numero dice quante segnalazioni ha aperto quel proprietario, non quante ne esistono
+sulla piattaforma ([ADR-027](08-decisioni.md#adr-027)).
+
+Ne segue che **il riferimento non è un identificatore globale**: per raggiungere una
+segnalazione serve il suo `id`, e un client che indicizzasse per `reference` senza
+l'organizzazione fonderebbe righe diverse. Non ha buchi: una richiesta che fallisce non
+consuma un numero, perché il contatore è una riga e non una sequenza.
 
 #### Cosa la risposta non dice, e perché
 
 Non compaiono `ai_suggested_category`, `ai_suggested_priority`, `ai_confidence`,
-`ai_analysis`, `sla_due_at`, `scheduled_at` né `resolution_notes`: triage AI, SLA,
-programmazione e note di risoluzione sono fuori dal perimetro di questa fetta. Le
-colonne esistono nello schema e restano ai loro default — vedere una colonna non è una
-ragione per riempirla, e i suggerimenti del modello sono tenuti separati dai valori
-decisi da una persona proprio perché si possa misurare l'accuratezza dopo.
+`ai_analysis`, `sla_due_at` né `scheduled_at`: triage AI, SLA e programmazione sono
+fuori dal perimetro di questa fetta. Le colonne esistono nello schema e restano ai loro
+default — vedere una colonna non è una ragione per riempirla, e i suggerimenti del
+modello sono tenuti separati dai valori decisi da una persona proprio perché si possa
+misurare l'accuratezza dopo.
 
 Non c'è una `?q=`: `search_vector` esiste con il suo indice GIN, ma la ricerca è
 Meilisearch in V2 ed è pensata per essere alimentata dall'outbox. Esporre ora una
@@ -559,6 +593,10 @@ curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/documents \
 curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/triage \
   -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json' \
   -d '{ "category": "plumbing", "priority": "high" }'
+
+curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/close \
+  -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json' \
+  -d '{ "resolution_notes": "sostituita la valvola di sicurezza" }'
 ```
 
 ### Inviti

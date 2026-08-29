@@ -4,9 +4,9 @@ PostgreSQL **16 o superiore**. Il minimo non è arbitrario: le viste applicative
 usano `security_invoker`, introdotto in 15, senza il quale una vista girerebbe con
 i diritti del proprietario e aggirerebbe la Row Level Security del chiamante.
 
-Numeri dello schema attuale: **23 tabelle** di business più `audit_log`
-partizionata, **35 enum**, **6 domini**, **169 indici**, **64 policy RLS**,
-**49 trigger**, **4 viste**, **28 funzioni**, **20 migration**.
+Numeri dello schema attuale: **24 tabelle** più `audit_log` partizionata,
+**35 enum**, **6 domini**, **170 indici**, **65 policy RLS**, **50 trigger**,
+**4 viste**, **29 funzioni**, **21 migration**.
 
 ## Diagramma ER
 
@@ -192,7 +192,8 @@ Nessuno dei tre può scrivere su `audit_log`: la traccia la scrive il trigger, c
 Su tre tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle colonne
 che i repository scrivono: `org_invitations` e `lease_parties`
 ([ADR-021](08-decisioni.md#adr-021), migration `0019`) e `tickets`
-([ADR-026](08-decisioni.md#adr-026), migration `0020`).
+([ADR-026](08-decisioni.md#adr-026), migration `0020`, estesa dalla `0021` con
+`resolution_notes`).
 
 Il motivo comune è che **una policy non può confrontare la riga nuova con quella
 vecchia**: non esiste `OLD` in un `WITH CHECK`, che vincola solo le colonne che nomina
@@ -209,6 +210,19 @@ Ne segue un onere: l'elenco concesso e le colonne che compaiono in una `UPDATE` 
 la stessa lista, e allungare l'una richiede di allungare l'altra. È voluto — è il
 punto in cui ci si ferma a chiedersi se quella colonna debba davvero essere scrivibile
 dall'applicazione — ed è verificato dai controlli 11 e 12 delle invarianti.
+
+### Contatori scritti solo da un trigger
+
+`app.ticket_reference_counters` è l'unica tabella che il ruolo applicativo può
+**leggere e non scrivere**: ha la RLS attiva e una sola policy, di `SELECT`. I
+privilegi predefiniti della `0015` le concedono `INSERT` e `UPDATE` a livello di
+tabella, ma nessuna policy li ammette, quindi l'inserimento è rifiutato e
+l'aggiornamento non trova righe. La riempie `app.tg_ticket_reference`, che è
+`SECURITY DEFINER` e gira come proprietario.
+
+È la forma da riusare per ogni contatore futuro: leggibile per essere ispezionabile,
+non scrivibile perché riportarlo indietro farebbe collidere il prossimo valore con uno
+già emesso. Vedi [ADR-027](08-decisioni.md#adr-027).
 
 ## Soft delete
 

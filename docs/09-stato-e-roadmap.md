@@ -20,9 +20,9 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 20 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
-già esposta dall'API: 23 tabelle di business più `audit_log` partizionata, 35 enum,
-6 domini, 169 indici, 64 policy RLS, 49 trigger, 4 viste, 28 funzioni.
+Le 21 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
+170 indici, 65 policy RLS, 50 trigger, 4 viste, 29 funzioni.
 
 Coperti a schema: utenti e organizzazioni, immobili e stanze, contratti e parti
 contrattuali, documenti con allegato polimorfico, segnalazioni con thread e storico,
@@ -53,9 +53,9 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-197 test: 96 unitari di dominio, 15 applicativi, 9 di infrastruttura, 6 unitari
-del bordo HTTP, 26 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 39 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+204 test: 98 unitari di dominio, 16 applicativi, 9 di infrastruttura, 6 unitari
+del bordo HTTP, 28 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 41 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -117,8 +117,6 @@ cambia il contesto.
 | `retention_until` non viene applicato da nessuno | La colonna esiste e nessuna riga la valorizza; anche valorizzata, nessun job la legge. Lo schema la prevede come job applicativo e non come trigger, deliberatamente | Prima del primo dato reale soggetto a un obbligo di conservazione |
 | Il caricamento tiene il file intero in memoria | `UploadDocument` riceve `Vec<u8>` e lo passa allo storage. Con il limite di 25 MiB e poche richieste concorrenti è sostenibile; non lo è con caricamenti grandi e concorrenza alta | Quando i caricamenti superano le decine di MiB, o quando il profilo di memoria dell'API lo mostra. Lo streaming verso lo storage richiede di cambiare la firma della porta |
 | Il caricamento apre due transazioni | La prima verifica che l'owner sia visibile prima di scrivere l'oggetto, la seconda registra la riga: l'oggetto va scritto fuori transazione, e senza la verifica preliminare chiunque potrebbe riempire il bucket puntando a identificatori a caso | Se il costo si vede sul pool di connessioni. La verifica non si toglie: è ciò che impedisce di scrivere byte per una richiesta che finirà `404` |
-| La sequenza dei riferimenti è globale, non per organizzazione | `tickets.reference` nasce da `app.ticket_reference_seq`, che è una sola per il cluster: `TK-000042` dice a chiunque quante segnalazioni esistono sull'**intera piattaforma**, non nella propria organizzazione. Non è un dato sensibile ma è un dato che non intendevamo dare | Prima del primo cliente che se ne accorga. Cambiarlo dopo significa rinumerare o convivere con due formati, quindi la finestra è ora e si chiude con il primo dato reale |
-| Un coinquilino non può riaprire una segnalazione, e il codice dice la cosa sbagliata | La `USING` di `tickets_update` è staff **oppure** `reported_by` **oppure** `assigned_to`: non passa dal contratto. Chi è parte dello stesso contratto *vede* la segnalazione ma riceve `403 org.staff_role_required`, che gli dice che gli serve un ruolo quando in realtà gli servirebbe di essere lui ad aver segnalato. È lo **stesso debito** di `org.staff_role_required` sull'archiviazione di un documento | Insieme ai due debiti sulla tassonomia degli errori qui sopra: sono la stessa conversazione, e servirebbe un codice proprio del tipo `ticket.not_yours`. Se il prodotto volesse davvero che chiunque sul contratto possa riaprire, non è un ramo applicativo ma una migration sulla policy |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
@@ -992,6 +990,93 @@ Triage AI, ricerca full-text, SLA, programmazione, allegati sui singoli messaggi
 `manager` esposto, note di risoluzione. I primi sei erano già dichiarati fuori
 perimetro dal piano; l'ultima è una scelta presa eseguendo, ed è motivata qui sopra.
 
-Restano fuori anche, e sono registrati fra i [debiti](#debiti-tecnici-noti): la
-sequenza dei riferimenti globale invece che per organizzazione, e il codice `403` che
-un coinquilino riceve provando a riaprire.
+Le due cose che la fetta aveva lasciato come debiti — la sequenza dei riferimenti
+globale e il `403` che un coinquilino riceve provando a riaprire — **non sono più
+debiti**: sono state decise e chiuse subito dopo, e il resoconto è qui sotto.
+
+
+<a id="decisioni-dopo-la-fetta-segnalazioni"></a>
+
+### Decisioni prese subito dopo la fetta
+
+Prese il **29 agosto 2026**, a fetta consegnata, sulle domande che l'esecuzione aveva
+lasciato aperte e sui due debiti che aveva creato. Implementate sullo stesso ramo, con
+la migration `0021`.
+
+#### 1. Il riferimento si numera per organizzazione
+
+Era un debito, ed è stato chiuso subito per la forma del suo costo e non per la sua
+gravità: finché nessuno ha dati reali è una migration su tabelle vuote, dopo sarebbe
+rinumerare o convivere con due formati per sempre. Un contatore per `org_id` riempito
+da un trigger, e `tickets_reference_uk` che passa da `(reference)` a
+`(org_id, reference)`. Motivazione completa, alternative scartate e conseguenza sulla
+concorrenza in [ADR-027](08-decisioni.md#adr-027).
+
+**Conseguenza sul contratto pubblico:** il riferimento non è più un identificatore
+globale. Serve l'`id` per raggiungere una segnalazione, e un client che indicizzasse
+per `reference` senza l'organizzazione fonderebbe righe diverse.
+
+#### 2. L'inquilino vede il costo sostenuto, non la stima
+
+`actual_cost` sì: chi ha subito il guasto sa quanto è costato ripararlo.
+`estimated_cost` no, ed è `null` per chi non è staff anche quando un valore c'è — è la
+cifra di una trattativa con un fornitore e non riguarda chi abita la casa.
+
+Prima di questa decisione l'inquilino vedeva **entrambi**, e non per scelta: i campi
+erano nel DTO e la Row Level Security lascia leggere la riga a chi ha segnalato.
+Verificato interrogando l'API prima di cambiarla, non dedotto dal codice.
+
+La regola vive in `authorization::discloses_estimated_cost`, cioè nel service layer,
+dove sta l'autorizzazione; il bordo HTTP la applica alla proiezione e non la decide.
+**Non è un confine di sicurezza:** la riga resta leggibile, e renderlo un confine vero
+richiederebbe privilegi di colonna in `SELECT` o una policy separata. La direzione è
+deliberata — aggiungere un campo a una risposta è additivo, toglierlo è una rottura —
+ed è la ragione per cui si è partiti dalla scelta più chiusa delle due praticabili.
+
+#### 3. Un coinquilino non riapre, e il codice glielo dice per quello che è
+
+Il comportamento non cambia: riaprire spetta a chi ha segnalato, perché la `USING` di
+`tickets_update` non passa dal contratto, e allargarlo sarebbe una migration sulla
+policy e non un ramo applicativo.
+
+Cambia il codice. `ticket.not_yours` al posto di `org.staff_role_required`: al
+coinquilino non manca un ruolo — nessun ruolo gli darebbe questa operazione — gli manca
+l'essere stato lui a segnalare, e i due rimedi sono diversi. Aggiungere un codice è
+additivo.
+
+`org.staff_role_required` resta invece **corretto** in un caso vicino e diverso: chi ha
+segnalato prova ad annullare una segnalazione già in lavorazione. Lì il ruolo di staff
+serve davvero, perché annullarla butterebbe via il lavoro di qualcun altro.
+
+Il debito gemello sui documenti (`org.staff_role_required` all'archiviazione da parte
+di chi non ha caricato) **resta aperto**: è la stessa conversazione, ma toccarlo qui
+avrebbe voluto dire cambiare la tassonomia di un modulo chiuso per un'occasione.
+
+#### 4. Chiudere registra come è stata risolta
+
+`POST /tickets/{id}/close` accetta `resolution_notes`, facoltativo, visibile a chiunque
+veda la segnalazione. Senza, l'unica traccia di cosa fosse stato fatto era il thread —
+una conversazione, non una conclusione: a distanza di mesi la risposta a «com'è stato
+riparato il boiler» andava dedotta rileggendo venti messaggi.
+
+`resolution_notes` è ora nella `GRANT` dei privilegi di colonna (migration `0021`) e
+**non** è fra le colonne strutturali del controllo 12: è deliberatamente scrivibile.
+
+**Una riapertura la cancella**, insieme a `closed_at` e `resolved_at`. La regola è una
+sola e si spiega in una riga — riaprire disfa la chiusura, e la nota fa parte della
+chiusura — e l'alternativa lascerebbe una segnalazione `open` che dichiara come è stata
+risolta, cioè una riga che dice il falso sul proprio stato in una risposta che
+l'inquilino legge. Se quel testo deve sopravvivere alla riapertura, il posto è il
+thread, che non si riscrive mai. È una perdita di informazione **scelta**, non subita.
+
+#### 5. Le tre conferme, che non hanno cambiato codice
+
+- **Si chiude da tutti e sei gli stati di lavorazione.** Confermato: un falso allarme
+  si chiude senza inventare un avanzamento che non c'è stato, e l'insieme ammesso
+  coincide con il predicato di `tickets_open_ix`.
+- **La valuta resta `EUR` e non è dichiarabile.** Rinviato al modulo delle bollette e
+  degli addebiti, dove il problema si pone davvero — non è rimasto indietro, è stato
+  spostato dove appartiene.
+- **Nessun filtro «assegnate a me».** Rinviato a quando esisterà un client che lo
+  consumi: senza, sarebbe un filtro da mantenere e non da usare. L'indice
+  `tickets_assignee_ix` esiste già e aspetta, e aggiungerlo dopo è additivo.
