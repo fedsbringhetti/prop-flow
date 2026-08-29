@@ -62,6 +62,15 @@ pub enum Denial {
     NotAMember,
     #[error("The owner or manager role is required")]
     StaffRoleRequired,
+    /// Chi ha segnalato può riaprire e annullare; chi condivide il contratto no.
+    ///
+    /// Non è una scelta di prodotto rivedibile nel codice: la `USING` di
+    /// `tickets_update` ammette staff, `reported_by` e `assigned_to`, e non passa
+    /// dal contratto. Esiste come variante propria perché
+    /// `org.staff_role_required` direbbe al coinquilino che gli manca un ruolo,
+    /// mentre gli manca l'essere stato lui a segnalare — due rimedi diversi.
+    #[error("This ticket was reported by someone else")]
+    TicketNotYours,
 
     // Da qui in giù: mai in risposta, solo nei log.
     #[error("The account is not active")]
@@ -88,6 +97,7 @@ impl Denial {
             Self::OrgNotSelected => "org.not_selected",
             Self::NotAMember => "org.not_a_member",
             Self::StaffRoleRequired => "org.staff_role_required",
+            Self::TicketNotYours => "ticket.not_yours",
             Self::AccountInactive => "account.inactive",
             Self::AccountLocked => "account.locked",
             Self::NoLocalCredentials => "account.no_local_credentials",
@@ -270,6 +280,7 @@ mod tests {
             Denial::OrgNotSelected.code(),
             Denial::NotAMember.code(),
             Denial::StaffRoleRequired.code(),
+            Denial::TicketNotYours.code(),
             Denial::AccountInactive.code(),
             Denial::AccountLocked.code(),
             Denial::NoLocalCredentials.code(),

@@ -103,7 +103,12 @@ fn reporter_or_staff(context: &RequestContext, ticket: &Ticket) -> AppResult<()>
     if context.is_staff() || is_reporter(context, ticket) {
         return Ok(());
     }
-    Err(AppError::Forbidden(Denial::StaffRoleRequired))
+    // `ticket.not_yours` e non `org.staff_role_required`: al coinquilino non
+    // manca un ruolo — nessun ruolo gli darebbe questa operazione — gli manca
+    // l'essere stato lui a segnalare. Due codici perché i due rimedi sono
+    // diversi, e un client che instradasse sul primo direbbe all'utente di
+    // chiedere permessi che non servono.
+    Err(AppError::Forbidden(Denial::TicketNotYours))
 }
 
 /// Annullare tocca allo staff sempre, a chi ha segnalato **solo finché nessuno ci
@@ -113,10 +118,16 @@ fn canceller(context: &RequestContext, ticket: &Ticket) -> AppResult<()> {
     if context.is_staff() {
         return Ok(());
     }
-    if is_reporter(context, ticket) && matches!(ticket.status(), TicketStatus::Open) {
-        return Ok(());
+    if !is_reporter(context, ticket) {
+        return Err(AppError::Forbidden(Denial::TicketNotYours));
     }
-    Err(AppError::Forbidden(Denial::StaffRoleRequired))
+    if !matches!(ticket.status(), TicketStatus::Open) {
+        // Qui il primo codice è invece **vero**: la segnalazione è sua, ma
+        // annullarne una già in lavorazione richiede davvero lo staff, perché
+        // butterebbe via il lavoro di qualcun altro.
+        return Err(AppError::Forbidden(Denial::StaffRoleRequired));
+    }
+    Ok(())
 }
 
 fn is_reporter(context: &RequestContext, ticket: &Ticket) -> bool {
@@ -430,7 +441,13 @@ mod tests {
         assert!(reporter_or_staff(&owner(), &ticket).is_ok());
         // Un coinquilino sullo stesso contratto vede la segnalazione ma non può
         // aggiornarla: è la `USING` di `tickets_update`, non una scelta di qui.
-        assert!(reporter_or_staff(&tenant(UserId::generate()), &ticket).is_err());
+        let refused = reporter_or_staff(&tenant(UserId::generate()), &ticket)
+            .expect_err("il coinquilino non riapre");
+        assert_eq!(
+            refused.code(),
+            "ticket.not_yours",
+            "al coinquilino non manca un ruolo, gli manca l'aver segnalato"
+        );
     }
 
     /// Una segnalazione senza `reported_by` — l'utente è stato cancellato, e la
@@ -451,9 +468,13 @@ mod tests {
         ticket
             .assign(UserId::generate(), Utc::now())
             .expect("assegnato");
-        assert!(
-            canceller(&tenant(reporter), &ticket).is_err(),
-            "annullare una segnalazione già in lavorazione butta via il lavoro di un altro"
+        let refused = canceller(&tenant(reporter), &ticket).expect_err(
+            "annullare una segnalazione già in lavorazione butta via il lavoro di un altro",
+        );
+        assert_eq!(
+            refused.code(),
+            "org.staff_role_required",
+            "qui il ruolo serve davvero: la segnalazione è sua, ma è in lavorazione"
         );
         assert!(
             canceller(&owner(), &ticket).is_ok(),
