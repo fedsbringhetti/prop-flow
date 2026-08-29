@@ -17,6 +17,11 @@ use propflow_application::use_cases::property::{
     ArchiveProperty, CreateProperty, GetProperty, ListProperties, UpdateProperty,
 };
 use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
+use propflow_application::use_cases::ticket::{
+    AssignTicket, CancelTicket, CloseTicket, GetTicket, ListTicketMessages, ListTickets,
+    OpenTicket, PostTicketMessage, ReopenTicket, StartTicketWork, SuspendTicket, TriageTicket,
+    UpdateTicketCosts,
+};
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_infrastructure::DatabasePools;
 
@@ -54,6 +59,24 @@ pub struct AppState {
     pub list_documents: Arc<ListDocuments>,
     pub download_document: Arc<DownloadDocument>,
     pub archive_document: Arc<ArchiveDocument>,
+
+    pub open_ticket: Arc<OpenTicket>,
+    pub get_ticket: Arc<GetTicket>,
+    pub list_tickets: Arc<ListTickets>,
+    pub update_ticket_costs: Arc<UpdateTicketCosts>,
+    pub post_ticket_message: Arc<PostTicketMessage>,
+    pub list_ticket_messages: Arc<ListTicketMessages>,
+    /// Una transizione per caso d'uso: ognuna autorizza in modo proprio — la
+    /// riapertura spetta a chi ha segnalato, l'annullamento a lui solo finché
+    /// nessuno ci ha messo mano — e ognuna ha effetti che un `PATCH` sullo stato
+    /// produrrebbe di soppiatto.
+    pub triage_ticket: Arc<TriageTicket>,
+    pub assign_ticket: Arc<AssignTicket>,
+    pub start_ticket_work: Arc<StartTicketWork>,
+    pub suspend_ticket: Arc<SuspendTicket>,
+    pub close_ticket: Arc<CloseTicket>,
+    pub reopen_ticket: Arc<ReopenTicket>,
+    pub cancel_ticket: Arc<CancelTicket>,
 
     pub invite_tenant: Arc<InviteTenant>,
     pub revoke_invitation: Arc<RevokeInvitation>,
@@ -183,6 +206,49 @@ impl AppState {
                 presign_ttl_seconds,
             )),
             archive_document: Arc::new(ArchiveDocument::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            open_ticket: Arc::new(OpenTicket::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_ticket: Arc::new(GetTicket::new(Arc::clone(&unit_of_work))),
+            list_tickets: Arc::new(ListTickets::new(Arc::clone(&unit_of_work))),
+            update_ticket_costs: Arc::new(UpdateTicketCosts::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            post_ticket_message: Arc::new(PostTicketMessage::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            list_ticket_messages: Arc::new(ListTicketMessages::new(Arc::clone(&unit_of_work))),
+            triage_ticket: Arc::new(TriageTicket::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            assign_ticket: Arc::new(AssignTicket::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            start_ticket_work: Arc::new(StartTicketWork::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            suspend_ticket: Arc::new(SuspendTicket::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            close_ticket: Arc::new(CloseTicket::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            reopen_ticket: Arc::new(ReopenTicket::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            cancel_ticket: Arc::new(CancelTicket::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),

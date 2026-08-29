@@ -74,6 +74,7 @@ pub fn router(
         .merge(routes::leases::router())
         .merge(routes::invitations::router())
         .merge(routes::documents::router())
+        .merge(routes::tickets::router())
         .merge(SwaggerUi::new("/docs").url("/openapi.json", openapi::ApiDoc::openapi()))
         .layer(RequestBodyLimitLayer::new(body_limit_bytes));
 
