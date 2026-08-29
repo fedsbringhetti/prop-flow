@@ -1696,29 +1696,56 @@ async fn the_relationship_runs_in_both_directions() {
     assert_eq!(status, StatusCode::OK, "corpo: {staff_thread}");
     assert_eq!(staff_thread["items"].as_array().map(Vec::len), Some(3));
 
-    // 6. Il proprietario registra il costo sostenuto e chiude.
+    // 6. Il proprietario registra stima e costo sostenuto, e chiude dicendo cosa
+    //    è stato fatto.
     let (status, priced) = app
         .send(
             "PATCH",
             &format!("/api/v1/tickets/{ticket}"),
             Some(&owner),
-            Some(serde_json::json!({ "actual_cost": "180.00" })),
+            Some(serde_json::json!({ "estimated_cost": "200.00", "actual_cost": "180.00" })),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {priced}");
+    assert_eq!(priced["estimated_cost"], "200.00", "corpo: {priced}");
     assert_eq!(priced["actual_cost"], "180.00", "corpo: {priced}");
     assert_eq!(priced["currency"], "EUR");
+
+    // L'inquilino vede il costo sostenuto e **non** la stima: quella è la cifra
+    // di una trattativa con un fornitore e non riguarda chi abita la casa.
+    let (status, seen_by_tenant) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {seen_by_tenant}");
+    assert_eq!(
+        seen_by_tenant["actual_cost"], "180.00",
+        "corpo: {seen_by_tenant}"
+    );
+    assert!(
+        seen_by_tenant["estimated_cost"].is_null(),
+        "la stima è arrivata all'inquilino: {seen_by_tenant}"
+    );
 
     let (status, closed) = app
         .post_auth(
             &format!("/api/v1/tickets/{ticket}/close"),
             &owner,
-            serde_json::json!({}),
+            serde_json::json!({ "resolution_notes": "sostituita la valvola di sicurezza" }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {closed}");
     assert_eq!(closed["status"], "closed");
     assert!(closed["closed_at"].is_string(), "corpo: {closed}");
+    assert_eq!(
+        closed["resolution_notes"],
+        "sostituita la valvola di sicurezza"
+    );
 
     // 7. Il guasto torna: **l'inquilino** riapre. È la sola transizione che può
     //    eseguire, ed è ciò che rende la segnalazione un rapporto.
@@ -1736,6 +1763,12 @@ async fn the_relationship_runs_in_both_directions() {
     assert!(
         reopened["closed_at"].is_null(),
         "una segnalazione riaperta con una data di chiusura è una riga che mente: {reopened}"
+    );
+    // Riaprire disfa la chiusura, e la nota di risoluzione ne fa parte: una
+    // segnalazione aperta che dichiara come è stata risolta direbbe il falso.
+    assert!(
+        reopened.get("resolution_notes").is_none(),
+        "la nota di risoluzione è sopravvissuta alla riapertura: {reopened}"
     );
 
     // 8. Lo storico mostra la catena intera, riapertura compresa.
@@ -1856,6 +1889,118 @@ async fn a_tenant_can_speak_but_not_drive_the_handling() {
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {cancelled}");
     assert_eq!(cancelled["status"], "cancelled");
+}
+
+/// Chi condivide il contratto vede la segnalazione ma non la riapre, e il codice
+/// glielo dice per quello che è.
+///
+/// La `USING` di `tickets_update` ammette staff, chi ha segnalato e chi è
+/// assegnato: non passa dal contratto. `org.staff_role_required` direbbe al
+/// coinquilino che gli manca un ruolo, mentre gli manca l'essere stato lui a
+/// segnalare — e nessun ruolo glielo darebbe.
+#[tokio::test]
+async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-coinquilini").await;
+    let property = create_property(&app, &owner, "Casa condivisa").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    // Due inquilini sullo stesso contratto.
+    let mut tokens = Vec::new();
+    for prefix in ["coinquilino-uno", "coinquilino-due"] {
+        let email = common::unique_email(prefix);
+        let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+        let (token, _, _) = common::register_and_login_with_email(&app, &email).await;
+        let (status, accepted) = app
+            .post_auth(
+                "/api/v1/auth/accept-invitation",
+                &token,
+                serde_json::json!({ "token": accept_token }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+        tokens.push(token);
+    }
+    let (reporter, cotenant) = (&tokens[0], &tokens[1]);
+
+    let (ticket, _) = open_ticket(
+        &app,
+        reporter,
+        Some(&owner_org),
+        &property,
+        Some(&lease),
+        "Perdita in cucina",
+    )
+    .await;
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/close"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    // Il coinquilino la vede: gliela concede can_access_ticket attraverso il
+    // contratto.
+    let (status, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(cotenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+
+    // Ma non la riapre, e il codice non parla di ruoli.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(cotenant),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "ticket.not_yours", "corpo: {problem}");
+
+    // Chi ha segnalato invece sì.
+    let (status, reopened) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(reporter),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
+}
+
+/// Il riferimento riparte da uno in ogni organizzazione, e non dice quante
+/// segnalazioni esistono sulla piattaforma.
+#[tokio::test]
+async fn the_reference_restarts_from_one_in_every_organization() {
+    let app = require_app!();
+
+    let mut references = Vec::new();
+    for prefix in ["riferimenti-alfa", "riferimenti-beta"] {
+        let (owner, _) = common::register_and_login(&app, prefix).await;
+        let property = create_property(&app, &owner, "Immobile numerato").await;
+        let (_, first) = open_ticket(&app, &owner, None, &property, None, "La prima").await;
+        let (_, second) = open_ticket(&app, &owner, None, &property, None, "La seconda").await;
+        references.push((first, second));
+    }
+
+    for (first, second) in &references {
+        assert_eq!(first, "TK-000001", "ogni organizzazione riparte da uno");
+        assert_eq!(second, "TK-000002");
+    }
+    assert_eq!(
+        references[0], references[1],
+        "due organizzazioni indipendenti devono numerare allo stesso modo"
+    );
 }
 
 /// Una segnalazione di un'altra organizzazione non esiste, e l'elenco non la

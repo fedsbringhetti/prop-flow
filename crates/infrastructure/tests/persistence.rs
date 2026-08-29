@@ -1387,10 +1387,17 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
         .await
         .expect("ripresa");
     let closed = CloseTicket::new(factory(), clock())
-        .execute(&context, CloseTicketCommand { id: ticket.id() })
+        .execute(
+            &context,
+            CloseTicketCommand {
+                id: ticket.id(),
+                resolution_notes: Some("sostituita la valvola".to_owned()),
+            },
+        )
         .await
         .expect("chiusa");
     assert!(closed.closed_at().is_some());
+    assert_eq!(closed.resolution_notes(), Some("sostituita la valvola"));
 
     let reopened = ReopenTicket::new(factory(), clock())
         .execute(&context, ReopenTicketCommand { id: ticket.id() })
@@ -1411,6 +1418,14 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
         .expect("query")
         .expect("visibile");
     assert_eq!(read.closed_at(), None, "closed_at è rimasto in database");
+    // Riaprire disfa la chiusura, e la nota di risoluzione fa parte della
+    // chiusura: una segnalazione `open` che dichiara come è stata risolta
+    // direbbe il falso, e la risposta la vede anche chi ha segnalato.
+    assert_eq!(
+        read.resolution_notes(),
+        None,
+        "la nota di risoluzione è sopravvissuta alla riapertura"
+    );
 
     let history = uow
         .tickets()
@@ -1488,6 +1503,8 @@ async fn the_application_role_cannot_move_a_ticket_to_another_property() {
         "UPDATE app.tickets SET status = 'closed', closed_at = now() WHERE id = $1",
         "UPDATE app.tickets SET actual_cost = 10.00 WHERE id = $1",
         "UPDATE app.tickets SET assigned_to = NULL WHERE id = $1",
+        // Concessa dalla 0021: la chiusura registra come è stata risolta.
+        "UPDATE app.tickets SET resolution_notes = 'fatto' WHERE id = $1",
     ] {
         let allowed = sqlx::query(statement)
             .bind(uuid::Uuid::now_v7())
@@ -1499,6 +1516,80 @@ async fn the_application_role_cannot_move_a_ticket_to_another_property() {
             allowed.err()
         );
     }
+}
+
+/// Il contatore dei riferimenti non è manipolabile dal ruolo applicativo.
+///
+/// Lo scrive il trigger `tg_ticket_reference`, che è `SECURITY DEFINER`. Al ruolo
+/// applicativo i privilegi predefiniti della 0015 lasciano `INSERT` e `UPDATE` a
+/// livello di tabella, ma l'unica policy è di lettura: la Row Level Security
+/// rifiuta l'inserimento e l'aggiornamento non trova righe. Senza questa
+/// asimmetria un membro qualsiasi potrebbe riportare il contatore indietro e far
+/// collidere il prossimo riferimento con uno già emesso.
+#[tokio::test]
+async fn the_reference_counter_is_written_by_the_trigger_and_by_nobody_else() {
+    let env = require_db!();
+
+    let insert = sqlx::query(
+        "INSERT INTO app.ticket_reference_counters (org_id, last_number) VALUES ($1, 999)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(env.pools.application())
+    .await;
+    let error = insert.expect_err("l'inserimento doveva essere rifiutato");
+    assert!(
+        error.to_string().contains("row-level security"),
+        "atteso un rifiuto della RLS, ottenuto: {error}"
+    );
+
+    // L'aggiornamento non fallisce: semplicemente non vede alcuna riga, perché
+    // l'unica policy è di SELECT.
+    let updated = sqlx::query("UPDATE app.ticket_reference_counters SET last_number = 0")
+        .execute(env.pools.application())
+        .await
+        .expect("l'aggiornamento non deve dare errore");
+    assert_eq!(
+        updated.rows_affected(),
+        0,
+        "il ruolo applicativo ha riportato indietro un contatore"
+    );
+}
+
+/// Il riferimento riparte da uno in ogni organizzazione.
+///
+/// Prima della `0021` la sequenza era una sola per il cluster, e il numero
+/// diceva quante segnalazioni esistono sull'intera piattaforma.
+#[tokio::test]
+async fn the_reference_is_numbered_per_organization() {
+    let env = require_db!();
+    let alfa = register_owner(&env, "riferimento-alfa").await;
+    let beta = register_owner(&env, "riferimento-beta").await;
+
+    let mut emitted = Vec::new();
+    for context in [&alfa, &beta] {
+        let property = a_property(&env, context, "Numerazione").await;
+        let first = open_ticket(&env, context, property, None, "La prima").await;
+        let second = open_ticket(&env, context, property, None, "La seconda").await;
+        emitted.push((
+            first
+                .reference()
+                .map(TicketReference::as_str)
+                .map(str::to_owned),
+            second
+                .reference()
+                .map(TicketReference::as_str)
+                .map(str::to_owned),
+        ));
+    }
+
+    assert_eq!(
+        emitted[0],
+        (Some("TK-000001".to_owned()), Some("TK-000002".to_owned()))
+    );
+    assert_eq!(
+        emitted[0], emitted[1],
+        "due organizzazioni indipendenti devono numerare allo stesso modo"
+    );
 }
 
 /// Una segnalazione di un'altra organizzazione non esiste.
