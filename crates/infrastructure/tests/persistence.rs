@@ -30,6 +30,12 @@ use propflow_application::use_cases::property::{
     ListPropertiesQuery,
 };
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
+use propflow_application::use_cases::ticket::{
+    AssignTicket, AssignTicketCommand, CloseTicket, CloseTicketCommand, GetTicket, ListTickets,
+    ListTicketsQuery, OpenTicket, OpenTicketCommand, ReopenTicket, ReopenTicketCommand,
+    StartTicketWork, StartTicketWorkCommand, SuspendTicket, SuspendTicketCommand, TriageTicket,
+    TriageTicketCommand,
+};
 use propflow_domain::RequestContext;
 use propflow_domain::document::{AttachmentOwner, DocumentKind};
 use propflow_domain::identity::OrgRole;
@@ -37,6 +43,10 @@ use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
+use propflow_domain::ticket::{
+    TicketCategory, TicketDescription, TicketPriority, TicketReference, TicketStatus,
+    TicketStatusChange, TicketTitle, WaitingOn,
+};
 use propflow_infrastructure::security::OpaqueTokenGenerator;
 
 fn address(city: &str) -> Address {
@@ -1210,4 +1220,440 @@ async fn uploading_a_document_writes_the_event_in_the_same_transaction() {
         "il nome del file è finito nell'evento: {payload}"
     );
     assert!(payload.contains("lease"), "payload: {payload}");
+}
+
+// ---------------------------------------------------------------------------
+// Segnalazioni
+// ---------------------------------------------------------------------------
+
+/// Apre una segnalazione sull'immobile indicato e la restituisce.
+async fn open_ticket(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+    lease_id: Option<propflow_domain::shared::LeaseId>,
+    title: &str,
+) -> propflow_domain::ticket::Ticket {
+    OpenTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            OpenTicketCommand {
+                property_id,
+                room_id: None,
+                lease_id,
+                title: TicketTitle::parse(title).expect("titolo valido"),
+                description: TicketDescription::parse("Descrizione di prova")
+                    .expect("descrizione valida"),
+                category: None,
+                priority: None,
+            },
+        )
+        .await
+        .expect("segnalazione aperta")
+}
+
+/// Crea un immobile e restituisce il suo identificatore.
+async fn a_property(env: &common::TestEnv, context: &RequestContext, city: &str) -> PropertyId {
+    CreateProperty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            CreatePropertyCommand {
+                label: format!("Immobile {city}"),
+                property_type: PropertyType::Apartment,
+                address: address(city),
+            },
+        )
+        .await
+        .expect("immobile creato")
+        .id()
+}
+
+/// Il riferimento lo assegna il **database**, non il dominio.
+///
+/// È l'unico identificatore del progetto che non nasce da `generate()`: la
+/// `INSERT` non nomina la colonna, il `DEFAULT` attinge a
+/// `app.ticket_reference_seq` e la `RETURNING` lo riporta indietro. Se qualcuno
+/// tornasse a generarlo nell'applicazione, la sequenza avanzerebbe comunque e le
+/// collisioni su `tickets_reference_uk` arriverebbero mesi dopo.
+#[tokio::test]
+async fn the_reference_comes_back_from_the_insert() {
+    let env = require_db!();
+    let context = register_owner(&env, "ticket-reference").await;
+    let property = a_property(&env, &context, "Trento").await;
+
+    let ticket = open_ticket(&env, &context, property, None, "Il boiler perde").await;
+
+    let reference = ticket.reference().expect("assegnato dalla INSERT");
+    assert!(
+        reference.as_str().starts_with("TK-"),
+        "riferimento inatteso: {reference}"
+    );
+
+    // E la riga riletta porta lo stesso riferimento: non è un valore inventato
+    // dal caso d'uso e mai scritto.
+    let mut uow = env.factory.begin(&context).await.expect("transazione");
+    let read = uow
+        .tickets()
+        .find_by_id(ticket.id())
+        .await
+        .expect("query riuscita")
+        .expect("visibile a chi l'ha aperta");
+    assert_eq!(
+        read.reference().map(TicketReference::as_str),
+        Some(reference.as_str())
+    );
+}
+
+/// Lo storico lo scrive un trigger, e lo scrive **già all'inserimento**.
+///
+/// `tg_ticket_status_history` scatta `AFTER INSERT OR UPDATE OF status`: la riga
+/// `NULL → open` esiste senza che il caso d'uso ne aggiunga una. Se qualcuno la
+/// scrivesse anche dall'applicazione, qui se ne vedrebbero due — e comunque
+/// `ticket_status_history` non ha una policy di `INSERT`, quindi la scrittura
+/// applicativa verrebbe rifiutata.
+#[tokio::test]
+async fn the_history_writes_itself_from_the_first_row() {
+    let env = require_db!();
+    let context = register_owner(&env, "ticket-storico").await;
+    let property = a_property(&env, &context, "Ancona").await;
+    let ticket = open_ticket(&env, &context, property, None, "Storico").await;
+
+    let mut uow = env.factory.begin(&context).await.expect("transazione");
+    let history = uow
+        .tickets()
+        .list_status_history(ticket.id())
+        .await
+        .expect("query riuscita");
+
+    assert_eq!(history.len(), 1, "storico: {history:?}");
+    assert_eq!(history[0].from_status(), None);
+    assert_eq!(history[0].to_status(), TicketStatus::Open);
+    assert_eq!(
+        history[0].changed_by(),
+        context.user_id(),
+        "`changed_by` lo riempie app.current_user_id() dal contesto della richiesta"
+    );
+}
+
+/// Il ciclo intero, con la riapertura, lascia nello storico la catena completa.
+#[tokio::test]
+async fn the_whole_cycle_leaves_its_trace_in_the_history() {
+    let env = require_db!();
+    let context = register_owner(&env, "ticket-ciclo").await;
+    let property = a_property(&env, &context, "Perugia").await;
+    let ticket = open_ticket(&env, &context, property, None, "Ciclo completo").await;
+    let assignee = context.user_id().expect("utente");
+
+    let factory = || Arc::clone(&env.factory);
+    let clock = || Arc::clone(&env.clock) as Arc<dyn propflow_domain::ports::Clock>;
+
+    TriageTicket::new(factory(), clock())
+        .execute(
+            &context,
+            TriageTicketCommand {
+                id: ticket.id(),
+                category: TicketCategory::Plumbing,
+                priority: TicketPriority::High,
+            },
+        )
+        .await
+        .expect("classificata");
+    AssignTicket::new(factory(), clock())
+        .execute(
+            &context,
+            AssignTicketCommand {
+                id: ticket.id(),
+                assignee,
+            },
+        )
+        .await
+        .expect("assegnata");
+    StartTicketWork::new(factory(), clock())
+        .execute(&context, StartTicketWorkCommand { id: ticket.id() })
+        .await
+        .expect("avviata");
+    SuspendTicket::new(factory(), clock())
+        .execute(
+            &context,
+            SuspendTicketCommand {
+                id: ticket.id(),
+                waiting_on: WaitingOn::Tenant,
+            },
+        )
+        .await
+        .expect("sospesa");
+    StartTicketWork::new(factory(), clock())
+        .execute(&context, StartTicketWorkCommand { id: ticket.id() })
+        .await
+        .expect("ripresa");
+    let closed = CloseTicket::new(factory(), clock())
+        .execute(&context, CloseTicketCommand { id: ticket.id() })
+        .await
+        .expect("chiusa");
+    assert!(closed.closed_at().is_some());
+
+    let reopened = ReopenTicket::new(factory(), clock())
+        .execute(&context, ReopenTicketCommand { id: ticket.id() })
+        .await
+        .expect("riaperta");
+    assert_eq!(reopened.status(), TicketStatus::Open);
+    // La trappola: `tickets_closed_ck` vincola una sola direzione, quindi il
+    // database accetterebbe senza dire niente una segnalazione `open` con una data
+    // di chiusura nel passato. Deve azzerarla il dominio, e la riga riletta lo
+    // conferma — non solo l'aggregato in memoria.
+    assert_eq!(reopened.closed_at(), None);
+
+    let mut uow = env.factory.begin(&context).await.expect("transazione");
+    let read = uow
+        .tickets()
+        .find_by_id(ticket.id())
+        .await
+        .expect("query")
+        .expect("visibile");
+    assert_eq!(read.closed_at(), None, "closed_at è rimasto in database");
+
+    let history = uow
+        .tickets()
+        .list_status_history(ticket.id())
+        .await
+        .expect("query");
+    let chain: Vec<TicketStatus> = history.iter().map(TicketStatusChange::to_status).collect();
+    assert_eq!(
+        chain,
+        vec![
+            TicketStatus::Open,
+            TicketStatus::Triaged,
+            TicketStatus::Assigned,
+            TicketStatus::InProgress,
+            TicketStatus::WaitingTenant,
+            TicketStatus::InProgress,
+            TicketStatus::Closed,
+            TicketStatus::Open,
+        ],
+        "la catena degli stati non è quella percorsa"
+    );
+}
+
+/// Le colonne strutturali non sono più scrivibili dal ruolo applicativo.
+///
+/// È la migration `0020`. Il privilegio è verificato **prima** delle policy,
+/// quindi il rifiuto arriva come `permission denied` anche su una riga che non
+/// esiste: non serve costruire il caso reale per provare che la porta è chiusa.
+/// Il precedente è
+/// `the_application_role_cannot_repoint_a_lease_party_to_another_lease`.
+#[tokio::test]
+async fn the_application_role_cannot_move_a_ticket_to_another_property() {
+    let env = require_db!();
+
+    for column in ["property_id", "room_id", "lease_id"] {
+        let statement = match column {
+            "property_id" => "UPDATE app.tickets SET property_id = $1 WHERE id = $2",
+            "room_id" => "UPDATE app.tickets SET room_id = $1 WHERE id = $2",
+            _ => "UPDATE app.tickets SET lease_id = $1 WHERE id = $2",
+        };
+        let error = sqlx::query(statement)
+            .bind(uuid::Uuid::now_v7())
+            .bind(uuid::Uuid::now_v7())
+            .execute(env.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "su `{column}` atteso un rifiuto per privilegi, ottenuto: {error}"
+        );
+    }
+
+    // Nemmeno il testo con cui una persona ha descritto il guasto: il thread
+    // esiste apposta per correggere il tiro.
+    for statement in [
+        "UPDATE app.tickets SET title = 'riscritto' WHERE id = $1",
+        "UPDATE app.tickets SET description = 'riscritta' WHERE id = $1",
+        "UPDATE app.tickets SET reference = 'TK-999999' WHERE id = $1",
+        "UPDATE app.tickets SET reported_by = NULL WHERE id = $1",
+    ] {
+        let error = sqlx::query(statement)
+            .bind(uuid::Uuid::now_v7())
+            .execute(env.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "`{statement}` doveva essere negato, ottenuto: {error}"
+        );
+    }
+
+    // Ciò che è il lavoro dell'applicazione resta invece concesso: la restrizione
+    // riguarda l'incoerenza strutturale, non l'operazione.
+    for statement in [
+        "UPDATE app.tickets SET status = 'closed', closed_at = now() WHERE id = $1",
+        "UPDATE app.tickets SET actual_cost = 10.00 WHERE id = $1",
+        "UPDATE app.tickets SET assigned_to = NULL WHERE id = $1",
+    ] {
+        let allowed = sqlx::query(statement)
+            .bind(uuid::Uuid::now_v7())
+            .execute(env.pools.application())
+            .await;
+        assert!(
+            allowed.is_ok(),
+            "`{statement}` non doveva essere negato: {:?}",
+            allowed.err()
+        );
+    }
+}
+
+/// Una segnalazione di un'altra organizzazione non esiste.
+///
+/// La Row Level Security la nasconde, e il caso d'uso traduce l'assenza in `404`
+/// invece di confermare che esiste ma non è sua.
+#[tokio::test]
+async fn a_ticket_of_another_organization_is_invisible() {
+    let env = require_db!();
+    let alfa = register_owner(&env, "ticket-alfa").await;
+    let beta = register_owner(&env, "ticket-beta").await;
+
+    let property = a_property(&env, &alfa, "Genova").await;
+    let ticket = open_ticket(&env, &alfa, property, None, "Solo di Alfa").await;
+
+    let error = GetTicket::new(Arc::clone(&env.factory))
+        .execute(&beta, ticket.id())
+        .await
+        .expect_err("Beta non deve vederla");
+    assert_eq!(error.code(), "ticket.not_found");
+
+    let page = ListTickets::new(Arc::clone(&env.factory))
+        .execute(&beta, ListTicketsQuery::default())
+        .await
+        .expect("elenco riuscito");
+    assert!(
+        page.items.is_empty(),
+        "Beta vede {} segnalazioni",
+        page.items.len()
+    );
+}
+
+/// Una stanza o un contratto di un **altro** immobile vengono rifiutati dal
+/// service layer, perché lo schema non li rifiuta.
+///
+/// Non esiste alcun vincolo fra `room_id`, `lease_id` e `property_id`: il trigger
+/// `assert_org_matches_property` verifica soltanto l'`org_id`. Riprodotto su
+/// database reale: l'inserimento diretto di una segnalazione con la stanza di un
+/// altro immobile passa senza una parola.
+#[tokio::test]
+async fn a_ticket_refuses_a_room_or_a_lease_of_another_property() {
+    let env = require_db!();
+    let context = register_owner(&env, "ticket-coerenza").await;
+
+    let target = a_property(&env, &context, "Livorno").await;
+    let other = a_property(&env, &context, "Pisa").await;
+
+    let room = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &context,
+            CreateRoomCommand {
+                property_id: other,
+                name: "Camera altrove".to_owned(),
+                attributes: RoomChanges::default(),
+            },
+        )
+        .await
+        .expect("stanza creata");
+    let lease = draft_lease(
+        &env,
+        &context,
+        other,
+        None,
+        days_from_today(0),
+        Some(days_from_today(365)),
+    )
+    .await;
+
+    let open = OpenTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let command = |room_id, lease_id| OpenTicketCommand {
+        property_id: target,
+        room_id,
+        lease_id,
+        title: TicketTitle::parse("Incoerente").expect("titolo"),
+        description: TicketDescription::parse("Riferimenti di un altro immobile")
+            .expect("descrizione"),
+        category: None,
+        priority: None,
+    };
+
+    let error = open
+        .execute(&context, command(Some(room.id()), None))
+        .await
+        .expect_err("una stanza di un altro immobile va rifiutata");
+    assert_eq!(error.code(), "validation.failed");
+
+    let error = open
+        .execute(&context, command(None, Some(lease.id())))
+        .await
+        .expect_err("un contratto di un altro immobile va rifiutato");
+    assert_eq!(error.code(), "validation.failed");
+}
+
+/// Comando ed evento sono atomici, e l'evento **non trasporta il testo**.
+///
+/// Titolo e descrizione sono ciò che una persona ha scritto su un guasto in casa
+/// propria: un evento pubblicato su un broker è un dato che viaggia e si conserva
+/// (regola 18).
+#[tokio::test]
+async fn opening_a_ticket_writes_the_event_without_the_free_text() {
+    let env = require_db!();
+    let context = register_owner(&env, "ticket-evento").await;
+    let property = a_property(&env, &context, "Rimini").await;
+    let ticket = open_ticket(
+        &env,
+        &context,
+        property,
+        None,
+        "Perdita nel bagno di Mario Rossi",
+    )
+    .await;
+
+    let row: (String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT event_type, aggregate_type, payload
+           FROM app.domain_events
+          WHERE aggregate_id = $1",
+    )
+    .bind(ticket.id().as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("evento presente");
+
+    assert_eq!(row.0, "ticket.opened");
+    assert_eq!(row.1, "Ticket");
+    let payload = row.2.to_string();
+    assert!(
+        !payload.contains("Mario") && !payload.contains("bagno"),
+        "il testo libero è finito nell'evento: {payload}"
+    );
+    assert!(payload.contains("other"), "payload: {payload}");
+}
+
+/// Un messaggio del thread non si modifica e non si cancella, nemmeno in modo
+/// soft: `app.ticket_messages` ha solo `_select` e `_insert`.
+///
+/// Il test non verifica il nostro codice — che non offre nemmeno il metodo — ma
+/// **il database**: se un giorno qualcuno aggiungesse una policy di `UPDATE`, la
+/// proprietà su cui il thread si regge cambierebbe senza che nulla lo dica.
+#[tokio::test]
+async fn a_thread_message_can_never_be_rewritten() {
+    let env = require_db!();
+
+    let policies: Vec<(String,)> = sqlx::query_as(
+        "SELECT polname FROM pg_policy
+          WHERE polrelid = 'app.ticket_messages'::regclass
+          ORDER BY polname",
+    )
+    .fetch_all(env.pools.privileged())
+    .await
+    .expect("policy leggibili");
+
+    let names: Vec<&str> = policies.iter().map(|row| row.0.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["ticket_messages_insert", "ticket_messages_select"],
+        "una policy in più su ticket_messages cambia una proprietà del thread"
+    );
 }
