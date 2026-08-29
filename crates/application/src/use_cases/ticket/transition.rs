@@ -288,9 +288,13 @@ transition_use_case!(
     CloseTicket
 );
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CloseTicketCommand {
     pub id: TicketId,
+    /// Come è stata risolta. Facoltativo, e visibile a chiunque veda la
+    /// segnalazione: senza, l'unica traccia di cosa sia stato fatto resta il
+    /// thread, che è una conversazione e non una conclusione.
+    pub resolution_notes: Option<String>,
 }
 
 impl CloseTicket {
@@ -305,7 +309,7 @@ impl CloseTicket {
             context,
             command.id,
             staff_only,
-            |ticket, now| ticket.close(now),
+            |ticket, now| ticket.close(command.resolution_notes, now),
             no_extra_events,
         )
         .await

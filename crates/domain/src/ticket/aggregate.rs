@@ -267,6 +267,13 @@ pub struct Ticket {
     currency: Currency,
     resolved_at: Option<DateTime<Utc>>,
     closed_at: Option<DateTime<Utc>>,
+    /// Come è stata risolta, scritto da chi ha chiuso.
+    ///
+    /// È l'unico posto che risponde «com'è andata a finire»: il thread è una
+    /// conversazione, e a distanza di mesi la conclusione andrebbe dedotta
+    /// rileggendola. Viaggia in risposta a chiunque veda la segnalazione,
+    /// l'inquilino compreso.
+    resolution_notes: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     archived_at: Option<DateTime<Utc>>,
@@ -320,6 +327,7 @@ impl Ticket {
             currency: Currency::EUR,
             resolved_at: None,
             closed_at: None,
+            resolution_notes: None,
             created_at: now,
             updated_at: now,
             archived_at: None,
@@ -415,10 +423,20 @@ impl Ticket {
     ///
     /// `closed_at` è obbligatorio anche a schema (`tickets_closed_ck`): uno stato
     /// «chiuso» senza la data del fatto non direbbe quando è finito.
-    pub fn close(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
+    ///
+    /// `resolution_notes` è facoltativo e sovrascrive quello di una chiusura
+    /// precedente: la nota descrive **questa** chiusura, non tutte quelle che ci
+    /// sono state.
+    pub fn close(
+        &mut self,
+        resolution_notes: Option<String>,
+        now: DateTime<Utc>,
+    ) -> DomainResult<()> {
         if !self.status.is_working() {
             return Err(DomainError::Invariant(Invariant::TicketNotClosable));
         }
+        self.resolution_notes =
+            crate::shared::text::optional("resolution_notes", resolution_notes, 4000)?;
         self.status = TicketStatus::Closed;
         self.closed_at = Some(now);
         self.updated_at = now;
@@ -445,6 +463,13 @@ impl Ticket {
         // entrasse in uso: oggi l'applicazione non lo scrive mai, ma una riga
         // riletta può portarselo dietro e riaprire deve ripulire anche quello.
         self.resolved_at = None;
+        // La regola è una sola e si spiega in una riga: **riaprire disfa la
+        // chiusura**, e la nota di risoluzione fa parte della chiusura. Tenerla
+        // lascerebbe una segnalazione `open` che dichiara come è stata risolta,
+        // cioè una riga che dice il falso sul proprio stato — e la risposta la
+        // vede anche l'inquilino. Se quel testo deve sopravvivere alla
+        // riapertura, il posto è il thread, che non si riscrive mai.
+        self.resolution_notes = None;
         self.updated_at = now;
         Ok(())
     }
@@ -591,6 +616,10 @@ impl Ticket {
         self.closed_at
     }
     #[must_use]
+    pub fn resolution_notes(&self) -> Option<&str> {
+        self.resolution_notes.as_deref()
+    }
+    #[must_use]
     pub const fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
@@ -629,6 +658,7 @@ impl Ticket {
             currency,
             resolved_at,
             closed_at,
+            resolution_notes,
             created_at,
             updated_at,
             archived_at,
@@ -654,6 +684,7 @@ impl Ticket {
             currency,
             resolved_at,
             closed_at,
+            resolution_notes,
             created_at,
             updated_at,
             archived_at,
@@ -708,6 +739,7 @@ pub struct TicketParts {
     pub currency: Currency,
     pub resolved_at: Option<DateTime<Utc>>,
     pub closed_at: Option<DateTime<Utc>>,
+    pub resolution_notes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
@@ -766,7 +798,7 @@ mod tests {
                 },
                 &|t: &mut Ticket| t.start(Utc::now()).expect("avviato"),
             ],
-            TicketStatus::Closed => &[&|t: &mut Ticket| t.close(Utc::now()).expect("chiuso")],
+            TicketStatus::Closed => &[&|t: &mut Ticket| t.close(None, Utc::now()).expect("chiuso")],
             TicketStatus::Cancelled => {
                 &[&|t: &mut Ticket| t.cancel(Utc::now()).expect("annullato")]
             }
@@ -879,7 +911,7 @@ mod tests {
             Cancelled,
         ] {
             assert_eq!(
-                at(from).close(Utc::now()).is_ok(),
+                at(from).close(None, Utc::now()).is_ok(),
                 from.is_working(),
                 "close da {from:?}"
             );
@@ -950,7 +982,7 @@ mod tests {
     fn reopening_clears_the_closing_date() {
         let now = Utc::now();
         let mut ticket = ticket();
-        ticket.close(now).expect("chiuso");
+        ticket.close(None, now).expect("chiuso");
         assert_eq!(ticket.closed_at(), Some(now));
 
         ticket.reopen(Utc::now()).expect("riaperto");
@@ -962,10 +994,45 @@ mod tests {
         );
     }
 
+    /// Chiudere registra come è stata risolta; riaprire disfa la chiusura, e la
+    /// nota fa parte della chiusura. Una segnalazione `open` che dichiara come è
+    /// stata risolta direbbe il falso sul proprio stato, e la risposta la vede
+    /// anche chi ha segnalato.
+    #[test]
+    fn closing_records_the_resolution_and_reopening_takes_it_away() {
+        let mut ticket = ticket();
+        ticket
+            .close(Some("  sostituita la valvola  ".to_owned()), Utc::now())
+            .expect("chiusa");
+        assert_eq!(ticket.resolution_notes(), Some("sostituita la valvola"));
+
+        ticket.reopen(Utc::now()).expect("riaperta");
+        assert_eq!(ticket.resolution_notes(), None);
+        assert_eq!(ticket.closed_at(), None);
+
+        // Una chiusura successiva descrive sé stessa, non la somma delle
+        // precedenti.
+        ticket
+            .close(Some("rifatta la guarnizione".to_owned()), Utc::now())
+            .expect("richiusa");
+        assert_eq!(ticket.resolution_notes(), Some("rifatta la guarnizione"));
+    }
+
+    /// Una nota vuota o di soli spazi non è una nota: diventa `None`, così il
+    /// database non accumula la distinzione priva di senso fra `''` e `NULL`.
+    #[test]
+    fn a_blank_resolution_note_is_no_note() {
+        let mut ticket = ticket();
+        ticket
+            .close(Some("   ".to_owned()), Utc::now())
+            .expect("chiusa");
+        assert_eq!(ticket.resolution_notes(), None);
+    }
+
     #[test]
     fn a_reopened_ticket_can_run_the_whole_cycle_again() {
         let mut ticket = ticket();
-        ticket.close(Utc::now()).expect("chiuso");
+        ticket.close(None, Utc::now()).expect("chiuso");
         ticket.reopen(Utc::now()).expect("riaperto");
         ticket
             .triage(
@@ -1085,7 +1152,7 @@ mod tests {
             let _ = ticket.assign(UserId::generate(), now);
             let _ = ticket.start(now);
             let _ = ticket.wait_for(WaitingOn::Owner, now);
-            let _ = ticket.close(now);
+            let _ = ticket.close(None, now);
             let _ = ticket.reopen(now);
             let _ = ticket.cancel(now);
             assert_ne!(ticket.status(), TicketStatus::Resolved);

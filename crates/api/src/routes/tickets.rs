@@ -301,6 +301,22 @@ pub struct UpdateTicketCostsRequest {
     pub actual_cost: Patch<Decimal>,
 }
 
+/// Corpo della chiusura.
+///
+/// Tutti i campi sono facoltativi, ma il corpo JSON va inviato — anche solo
+/// `{}` — come per la disdetta di un contratto.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct CloseTicketRequest {
+    /// Come è stata risolta. Visibile a chiunque veda la segnalazione,
+    /// l'inquilino compreso: è la risposta a «com'è andata a finire», che
+    /// altrimenti andrebbe dedotta rileggendo il thread.
+    ///
+    /// Una riapertura la **cancella**: riaprire disfa la chiusura, e la nota fa
+    /// parte della chiusura.
+    #[serde(default)]
+    pub resolution_notes: Option<String>,
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PostTicketMessageRequest {
     pub body: String,
@@ -335,6 +351,9 @@ pub struct TicketResponse {
     pub actual_cost: Option<String>,
     pub currency: String,
     pub closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Come è stata risolta, se chi ha chiuso lo ha scritto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_notes: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -367,6 +386,7 @@ impl TicketResponse {
                 .map(|money| format_amount(money.amount())),
             currency: ticket.currency().as_str().to_owned(),
             closed_at: ticket.closed_at(),
+            resolution_notes: ticket.resolution_notes().map(str::to_owned),
             created_at: ticket.created_at(),
             updated_at: ticket.updated_at(),
         }
@@ -836,6 +856,7 @@ async fn suspend(
 #[utoipa::path(
     post, path = "/api/v1/tickets/{id}/close", tag = "segnalazioni",
     params(("id" = Uuid, Path, description = "Identificatore della segnalazione")),
+    request_body = CloseTicketRequest,
     security(("bearer" = [])),
     responses(
         (status = 200, description = "Segnalazione chiusa", body = TicketResponse),
@@ -848,6 +869,7 @@ async fn close(
     State(state): State<AppState>,
     Authenticated(context): Authenticated,
     Path(id): Path<Uuid>,
+    Json(request): Json<CloseTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
     let ticket = state
@@ -856,6 +878,7 @@ async fn close(
             &context,
             CloseTicketCommand {
                 id: TicketId::from_uuid(id),
+                resolution_notes: request.resolution_notes,
             },
         )
         .await

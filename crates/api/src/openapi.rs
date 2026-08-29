@@ -107,6 +107,7 @@ use utoipa::{Modify, OpenApi};
         crate::routes::tickets::TriageTicketRequest,
         crate::routes::tickets::AssignTicketRequest,
         crate::routes::tickets::SuspendTicketRequest,
+        crate::routes::tickets::CloseTicketRequest,
         crate::routes::tickets::UpdateTicketCostsRequest,
         crate::routes::tickets::PostTicketMessageRequest,
         crate::routes::tickets::TicketResponse,

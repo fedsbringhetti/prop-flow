@@ -41,8 +41,8 @@ macro_rules! working_statuses {
 /// Colonne lette.
 ///
 /// **Non ci sono `ai_job_id`, `ai_suggested_category`, `ai_suggested_priority`,
-/// `ai_confidence`, `ai_analysis`, `sla_due_at`, `scheduled_at`,
-/// `resolution_notes`, `metadata` né `search_vector`.** Non è una dimenticanza:
+/// `ai_confidence`, `ai_analysis`, `sla_due_at`, `scheduled_at`, `metadata` né
+/// `search_vector`.** Non è una dimenticanza:
 /// triage AI, SLA, programmazione e ricerca full-text sono fuori dal perimetro di
 /// questa fetta (`docs/09-stato-e-roadmap.md`), il dominio non li modella, e
 /// leggere una colonna che nessuno sa interpretare significa doverla mappare su un
@@ -74,6 +74,7 @@ macro_rules! select_ticket {
            currency::text       AS currency,
            resolved_at,
            closed_at,
+           resolution_notes,
            created_at,
            updated_at,
            deleted_at
@@ -212,7 +213,8 @@ impl TicketRepository for PgUnitOfWork {
         //
         // `property_id`, `room_id`, `lease_id`, `title`, `description`,
         // `reported_by` e `reference` non ci sono e non possono esserci: il ruolo
-        // applicativo non ha più il privilegio di scriverle. Una segnalazione
+        // applicativo non ha più il privilegio di scriverle. `resolution_notes`
+        // invece sì, ed è la migration `0021` a concederla. Una segnalazione
         // aperta sull'immobile sbagliato si annulla e si riapre.
         //
         // `updated_at` non compare perché la scrive il trigger `set_updated_at`.
@@ -226,7 +228,8 @@ impl TicketRepository for PgUnitOfWork {
                     estimated_cost = $7::app.money_amount,
                     actual_cost    = $8::app.money_amount,
                     resolved_at    = $9,
-                    closed_at      = $10
+                    closed_at      = $10,
+                    resolution_notes = $11
               WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(ticket.id().as_uuid())
@@ -239,6 +242,7 @@ impl TicketRepository for PgUnitOfWork {
         .bind(ticket.actual_cost().map(|money| money.amount()))
         .bind(ticket.resolved_at())
         .bind(ticket.closed_at())
+        .bind(ticket.resolution_notes())
         .execute(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -414,6 +418,7 @@ fn map_ticket(row: PgRow) -> RepositoryResult<Ticket> {
         currency,
         resolved_at: try_get(&row, "resolved_at")?,
         closed_at: try_get(&row, "closed_at")?,
+        resolution_notes: try_get(&row, "resolution_notes")?,
         created_at,
         updated_at,
         archived_at,
