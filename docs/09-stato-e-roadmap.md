@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **27 agosto 2026**.
+Stato al **29 agosto 2026**.
 
 ## Come si usa questo documento
 
@@ -20,7 +20,7 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 19 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 20 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 23 tabelle di business più `audit_log` partizionata, 35 enum,
 6 domini, 169 indici, 64 policy RLS, 49 trigger, 4 viste, 28 funzioni.
 
@@ -47,14 +47,15 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Contratti: bozza, parti, attivazione, disdetta, stati derivati | completo |
 | Inviti: emissione, revoca, accettazione senza pool privilegiato | completo |
 | Documenti: caricamento multipart, elenco, download pre-firmato, archiviazione | completo per la fetta 1 |
+| Segnalazioni: apertura, elenco filtrato, dettaglio con storico, thread con note interne, sette transizioni, costi, allegati | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-155 test: 75 unitari di dominio, 11 applicativi, 8 di infrastruttura, 6 unitari
-del bordo HTTP, 18 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 31 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+197 test: 96 unitari di dominio, 15 applicativi, 9 di infrastruttura, 6 unitari
+del bordo HTTP, 26 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 39 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -63,23 +64,28 @@ MinIO, 31 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Segnalazioni** (`tickets`) — thread, storico, assegnazione. Il piano della
-   prima fetta è in fondo a questo documento:
-   [Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
-2. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
+1. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
    `v_charge_balances` già disponibile.
-3. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
-4. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+2. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
+3. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
    `settlements`) — la vista dei saldi esiste già.
-5. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+4. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento.
-6. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
+5. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
 
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
-archiviazione su immobili, stanze e contratti. Restano fuori, e non per
-dimenticanza, il versionamento (V2) e l'OCR (punto 5); allargare gli owner ad
-avatar, ticket, bollette e spese è additivo e si fa quando quei moduli esistono.
-Il resoconto è in fondo: [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
+archiviazione su immobili, stanze, contratti e — dal modulo delle segnalazioni —
+segnalazioni. Restano fuori, e non per dimenticanza, il versionamento (V2) e l'OCR
+(punto 4); allargare gli owner ad avatar, bollette e spese è additivo e si fa quando
+quei moduli esistono. Il resoconto è in fondo:
+[Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
+
+**Segnalazioni** è implementato nella fetta 1: apertura, elenco filtrato, dettaglio
+con lo storico degli stati, thread con note interne, le sette transizioni del ciclo di
+vita, costi e allegati. Restano fuori, e non per dimenticanza, il triage AI (punto 4),
+la ricerca full-text (V2), gli SLA, la programmazione, gli allegati sui singoli
+messaggi e le note di risoluzione. Il resoconto è in fondo:
+[Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
 
 ### Trasversali mancanti
 
@@ -111,19 +117,24 @@ cambia il contesto.
 | `retention_until` non viene applicato da nessuno | La colonna esiste e nessuna riga la valorizza; anche valorizzata, nessun job la legge. Lo schema la prevede come job applicativo e non come trigger, deliberatamente | Prima del primo dato reale soggetto a un obbligo di conservazione |
 | Il caricamento tiene il file intero in memoria | `UploadDocument` riceve `Vec<u8>` e lo passa allo storage. Con il limite di 25 MiB e poche richieste concorrenti è sostenibile; non lo è con caricamenti grandi e concorrenza alta | Quando i caricamenti superano le decine di MiB, o quando il profilo di memoria dell'API lo mostra. Lo streaming verso lo storage richiede di cambiare la firma della porta |
 | Il caricamento apre due transazioni | La prima verifica che l'owner sia visibile prima di scrivere l'oggetto, la seconda registra la riga: l'oggetto va scritto fuori transazione, e senza la verifica preliminare chiunque potrebbe riempire il bucket puntando a identificatori a caso | Se il costo si vede sul pool di connessioni. La verifica non si toglie: è ciò che impedisce di scrivere byte per una richiesta che finirà `404` |
+| La sequenza dei riferimenti è globale, non per organizzazione | `tickets.reference` nasce da `app.ticket_reference_seq`, che è una sola per il cluster: `TK-000042` dice a chiunque quante segnalazioni esistono sull'**intera piattaforma**, non nella propria organizzazione. Non è un dato sensibile ma è un dato che non intendevamo dare | Prima del primo cliente che se ne accorga. Cambiarlo dopo significa rinumerare o convivere con due formati, quindi la finestra è ora e si chiude con il primo dato reale |
+| Un coinquilino non può riaprire una segnalazione, e il codice dice la cosa sbagliata | La `USING` di `tickets_update` è staff **oppure** `reported_by` **oppure** `assigned_to`: non passa dal contratto. Chi è parte dello stesso contratto *vede* la segnalazione ma riceve `403 org.staff_role_required`, che gli dice che gli serve un ruolo quando in realtà gli servirebbe di essere lui ad aver segnalato. È lo **stesso debito** di `org.staff_role_required` sull'archiviazione di un documento | Insieme ai due debiti sulla tassonomia degli errori qui sopra: sono la stessa conversazione, e servirebbe un codice proprio del tipo `ticket.not_yours`. Se il prodotto volesse davvero che chiunque sul contratto possa riaprire, non è un ramo applicativo ma una migration sulla policy |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-**Segnalazioni** (`tickets`). I documenti sono chiusi per la fetta 1, e con loro la
-porta `ObjectStorage`: da qui i moduli rimasti non hanno più dipendenze bloccanti fra
-loro. I ticket vengono per primi perché sono l'altra metà del rapporto bidirezionale —
-finora l'inquilino può solo leggere — e perché `can_access_attachment` copre già
-`ticket` e `ticket_message`, quindi allegare un documento a una segnalazione sarà
-additivo e non richiederà di ripensare nulla.
+**Bollette e addebiti** (`utility_bills`, `charges`). Le segnalazioni hanno chiuso
+l'anello nei due versi, e da qui i moduli rimasti non hanno più dipendenze bloccanti
+fra loro: la scelta è di prodotto, non di architettura. Le bollette vengono per prime
+perché sono il flusso che il proprietario ha già in mano ogni mese, perché la vista
+`v_charge_balances` esiste, e perché riusano interamente la forma dei documenti —
+`can_access_attachment` copre già `utility_bill` e `charge`, quindi allegare la
+bolletta scansionata è additivo.
 
-Il piano della prima fetta è in fondo:
-[Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
+Il costo di una riparazione registrato su una segnalazione (`actual_cost`) è la prima
+cosa da guardare quando si progetterà quel modulo: la domanda «diventa un addebito
+all'inquilino?» appartiene lì e non ai ticket, ed è stata deliberatamente lasciata
+aperta.
 
 Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
@@ -440,9 +451,11 @@ momento in cui affrontarli.
 
 ## Piano — Segnalazioni, fetta 1
 
-Pianificato il **27 agosto 2026**, non ancora implementato. Scritto qui prima di
-scrivere codice, come chiede `CLAUDE.md` §3: quello che segue è la decomposizione,
-non un riassunto.
+Pianificato il **27 agosto 2026**, **implementato il 29 agosto 2026**. Il piano resta
+sotto come è stato scritto: quello che segue serviva a eseguirlo, e serve ancora a
+capire perché il codice è com'è. Ciò che l'esecuzione ha confermato, cambiato e
+scoperto è in fondo, in [Esito](#esito-segnalazioni-fetta-1) — letto per primo se la
+domanda è «cosa è successo», per secondo se la domanda è «perché».
 
 ### Obiettivo
 
@@ -813,3 +826,172 @@ contratto nemmeno.
 
 `docs/05-api.md` che descrive gli endpoint, e la guardia della configurazione verde —
 questa fetta non aggiunge impostazioni, quindi deve restare verde senza toccarla.
+
+
+<a id="esito-segnalazioni-fetta-1"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Scritto il **29 agosto 2026**, a fetta conclusa. I tredici passi sono stati eseguiti
+tutti, **compreso il passo 11**: la fetta non si è rivelata troppo grande e il punto di
+taglio non è servito. Le trappole si sono presentate come descritte tranne una, che si
+è rivelata **più grave** di come il piano la immaginava; ne sono emerse tre nuove.
+
+#### Le trappole, verificate una per una
+
+| Trappola del piano | Si è presentata? |
+|---|---|
+| `reference` la assegna il database, e nessun repository sa ancora farlo | **Sì, e peggio.** La via indicata — `RETURNING reference` — **non funziona sotto RLS**. Vedi la trappola nuova 1 |
+| La sequenza è globale, non per organizzazione | Sì. `TK-000001` sul database di test appena migrato, e la sequenza è una sola per il cluster. Registrato fra i [debiti](#debiti-tecnici-noti) |
+| Non esiste alcun vincolo fra `room_id`, `lease_id` e `property_id` | **Sì, riprodotto su database reale.** Un `INSERT` diretto con la stanza di un altro immobile è passato senza una parola. Il controllo sta in `OpenTicket`, una volta sola, e un test di persistenza più uno di contratto lo fissano |
+| `ticket_messages` non ha una policy di `UPDATE` | Sì. Verificato interrogando `pg_policy`: due policy, `_select` e `_insert`. Il test `a_thread_message_can_never_be_rewritten` fallisce se qualcuno ne aggiunge una terza, perché quella è la proprietà su cui il thread si regge |
+| La `WITH CHECK` di `tickets_update` vincola solo `org_id` | Sì. `pg_get_expr(polwithcheck, …)` restituisce esattamente `(org_id = current_org_id())`. La migration `0020` e [ADR-026](08-decisioni.md#adr-026) sono la risposta |
+| L'onere di manutenzione non è un rischio silenzioso | Sì, e con una guardia in più: oltre ai test di integrazione che girano come `propflow_app`, il **controllo 12** delle invarianti dello schema verifica che le nove colonne strutturali restino non aggiornabili. Verificato concedendo `UPDATE (title)` a mano: il controllo fallisce con `colonna-strutturale-scrivibile / tickets.title` |
+| Il service layer restringe comunque | Sì. `status` e i due costi restano concesse, e chi possa chiudere o valorizzare resta autorizzazione applicativa, transizione per transizione |
+| Lo storico lo scrive un trigger, e scriverlo anche noi lo raddoppia | **Sì, riprodotto.** Un `INSERT` diretto produce da sé la riga `NULL → open`, con `changed_by` nullo fuori da un contesto di richiesta. La porta non ha un metodo di scrittura sullo storico, per non invitare a farlo |
+| `closed_at` non si azzera da solo alla riapertura | Sì. Lo azzera `Ticket::reopen`, e due test lo fissano: uno unitario e uno di persistenza che rilegge la riga dal database, non l'aggregato in memoria |
+| Solo chi ha segnalato può riaprire | Sì, e ha prodotto un debito: al coinquilino l'API risponde `org.staff_role_required`, che è vero a metà. Registrato fra i [debiti](#debiti-tecnici-noti), insieme al gemello sui documenti |
+| Una segnalazione senza `lease_id` è invisibile all'inquilino che ci abita | Non riprodotta a runtime, ma **letta nello schema** e confermata: `can_access_ticket` arriva al contratto solo se `lease_id` non è nullo. Non è codice ma un avviso a chi userà l'API, ed è finito nella documentazione del campo — nel DTO, nel comando e in `docs/05-api.md` |
+| `search_vector` è `GENERATED ALWAYS` | **Non si è presentata, e non poteva.** La colonna non compare in nessuna query, nemmeno in lettura: la trappola scatta solo per chi elenca «tutti i campi», e il commento sulla macro `select_ticket!` è lì per quella persona |
+| `tickets_open_ix` è parziale sui sei stati di lavorazione | Sì, e ha deciso la forma della query. Vedi la scelta sul letterale SQL più sotto |
+
+#### La trappola che si è rivelata più grave: `RETURNING` sotto Row Level Security
+
+Il piano diceva che «la `INSERT` deve usare `RETURNING reference`» e lasciava aperta,
+come alternativa, «leggere la riga dopo l'inserimento». **La prima via non esiste.**
+
+Un `INSERT … RETURNING` applica alla riga restituita anche la **policy di `SELECT`**,
+oltre alla `WITH CHECK` dell'`INSERT`. `tickets_select` chiama
+`app.can_access_ticket(id)`, che è dichiarata `STABLE`: vede lo snapshot preso
+all'inizio dello **statement**, cioè prima che la riga esistesse. La funzione risponde
+`false`, la policy di SELECT non passa, e PostgreSQL rifiuta con
+
+```
+ERROR: new row violates row-level security policy for table "tickets"
+```
+
+che è il messaggio della `WITH CHECK` e manda a cercare nel posto sbagliato: si
+controlla la policy di `INSERT`, la si trova corretta, e non si sospetta la `SELECT`.
+Isolato con due `INSERT` identici nella stessa transazione, uno con `RETURNING` e uno
+senza: il secondo passa.
+
+La rilettura in uno **statement separato** della stessa transazione funziona, perché lì
+`can_access_ticket` prende uno snapshot nuovo che comprende la riga appena scritta.
+Verificato: `SELECT reference FROM app.tickets WHERE id = $1` subito dopo l'`INSERT`
+restituisce `TK-000011`.
+
+Il repository fa così. Costa un round-trip in più per apertura, ed è l'unica via che la
+policy lascia aperta senza toccarla. **Nessuna decisione del piano cambia:** il
+riferimento lo assegna comunque il database, `Ticket::open` restituisce comunque un
+aggregato con `reference` a `None`, e il porto restituisce comunque il valore a chi
+chiama. Cambia il meccanismo, che era la seconda delle due alternative che il piano
+stesso elencava.
+
+**Conseguenza generale, buona da ricordare:** ogni futura `RETURNING` su una tabella
+con una policy di `SELECT` che dipende dalla riga stessa incontrerà lo stesso muro. È
+il caso di tutte le tabelle il cui `can_access_*` interroga la tabella filtrata.
+
+#### Le altre due trappole nuove
+
+**1. Lo storico non si ordina per `id`.** `ticket_status_history.id` è
+`gen_random_uuid()`, cioè UUID **v4**: a differenza di ogni altro identificatore del
+progetto non porta con sé il tempo, e ordinare per id darebbe un ordine casuale. La
+query ordina per `created_at`. È il genere di dettaglio che non fallisce mai in un test
+con tre righe scritte a un millisecondo di distanza, e che si nota quando la catena
+degli stati appare mescolata in produzione.
+
+**2. `updated_at` non va nella `GRANT`, e non va nella `UPDATE`.** Ogni tabella con
+quella colonna ha un trigger `set_updated_at` `BEFORE UPDATE` (migration `0013`), e un
+trigger non è soggetto ai privilegi di colonna del chiamante. Nominare `updated_at`
+nella `SET` avrebbe richiesto di concederla, allungando la lista senza motivo — e
+avrebbe reso meno evidente che l'elenco concesso è *esattamente* ciò che
+l'applicazione decide.
+
+#### Scelte prese eseguendo, che il piano lasciava aperte
+
+- **`close` e `cancel` sono ammesse da tutti e sei gli stati di lavorazione**, non
+  dal solo `in_progress` che il diagramma suggerisce. Una segnalazione che si rivela
+  un falso allarme si chiude senza inventare un avanzamento che non c'è stato, e
+  `cancelled` resta per il caso diverso in cui la richiesta viene ritirata. L'insieme
+  ammesso coincide con `TicketStatus::WORKING`, cioè con il predicato di
+  `tickets_open_ix`: la coda di lavorazione e «ciò da cui si può ancora uscire» sono
+  la stessa cosa, ed è una coerenza che vale la pena avere.
+- **`assign` è ammessa anche da `open` e da `assigned`.** Da `open` perché una
+  segnalazione ovvia si assegna senza passare dal triage, e obbligare a classificarla
+  prima produrrebbe classificazioni finte; da `assigned` perché è una riassegnazione,
+  che è un fatto normale.
+- **`TicketCostsUpdated` è un quinto evento**, che il piano non nominava. Senza, il
+  `PATCH` sui costi sarebbe l'unica modifica del progetto priva dell'evento che la
+  descrive, e romperebbe la proprietà su cui l'outbox si regge. Porta i **nomi dei
+  campi** e non i valori, come `PropertyUpdated`.
+- **L'assegnazione emette due eventi**, `TicketStatusChanged` e `TicketAssigned`. Il
+  primo da solo non direbbe a chi il lavoro è finito in mano; il secondo da solo
+  farebbe perdere l'assegnazione a chi consuma le transizioni. La funzione condivisa
+  delle transizioni emette sempre il primo, così nessuna può dimenticarlo.
+- **Le sette transizioni sono sette casi d'uso con una sequenza sola.** Ciò che le
+  distingue è l'autorizzazione e la chiamata al dominio, non l'ordine dei passi:
+  replicare sette volte «autorizza → carica → applica → persisti → evento → commit»
+  darebbe sette occasioni di sbagliarne uno, e la sequenza è precisamente ciò che non
+  deve variare. Vivono in `transition.rs` attorno a una funzione privata `run`.
+- **`resolution_notes` resta fuori perimetro.** Il piano non la nominava né fra ciò
+  che è dentro né fra ciò che è fuori. Sta fuori perché la chiusura non ha un corpo, e
+  aggiungerla avrebbe voluto dire decidere chi può scriverla e se sia visibile
+  all'inquilino — due domande che nessuno aveva posto.
+- **La valuta è fissata a `EUR` alla creazione e non è modificabile.** L'`INSERT` non
+  nomina `currency`, che resta al default dello schema, e la colonna non è nella
+  `GRANT`. Entrambi i costi la condividono, perché la colonna è una sola: due importi
+  in valute diverse non sarebbero rappresentabili.
+- **`ticket.cancelled` è un codice a sé**, distinto da `ticket.invalid_transition`.
+  Non è una transizione rifiutata ma una modifica su un aggregato che non ne accetta
+  più, e il rimedio per il client è diverso — non «riprova da un altro stato» ma
+  «questa segnalazione è finita».
+- **I sei stati della coda esistono come letterale SQL**, e non come parametro. Il
+  planner può usare un indice parziale solo se dimostra che il predicato della query
+  implica quello dell'indice, e con un array passato come parametro non può: al
+  momento del piano non ne conosce il contenuto. Il prezzo è che l'elenco vive in due
+  posti — `TicketStatus::WORKING` e la macro `working_statuses!` — e il test
+  `the_sql_literal_and_the_domain_constant_agree` li tiene insieme.
+- **Il thread è paginato per `id`** e non per `created_at`, così il cursore resta un
+  solo UUID come in ogni altro elenco dell'API. Gli id sono UUIDv7, quindi l'ordine
+  coincide con quello di creazione; il prezzo è che `ticket_messages_thread_ix` serve
+  l'uguaglianza su `ticket_id` ma non l'ordinamento, che resta un sort su un insieme
+  limitato da quanto due persone si scrivono.
+- **Il controllo 12 delle invarianti ha un nome proprio**,
+  `colonna-strutturale-scrivibile`, distinto dal `colonna-di-confine-scrivibile` del
+  controllo 11. Il criterio è diverso — qui non c'è un confine da difendere — e
+  confonderli renderebbe illeggibile la ragione di entrambi.
+- **`AttachmentOwnerType` nel dominio passa da tre valori a quattro.** Il test degli
+  enum che verificava «un `ticket` in lettura dà errore» ora verifica lo stesso su
+  `utility_bill`: la regola non è cambiata, si è spostato il confine del perimetro.
+
+#### Come si è verificato
+
+`./ops/ci/test-integration.sh` verde con **197 test** (erano 155): 21 unitari di
+dominio in più sulla macchina a stati e sui value object, 4 applicativi
+sull'autorizzazione delle transizioni, 1 di infrastruttura sul letterale SQL, 8 di
+persistenza e 8 di contratto HTTP.
+
+Il test `the_relationship_runs_in_both_directions` percorre il giro che il piano
+descriveva a parole: l'inquilino apre una segnalazione sul proprio immobile con una
+foto allegata, il proprietario la classifica e la assegna, si scambiano due messaggi,
+il proprietario scrive una nota interna che **l'inquilino non vede** — mentre lui la
+vede, ed è lo stesso thread — registra il costo sostenuto e chiude; l'inquilino riapre
+perché il guasto torna, e lo storico mostra la catena intera compresa la riapertura,
+con la prima riga senza stato di partenza.
+
+Su database reale, oltre alla suite: riprodotto che lo schema accetta una segnalazione
+con la stanza di un altro immobile; che il trigger scrive `NULL → open` da sé; che
+`propflow_app` non ha più `UPDATE` a livello di tabella su `app.tickets` e ne ha nove a
+livello di colonna, esattamente quelle che il repository scrive; che il controllo 12
+fallisce se una colonna strutturale torna concessa; e che `INSERT … RETURNING` è
+rifiutato mentre lo stesso `INSERT` senza `RETURNING` passa.
+
+#### Cosa resta fuori, e resta fuori apposta
+
+Triage AI, ricerca full-text, SLA, programmazione, allegati sui singoli messaggi, ruolo
+`manager` esposto, note di risoluzione. I primi sei erano già dichiarati fuori
+perimetro dal piano; l'ultima è una scelta presa eseguendo, ed è motivata qui sopra.
+
+Restano fuori anche, e sono registrati fra i [debiti](#debiti-tecnici-noti): la
+sequenza dei riferimenti globale invece che per organizzazione, e il codice `403` che
+un coinquilino riceve provando a riaprire.

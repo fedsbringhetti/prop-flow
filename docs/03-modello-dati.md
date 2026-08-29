@@ -6,7 +6,7 @@ i diritti del proprietario e aggirerebbe la Row Level Security del chiamante.
 
 Numeri dello schema attuale: **23 tabelle** di business più `audit_log`
 partizionata, **35 enum**, **6 domini**, **169 indici**, **64 policy RLS**,
-**49 trigger**, **4 viste**, **28 funzioni**, **18 migration**.
+**49 trigger**, **4 viste**, **28 funzioni**, **20 migration**.
 
 ## Diagramma ER
 
@@ -173,7 +173,7 @@ Creati da `ops/sql/roles.sql`, che gira una volta per cluster come superuser
 | Ruolo | RLS | Privilegi | Uso |
 |---|---|---|---|
 | `propflow_migrator` | esente (proprietario delle tabelle) | DDL completo | migration; è il *definer* delle funzioni di accesso |
-| `propflow_app` | **soggetta** | `SELECT`, `INSERT`, `UPDATE`. Niente `DELETE` | servizio HTTP |
+| `propflow_app` | **soggetta** | `SELECT`, `INSERT`, `UPDATE`. Niente `DELETE`, e su tre tabelle l'`UPDATE` è **per colonna** | servizio HTTP |
 | `propflow_worker` | `BYPASSRLS` | anche `DELETE` | dispatcher outbox, worker AI, flussi pre-autenticazione |
 
 `propflow_app` **non deve possedere tabelle**: il proprietario di una tabella è
@@ -186,6 +186,29 @@ test.
 
 Nessuno dei tre può scrivere su `audit_log`: la traccia la scrive il trigger, che
 è `SECURITY DEFINER`.
+
+### Privilegi di colonna
+
+Su tre tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle colonne
+che i repository scrivono: `org_invitations` e `lease_parties`
+([ADR-021](08-decisioni.md#adr-021), migration `0019`) e `tickets`
+([ADR-026](08-decisioni.md#adr-026), migration `0020`).
+
+Il motivo comune è che **una policy non può confrontare la riga nuova con quella
+vecchia**: non esiste `OLD` in un `WITH CHECK`, che vincola solo le colonne che nomina
+e lascia libere tutte le altre. Il permesso di colonna è invece verificato **prima**
+delle policy, quindi una scrittura su una colonna non concessa fallisce con
+`permission denied` qualunque cosa la policy ammetta.
+
+Le due ragioni per cui lo si usa sono però diverse, e i due ADR le tengono distinte:
+sulle prime due tabelle la colonna non concessa **è il confine** dell'organizzazione;
+su `tickets` non c'è un confine da difendere, ma una coerenza strutturale
+(`room_id`, `lease_id` e `property_id`) che nessun vincolo dello schema impone.
+
+Ne segue un onere: l'elenco concesso e le colonne che compaiono in una `UPDATE` sono
+la stessa lista, e allungare l'una richiede di allungare l'altra. È voluto — è il
+punto in cui ci si ferma a chiedersi se quella colonna debba davvero essere scrivibile
+dall'applicazione — ed è verificato dai controlli 11 e 12 delle invarianti.
 
 ## Soft delete
 
@@ -306,7 +329,7 @@ difetto osservato:
 
 ### Invarianti verificate
 
-`ops/sql/checks/schema_invariants.sql` esegue dieci controlli e **solleva
+`ops/sql/checks/schema_invariants.sql` esegue dodici controlli e **solleva
 un'eccezione** se ne viola uno, così la pipeline si ferma:
 
 1. tabelle di business senza RLS attiva
@@ -319,6 +342,14 @@ un'eccezione** se ne viola uno, così la pipeline si ferma:
 8. colonne monetarie fuori dal dominio `money_amount`
 9. policy di SELECT che filtrano il soft delete
 10. `_sqlx_migrations` duplicata fuori da `public`
+11. colonne di **confine** aggiornabili dal ruolo applicativo ([ADR-021](08-decisioni.md#adr-021))
+12. colonne **strutturali** di una segnalazione aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026))
 
 Il controllo 4 ha trovato cinque foreign key senza indice durante la prima
-scrittura dello schema; i controlli 9 e 10 sono i guardiani di due bug reali.
+scrittura dello schema; i controlli 9 e 10 sono i guardiani di due bug reali, e gli
+ultimi due tengono in piedi due migration di privilegi che una `GRANT` distratta
+disferebbe senza rumore.
+
+Gli ultimi due hanno nomi distinti — `colonna-di-confine-scrivibile` e
+`colonna-strutturale-scrivibile` — e non è cosmetico: il criterio è diverso, e un
+nome solo renderebbe illeggibile la ragione di entrambi.

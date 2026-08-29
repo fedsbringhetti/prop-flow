@@ -93,7 +93,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -121,6 +121,8 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `lease.shares_not_hundred` | 409 | le quote degli inquilini non sommano a 100 |
 | `invitation.already_accepted` | 409 | l'invito è già stato accettato |
 | `document.archived` | 409 | il documento è già archiviato |
+| `ticket.invalid_transition` | 409 | classificazione, assegnazione, avvio, sospensione, chiusura, riapertura o annullamento non ammessi nello stato attuale |
+| `ticket.cancelled` | 409 | la segnalazione è annullata e non si modifica più |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -319,9 +321,11 @@ occupato" sarebbe falso, perché le altre stanze restano libere.
 | POST | `/api/v1/properties/{property_id}/documents` | membro | `201` con i metadati. `multipart/form-data` |
 | POST | `/api/v1/rooms/{room_id}/documents` | membro | come sopra |
 | POST | `/api/v1/leases/{lease_id}/documents` | membro | come sopra |
+| POST | `/api/v1/tickets/{ticket_id}/documents` | membro | come sopra |
 | GET | `/api/v1/properties/{property_id}/documents` | membro | `200`, pagina keyset |
 | GET | `/api/v1/rooms/{room_id}/documents` | membro | come sopra |
 | GET | `/api/v1/leases/{lease_id}/documents` | membro | come sopra |
+| GET | `/api/v1/tickets/{ticket_id}/documents` | membro | come sopra |
 | GET | `/api/v1/documents/{id}/content` | membro | `307` verso l'URL pre-firmato, in `Location` |
 | DELETE | `/api/v1/documents/{id}` | membro, e staff **o** chi lo ha caricato | `204`. Archiviazione |
 
@@ -395,9 +399,167 @@ ripristino: la policy `documents_update` ha `deleted_at IS NULL` nella `USING`, 
 un update su una riga archiviata aggiorna zero righe senza dare errore, e ripristinare
 richiederebbe una migration sulla policy.
 
+Gli owner esposti sono **quattro** su undici: immobile, stanza, contratto e
+segnalazione. Le rotte sulle segnalazioni sono arrivate con quel modulo e sono costate
+una variante d'enum e due rotte, senza toccare gli use case dei documenti:
+`app.attachment_owner_type` aveva già `ticket`, e `can_access_attachment` lo risolveva
+già su `can_access_ticket`. Allargare agli owner rimasti — avatar, bollette, spese — è
+altrettanto additivo, e si fa quando quei moduli esistono.
+
 `users.avatar_document_id` e `leases.contract_document_id` restano **non popolati
-dall'API**: gli allegati ad avatar, ticket, bollette e spese sono fuori perimetro,
-anche se `can_access_attachment` li copre già a livello di policy.
+dall'API**.
+
+### Segnalazioni
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/properties/{property_id}/tickets` | membro | `201`, stato iniziale `open`. `422` se stanza o contratto sono di un altro immobile |
+| GET | `/api/v1/tickets` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `open` |
+| GET | `/api/v1/tickets/{id}` | membro | `200` con lo storico degli stati, o `404` |
+| PATCH | `/api/v1/tickets/{id}` | staff | `200`. Solo i costi. `409` se annullata |
+| POST | `/api/v1/tickets/{id}/messages` | membro | `201`. `403` a un inquilino che chiede `is_internal` |
+| GET | `/api/v1/tickets/{id}/messages` | membro | `200`, pagina keyset. Le note interne non compaiono all'inquilino |
+| POST | `/api/v1/tickets/{id}/triage` | staff | `200`. Imposta categoria e priorità |
+| POST | `/api/v1/tickets/{id}/assign` | staff | `200`. Corpo: `assignee_id` |
+| POST | `/api/v1/tickets/{id}/start` | staff | `200`. Avvia la lavorazione, o la riprende |
+| POST | `/api/v1/tickets/{id}/wait` | staff | `200`. Corpo: `waiting_on` (`tenant` o `owner`) |
+| POST | `/api/v1/tickets/{id}/close` | staff | `200`. Valorizza `closed_at` |
+| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Riporta a `open` e azzera `closed_at` |
+| POST | `/api/v1/tickets/{id}/cancel` | staff, o chi ha segnalato finché è `open` | `200` |
+
+L'apertura è annidata sotto l'immobile perché una segnalazione nasce **sempre** su un
+immobile; tutto il resto va per id, perché il percorso dell'immobile non aggiungerebbe
+nulla e obbligherebbe il client a portarselo dietro. È la stessa scelta delle stanze e
+dei documenti.
+
+**Ruolo minimo `membro` in apertura, elenco, dettaglio e thread.** È il modulo in cui
+l'inquilino prende la parola: fino a qui poteva solo leggere. Quali segnalazioni siano
+sue lo decide `app.can_access_ticket` — chi ha aperto, chi è assegnato, e chi è parte
+del contratto indicato — non un ramo applicativo sul ruolo.
+
+#### Il ciclo di vita
+
+```
+open ──► triaged ──► assigned ──► in_progress ──► closed
+                          ▲            │  ▲          │
+                          │            ▼  │          ▼
+                          └──── waiting_tenant     open
+                                waiting_owner   (riapertura)
+
+cancelled ◄── da qualunque stato di lavorazione
+```
+
+`waiting_tenant` e `waiting_owner` non sono una fase a sé ma una **sospensione** della
+lavorazione: si entra con `/wait` e si esce con `/start`. Servono a dire perché una
+segnalazione è ferma — «aspetto che tu sia in casa» è lo stato più comune di una
+manutenzione reale, e senza un nome resta una segnalazione che sembra abbandonata.
+
+**La riapertura è dell'inquilino**, ed è ciò che rende la segnalazione un rapporto
+invece di una casella postale: senza, un guasto ricorrente diventa una segnalazione
+nuova ogni volta e lo storico si frantuma proprio dove servirebbe intero. Solo **chi
+ha segnalato** può riaprire, e non è una scelta di prodotto: la `USING` di
+`tickets_update` ammette staff, chi ha segnalato e chi è assegnato, e non passa dal
+contratto. Un coinquilino *vede* la segnalazione ma non può aggiornarla; allargare
+richiederebbe una migration sulla policy.
+
+`resolved` esiste nell'enum e **l'API non lo produce mai**. Il flusso `resolved` con
+conferma dell'inquilino è stato scartato: introdurrebbe un'attesa che senza scheduler
+non si chiude mai da sé, e un ticket risolto e mai confermato resterebbe appeso per
+sempre. La riapertura ottiene lo stesso risultato senza richiedere un orologio.
+
+#### Perché le transizioni sono sotto-risorse e il `PATCH` è solo per i costi
+
+Ognuna ha effetti propri — `closed_at`, una riga di storico, un evento — e un `PATCH`
+che li producesse di soppiatto renderebbe invisibile che siano avvenuti. È la stessa
+scelta di attivazione e disdetta dei contratti.
+
+Il `PATCH` resta per ciò che è davvero un attributo: `estimated_cost` e `actual_cost`,
+con la semantica generale del PATCH (assente = invariato, `null` = azzerato). Il resto
+non è modificabile, e non per dimenticanza:
+
+- **titolo e descrizione** sono il testo con cui una persona ha descritto un guasto in
+  un momento preciso, e il thread esiste apposta per correggere il tiro. Un titolo
+  riscritto dopo tre messaggi rende incomprensibili i tre messaggi;
+- **categoria e priorità** si impostano con il triage, perché sono ciò che `triaged`
+  *significa*: lasciarle modificabili altrove renderebbe lo stato una dichiarazione
+  non verificabile;
+- **immobile, stanza e contratto** non sono nemmeno più scrivibili dal ruolo
+  applicativo, per privilegio di colonna ([ADR-026](08-decisioni.md#adr-026)). Una
+  segnalazione aperta sull'immobile sbagliato si annulla e si riapre.
+
+I costi sono nella valuta della segnalazione, che nasce `EUR` e non è modificabile: la
+colonna `currency` è una sola per entrambi, e due importi in valute diverse non
+sarebbero rappresentabili.
+
+#### Il dettaglio, lo storico e il thread
+
+`GET /api/v1/tickets/{id}` restituisce la segnalazione e lo **storico degli stati**,
+che è corto e limitato per costruzione — una riga per transizione. I **messaggi**
+stanno su `GET /api/v1/tickets/{id}/messages` con il proprio cursore: una
+conversazione non ha un tetto, e incorporarla nel dettaglio significherebbe che il
+giorno in cui qualcuno scrive duecento messaggi il dettaglio smette di rispondere.
+
+Lo storico lo scrive un **trigger** del database, non l'API: la prima riga è sempre
+`from_status: null → open` e la produce l'inserimento. Per questo `changed_by` può
+essere `null` — è `app.current_user_id()`, che fuori da un contesto di richiesta non
+c'è.
+
+Un messaggio **non si modifica e non si cancella**, nemmeno in modo soft:
+`app.ticket_messages` ha due sole policy, `_select` e `_insert`. Non è un limite da
+aggirare, è una proprietà del thread; l'API non espone nulla che lo prometta.
+
+Le **note interne** (`is_internal: true`) le può scrivere solo lo staff, e non
+compaiono affatto nell'elenco dell'inquilino: le filtra la policy di SELECT, non un
+campo della risposta. A un inquilino che le chieda l'API risponde `403
+org.staff_role_required` invece di lasciar produrre `auth.denied_by_policy` alla RLS,
+che significa «difetto nostro».
+
+#### Il filtro della coda
+
+`?open=true` restituisce le segnalazioni ancora in lavorazione — i sei stati non
+terminali — e `?open=false` quelle chiuse, annullate o risolte. Non è zucchero
+sintattico per `status <> 'closed'`: l'indice parziale `tickets_open_ix` è definito su
+esattamente quei sei valori, e una disuguaglianza non lo userebbe. È l'elenco che la
+dashboard del proprietario legge.
+
+#### `reference`
+
+Ogni segnalazione porta un riferimento leggibile, `TK-000042`, **assegnato dal
+database**: è l'unico identificatore del progetto che non nasce nell'applicazione.
+La sequenza è **globale**, non per organizzazione, quindi il numero dice quante
+segnalazioni esistono sull'intera piattaforma. Non è un dato sensibile ma non è un
+dato che si intendeva dare: è registrato fra i debiti noti in
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+
+#### Cosa la risposta non dice, e perché
+
+Non compaiono `ai_suggested_category`, `ai_suggested_priority`, `ai_confidence`,
+`ai_analysis`, `sla_due_at`, `scheduled_at` né `resolution_notes`: triage AI, SLA,
+programmazione e note di risoluzione sono fuori dal perimetro di questa fetta. Le
+colonne esistono nello schema e restano ai loro default — vedere una colonna non è una
+ragione per riempirla, e i suggerimenti del modello sono tenuti separati dai valori
+decisi da una persona proprio perché si possa misurare l'accuratezza dopo.
+
+Non c'è una `?q=`: `search_vector` esiste con il suo indice GIN, ma la ricerca è
+Meilisearch in V2 ed è pensata per essere alimentata dall'outbox. Esporre ora una
+ricerca su `tsvector` significherebbe costruire un contratto da rompere.
+
+```bash
+# L'inquilino apre una segnalazione sul proprio immobile e vi allega una foto.
+curl -X POST http://localhost:8080/api/v1/properties/$PROPERTY/tickets \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $OWNER_ORG" \
+  -H 'content-type: application/json' \
+  -d '{ "title": "Il boiler perde", "description": "Perde da ieri sera", "lease_id": "'$LEASE'" }'
+
+curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/documents \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $OWNER_ORG" \
+  -F "kind=photo" -F "file=@boiler.jpg;type=image/jpeg"
+
+# Il proprietario classifica, assegna e chiude.
+curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/triage \
+  -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json' \
+  -d '{ "category": "plumbing", "priority": "high" }'
+```
 
 ### Inviti
 
