@@ -65,6 +65,8 @@ typed_id!(LeaseId, "un contratto di locazione");
 typed_id!(LeasePartyId, "una parte contrattuale");
 typed_id!(InvitationId, "un invito");
 typed_id!(DocumentId, "un documento");
+typed_id!(TicketId, "una segnalazione");
+typed_id!(TicketMessageId, "un messaggio di una segnalazione");
 typed_id!(SessionId, "una sessione di refresh");
 typed_id!(EventId, "un evento di dominio");
 

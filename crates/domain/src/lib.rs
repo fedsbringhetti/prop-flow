@@ -19,6 +19,7 @@ pub mod lease;
 pub mod ports;
 pub mod property;
 pub mod shared;
+pub mod ticket;
 
 pub use context::RequestContext;
 pub use error::{Denial, DomainError, DomainResult, Entity, Invariant};

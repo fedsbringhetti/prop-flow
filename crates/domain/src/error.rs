@@ -20,6 +20,8 @@ pub enum Entity {
     Invitation,
     #[error("Document not found")]
     Document,
+    #[error("Ticket not found")]
+    Ticket,
     /// Rotta sconosciuta. Sta qui e non nel bordo HTTP perché un `404` di rotta e
     /// un `404` di risorsa devono avere la stessa forma per il client.
     #[error("Endpoint not found")]
@@ -35,6 +37,7 @@ impl Entity {
             Self::Lease => "lease.not_found",
             Self::Invitation => "invitation.not_found",
             Self::Document => "document.not_found",
+            Self::Ticket => "ticket.not_found",
             Self::Endpoint => "endpoint.not_found",
         }
     }
@@ -133,6 +136,23 @@ pub enum Invariant {
     #[error("The document is already archived")]
     DocumentArchived,
 
+    #[error("Only an open ticket can be triaged")]
+    TicketNotTriageable,
+    #[error("A ticket can only be assigned while it is open, triaged or already assigned")]
+    TicketNotAssignable,
+    #[error("Work can only start on an assigned or suspended ticket")]
+    TicketNotStartable,
+    #[error("Only a ticket being worked on can be suspended")]
+    TicketNotSuspendable,
+    #[error("Only a ticket still being handled can be closed")]
+    TicketNotClosable,
+    #[error("Only a closed ticket can be reopened")]
+    TicketNotReopenable,
+    #[error("Only a ticket still being handled can be cancelled")]
+    TicketNotCancellable,
+    #[error("A cancelled ticket cannot be modified")]
+    TicketCancelled,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -156,6 +176,18 @@ impl Invariant {
                 "invitation.already_accepted"
             }
             Self::DocumentArchived => "document.archived",
+            // Sette varianti, un codice: il rimedio è lo stesso — rileggere lo
+            // stato attuale e chiedere una transizione ammessa — e le tre
+            // transizioni di contratto hanno già lo stesso trattamento. Restano
+            // distinte perché il messaggio che accompagna il codice non lo è.
+            Self::TicketNotTriageable
+            | Self::TicketNotAssignable
+            | Self::TicketNotStartable
+            | Self::TicketNotSuspendable
+            | Self::TicketNotClosable
+            | Self::TicketNotReopenable
+            | Self::TicketNotCancellable => "ticket.invalid_transition",
+            Self::TicketCancelled => "ticket.cancelled",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }
@@ -232,6 +264,7 @@ mod tests {
             Entity::Lease.code(),
             Entity::Invitation.code(),
             Entity::Document.code(),
+            Entity::Ticket.code(),
             Entity::Endpoint.code(),
             Denial::AuthenticationRequired.code(),
             Denial::OrgNotSelected.code(),
@@ -256,6 +289,14 @@ mod tests {
             .code(),
             Invariant::InvitationAlreadyAccepted.code(),
             Invariant::DocumentArchived.code(),
+            Invariant::TicketNotTriageable.code(),
+            Invariant::TicketNotAssignable.code(),
+            Invariant::TicketNotStartable.code(),
+            Invariant::TicketNotSuspendable.code(),
+            Invariant::TicketNotClosable.code(),
+            Invariant::TicketNotReopenable.code(),
+            Invariant::TicketNotCancellable.code(),
+            Invariant::TicketCancelled.code(),
             Invariant::RefreshTokenReused.code(),
             DomainError::validation("field", "message").code(),
         ]
@@ -291,6 +332,30 @@ mod tests {
         assert_eq!(
             Invariant::InvitationAlreadyAccepted.code(),
             Invariant::AcceptedInvitationCannotBeRevoked.code()
+        );
+    }
+
+    /// Le sette transizioni di segnalazione condividono un codice per la stessa
+    /// ragione delle tre di contratto: il rimedio non cambia. `TicketCancelled`
+    /// invece **non** lo condivide, perché non è una transizione rifiutata ma una
+    /// modifica su un aggregato che non ne accetta più.
+    #[test]
+    fn ticket_transitions_share_one_code_but_cancellation_does_not() {
+        let transitions = [
+            Invariant::TicketNotTriageable,
+            Invariant::TicketNotAssignable,
+            Invariant::TicketNotStartable,
+            Invariant::TicketNotSuspendable,
+            Invariant::TicketNotClosable,
+            Invariant::TicketNotReopenable,
+            Invariant::TicketNotCancellable,
+        ];
+        for invariant in &transitions {
+            assert_eq!(invariant.code(), "ticket.invalid_transition");
+        }
+        assert_ne!(
+            Invariant::TicketCancelled.code(),
+            Invariant::TicketNotClosable.code()
         );
     }
 }

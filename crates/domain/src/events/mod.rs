@@ -3,8 +3,10 @@ use chrono::{DateTime, Utc};
 use crate::document::{AttachmentOwner, DocumentKind};
 use crate::identity::OrgRole;
 use crate::shared::{
-    DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, UserId,
+    DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, TicketId,
+    TicketMessageId, UserId,
 };
+use crate::ticket::{Ticket, TicketMessage, TicketStatus};
 
 /// Evento di dominio pronto per l'outbox.
 ///
@@ -118,6 +120,11 @@ pub enum DomainEventPayload {
     InvitationAccepted(InvitationAccepted),
     DocumentUploaded(DocumentUploaded),
     DocumentArchived(DocumentArchived),
+    TicketOpened(TicketOpened),
+    TicketStatusChanged(TicketStatusChanged),
+    TicketAssigned(TicketAssigned),
+    TicketCostsUpdated(TicketCostsUpdated),
+    TicketMessagePosted(TicketMessagePosted),
 }
 
 impl DomainEventPayload {
@@ -141,6 +148,11 @@ impl DomainEventPayload {
             Self::InvitationAccepted(_) => "identity.invitation.accepted",
             Self::DocumentUploaded(_) => "document.uploaded",
             Self::DocumentArchived(_) => "document.archived",
+            Self::TicketOpened(_) => "ticket.opened",
+            Self::TicketStatusChanged(_) => "ticket.status_changed",
+            Self::TicketAssigned(_) => "ticket.assigned",
+            Self::TicketCostsUpdated(_) => "ticket.costs_updated",
+            Self::TicketMessagePosted(_) => "ticket.message.posted",
         }
     }
 
@@ -163,6 +175,14 @@ impl DomainEventPayload {
                 "Invitation"
             }
             Self::DocumentUploaded(_) | Self::DocumentArchived(_) => "Document",
+            // Anche `TicketMessagePosted` è un evento della segnalazione: il
+            // messaggio non è un aggregato a sé, e chi consuma reagisce al thread
+            // che si è mosso.
+            Self::TicketOpened(_)
+            | Self::TicketStatusChanged(_)
+            | Self::TicketAssigned(_)
+            | Self::TicketCostsUpdated(_)
+            | Self::TicketMessagePosted(_) => "Ticket",
         }
     }
 
@@ -186,6 +206,11 @@ impl DomainEventPayload {
             Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
             Self::DocumentUploaded(event) => event.document_id.as_uuid(),
             Self::DocumentArchived(event) => event.document_id.as_uuid(),
+            Self::TicketOpened(event) => event.ticket_id.as_uuid(),
+            Self::TicketStatusChanged(event) => event.ticket_id.as_uuid(),
+            Self::TicketAssigned(event) => event.ticket_id.as_uuid(),
+            Self::TicketCostsUpdated(event) => event.ticket_id.as_uuid(),
+            Self::TicketMessagePosted(event) => event.ticket_id.as_uuid(),
         }
     }
 
@@ -209,6 +234,11 @@ impl DomainEventPayload {
             Self::InvitationAccepted(event) => Some(event.org_id),
             Self::DocumentUploaded(event) => Some(event.org_id),
             Self::DocumentArchived(event) => Some(event.org_id),
+            Self::TicketOpened(event) => Some(event.org_id),
+            Self::TicketStatusChanged(event) => Some(event.org_id),
+            Self::TicketAssigned(event) => Some(event.org_id),
+            Self::TicketCostsUpdated(event) => Some(event.org_id),
+            Self::TicketMessagePosted(event) => Some(event.org_id),
         }
     }
 }
@@ -446,5 +476,135 @@ const fn owner_type_name(owner: AttachmentOwner) -> &'static str {
         AttachmentOwner::Property(_) => "property",
         AttachmentOwner::Room(_) => "room",
         AttachmentOwner::Lease(_) => "lease",
+    }
+}
+
+/// Segnalazione aperta.
+///
+/// **Nessun titolo e nessuna descrizione.** Sono testo libero scritto da una
+/// persona su un guasto in casa propria, e un evento pubblicato su un broker è un
+/// dato che viaggia e si conserva (regola 18, stessa ragione per cui
+/// `LeaseTerminated` non porta `termination_reason`). Nemmeno `reference`: è
+/// derivabile dall'identificatore, e chi consuma legge l'aggregato.
+///
+/// Viaggiano invece immobile, stanza e contratto, che sono ciò che serve a sapere
+/// **cosa invalidare**.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketOpened {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+    pub room_id: Option<RoomId>,
+    pub lease_id: Option<LeaseId>,
+    pub category: &'static str,
+    pub priority: &'static str,
+    pub reported_by_kind: &'static str,
+}
+
+impl TicketOpened {
+    /// Costruito **dall'aggregato** e non da otto argomenti: sarebbero tre
+    /// `Option<…Id>` di fila, e scambiarne due compilerebbe senza che nulla se ne
+    /// accorga. È anche la garanzia che l'evento descriva la segnalazione appena
+    /// scritta e non i valori del comando.
+    #[must_use]
+    pub const fn from_ticket(ticket: &Ticket) -> Self {
+        Self {
+            ticket_id: ticket.id(),
+            org_id: ticket.org_id(),
+            property_id: ticket.property_id(),
+            room_id: ticket.room_id(),
+            lease_id: ticket.lease_id(),
+            category: ticket.category().as_str(),
+            priority: ticket.priority().as_str(),
+            reported_by_kind: ticket.reported_by_kind().as_str(),
+        }
+    }
+}
+
+/// Transizione di stato.
+///
+/// Ogni transizione ne produce uno, compresa l'assegnazione — che ne produce
+/// **due**, questo e [`TicketAssigned`]: il cambio di stato non dice a chi il
+/// lavoro è finito in mano, e chi consuma il solo `ticket.assigned` perderebbe
+/// tutte le altre transizioni.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketStatusChanged {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub from_status: &'static str,
+    pub to_status: &'static str,
+    pub changed_by_role: &'static str,
+}
+
+impl TicketStatusChanged {
+    #[must_use]
+    pub const fn new(
+        ticket_id: TicketId,
+        org_id: OrgId,
+        from_status: TicketStatus,
+        to_status: TicketStatus,
+        role: OrgRole,
+    ) -> Self {
+        Self {
+            ticket_id,
+            org_id,
+            from_status: from_status.as_str(),
+            to_status: to_status.as_str(),
+            changed_by_role: role.as_str(),
+        }
+    }
+}
+
+/// Assegnazione della lavorazione. L'identificatore dell'incaricato viaggia
+/// perché è ciò che rende l'evento utile a chi notifica; nessun nome, nessuna
+/// email.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketAssigned {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub assignee_id: UserId,
+}
+
+/// Costi stimati o sostenuti modificati.
+///
+/// **Nomi dei campi, non valori**, come `PropertyUpdated`: chi consuma sa cosa
+/// invalidare senza che l'importo di una riparazione viaggi su un broker.
+///
+/// L'evento esiste benché il piano non lo nominasse: senza, il `PATCH` sui costi
+/// sarebbe l'unica modifica del progetto priva dell'evento che la descrive, e
+/// romperebbe la proprietà su cui l'outbox si regge
+/// ([02 — Architettura](../../../../docs/02-architettura.md)).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketCostsUpdated {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub changed_fields: Vec<&'static str>,
+}
+
+/// Messaggio scritto nel thread.
+///
+/// **Nessun corpo.** Vale la stessa ragione del titolo: è ciò che una persona ha
+/// scritto, e non deve finire su un broker. `is_internal` viaggia perché chi
+/// consuma deve sapere se il messaggio è visibile all'inquilino prima di
+/// notificarlo.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketMessagePosted {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub message_id: TicketMessageId,
+    pub author_kind: &'static str,
+    pub is_internal: bool,
+}
+
+impl TicketMessagePosted {
+    #[must_use]
+    pub const fn from_message(message: &TicketMessage) -> Self {
+        Self {
+            ticket_id: message.ticket_id(),
+            org_id: message.org_id(),
+            message_id: message.id(),
+            author_kind: message.author_kind().as_str(),
+            is_internal: message.is_internal(),
+        }
     }
 }
