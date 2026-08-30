@@ -1509,3 +1509,760 @@ async fn an_unknown_document_kind_is_refused() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
     assert_eq!(problem["errors"][0]["field"], "kind", "corpo: {problem}");
 }
+
+// ---------------------------------------------------------------------------
+// Segnalazioni
+// ---------------------------------------------------------------------------
+
+/// Apre una segnalazione e restituisce (id, reference).
+async fn open_ticket(
+    app: &TestApp,
+    token: &str,
+    org: Option<&str>,
+    property: &str,
+    lease: Option<&str>,
+    title: &str,
+) -> (String, String) {
+    let mut body = serde_json::json!({ "title": title, "description": "Descrizione del guasto" });
+    if let Some(lease) = lease {
+        body["lease_id"] = serde_json::json!(lease);
+    }
+    let (status, created) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/properties/{property}/tickets"),
+            Some(token),
+            org,
+            Some(body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    (
+        created["id"].as_str().expect("id").to_owned(),
+        created["reference"].as_str().expect("reference").to_owned(),
+    )
+}
+
+/// Il giro che dimostra la bidirezionalità: l'inquilino apre, allega una foto,
+/// commenta, **non vede la nota interna**, e riapre dopo la chiusura.
+///
+/// È il test che il piano chiama «come si saprà che è finita», scritto come test
+/// invece che come sequenza di `curl`: qui non si può dimenticare di eseguirlo.
+#[tokio::test]
+async fn the_relationship_runs_in_both_directions() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-ticket").await;
+
+    let property = create_property(&app, &owner, "Immobile con segnalazioni").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    // L'inquilino diventa reale.
+    let tenant_email = common::unique_email("inquilino-ticket");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    // 1. L'inquilino apre la segnalazione sul proprio immobile. Serve `X-Org-Id`:
+    //    la sua organizzazione predefinita resta quella personale (debito noto).
+    let (ticket, reference) = open_ticket(
+        &app,
+        &tenant,
+        Some(&owner_org),
+        &property,
+        Some(&lease),
+        "Il boiler perde",
+    )
+    .await;
+    assert!(
+        reference.starts_with("TK-"),
+        "il riferimento lo assegna il database: {reference}"
+    );
+
+    // 2. Ci allega la foto del guasto. La rotta riusa gli use case dei documenti
+    //    senza modificarli: `can_access_attachment` risolveva già `ticket`.
+    let (status, photo) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/tickets/{ticket}/documents"),
+            token: &tenant,
+            org: Some(&owner_org),
+            filename: "boiler.pdf",
+            content_type: "application/pdf",
+            content: PDF,
+            kind: Some("photo"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {photo}");
+    assert_eq!(photo["owner_type"], "ticket", "corpo: {photo}");
+
+    let (status, attachments) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/documents"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {attachments}");
+    assert_eq!(attachments["items"].as_array().map(Vec::len), Some(1));
+
+    // 3. Il proprietario classifica e assegna.
+    let (status, triaged) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/triage"),
+            &owner,
+            serde_json::json!({ "category": "plumbing", "priority": "high" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {triaged}");
+    assert_eq!(triaged["status"], "triaged", "corpo: {triaged}");
+    assert_eq!(triaged["category"], "plumbing");
+
+    let owner_id = triaged["reported_by"]
+        .as_str()
+        .map(str::to_owned)
+        .expect("chi ha segnalato è l'inquilino");
+    let (status, assigned) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/assign"),
+            &owner,
+            serde_json::json!({ "assignee_id": owner_id }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {assigned}");
+    assert_eq!(assigned["status"], "assigned");
+
+    // 4. Due messaggi, uno per parte.
+    for (token, org, body) in [
+        (&tenant, Some(owner_org.as_str()), "Sono in casa dopo le 18"),
+        (&owner, None, "Mando l'idraulico giovedì"),
+    ] {
+        let (status, message) = app
+            .send_in_org(
+                "POST",
+                &format!("/api/v1/tickets/{ticket}/messages"),
+                Some(token),
+                org,
+                Some(serde_json::json!({ "body": body })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "corpo: {message}");
+    }
+
+    // 5. Il proprietario scrive una nota interna. L'inquilino non la vede: la
+    //    filtra `ticket_messages_select`, non un ramo applicativo.
+    let (status, note) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            &owner,
+            serde_json::json!({ "body": "Preventivo gonfiato, trattare", "is_internal": true }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {note}");
+
+    let (status, thread) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {thread}");
+    let visible = thread["items"].as_array().expect("elenco");
+    assert_eq!(visible.len(), 2, "l'inquilino vede due messaggi: {thread}");
+    assert!(
+        !thread.to_string().contains("gonfiato"),
+        "la nota interna è arrivata all'inquilino: {thread}"
+    );
+
+    // Il proprietario invece la vede, ed è lo stesso thread.
+    let (status, staff_thread) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {staff_thread}");
+    assert_eq!(staff_thread["items"].as_array().map(Vec::len), Some(3));
+
+    // 6. Il proprietario registra stima e costo sostenuto, e chiude dicendo cosa
+    //    è stato fatto.
+    let (status, priced) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&owner),
+            Some(serde_json::json!({ "estimated_cost": "200.00", "actual_cost": "180.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {priced}");
+    assert_eq!(priced["estimated_cost"], "200.00", "corpo: {priced}");
+    assert_eq!(priced["actual_cost"], "180.00", "corpo: {priced}");
+    assert_eq!(priced["currency"], "EUR");
+
+    // L'inquilino vede il costo sostenuto e **non** la stima: quella è la cifra
+    // di una trattativa con un fornitore e non riguarda chi abita la casa.
+    let (status, seen_by_tenant) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {seen_by_tenant}");
+    assert_eq!(
+        seen_by_tenant["actual_cost"], "180.00",
+        "corpo: {seen_by_tenant}"
+    );
+    assert!(
+        seen_by_tenant["estimated_cost"].is_null(),
+        "la stima è arrivata all'inquilino: {seen_by_tenant}"
+    );
+
+    let (status, closed) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/close"),
+            &owner,
+            serde_json::json!({ "resolution_notes": "sostituita la valvola di sicurezza" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {closed}");
+    assert_eq!(closed["status"], "closed");
+    assert!(closed["closed_at"].is_string(), "corpo: {closed}");
+    assert_eq!(
+        closed["resolution_notes"],
+        "sostituita la valvola di sicurezza"
+    );
+
+    // 7. Il guasto torna: **l'inquilino** riapre. È la sola transizione che può
+    //    eseguire, ed è ciò che rende la segnalazione un rapporto.
+    let (status, reopened) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
+    assert_eq!(reopened["status"], "open");
+    assert!(
+        reopened["closed_at"].is_null(),
+        "una segnalazione riaperta con una data di chiusura è una riga che mente: {reopened}"
+    );
+    // Riaprire disfa la chiusura, e la nota di risoluzione ne fa parte: una
+    // segnalazione aperta che dichiara come è stata risolta direbbe il falso.
+    assert!(
+        reopened.get("resolution_notes").is_none(),
+        "la nota di risoluzione è sopravvissuta alla riapertura: {reopened}"
+    );
+
+    // 8. Lo storico mostra la catena intera, riapertura compresa.
+    let (status, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    let chain: Vec<&str> = detail["history"]
+        .as_array()
+        .expect("storico")
+        .iter()
+        .filter_map(|row| row["to_status"].as_str())
+        .collect();
+    assert_eq!(
+        chain,
+        vec!["open", "triaged", "assigned", "closed", "open"],
+        "corpo: {detail}"
+    );
+    // Lo storico lo scrive il trigger, e la prima riga non ha uno stato di
+    // partenza: la produce l'`INSERT`, non una transizione.
+    assert!(
+        detail["history"][0]["from_status"].is_null(),
+        "corpo: {detail}"
+    );
+}
+
+/// L'inquilino non guida la lavorazione, e non scrive note interne.
+#[tokio::test]
+async fn a_tenant_can_speak_but_not_drive_the_handling() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-ruoli").await;
+    let property = create_property(&app, &owner, "Immobile dei ruoli").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("inquilino-ruoli");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    app.post_auth(
+        "/api/v1/auth/accept-invitation",
+        &tenant,
+        serde_json::json!({ "token": accept_token }),
+    )
+    .await;
+
+    let (ticket, _) = open_ticket(
+        &app,
+        &tenant,
+        Some(&owner_org),
+        &property,
+        Some(&lease),
+        "Guasto dell'inquilino",
+    )
+    .await;
+
+    // Le transizioni dello staff gli sono precluse.
+    for path in ["triage", "assign", "start", "close"] {
+        let body = match path {
+            "triage" => serde_json::json!({ "category": "other", "priority": "low" }),
+            "assign" => serde_json::json!({ "assignee_id": uuid::Uuid::now_v7().to_string() }),
+            _ => serde_json::json!({}),
+        };
+        let (status, problem) = app
+            .send_in_org(
+                "POST",
+                &format!("/api/v1/tickets/{ticket}/{path}"),
+                Some(&tenant),
+                Some(&owner_org),
+                Some(body),
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "su `{path}`: {problem}");
+        // `org.staff_role_required` e non `auth.denied_by_policy`: quest'ultimo
+        // significa "difetto nostro", e qui il rifiuto è corretto e previsto.
+        assert_eq!(problem["code"], "org.staff_role_required", "su `{path}`");
+    }
+
+    // Nemmeno il PATCH sui costi: il costo di una riparazione lo registra chi paga.
+    let (status, problem) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "actual_cost": "1.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+
+    // E nemmeno una nota interna: il service layer la rifiuta **prima** della
+    // policy, che darebbe `auth.denied_by_policy`.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "body": "nota", "is_internal": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "org.staff_role_required");
+
+    // Annullare invece sì, finché nessuno ci ha messo mano.
+    let (status, cancelled) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/cancel"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cancelled}");
+    assert_eq!(cancelled["status"], "cancelled");
+}
+
+/// Chi condivide il contratto vede la segnalazione ma non la riapre, e il codice
+/// glielo dice per quello che è.
+///
+/// La `USING` di `tickets_update` ammette staff, chi ha segnalato e chi è
+/// assegnato: non passa dal contratto. `org.staff_role_required` direbbe al
+/// coinquilino che gli manca un ruolo, mentre gli manca l'essere stato lui a
+/// segnalare — e nessun ruolo glielo darebbe.
+#[tokio::test]
+async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-coinquilini").await;
+    let property = create_property(&app, &owner, "Casa condivisa").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    // Due inquilini sullo stesso contratto.
+    let mut tokens = Vec::new();
+    for prefix in ["coinquilino-uno", "coinquilino-due"] {
+        let email = common::unique_email(prefix);
+        let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+        let (token, _, _) = common::register_and_login_with_email(&app, &email).await;
+        let (status, accepted) = app
+            .post_auth(
+                "/api/v1/auth/accept-invitation",
+                &token,
+                serde_json::json!({ "token": accept_token }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+        tokens.push(token);
+    }
+    let (reporter, cotenant) = (&tokens[0], &tokens[1]);
+
+    let (ticket, _) = open_ticket(
+        &app,
+        reporter,
+        Some(&owner_org),
+        &property,
+        Some(&lease),
+        "Perdita in cucina",
+    )
+    .await;
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/close"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    // Il coinquilino la vede: gliela concede can_access_ticket attraverso il
+    // contratto.
+    let (status, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(cotenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+
+    // Ma non la riapre, e il codice non parla di ruoli.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(cotenant),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "ticket.not_yours", "corpo: {problem}");
+
+    // Chi ha segnalato invece sì.
+    let (status, reopened) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(reporter),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
+}
+
+/// Il riferimento riparte da uno in ogni organizzazione, e non dice quante
+/// segnalazioni esistono sulla piattaforma.
+#[tokio::test]
+async fn the_reference_restarts_from_one_in_every_organization() {
+    let app = require_app!();
+
+    let mut references = Vec::new();
+    for prefix in ["riferimenti-alfa", "riferimenti-beta"] {
+        let (owner, _) = common::register_and_login(&app, prefix).await;
+        let property = create_property(&app, &owner, "Immobile numerato").await;
+        let (_, first) = open_ticket(&app, &owner, None, &property, None, "La prima").await;
+        let (_, second) = open_ticket(&app, &owner, None, &property, None, "La seconda").await;
+        references.push((first, second));
+    }
+
+    for (first, second) in &references {
+        assert_eq!(first, "TK-000001", "ogni organizzazione riparte da uno");
+        assert_eq!(second, "TK-000002");
+    }
+    assert_eq!(
+        references[0], references[1],
+        "due organizzazioni indipendenti devono numerare allo stesso modo"
+    );
+}
+
+/// Una segnalazione di un'altra organizzazione non esiste, e l'elenco non la
+/// nomina.
+#[tokio::test]
+async fn a_ticket_of_another_organization_is_not_found() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "ticket-mio").await;
+    let (stranger, _) = common::register_and_login(&app, "ticket-estraneo").await;
+
+    let property = create_property(&app, &owner, "Immobile riservato").await;
+    let (ticket, _) = open_ticket(&app, &owner, None, &property, None, "Solo mio").await;
+
+    for (method, path, body) in [
+        ("GET", format!("/api/v1/tickets/{ticket}"), None),
+        (
+            "GET",
+            format!("/api/v1/tickets/{ticket}/messages"),
+            None::<serde_json::Value>,
+        ),
+        (
+            "POST",
+            format!("/api/v1/tickets/{ticket}/close"),
+            Some(serde_json::json!({})),
+        ),
+    ] {
+        let (status, problem) = app.send(method, &path, Some(&stranger), body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "su `{path}`: {problem}");
+        assert_eq!(problem["code"], "ticket.not_found", "su `{path}`");
+    }
+
+    let (status, page) = app
+        .send("GET", "/api/v1/tickets", Some(&stranger), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(0));
+}
+
+/// Il filtro della coda usa i sei stati di lavorazione, non `status <> 'closed'`.
+#[tokio::test]
+async fn the_queue_filter_separates_working_from_terminal() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "ticket-coda").await;
+    let property = create_property(&app, &owner, "Immobile della coda").await;
+
+    let (aperta, _) = open_ticket(&app, &owner, None, &property, None, "Ancora aperta").await;
+    let (chiusa, _) = open_ticket(&app, &owner, None, &property, None, "Da chiudere").await;
+    app.post_auth(
+        &format!("/api/v1/tickets/{chiusa}/close"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let ids = |page: &serde_json::Value| -> Vec<String> {
+        page["items"]
+            .as_array()
+            .expect("elenco")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_owned))
+            .collect()
+    };
+
+    let (status, queue) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets?property_id={property}&open=true"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {queue}");
+    assert_eq!(ids(&queue), vec![aperta.clone()], "corpo: {queue}");
+
+    let (status, done) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets?property_id={property}&open=false"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {done}");
+    assert_eq!(ids(&done), vec![chiusa], "corpo: {done}");
+
+    // E il filtro per stato memorizzato resta disponibile.
+    let (status, by_status) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets?property_id={property}&status=open"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {by_status}");
+    assert_eq!(ids(&by_status), vec![aperta]);
+}
+
+/// Le transizioni non ammesse danno `409` con un codice che il client può
+/// instradare, e non un successo silenzioso.
+#[tokio::test]
+async fn a_transition_that_is_not_allowed_is_a_conflict() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "ticket-transizioni").await;
+    let property = create_property(&app, &owner, "Immobile delle transizioni").await;
+    let (ticket, _) = open_ticket(&app, &owner, None, &property, None, "Appena aperta").await;
+
+    // Da `open` non si avvia la lavorazione: prima si assegna.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/start"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "ticket.invalid_transition");
+
+    // Né si riapre ciò che non è chiuso.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "ticket.invalid_transition");
+
+    // Una segnalazione annullata non ha costi.
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/cancel"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&owner),
+            Some(serde_json::json!({ "actual_cost": "10.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "ticket.cancelled");
+}
+
+/// Un `PATCH` vuoto non è un errore, e non produce una modifica.
+///
+/// `null` invece azzera: è la differenza che rende un PATCH capace di cancellare
+/// un valore, e non solo di sovrascriverlo.
+#[tokio::test]
+async fn the_cost_patch_tells_absent_from_null() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "ticket-costi").await;
+    let property = create_property(&app, &owner, "Immobile dei costi").await;
+    let (ticket, _) = open_ticket(&app, &owner, None, &property, None, "Con preventivo").await;
+
+    let path = format!("/api/v1/tickets/{ticket}");
+    let patch = |body: serde_json::Value| app.send("PATCH", &path, Some(&owner), Some(body));
+
+    let (status, set) = patch(serde_json::json!({ "estimated_cost": "120.00" })).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {set}");
+    assert_eq!(set["estimated_cost"], "120.00");
+
+    let (status, untouched) = patch(serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {untouched}");
+    assert_eq!(
+        untouched["estimated_cost"], "120.00",
+        "un campo assente resta com'era: {untouched}"
+    );
+
+    let (status, cleared) = patch(serde_json::json!({ "estimated_cost": null })).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cleared}");
+    assert!(
+        cleared["estimated_cost"].is_null(),
+        "`null` azzera: {cleared}"
+    );
+
+    let (status, problem) = patch(serde_json::json!({ "actual_cost": "-1.00" })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "actual_cost");
+}
+
+/// Stanza e contratto di un **altro** immobile vengono rifiutati all'apertura,
+/// che è l'unico momento in cui l'incoerenza può nascere: dopo l'inserimento
+/// quelle colonne non sono più scrivibili (migration `0020`).
+#[tokio::test]
+async fn a_ticket_refuses_references_of_another_property() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "ticket-riferimenti").await;
+    let target = create_property(&app, &owner, "Immobile bersaglio").await;
+    let other = create_property(&app, &owner, "Immobile estraneo").await;
+
+    let (_, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{other}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera altrove" }),
+        )
+        .await;
+    let room = room["id"].as_str().expect("id").to_owned();
+    let foreign_lease = draft_lease(&app, &owner, &other, None, 0, Some(365)).await;
+
+    for (field, value) in [("room_id", room), ("lease_id", foreign_lease)] {
+        let (status, problem) = app
+            .post_auth(
+                &format!("/api/v1/properties/{target}/tickets"),
+                &owner,
+                serde_json::json!({
+                    "title": "Incoerente",
+                    "description": "Riferimento di un altro immobile",
+                    field: value,
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "su `{field}`: {problem}"
+        );
+        assert_eq!(problem["code"], "validation.failed", "su `{field}`");
+        assert_eq!(problem["errors"][0]["field"], field);
+    }
+}
+
+/// Il titolo rispetta i limiti dello schema, e il corpo di un messaggio non può
+/// essere vuoto.
+#[tokio::test]
+async fn a_ticket_validates_its_text() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "ticket-validazione").await;
+    let property = create_property(&app, &owner, "Immobile della validazione").await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({ "title": "   ", "description": "c'è" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "title");
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({ "title": "a".repeat(201), "description": "c'è" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let (ticket, _) = open_ticket(&app, &owner, None, &property, None, "Valida").await;
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            &owner,
+            serde_json::json!({ "body": "  " }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "body");
+}

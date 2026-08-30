@@ -5,7 +5,11 @@ use crate::events::DomainEvent;
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::property::{Property, PropertyStatus, Room};
-use crate::shared::{DocumentId, Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, UserId};
+use crate::shared::{
+    DocumentId, Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, TicketId, TicketMessageId,
+    UserId,
+};
+use crate::ticket::{Ticket, TicketMessage, TicketReference, TicketStatus, TicketStatusChange};
 
 /// Errori della persistenza espressi senza nominare la tecnologia.
 ///
@@ -285,6 +289,146 @@ pub trait DocumentRepository: Send {
     /// privilegio `DELETE`, e rimuovere i byte è un lavoro a parte, insieme al
     /// purge di `retention_until`.
     async fn archive(&mut self, document: &Document) -> RepositoryResult<()>;
+}
+
+/// Filtro di elenco delle segnalazioni con paginazione keyset.
+#[derive(Debug, Clone)]
+pub struct TicketQuery {
+    pub property_id: Option<PropertyId>,
+    pub status: Option<TicketStatus>,
+    /// `Some(true)` = solo le segnalazioni ancora in lavorazione, `Some(false)` =
+    /// solo quelle terminate.
+    ///
+    /// Il ramo positivo enumera i sei stati di [`TicketStatus::WORKING`] invece di
+    /// scrivere `status <> 'closed'`, ed è la ragione per cui esiste: l'indice
+    /// `tickets_open_ix` è **parziale** su quell'elenco esatto, e una disuguaglianza
+    /// non lo userebbe. È l'elenco che la dashboard del proprietario legge.
+    pub open: Option<bool>,
+    pub after: Option<TicketId>,
+    pub limit: u16,
+}
+
+impl TicketQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+impl Default for TicketQuery {
+    fn default() -> Self {
+        Self {
+            property_id: None,
+            status: None,
+            open: None,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TicketPage {
+    pub items: Vec<Ticket>,
+    pub next_cursor: Option<TicketId>,
+}
+
+/// Segnalazioni.
+///
+/// Nessun `soft_delete`: una segnalazione non si archivia, si **annulla** — e
+/// l'annullamento è una transizione di stato, quindi passa da `update`. La colonna
+/// `deleted_at` esiste sulla tabella e in questa fetta nessuno la valorizza.
+#[async_trait]
+pub trait TicketRepository: Send {
+    async fn find_by_id(&mut self, id: TicketId) -> RepositoryResult<Option<Ticket>>;
+    async fn list(&mut self, query: &TicketQuery) -> RepositoryResult<TicketPage>;
+
+    /// Inserisce la segnalazione e **restituisce il riferimento** che il database
+    /// le ha assegnato.
+    ///
+    /// È l'unico `insert` del progetto con un valore di ritorno, e non è una
+    /// comodità: `tickets.reference` ha come `DEFAULT`
+    /// `'TK-' || to_char(nextval('app.ticket_reference_seq'), 'FM000000')`, quindi
+    /// il valore esiste solo dopo la scrittura. Chi chiama passa il risultato a
+    /// `Ticket::attach_reference`.
+    ///
+    /// Generarlo nell'applicazione non è la scorciatoia che sembra: metterebbe il
+    /// codice in competizione con la sequenza, e il primo `INSERT` che non lo
+    /// specificasse la farebbe avanzare comunque, producendo collisioni
+    /// sull'indice unico `tickets_reference_uk` a distanza di mesi.
+    ///
+    /// **Non lo recupera un `RETURNING`**, che sotto Row Level Security fallisce:
+    /// l'implementazione rilegge la riga in uno statement separato della stessa
+    /// transazione, e il perché sta nel commento del repository.
+    async fn insert(&mut self, ticket: &Ticket) -> RepositoryResult<TicketReference>;
+
+    /// Aggiorna le sole colonne che l'applicazione può scrivere.
+    ///
+    /// L'elenco non è discrezionale: coincide con la `GRANT UPDATE (…)` della
+    /// migration `0020`, e una colonna aggiunta qui e non lì fallisce con
+    /// `permission denied` nei test di integrazione, che girano come
+    /// `propflow_app`.
+    async fn update(&mut self, ticket: &Ticket) -> RepositoryResult<()>;
+
+    /// Storico delle transizioni, dalla più vecchia alla più recente.
+    ///
+    /// Solo lettura, e non per prudenza: lo scrive il trigger
+    /// `tg_ticket_status_history`, e `app.ticket_status_history` non ha una policy
+    /// di `INSERT`. Un metodo di scrittura su questa porta inviterebbe a fare ciò
+    /// che il database rifiuta.
+    async fn list_status_history(
+        &mut self,
+        ticket_id: TicketId,
+    ) -> RepositoryResult<Vec<TicketStatusChange>>;
+}
+
+/// Filtro di elenco dei messaggi di una segnalazione, con paginazione keyset.
+///
+/// Il filtro sulla segnalazione non è opzionale: un elenco di *tutti* i messaggi
+/// dell'organizzazione non è un'operazione che l'API espone.
+#[derive(Debug, Clone)]
+pub struct TicketMessageQuery {
+    pub ticket_id: TicketId,
+    pub after: Option<TicketMessageId>,
+    pub limit: u16,
+}
+
+impl TicketMessageQuery {
+    pub const DEFAULT_LIMIT: u16 = 50;
+    pub const MAX_LIMIT: u16 = 100;
+
+    #[must_use]
+    pub const fn for_ticket(ticket_id: TicketId) -> Self {
+        Self {
+            ticket_id,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TicketMessagePage {
+    pub items: Vec<TicketMessage>,
+    pub next_cursor: Option<TicketMessageId>,
+}
+
+/// Thread di conversazione di una segnalazione.
+///
+/// **Nessun `update` e nessun `delete`, nemmeno soft.** `app.ticket_messages` ha
+/// due sole policy, `_select` e `_insert`: un messaggio scritto resta com'è. Non è
+/// una svista da correggere di passaggio — un thread in cui le righe non si
+/// riscrivono è una proprietà — ma qualunque metodo qui che prometta di
+/// modificarne uno starebbe promettendo ciò che il database rifiuta.
+///
+/// Le note interne **non** hanno una porta a parte: `is_internal` è un campo del
+/// messaggio, e la policy di SELECT lo filtra per l'inquilino. Due tabelle
+/// avrebbero due thread da fondere in lettura e due punti dove sbagliare l'ordine.
+#[async_trait]
+pub trait TicketMessageRepository: Send {
+    async fn insert(&mut self, message: &TicketMessage) -> RepositoryResult<()>;
+    async fn list_for_ticket(
+        &mut self,
+        query: &TicketMessageQuery,
+    ) -> RepositoryResult<TicketMessagePage>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa

@@ -139,6 +139,26 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
 
+-- 12. Colonne strutturali di una segnalazione non devono essere aggiornabili dal
+--     ruolo applicativo. Il criterio è **diverso** da quello del controllo 11:
+--     qui non c'è un confine di isolamento da difendere — l'inquilino che le
+--     riscrivesse resterebbe dentro la propria organizzazione — ma una classe di
+--     incoerenze che nessuna policy può esprimere, perché una policy non può
+--     confrontare la riga nuova con quella vecchia. Lo schema non ha alcun vincolo
+--     fra `room_id`, `lease_id` e `property_id`, e la `WITH CHECK` di
+--     `tickets_update` nomina il solo `org_id`. Vedi migrations/0020 e ADR-026.
+INSERT INTO invariant_violations
+SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
+  FROM (
+    VALUES ('tickets', 'property_id'), ('tickets', 'room_id'),
+           ('tickets', 'lease_id'),    ('tickets', 'reported_by'),
+           ('tickets', 'reported_by_kind'),
+           ('tickets', 'title'),       ('tickets', 'description'),
+           ('tickets', 'reference'),   ('tickets', 'currency')
+  ) AS t(tbl, col)
+ WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
+   AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
+
 -- ---------------------------------------------------------------------------
 \echo ''
 \echo 'Violazioni rilevate (vuoto = tutto in ordine):'

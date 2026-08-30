@@ -823,3 +823,177 @@ diventano `413` con `request.payload_too_large`.
 sopra entrambi i limiti, quindi fallirebbe se se ne fosse alzato uno solo — e un
 corpo JSON oltre 1 MiB su `POST /api/v1/properties` deve **fallire** con `413`, che è
 ciò che si romperebbe alzando il limite generale invece di separare i gruppi.
+
+---
+
+<a id="adr-026"></a>
+
+## ADR-026 — I privilegi di colonna anche dove non c'è un confine da difendere
+
+**Contesto.** [ADR-021](#adr-021) ha introdotto i privilegi di colonna per un caso
+preciso: due policy che concedevano scrittura a un **non membro**, attraversando il
+confine dell'organizzazione. La regola generale che ne è seguita — «quando una policy
+concede scrittura oltre il confine, il `WITH CHECK` non basta» — descrive perché
+*quelle due* ne avevano bisogno. Le segnalazioni pongono un caso che quella regola non
+copre, e in cui lo strumento conviene lo stesso.
+
+**Difetto osservato.** La `WITH CHECK` di `tickets_update` vincola **solo** `org_id`.
+La `USING` lascia passare lo staff, chi ha segnalato e chi è assegnato; nessun'altra
+colonna è nominata, quindi tutte restano libere per chiunque la `USING` ammetta — e
+ammette l'inquilino che ha aperto la segnalazione.
+
+Riprodotto su database reale, con `UPDATE` scritte a mano come inquilino sotto RLS,
+sulla segnalazione aperta da lui:
+
+| Tentativo | Esito |
+|---|---|
+| `actual_cost = 9999.00` | riuscito |
+| `assigned_to` = un altro utente | riuscito |
+| `status = 'closed'`, saltando il flusso | riuscito |
+| `priority = 'urgent'` | riuscito |
+| spostarlo su un immobile in cui non abita | riuscito |
+| toccare la segnalazione di un altro | rifiutato dalla `USING` |
+| spostarlo in un'altra organizzazione | rifiutato dal trigger `assert_org_matches_property` |
+
+**Perché non è ADR-021.** Due cose che l'esperimento ha stabilito e che il
+ragionamento da solo non dava. Il **confine di isolamento tiene**: dopo tutte le
+scritture l'inquilino vede ancora una sola segnalazione, non ha guadagnato visibilità
+su niente. E il **danno è registrato**: lo storico annota `open → closed` con lui come
+autore, e `tickets` è fra le tabelle con il trigger di audit, quindi ogni `UPDATE`
+finisce in `audit_log`. Non è una violazione dell'isolamento: è **corruzione di dati
+dentro la propria organizzazione**, tracciata.
+
+**Causa radice, e criterio nuovo.** Lo schema non ha **alcun vincolo** fra `room_id`,
+`lease_id` e `property_id` di una segnalazione. Il trigger
+`assert_org_matches_property` verifica soltanto che l'`org_id` del ticket coincida con
+quello dell'immobile: una stanza di un altro immobile, o il contratto di un altro
+immobile, sono accettati senza protestare. Riproducendo la prova qui sopra si è
+ottenuta esattamente questa riga — una segnalazione spostata su un immobile, con il
+`lease_id` che continuava a puntare al contratto del primo.
+
+Nessuna policy può impedirlo, e non per come è scritta: **una policy non può
+confrontare la riga nuova con quella vecchia**. È la stessa constatazione di ADR-021,
+e vale qui identica pur con una posta in gioco diversa.
+
+**Decisione.** `migrations/0020_ticket_column_privileges.sql` toglie a `propflow_app`
+l'`UPDATE` sull'intera tabella `app.tickets` e gliela riconcede sulle sole nove
+colonne che i repository scrivono: `status`, `category`, `priority`, `assigned_to`,
+`assigned_at`, `estimated_cost`, `actual_cost`, `resolved_at`, `closed_at`.
+
+Restano fuori `property_id`, `room_id`, `lease_id`, `reported_by`,
+`reported_by_kind`, `title`, `description`, `reference`, `currency` e `deleted_at`.
+`updated_at` non compare perché nessuna query la nomina: la scrive il trigger
+`set_updated_at`, che è `BEFORE UPDATE` e non è soggetto ai privilegi di colonna del
+chiamante.
+
+**Il criterio, dichiarato.** Lo strumento serve in due casi, non in uno:
+
+1. quando una policy concede scrittura **oltre il confine** di isolamento (ADR-021);
+2. quando una colonna **non ha un motivo legittimo di cambiare** e lo schema non ha
+   un vincolo che ne difenda la coerenza. Allora il privilegio di colonna è la sola
+   difesa disponibile, e costa una riga.
+
+Il secondo caso è quello delle segnalazioni, ed è quello che rende la scelta quasi
+gratuita: una segnalazione aperta sull'immobile sbagliato **si annulla e si riapre** —
+`cancelled` esiste per questo — e non si corregge spostandola.
+
+**Conseguenza sul dove va fatto il controllo.** L'incoerenza strutturale può ora
+nascere **solo all'apertura**. Il controllo applicativo sta lì, una volta sola
+(`OpenTicket` legge stanza e contratto dai rispettivi repository e confronta
+`property_id`), e non su ogni transizione. Senza la migration andrebbe ripetuto
+ovunque, o dimenticato una volta.
+
+**Cosa i privilegi non fanno.** Non dicono nulla su chi possa chiudere una
+segnalazione o valorizzarne il costo: `status`, `assigned_to` e i due costi restano
+concesse — devono esserlo, è il lavoro dell'applicazione. Quella parte resta
+autorizzazione applicativa, transizione per transizione.
+
+**Conseguenze e manutenzione.** L'elenco concesso e le colonne che compaiono nella
+`UPDATE` del repository sono **la stessa lista**. Aggiungerne una senza aggiungerla
+alla `GRANT` fa fallire la scrittura con `permission denied`, e fallisce nei test di
+integrazione, che girano come `propflow_app`. Il controllo 12 delle invarianti dello
+schema (`ops/sql/checks/schema_invariants.sql`) verifica che le colonne strutturali
+restino non aggiornabili, con un nome proprio — `colonna-strutturale-scrivibile` —
+distinto da quello del controllo 11, perché il criterio è diverso e confonderli
+renderebbe illeggibile la ragione di entrambi.
+
+**Alternativa scartata: irrigidire il `WITH CHECK`.** Stessa ragione di ADR-021, e una
+in più: qui non basterebbe nemmeno in linea di principio, perché la condizione da
+imporre («`room_id` appartiene a `property_id`») richiederebbe alla policy di leggere
+`app.rooms`, e la coerenza da difendere riguarda comunque il rapporto fra la riga
+vecchia e quella nuova.
+
+**Alternativa scartata: un trigger di coerenza.** Un `BEFORE UPDATE` che confronti
+`OLD` e `NEW` potrebbe farlo, e sarebbe la via naturale se le colonne dovessero
+restare scrivibili in qualche caso. Non è così: non devono cambiare mai, e togliere il
+privilegio esprime *questo*, mentre un trigger esprimerebbe «può cambiare, ma solo
+così». Un trigger in più è anche un trigger in più su ogni `UPDATE` di ogni
+segnalazione, mentre il controllo dei privilegi è già nel percorso.
+
+---
+
+<a id="adr-027"></a>
+
+## ADR-027 — Il riferimento di una segnalazione si numera per organizzazione
+
+**Difetto osservato.** `tickets.reference` nasceva da `app.ticket_reference_seq`, una
+sola sequenza per il cluster. La prima segnalazione di qualunque organizzazione era
+`TK-000001`; la millesima della piattaforma era `TK-001000` anche se per il suo
+proprietario era la seconda. Il numero rivelava quante segnalazioni esistono
+sull'intera piattaforma.
+
+Non è un dato sensibile e la fuga è modesta. È però un dato che non si intendeva
+dare, e la ragione per cui si è corretto subito non è la gravità ma **la forma del
+costo**: finché nessuno ha dati reali è una migration su tabelle vuote, dopo sarebbe
+rinumerare o convivere con due formati per sempre. È una delle poche decisioni la cui
+finestra si chiude da sola.
+
+**Decisione.** Un contatore per organizzazione — `app.ticket_reference_counters`,
+una riga per `org_id` con l'ultimo numero usato — riempito da un trigger
+`BEFORE INSERT` su `app.tickets` (`migrations/0021_ticket_reference_per_org.sql`).
+
+L'unicità cambia forma insieme alla numerazione: `tickets_reference_uk` era su
+`(reference)` e diventa su `(org_id, reference)`, perché due `TK-000001` in due
+organizzazioni diverse sono ora legittimi.
+
+**Perché un contatore e non una sequenza per organizzazione.** Una sequenza per org
+richiederebbe DDL dinamico a ogni registrazione — `CREATE SEQUENCE` dentro un
+trigger — e lascerebbe dietro di sé oggetti di schema che nessuna migration ha creato
+e che nessuno cancella. Una riga in una tabella si crea, si legge, si ispeziona e se
+ne va con l'organizzazione a cui appartiene.
+
+**Perché un trigger e non l'applicazione.** Così `reference` resta fuori dalla
+`GRANT UPDATE` della `0020` e fuori dalla portata del ruolo applicativo, che è ciò
+che il controllo 12 delle invarianti protegge. Il repository non nomina la colonna e
+non deve saperne nulla; se un giorno la nominasse, il trigger la sovrascriverebbe
+comunque. Calcolare il numero nell'applicazione avrebbe richiesto di concedere la
+colonna in scrittura, cioè di disfare la 0020 per un contatore.
+
+**Conseguenza sulla concorrenza, da dire ad alta voce.** `ON CONFLICT DO UPDATE`
+prende un lock di riga: due aperture concorrenti **nella stessa organizzazione** si
+serializzano fino al commit. Per un'azione umana su una casa è irrilevante, e in
+cambio la numerazione non ha buchi — una transazione annullata non consuma un numero,
+cosa che una sequenza invece fa. Se un giorno esistesse un'organizzazione che apre
+segnalazioni a ritmo di macchina, questa è la riga da guardare per prima.
+
+**Conseguenza sul contratto pubblico.** Il riferimento **non è più un identificatore
+globale**. Per raggiungere una segnalazione serve il suo `id`, e un client che
+indicizzasse per `reference` senza l'organizzazione fonderebbe righe diverse. È
+documentato in [05 — API](05-api.md#reference).
+
+**Il contatore non è manipolabile dall'applicazione.** La tabella ha la RLS attiva e
+una sola policy, di `SELECT`: al ruolo applicativo i privilegi predefiniti lasciano
+`INSERT` e `UPDATE` a livello di tabella, ma nessuna policy li ammette, quindi
+l'inserimento è rifiutato e l'aggiornamento non trova righe. Senza questa asimmetria
+un membro qualsiasi potrebbe riportare il contatore indietro e far collidere il
+prossimo riferimento con uno già emesso. Due test di persistenza lo fissano.
+
+**Le righe già presenti non si rinumerano.** Il contatore parte dal numero più alto
+già usato in quell'organizzazione — non dal conteggio delle righe, che con un'org
+avente `TK-000001` e `TK-000005` ripartirebbe da 3 e si scontrerebbe con `TK-000005`
+due aperture dopo.
+
+**Alternativa scartata: non esporre affatto il riferimento.** Avrebbe rimandato la
+decisione senza pagarla, ma toglie al proprietario un numero corto da citare al
+telefono, che è l'unica ragione per cui una colonna del genere esiste accanto a un
+UUID.

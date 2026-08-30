@@ -49,6 +49,12 @@ pub(super) async fn ensure_owner_is_visible(
             .await?
             .map(|_| ())
             .ok_or(AppError::not_found(Entity::Lease)),
+        AttachmentOwner::Ticket(id) => uow
+            .tickets()
+            .find_by_id(id)
+            .await?
+            .map(|_| ())
+            .ok_or(AppError::not_found(Entity::Ticket)),
     }
 }
 

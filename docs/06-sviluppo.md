@@ -64,7 +64,7 @@ Quattro livelli sul codice, più una guardia sulla documentazione.
 | Contratto HTTP | `crates/api/tests/` | codici di stato, formato degli errori, autorizzazione | **sì** |
 | Guardie sulla documentazione | `crates/api/tests/docs_config_reference.rs` | che le tabelle di [07 — Operazioni](07-operazioni.md#configurazione) non restino indietro rispetto al codice | no |
 
-Attualmente **155 test**.
+Attualmente **204 test**.
 
 L'ultimo livello non verifica il codice ma la documentazione: deriva le
 impostazioni dai sorgenti di `AppConfig` e del migratore e fallisce se una manca

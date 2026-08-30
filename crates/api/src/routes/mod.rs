@@ -9,6 +9,7 @@ pub mod invitations;
 pub mod leases;
 pub mod properties;
 pub mod rooms;
+pub mod tickets;
 
 /// Distingue "campo assente" da "campo presente e null".
 ///

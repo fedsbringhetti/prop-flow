@@ -8,6 +8,6 @@ pub use address::{Address, CountryCode};
 pub use email::Email;
 pub use ids::{
     DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, SessionId,
-    UserId,
+    TicketId, TicketMessageId, UserId,
 };
 pub use money::{Currency, Money};

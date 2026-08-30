@@ -1,20 +1,25 @@
 use uuid::Uuid;
 
-use crate::shared::{LeaseId, PropertyId, RoomId};
+use crate::shared::{LeaseId, PropertyId, RoomId, TicketId};
 
 /// Tipo dell'oggetto a cui un documento è allegato.
 ///
 /// L'enum del database (`app.attachment_owner_type`) ha undici valori; qui ce ne
-/// sono tre. Non è una svista: sono gli unici aggregati che hanno già dominio,
-/// caso d'uso ed endpoint, e un allegato a un ticket inesistente nell'API non è
+/// sono quattro. Non è una svista: sono gli unici aggregati che hanno già dominio,
+/// caso d'uso ed endpoint, e un allegato a una bolletta inesistente nell'API non è
 /// modellabile. La conseguenza voluta è che un documento scritto a mano su un
 /// altro tipo di owner dà **errore** in lettura invece di essere ignorato — la
 /// stessa regola degli altri enum (`docs/06-sviluppo.md` §Aggiungere un enum).
+///
+/// `Ticket` è arrivato con le segnalazioni, ed è costato **una variante e due
+/// rotte**: `can_access_attachment` risolveva già `ticket` su `can_access_ticket`
+/// dal primo giorno. È il dividendo di aver fatto i documenti per primi.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentOwnerType {
     Property,
     Room,
     Lease,
+    Ticket,
 }
 
 /// Oggetto a cui un documento è allegato, con il proprio identificatore.
@@ -29,6 +34,7 @@ pub enum AttachmentOwner {
     Property(PropertyId),
     Room(RoomId),
     Lease(LeaseId),
+    Ticket(TicketId),
 }
 
 impl AttachmentOwner {
@@ -38,6 +44,7 @@ impl AttachmentOwner {
             Self::Property(_) => AttachmentOwnerType::Property,
             Self::Room(_) => AttachmentOwnerType::Room,
             Self::Lease(_) => AttachmentOwnerType::Lease,
+            Self::Ticket(_) => AttachmentOwnerType::Ticket,
         }
     }
 
@@ -48,6 +55,7 @@ impl AttachmentOwner {
             Self::Property(id) => id.as_uuid(),
             Self::Room(id) => id.as_uuid(),
             Self::Lease(id) => id.as_uuid(),
+            Self::Ticket(id) => id.as_uuid(),
         }
     }
 
@@ -58,6 +66,7 @@ impl AttachmentOwner {
             AttachmentOwnerType::Property => Self::Property(PropertyId::from_uuid(owner_id)),
             AttachmentOwnerType::Room => Self::Room(RoomId::from_uuid(owner_id)),
             AttachmentOwnerType::Lease => Self::Lease(LeaseId::from_uuid(owner_id)),
+            AttachmentOwnerType::Ticket => Self::Ticket(TicketId::from_uuid(owner_id)),
         }
     }
 }
@@ -72,6 +81,7 @@ mod tests {
             AttachmentOwner::Property(PropertyId::generate()),
             AttachmentOwner::Room(RoomId::generate()),
             AttachmentOwner::Lease(LeaseId::generate()),
+            AttachmentOwner::Ticket(TicketId::generate()),
         ];
         for owner in owners {
             let rebuilt = AttachmentOwner::from_persistence(owner.owner_type(), owner.owner_id());

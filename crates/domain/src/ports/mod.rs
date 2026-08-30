@@ -10,6 +10,7 @@ pub use repositories::{
     DocumentPage, DocumentQuery, DocumentRepository, EventSink, InvitationRepository, LeaseOverlap,
     LeasePage, LeasePartyRepository, LeaseQuery, LeaseRepository, OrgMemberRepository,
     OrganizationRepository, PropertyPage, PropertyQuery, PropertyRepository, RepositoryError,
-    RepositoryResult, RoomRepository, SessionRepository, UserRepository,
+    RepositoryResult, RoomRepository, SessionRepository, TicketMessagePage, TicketMessageQuery,
+    TicketMessageRepository, TicketPage, TicketQuery, TicketRepository, UserRepository,
 };
 pub use uow::{UnitOfWork, UnitOfWorkFactory};

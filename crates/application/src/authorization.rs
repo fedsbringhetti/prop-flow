@@ -39,6 +39,25 @@ pub fn ensure_staff(context: &RequestContext) -> AppResult<OrgId> {
     Ok(org_id)
 }
 
+/// Chi può vedere il **costo stimato** di una segnalazione.
+///
+/// La regola vive qui e non al bordo HTTP perché è autorizzazione, non
+/// presentazione: il bordo la applica alla proiezione, ma non la decide.
+///
+/// `estimated_cost` è la cifra di una trattativa con un fornitore e non riguarda
+/// chi abita la casa; `actual_cost` sì, ed è visibile a chiunque veda la
+/// segnalazione. La distinzione **non è un confine di sicurezza**: la Row Level
+/// Security lascia comunque leggere la riga a chi ha segnalato, quindi questa è
+/// una regola del contratto dell'API. Renderla un confine vero richiederebbe
+/// privilegi di colonna in `SELECT` o una policy separata.
+///
+/// La direzione è deliberata: aggiungere un campo a una risposta è additivo,
+/// toglierlo è una rottura.
+#[must_use]
+pub fn discloses_estimated_cost(context: &RequestContext) -> bool {
+    context.is_staff()
+}
+
 /// Ruolo effettivo da registrare negli eventi di dominio.
 #[must_use]
 pub fn effective_role(context: &RequestContext) -> OrgRole {
@@ -64,6 +83,21 @@ mod tests {
             .with_org(OrgId::generate(), OrgRole::Tenant);
         assert!(ensure_member(&context).is_ok());
         assert!(ensure_staff(&context).is_err());
+    }
+
+    /// La stima non è per chi abita la casa. Il test fissa la regola dove è
+    /// scritta, così un cambiamento al bordo HTTP non può spostarla di nascosto.
+    #[test]
+    fn only_staff_sees_the_estimated_cost() {
+        let tenant = RequestContext::authenticated(UserId::generate())
+            .with_org(OrgId::generate(), OrgRole::Tenant);
+        assert!(!discloses_estimated_cost(&tenant));
+
+        for role in [OrgRole::Owner, OrgRole::Manager] {
+            let staff =
+                RequestContext::authenticated(UserId::generate()).with_org(OrgId::generate(), role);
+            assert!(discloses_estimated_cost(&staff), "{role:?}");
+        }
     }
 
     #[test]
