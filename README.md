@@ -22,6 +22,7 @@ set -a; source .env; set +a
 
 # Database roles, once per cluster
 docker compose exec -T postgres psql -U postgres -d postgres \
+  -v db_name=propflow \
   -v migrator_password=migrator -v app_password=app -v worker_password=worker \
   -f /dev/stdin < ops/sql/roles.sql
 
