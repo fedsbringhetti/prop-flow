@@ -49,6 +49,7 @@ fi
 
 log "ruoli con privilegi minimi"
 run_psql -q -v ON_ERROR_STOP=1 -d "${PROPFLOW_DB_NAME}" \
+  -v db_name="${PROPFLOW_DB_NAME}" \
   -v migrator_password="${PROPFLOW_MIGRATOR_PASSWORD}" \
   -v app_password="${PROPFLOW_APP_PASSWORD}" \
   -v worker_password="${PROPFLOW_WORKER_PASSWORD}" \
