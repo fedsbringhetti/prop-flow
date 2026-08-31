@@ -1038,9 +1038,31 @@ apposta ([ADR-002](#adr-002)). È lecito **solo** perché la valuta è una sola 
 i due, e va detta: `v_charge_balances.is_past_due` è vero anche per un addebito
 **annullato** con una scadenza nel passato, perché la vista non filtra su `status`. A
 escluderlo è `Charge::effective_status`, che deriva `overdue` solo dagli stati
-dell'insoluto. Chi legge la vista direttamente — la dashboard, quando arriverà —
-conta `overdue_charges` con quella definizione più larga, ed è un difetto da conoscere
-prima di scoprirlo.
+dell'insoluto.
+
+**Chi legge la vista direttamente eredita quella definizione più larga**, e la
+conseguenza è peggiore di quanto questo ADR dicesse quando è stato scritto. Riprodotto
+su database vero dopo l'esecuzione della fetta, con tre addebiti sullo stesso
+contratto:
+
+| stato | importo | `outstanding_amount` |
+|---|---|---|
+| `issued` | 800.00 | 800.00 |
+| **`void`** | **120.00** | **120.00** |
+| `issued`, scaduto | 40.00 | 40.00 |
+
+`v_owner_dashboard.total_outstanding` ha risposto **960.00**, dove il numero vero è
+840.00: l'addebito annullato — quello per cui all'inquilino è stato detto che la
+richiesta era caduta — continua a contare come credito. `written_off` fa lo stesso, ed
+è peggio, perché è una perdita e non un credito. Non è quindi solo `overdue_charges`:
+è anche il totale insoluto, che è il numero di testa della dashboard.
+
+Il difetto **non nasce con questa fetta** — la vista è così dalla `0015` — ma è questa
+fetta a renderlo raggiungibile, perché prima non esisteva alcun addebito.
+**L'elenco dell'API è invece corretto**: `?outstanding=true` enumera i tre stati
+dell'insoluto come letterale nella query del repository, quindi `void` e `written_off`
+non vi entrano. Sbagliano le sole viste, e la correzione è registrata fra i debiti in
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
 
 **Conseguenza sul filtro dell'elenco.** `?status=overdue` risponde **422** con il
 codice `charge.derived_status_filter`, indicando `?outstanding=true`. È la stessa forma

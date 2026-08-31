@@ -115,6 +115,7 @@ cambia il contesto.
 
 | Debito | Dettaglio | Quando affrontarlo |
 |---|---|---|
+| **Le viste dei saldi non filtrano sullo stato** | `v_charge_balances` ha il solo `WHERE c.deleted_at IS NULL`, e `v_owner_dashboard` somma da lì senza filtrare a sua volta: `total_outstanding` conta anche gli addebiti `void` e `written_off`, e `overdue_charges` fa lo stesso con `is_past_due`. Riprodotto su database vero — 800.00 emesso + 120.00 **annullato** + 40.00 scaduto hanno dato `total_outstanding = 960.00`, dove il vero è 840.00. L'inquilino si è visto dire che quei 120 euro non li deve più. Non nasce con la fetta contabile — la vista è così dalla `0015` — ma è quella fetta a renderlo raggiungibile. **L'elenco dell'API è corretto**: `?outstanding=true` enumera i tre stati come letterale. Vedi [ADR-028](08-decisioni.md#adr-028) | **Prima della dashboard.** È una riga di `WHERE` per vista, ma cambia il significato di due numeri: finché nessun client li legge è additivo, dopo è una rottura. Richiede prima una decisione di prodotto — *outstanding* significa `issued` + `partially_paid`, e `written_off` si riporta a parte come perdita? |
 | Query non verificate a compile time | [ADR-006](08-decisioni.md#adr-006). La copertura dipende dai test di integrazione | Se compaiono errori SQL che i test non intercettano |
 | Filtri di elenco con `($1 IS NULL OR col = $1)` | Il pattern può impedire al planner di usare l'indice sul filtro | Quando gli immobili per organizzazione passano l'ordine delle migliaia |
 | `Cargo.lock` dipende dai crate presenti | Rende scomodo dividere il workspace fra branch: su un branch privo di `crates/api` un build `--locked` fallisce | Non si ripresenta se il workspace non viene più diviso |
@@ -132,6 +133,16 @@ cambia il contesto.
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
+
+**Prima di tutto, due righe di `WHERE`.** Le viste dei saldi non filtrano sullo stato,
+quindi `total_outstanding` conta come credito anche gli addebiti annullati e stornati —
+riprodotto, 960.00 dove il vero è 840.00, ed è il primo debito della tabella qui sopra.
+Va corretto **prima della dashboard** e prima che qualcuno legga quei numeri: finché
+nessun client li consuma cambiarne il significato è additivo, dopo è una rottura. È
+poco lavoro e una decisione di prodotto, ed è l'unico debito del progetto la cui
+finestra si chiude da sola.
+
+Poi, il modulo:
 
 **Pagamenti** (`app.payments`), provider `manual`. La fetta contabile lo ha reso il
 passo più corto che resti: la `GRANT UPDATE (status)` della migration `0023` è già
