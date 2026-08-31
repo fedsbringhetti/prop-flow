@@ -27,9 +27,115 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Decide se la revisione tocca qualcosa che valga la pena verificare.
+  #
+  # PERCHÉ UN JOB E NON `paths-ignore` SUL TRIGGER
+  # `paths-ignore` sembra la via ovvia ed è la trappola: impedisce al workflow di
+  # partire, quindi il check richiesto `CI` **non viene mai riportato** e la
+  # protezione del branch tiene la pull request bloccata su «Expected — waiting for
+  # status» finché qualcuno non tocca un file di codice. Saltare i job invece li
+  # lascia in stato `skipped`, che il riepilogo qui sotto considera un successo:
+  # la sua condizione guarda `failure` e `cancelled`, non `skipped`.
+  #
+  # FAIL-SAFE: NEL DUBBIO SI ESEGUE TUTTO
+  # Ogni caso non previsto — un intervallo di commit che non si riesce a
+  # calcolare, un primo push su un branch, la chiamata da `release.yml` su un tag —
+  # restituisce `code=true`. L'asimmetria è voluta: un salto sbagliato manda su
+  # `dev` codice che nessuno ha verificato, un'esecuzione di troppo costa minuti.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.compare.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Serve la storia e non il solo ultimo commit: il confronto è fra due
+          # revisioni, e con la profondità 1 la base non esiste nel clone. Il
+          # repository è piccolo, quindi si prende tutta.
+          fetch-depth: 0
+
+      - name: Compare
+        id: compare
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          run_everything() {
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "$1: running every job"
+            exit 0
+          }
+
+          # `github.event_name` resta quello del *chiamante*: la chiamata da
+          # `release.yml` è il push di un tag, quindi arriva qui come `push` con
+          # `github.ref` su `refs/tags/...` e nessun `before` utile. Cade nel
+          # fail-safe, che è ciò che si vuole — la verifica di un tag non si salta.
+          case "$EVENT" in
+            pull_request) RANGE="${BASE_SHA}...${HEAD_SHA}" ;;
+            push)
+              if [[ "$REF" != refs/heads/* ]]; then
+                run_everything "not a branch push"
+              fi
+              if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+                run_everything "no usable previous revision"
+              fi
+              RANGE="${BEFORE}..${HEAD_SHA}"
+              ;;
+            *) run_everything "unhandled event \`${EVENT}\`" ;;
+          esac
+
+          if ! FILES="$(git diff --name-only "$RANGE" 2>/dev/null)"; then
+            run_everything "could not diff \`${RANGE}\`"
+          fi
+          if [[ -z "$FILES" ]]; then
+            run_everything "empty diff"
+          fi
+
+          echo "changed files:"
+          echo "$FILES" | sed 's/^/  /'
+
+          # Un file è «documentazione» solo se lo è con certezza. L'elenco è
+          # deliberatamente corto: allargarlo è facile e ogni voce in più è una
+          # classe di modifiche che nessuno verificherà più.
+          #
+          # `docs/07-operazioni.md` è l'eccezione, e non è un dettaglio:
+          # `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
+          # `AppConfig` e dal migratore e **fallisce** se manca la riga
+          # corrispondente in quel documento. È l'unico file di sola prosa che può
+          # rompere `cargo test`, quindi è l'unico che non si salta.
+          #
+          # Nei pattern di `case` l'asterisco attraversa le barre, quindi `docs/*`
+          # copre l'intero albero e `*.md` copre ogni markdown ovunque si trovi.
+          CODE=false
+          while IFS= read -r FILE; do
+            case "$FILE" in
+              docs/07-operazioni.md) CODE=true ;;
+              docs/*) ;;
+              *.md) ;;
+              LICENSE|.gitignore|.gitattributes|.editorconfig) ;;
+              *) CODE=true ;;
+            esac
+          done <<< "$FILES"
+
+          echo "code=${CODE}" >> "$GITHUB_OUTPUT"
+          if [[ "$CODE" == "true" ]]; then
+            echo "code or configuration changed: running every job"
+          else
+            echo "documentation only: the heavy jobs are skipped"
+          fi
+
+  # ---------------------------------------------------------------------------
   lint:
     name: Format and lint
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +162,8 @@ jobs:
   architecture:
     name: Architecture constraints
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -74,6 +182,8 @@ jobs:
   test:
     name: Tests on a real PostgreSQL
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
 
     services:
       postgres:
@@ -160,6 +270,8 @@ jobs:
   image:
     name: Container image
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -179,6 +291,8 @@ jobs:
   dependencies:
     name: Vulnerabilities and provenance
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -206,10 +320,16 @@ jobs:
   # Il nome `CI` è il check richiesto dalla protezione di `main` e `dev`:
   # rinominarlo la farebbe cercare un check che non esiste più, bloccando ogni
   # merge finché non la si riconfigura via `gh api`.
+  #
+  # **Gira sempre**, anche quando tutti i job che precede sono saltati: è ciò che
+  # permette a una pull request di sola documentazione di ottenere il verde invece
+  # di restare in attesa di un check che non arriverà mai. La condizione guarda
+  # `failure` e `cancelled` e **non** `skipped`, che qui è un esito legittimo — se
+  # guardasse anche quello, saltare un job equivarrebbe a farlo fallire.
   ci:
     name: CI
     runs-on: ubuntu-latest
-    needs: [lint, architecture, test, image, dependencies]
+    needs: [changes, lint, architecture, test, image, dependencies]
     if: always()
     steps:
       - name: Outcome
@@ -217,5 +337,9 @@ jobs:
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
             echo "::error::at least one job failed"
             exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.code }}" != "true" ]]; then
+            echo "documentation only: nothing to verify"
+            exit 0
           fi
           echo "every job passed"

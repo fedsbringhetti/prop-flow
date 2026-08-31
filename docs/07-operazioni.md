@@ -234,6 +234,7 @@ interrompendo le richieste in volo. Le connessioni vengono chiuse ordinatamente.
 
 | Job | Cosa fa |
 |---|---|
+| `changes` | Decide se la revisione tocca il codice. Se no, i cinque job che seguono vengono **saltati** |
 | `lint` | `cargo fmt --check`, `clippy` con `-D warnings` |
 | `architecture` | `check-domain-purity.sh`: il dominio non dipende dall'infrastruttura, nessun SQL negli handler |
 | `test` | PostgreSQL 16 come service, ruoli, migrazioni dal binario, invarianti dello schema, idempotenza del migratore, suite completa, e un controllo che nessun test si sia dichiarato saltato |
@@ -243,6 +244,34 @@ interrompendo le richieste in volo. Le connessioni vengono chiuse ordinatamente.
 
 Concorrenza: un push che arriva mentre la pipeline precedente sullo stesso ref è in
 corso la annulla.
+
+### Le modifiche di sola documentazione non eseguono la pipeline
+
+Una revisione che tocca solo prosa salta `lint`, `architecture`, `test`, `image` e
+`dependencies`. Vale sia sulle pull request sia sui push verso `main` e `dev`: se il
+merge non porta codice nuovo, dopo il merge non c'è niente di nuovo da verificare.
+
+**Il salto si fa con un `if:` sui job, non con `paths-ignore` sul trigger**, ed è la
+cosa da sapere prima di «semplificare». `paths-ignore` impedisce al workflow di
+partire: il check richiesto `CI` non verrebbe mai riportato, e la protezione del branch
+terrebbe la pull request bloccata su *«Expected — waiting for status»* finché qualcuno
+non tocca un file di codice. Saltando i job invece questi restano in stato `skipped`,
+che il riepilogo tratta come successo — la sua condizione guarda `failure` e
+`cancelled`, non `skipped`.
+
+Conta come documentazione: tutto sotto `docs/`, ogni file `.md`, e `LICENSE`,
+`.gitignore`, `.gitattributes`, `.editorconfig`.
+
+**`docs/07-operazioni.md` — questo documento — è l'eccezione, e non è pedanteria:**
+`crates/api/tests/docs_config_reference.rs` deriva le impostazioni da `AppConfig` e dal
+migratore e **fa fallire `cargo test`** se manca la riga corrispondente nelle tabelle
+qui sopra. È l'unico file di sola prosa che può rompere la suite, quindi è l'unico che
+non si salta. Modificarlo esegue la pipeline intera.
+
+Nel dubbio si esegue tutto: un intervallo di commit che non si riesce a calcolare, un
+primo push su un branch, un evento non previsto e la chiamata da `release.yml` su un
+tag danno tutti «c'è codice». L'asimmetria è voluta — un salto sbagliato manda su `dev`
+codice che nessuno ha verificato, un'esecuzione di troppo costa minuti.
 
 La preparazione del database è condivisa fra CI e locale
 (`ops/ci/prepare-database.sh`): due procedure separate divergono al primo
