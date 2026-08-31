@@ -303,6 +303,37 @@ impl TestApp {
         (status, json)
     }
 
+    /// `POST` con l'header `Idempotency-Key`.
+    ///
+    /// La chiave è `Option` perché una delle cose da verificare è che **assente
+    /// dia `400`**: sulle rotte che creano un pagamento l'header è obbligatorio, e
+    /// un test che potesse solo mandarlo non proverebbe l'obbligo.
+    pub async fn post_idempotent(
+        &self,
+        path: &str,
+        token: &str,
+        org: Option<&str>,
+        key: Option<&str>,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"));
+        if let Some(org) = org {
+            builder = builder.header("x-org-id", org);
+        }
+        if let Some(key) = key {
+            builder = builder.header("idempotency-key", key);
+        }
+        let request = builder
+            .body(Body::from(body.to_string()))
+            .expect("richiesta costruita");
+        let (status, json, _) = self.request(request).await;
+        (status, json)
+    }
+
     pub async fn send(
         &self,
         method: &str,
