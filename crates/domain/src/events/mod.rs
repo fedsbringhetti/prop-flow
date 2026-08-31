@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 
+use crate::billing::{BillStatus, Charge, ChargeStatus, UtilityBill};
 use crate::document::{AttachmentOwner, DocumentKind};
 use crate::identity::OrgRole;
 use crate::shared::{
-    DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId, TicketId,
-    TicketMessageId, UserId,
+    ChargeId, DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId,
+    TicketId, TicketMessageId, UserId, UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketStatus};
 
@@ -125,6 +126,11 @@ pub enum DomainEventPayload {
     TicketAssigned(TicketAssigned),
     TicketCostsUpdated(TicketCostsUpdated),
     TicketMessagePosted(TicketMessagePosted),
+    UtilityBillRegistered(UtilityBillRegistered),
+    UtilityBillUpdated(UtilityBillUpdated),
+    UtilityBillStatusChanged(UtilityBillStatusChanged),
+    ChargeIssued(ChargeIssued),
+    ChargeStatusChanged(ChargeStatusChanged),
 }
 
 impl DomainEventPayload {
@@ -153,6 +159,11 @@ impl DomainEventPayload {
             Self::TicketAssigned(_) => "ticket.assigned",
             Self::TicketCostsUpdated(_) => "ticket.costs_updated",
             Self::TicketMessagePosted(_) => "ticket.message.posted",
+            Self::UtilityBillRegistered(_) => "billing.utility_bill.registered",
+            Self::UtilityBillUpdated(_) => "billing.utility_bill.updated",
+            Self::UtilityBillStatusChanged(_) => "billing.utility_bill.status_changed",
+            Self::ChargeIssued(_) => "billing.charge.issued",
+            Self::ChargeStatusChanged(_) => "billing.charge.status_changed",
         }
     }
 
@@ -183,6 +194,14 @@ impl DomainEventPayload {
             | Self::TicketAssigned(_)
             | Self::TicketCostsUpdated(_)
             | Self::TicketMessagePosted(_) => "Ticket",
+            Self::UtilityBillRegistered(_)
+            | Self::UtilityBillUpdated(_)
+            | Self::UtilityBillStatusChanged(_) => "UtilityBill",
+            // Il riaddebito produce **due** eventi, uno per aggregato: la bolletta
+            // che passa ad `allocated` e l'addebito che nasce. Chi consuma il solo
+            // `charge.issued` non saprebbe che la bolletta è stata usata, e chi
+            // consuma il solo `utility_bill.status_changed` non saprebbe a chi.
+            Self::ChargeIssued(_) | Self::ChargeStatusChanged(_) => "Charge",
         }
     }
 
@@ -211,6 +230,11 @@ impl DomainEventPayload {
             Self::TicketAssigned(event) => event.ticket_id.as_uuid(),
             Self::TicketCostsUpdated(event) => event.ticket_id.as_uuid(),
             Self::TicketMessagePosted(event) => event.ticket_id.as_uuid(),
+            Self::UtilityBillRegistered(event) => event.utility_bill_id.as_uuid(),
+            Self::UtilityBillUpdated(event) => event.utility_bill_id.as_uuid(),
+            Self::UtilityBillStatusChanged(event) => event.utility_bill_id.as_uuid(),
+            Self::ChargeIssued(event) => event.charge_id.as_uuid(),
+            Self::ChargeStatusChanged(event) => event.charge_id.as_uuid(),
         }
     }
 
@@ -239,6 +263,11 @@ impl DomainEventPayload {
             Self::TicketAssigned(event) => Some(event.org_id),
             Self::TicketCostsUpdated(event) => Some(event.org_id),
             Self::TicketMessagePosted(event) => Some(event.org_id),
+            Self::UtilityBillRegistered(event) => Some(event.org_id),
+            Self::UtilityBillUpdated(event) => Some(event.org_id),
+            Self::UtilityBillStatusChanged(event) => Some(event.org_id),
+            Self::ChargeIssued(event) => Some(event.org_id),
+            Self::ChargeStatusChanged(event) => Some(event.org_id),
         }
     }
 }
@@ -606,6 +635,166 @@ impl TicketMessagePosted {
             message_id: message.id(),
             author_kind: message.author_kind().as_str(),
             is_internal: message.is_internal(),
+        }
+    }
+}
+
+/// Bolletta registrata.
+///
+/// **Nessun importo viaggia**, ed è la stessa regola di [`TicketCostsUpdated`] e
+/// di [`RoomUpdated`], che non porta il canone: un evento pubblicato su un broker
+/// è un dato che viaggia e si conserva.
+///
+/// **Nemmeno `supplier_name` e `supplier_vat`**, che sembrano dati d'azienda e
+/// per un fornitore individuale — un idraulico, un amministratore di condominio
+/// che fattura in proprio — nominano una persona e ne portano l'identificativo
+/// fiscale. Non c'è `invoice_number` per la stessa ragione: insieme alla partita
+/// IVA identifica un documento fiscale, e l'insieme dei due è precisamente ciò
+/// che l'indice di deduplica tratta come identità.
+///
+/// Viaggiano invece immobile, stanza e contratto, che sono ciò che serve a sapere
+/// **cosa invalidare**, e il tipo di utenza, che è una classificazione chiusa.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UtilityBillRegistered {
+    pub utility_bill_id: UtilityBillId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+    pub room_id: Option<RoomId>,
+    pub lease_id: Option<LeaseId>,
+    pub utility_type: &'static str,
+}
+
+impl UtilityBillRegistered {
+    /// Costruito **dall'aggregato** e non da sei argomenti: sarebbero due
+    /// `Option<…Id>` di fila, e scambiarli compilerebbe senza che nulla se ne
+    /// accorga. È anche la garanzia che l'evento descriva la bolletta appena
+    /// scritta e non i valori del comando.
+    #[must_use]
+    pub const fn from_bill(bill: &UtilityBill) -> Self {
+        Self {
+            utility_bill_id: bill.id(),
+            org_id: bill.org_id(),
+            property_id: bill.property_id(),
+            room_id: bill.room_id(),
+            lease_id: bill.lease_id(),
+            utility_type: bill.utility_type().as_str(),
+        }
+    }
+}
+
+/// Bolletta corretta.
+///
+/// **Nomi dei campi, non valori**, come [`PropertyUpdated`] e
+/// [`TicketCostsUpdated`]: chi consuma sa cosa invalidare senza che l'importo di
+/// una bolletta, o il nome del suo fornitore, viaggino su un broker.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UtilityBillUpdated {
+    pub utility_bill_id: UtilityBillId,
+    pub org_id: OrgId,
+    pub changed_fields: Vec<&'static str>,
+}
+
+/// Transizione di stato della bolletta.
+///
+/// Ne produce uno ogni transizione, **compresa quella implicita** con cui una
+/// correzione riporta a `draft` una bolletta validata: è il caso in cui l'evento
+/// serve di più, perché è l'unico modo in cui chi consuma scopre che una
+/// validazione è stata disfatta senza che nessuno abbia chiesto di disfarla.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UtilityBillStatusChanged {
+    pub utility_bill_id: UtilityBillId,
+    pub org_id: OrgId,
+    pub from_status: &'static str,
+    pub to_status: &'static str,
+    pub changed_by_role: &'static str,
+}
+
+impl UtilityBillStatusChanged {
+    #[must_use]
+    pub const fn new(
+        utility_bill_id: UtilityBillId,
+        org_id: OrgId,
+        from_status: BillStatus,
+        to_status: BillStatus,
+        role: OrgRole,
+    ) -> Self {
+        Self {
+            utility_bill_id,
+            org_id,
+            from_status: from_status.as_str(),
+            to_status: to_status.as_str(),
+            changed_by_role: role.as_str(),
+        }
+    }
+}
+
+/// Addebito emesso.
+///
+/// **Nessun importo viaggia**, per la ragione di sempre — e qui la ragione è più
+/// forte che altrove: questo importo è ciò che una persona identificabile
+/// (`lease_id` porta al contratto e da lì alle sue parti) deve pagare, e la coppia
+/// «chi» e «quanto» è esattamente il dato che non deve conservarsi su un broker.
+/// Nemmeno `description`, che è testo libero scritto da una persona.
+///
+/// `due_date` **sì**: è una data, non un importo, ed è ciò che serve a chi
+/// programma un sollecito — che è il consumatore per cui questo evento esiste.
+///
+/// `utility_bill_id` viaggia quando l'addebito nasce da un riaddebito: chi
+/// consuma deve poter collegare i due eventi della stessa transazione.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChargeIssued {
+    pub charge_id: ChargeId,
+    pub org_id: OrgId,
+    pub lease_id: LeaseId,
+    pub charge_type: &'static str,
+    pub due_date: chrono::NaiveDate,
+    pub utility_bill_id: Option<UtilityBillId>,
+}
+
+impl ChargeIssued {
+    #[must_use]
+    pub const fn from_charge(charge: &Charge) -> Self {
+        Self {
+            charge_id: charge.id(),
+            org_id: charge.org_id(),
+            lease_id: charge.lease_id(),
+            charge_type: charge.charge_type().as_str(),
+            due_date: charge.due_date(),
+            utility_bill_id: charge.utility_bill_id(),
+        }
+    }
+}
+
+/// Transizione di stato dell'addebito: annullamento o rinuncia all'incasso.
+///
+/// `to_status` non porta mai `overdue`, e non perché l'evento lo escluda: quello
+/// stato **non si scrive**, si deriva dalla scadenza. Un consumatore che aspetti
+/// un evento per sapere che un addebito è scaduto aspetterebbe per sempre, e deve
+/// invece guardare `due_date` di [`ChargeIssued`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChargeStatusChanged {
+    pub charge_id: ChargeId,
+    pub org_id: OrgId,
+    pub from_status: &'static str,
+    pub to_status: &'static str,
+    pub changed_by_role: &'static str,
+}
+
+impl ChargeStatusChanged {
+    #[must_use]
+    pub const fn new(
+        charge_id: ChargeId,
+        org_id: OrgId,
+        from_status: ChargeStatus,
+        to_status: ChargeStatus,
+        role: OrgRole,
+    ) -> Self {
+        Self {
+            charge_id,
+            org_id,
+            from_status: from_status.as_str(),
+            to_status: to_status.as_str(),
+            changed_by_role: role.as_str(),
         }
     }
 }

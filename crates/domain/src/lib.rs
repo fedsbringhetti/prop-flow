@@ -10,6 +10,7 @@
 //! l'esterno. Il divieto è verificato in CI da `ops/ci/check-domain-purity.sh`,
 //! non lasciato alla code review.
 
+pub mod billing;
 pub mod context;
 pub mod document;
 pub mod error;
