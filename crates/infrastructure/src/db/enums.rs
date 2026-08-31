@@ -11,8 +11,10 @@ use propflow_domain::billing::{BillStatus, ChargeStatus, ChargeType, UtilityType
 use propflow_domain::document::{AttachmentOwnerType, DocumentKind};
 use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, UserStatus};
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, LeaseType, RentFrequency};
+use propflow_domain::payment::{Payable, PaymentMethod, PaymentStatus};
 use propflow_domain::ports::RepositoryError;
 use propflow_domain::property::{EnergyClass, PropertyStatus, PropertyType, RoomStatus};
+use propflow_domain::shared::ChargeId;
 use propflow_domain::ticket::{TicketActor, TicketCategory, TicketPriority, TicketStatus};
 
 fn unknown(kind: &'static str, value: &str) -> RepositoryError {
@@ -273,6 +275,47 @@ string_enum!("energy_class", EnergyClass, energy_class_to_db, energy_class_from_
     G => "G",
 });
 
+string_enum!("payment_method", PaymentMethod, payment_method_to_db, payment_method_from_db, {
+    BankTransfer => "bank_transfer",
+    SepaDirectDebit => "sepa_direct_debit",
+    Card => "card",
+    Cash => "cash",
+    Check => "check",
+    Other => "other",
+});
+
+string_enum!("payment_status", PaymentStatus, payment_status_to_db, payment_status_from_db, {
+    Pending => "pending",
+    Authorized => "authorized",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+    Refunded => "refunded",
+    PartiallyRefunded => "partially_refunded",
+});
+
+/// `app.payable_type` non passa da `string_enum!` perché il valore da solo non
+/// basta a costruire un [`Payable`]: la variante porta con sé l'identificatore
+/// della riga referenziata.
+///
+/// **Un valore su tre**, e gli altri due danno errore. `expense_share` e
+/// `settlement` appartengono al modulo delle spese co-living, che non esiste, e
+/// nessuna riga può portarli oggi perché l'applicazione è l'unica a scrivere su
+/// `app.payments`. È la stessa scelta di `attachment_owner_type_from_db`, che
+/// lascia fuori gli owner dei moduli non ancora costruiti: un valore fuori
+/// perimetro deve dare errore, non ricadere sul più simile fra quelli noti.
+#[must_use]
+pub const fn payable_type_to_db(payable: Payable) -> &'static str {
+    payable.as_str()
+}
+
+pub fn payable_from_db(value: &str, id: ChargeId) -> Result<Payable, RepositoryError> {
+    match value {
+        "charge" => Ok(Payable::Charge(id)),
+        other => Err(unknown("payable_type", other)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +545,39 @@ mod tests {
             // `charges_outstanding_ix`.
             assert_eq!(charge_status_to_db(status), status.as_str());
         }
+        for method in [
+            PaymentMethod::BankTransfer,
+            PaymentMethod::SepaDirectDebit,
+            PaymentMethod::Card,
+            PaymentMethod::Cash,
+            PaymentMethod::Check,
+            PaymentMethod::Other,
+        ] {
+            assert_eq!(
+                payment_method_from_db(payment_method_to_db(method)).expect("noto"),
+                method
+            );
+            assert_eq!(payment_method_to_db(method), method.as_str());
+        }
+        for status in [
+            PaymentStatus::Pending,
+            PaymentStatus::Authorized,
+            PaymentStatus::Succeeded,
+            PaymentStatus::Failed,
+            PaymentStatus::Cancelled,
+            PaymentStatus::Refunded,
+            PaymentStatus::PartiallyRefunded,
+        ] {
+            assert_eq!(
+                payment_status_from_db(payment_status_to_db(status)).expect("noto"),
+                status
+            );
+            // Come per `ChargeStatus`: la costante
+            // `PaymentStatus::COUNTS_TOWARDS_BALANCE` compare come letterale SQL
+            // nel repository dei pagamenti, e una rinomina che toccasse solo uno
+            // dei due farebbe smettere il saldo di contare gli incassi.
+            assert_eq!(payment_status_to_db(status), status.as_str());
+        }
         assert_eq!(lease_type_to_db(LeaseType::WholeProperty), "whole_property");
         assert_eq!(energy_class_to_db(EnergyClass::A4), "A4");
     }
@@ -522,6 +598,12 @@ mod tests {
         assert!(ticket_actor_from_db("vendor").is_err());
         assert!(bill_status_from_db("archived").is_err());
         assert!(charge_status_from_db("refunded").is_err());
+        assert!(payment_status_from_db("chargeback").is_err());
+        assert!(payment_method_from_db("crypto").is_err());
+        // I due `payable_type` dei moduli non ancora costruiti danno errore invece
+        // di ricadere su `charge`, che è l'unico che sappiamo interpretare.
+        assert!(payable_from_db("expense_share", ChargeId::generate()).is_err());
+        assert!(payable_from_db("settlement", ChargeId::generate()).is_err());
         assert!(utility_type_from_db("sewage").is_err());
     }
 }
