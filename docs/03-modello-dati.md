@@ -6,7 +6,7 @@ i diritti del proprietario e aggirerebbe la Row Level Security del chiamante.
 
 Numeri dello schema attuale: **24 tabelle** più `audit_log` partizionata,
 **35 enum**, **6 domini**, **170 indici**, **65 policy RLS**, **50 trigger**,
-**4 viste**, **29 funzioni**, **21 migration**.
+**4 viste**, **29 funzioni**, **23 migration**.
 
 ## Diagramma ER
 
@@ -189,11 +189,22 @@ Nessuno dei tre può scrivere su `audit_log`: la traccia la scrive il trigger, c
 
 ### Privilegi di colonna
 
-Su tre tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle colonne
-che i repository scrivono: `org_invitations` e `lease_parties`
-([ADR-021](08-decisioni.md#adr-021), migration `0019`) e `tickets`
+Su quattro tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle
+colonne che i repository scrivono: `org_invitations` e `lease_parties`
+([ADR-021](08-decisioni.md#adr-021), migration `0019`), `tickets`
 ([ADR-026](08-decisioni.md#adr-026), migration `0020`, estesa dalla `0021` con
-`resolution_notes`).
+`resolution_notes`) e `charges`
+([ADR-029](08-decisioni.md#adr-029), migration `0023`).
+
+Su `charges` la concessione è di **una colonna sola**, `status`: un addebito emesso è
+una pretesa verso una persona, e tutto ciò che la descrive — a chi, quanto, per cosa,
+entro quando — è fissato all'emissione. È anche la `GRANT` che basterà al modulo dei
+pagamenti, che scrive solo lo stato.
+
+**Su `utility_bills` lo strumento non si usa**, ed è la prima volta che il criterio di
+ADR-026 dà «no»: una bolletta si digita, dodici campi alla volta, e la `GRANT` dovrebbe
+nominare quasi ogni colonna. Un elenco che contiene quasi tutto non difende niente.
+L'immutabilità della bolletta è quindi un'invariante di dominio.
 
 Il motivo comune è che **una policy non può confrontare la riga nuova con quella
 vecchia**: non esiste `OLD` in un `WITH CHECK`, che vincola solo le colonne che nomina
@@ -357,7 +368,7 @@ un'eccezione** se ne viola uno, così la pipeline si ferma:
 9. policy di SELECT che filtrano il soft delete
 10. `_sqlx_migrations` duplicata fuori da `public`
 11. colonne di **confine** aggiornabili dal ruolo applicativo ([ADR-021](08-decisioni.md#adr-021))
-12. colonne **strutturali** di una segnalazione aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026))
+12. colonne **strutturali** di una segnalazione o di un addebito aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026), [ADR-029](08-decisioni.md#adr-029))
 
 Il controllo 4 ha trovato cinque foreign key senza indice durante la prima
 scrittura dello schema; i controlli 9 e 10 sono i guardiani di due bug reali, e gli

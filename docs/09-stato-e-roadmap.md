@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **29 agosto 2026**.
+Stato al **31 agosto 2026**.
 
 ## Come si usa questo documento
 
@@ -20,7 +20,7 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 21 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 23 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
 170 indici, 65 policy RLS, 50 trigger, 4 viste, 29 funzioni.
 
@@ -48,14 +48,16 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Inviti: emissione, revoca, accettazione senza pool privilegiato | completo |
 | Documenti: caricamento multipart, elenco, download pre-firmato, archiviazione | completo per la fetta 1 |
 | Segnalazioni: apertura, elenco filtrato, dettaglio con storico, thread con note interne, sette transizioni, costi, allegati | completo per la fetta 1 |
+| Bollette: registrazione manuale, correzione, validazione, annullamento, riaddebito, allegati | completo per la fetta 1 |
+| Addebiti: emissione, elenco e dettaglio con il saldo dalla vista, annullamento, rinuncia all'incasso, allegati | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-204 test: 98 unitari di dominio, 16 applicativi, 9 di infrastruttura, 6 unitari
-del bordo HTTP, 28 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 41 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+264 test: 133 unitari di dominio, 16 applicativi, 10 di infrastruttura, 6 unitari
+del bordo HTTP, 38 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 55 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -64,25 +66,35 @@ MinIO, 41 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Bollette e addebiti** (`utility_bills`, `charges`) — con la vista
-   `v_charge_balances` già disponibile.
-2. **Pagamenti** (`payments`) — provider `manual` per l'MVP.
-3. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+1. **Pagamenti** (`payments`) — provider `manual` per l'MVP. È il **prossimo passo
+   suggerito**, e la fetta contabile gli ha già posato ciò che gli serve: la
+   `GRANT UPDATE (status)` della migration `0023` basta a portare un addebito a
+   `partially_paid` o `paid`, quindi il modulo si aggiunge con un metodo di dominio su
+   `Charge` e uno use case, senza migration sullo schema degli addebiti. Finché non
+   esiste, `paid_amount` vale sempre `0.00` in ogni risposta.
+2. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
    `settlements`) — la vista dei saldi esiste già.
-4. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
-   verificando la reference del fornitore scelto in quel momento.
-5. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no.
+3. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+   verificando la reference del fornitore scelto in quel momento. È il modulo che
+   riempirà `ocr_extracted`, `ocr_confidence` e lo stato `pending_review`, che la
+   fetta contabile ha deliberatamente lasciato ai loro default: lo schema tiene
+   separato ciò che ha letto la macchina da ciò che ha confermato una persona
+   (`validated_by`, `validated_at`) proprio perché l'accuratezza si possa misurare, e
+   riempire le prime con valori umani distruggerebbe quel dato prima di raccoglierlo.
+4. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no. La vista conta già
+   `total_outstanding`, `overdue_charges` e `bills_pending_review`, e da questa fetta
+   quei numeri hanno finalmente righe da contare.
 
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
-archiviazione su immobili, stanze, contratti e — dal modulo delle segnalazioni —
-segnalazioni. Restano fuori, e non per dimenticanza, il versionamento (V2) e l'OCR
-(punto 4); allargare gli owner ad avatar, bollette e spese è additivo e si fa quando
-quei moduli esistono. Il resoconto è in fondo:
+archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
+bollette e addebiti. Restano fuori, e non per dimenticanza, il versionamento (V2) e
+l'OCR (punto 3); allargare gli owner ad avatar, spese e pagamenti è additivo e si fa
+quando quei moduli esistono. Il resoconto è in fondo:
 [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
 
 **Segnalazioni** è implementato nella fetta 1: apertura, elenco filtrato, dettaglio
 con lo storico degli stati, thread con note interne, le sette transizioni del ciclo di
-vita, costi e allegati. Restano fuori, e non per dimenticanza, il triage AI (punto 4),
+vita, costi e allegati. Restano fuori, e non per dimenticanza, il triage AI (punto 3),
 la ricerca full-text (V2), gli SLA, la programmazione, gli allegati sui singoli
 messaggi e le note di risoluzione. Il resoconto è in fondo:
 [Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
@@ -121,18 +133,30 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**Bollette e addebiti** (`utility_bills`, `charges`). Le segnalazioni hanno chiuso
-l'anello nei due versi, e da qui i moduli rimasti non hanno più dipendenze bloccanti
-fra loro: la scelta è di prodotto, non di architettura. Le bollette vengono per prime
-perché sono il flusso che il proprietario ha già in mano ogni mese, perché la vista
-`v_charge_balances` esiste, e perché riusano interamente la forma dei documenti —
-`can_access_attachment` copre già `utility_bill` e `charge`, quindi allegare la
-bolletta scansionata è additivo.
+**Pagamenti** (`app.payments`), provider `manual`. La fetta contabile lo ha reso il
+passo più corto che resti: la `GRANT UPDATE (status)` della migration `0023` è già
+tutto ciò che serve a portare un addebito a `partially_paid` o `paid`, quindi il modulo
+si aggiunge con un metodo di dominio su `Charge` — che oggi **non** ha un `apply`,
+apposta — e uno use case che, in una transazione, inserisce il pagamento, rilegge
+l'addebito e ne scrive lo stato. **Nessuna migration sullo schema degli addebiti.**
 
-Il costo di una riparazione registrato su una segnalazione (`actual_cost`) è la prima
-cosa da guardare quando si progetterà quel modulo: la domanda «diventa un addebito
-all'inquilino?» appartiene lì e non ai ticket, ed è stata deliberatamente lasciata
-aperta.
+È anche il modulo che rende vero un numero che oggi è sempre lo stesso:
+`paid_amount` vale `0.00` in ogni risposta perché `app.payments` è vuota, non perché
+il calcolo sbagli. Finché resta così, `outstanding_amount` coincide con `amount` e la
+dashboard non ha nulla da distinguere.
+
+Ciò che quel modulo dovrà decidere, e che questa fetta ha lasciato aperto: chi può
+registrare un incasso (solo staff, o anche l'inquilino che dichiara di aver pagato),
+come si gestisce l'`idempotency_key` che lo schema richiede, e se `void` e
+`write_off` restino ammessi da `partially_paid` — oggi partono dal solo `issued`,
+perché annullare un addebito su cui è già entrato del denaro chiede prima di dire cosa
+ne è di quel denaro.
+
+**La fonte di verità resta la vista**, anche dopo. `outstanding_amount` continuerà a
+venire da `app.v_charge_balances` e non da `status`: lo stato memorizzato è una
+comodità interrogabile — l'indice `charges_outstanding_ix` è parziale su quei tre
+valori — che il modulo dei pagamenti tiene allineata come effetto secondario. Le due
+definizioni non devono diventare due.
 
 Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
@@ -1115,3 +1139,739 @@ thread, che non si riscrive mai. È una perdita di informazione **scelta**, non 
 - **Nessun filtro «assegnate a me».** Rinviato a quando esisterà un client che lo
   consumi: senza, sarebbe un filtro da mantenere e non da usare. L'indice
   `tickets_assignee_ix` esiste già e aspetta, e aggiungerlo dopo è additivo.
+
+---
+
+<a id="piano-bollette-e-addebiti-fetta-1"></a>
+
+## Piano — Bollette e addebiti, fetta 1
+
+Pianificato il **30 agosto 2026**, **implementato il 31 agosto 2026**. Il piano resta
+sotto come è stato scritto: serve a eseguirlo, e serve a capire perché il codice è
+com'è. L'esito è in fondo, dopo le trappole.
+
+### Obiettivo
+
+Il flusso che il proprietario ha già in mano ogni mese: arriva una bolletta, la
+registra, la controlla, ne riaddebita all'inquilino la parte che gli spetta, e vede
+chi è indietro con i pagamenti. È il primo modulo **contabile** del progetto, e la
+prima volta che l'applicazione scrive una cifra che qualcuno dovrà versare a
+qualcun altro.
+
+Chiude anche le due domande che il modulo delle segnalazioni ha rinviato qui per
+nome: la valuta dichiarabile e il costo di una riparazione che diventa un addebito.
+Entrambe hanno una risposta, ed entrambe le risposte sono «no», con la ragione
+scritta — vedi le decisioni 6 e 7.
+
+**Dentro:** registrazione manuale di una bolletta su un immobile, correzione finché
+non è validata, validazione, riaddebito a un contratto (che crea l'addebito),
+annullamento; creazione diretta di un addebito su un contratto, elenco e dettaglio
+con il **saldo** letto da `app.v_charge_balances`, annullamento e rinuncia
+all'incasso; allegati su bollette e addebiti, che riusano gli use case dei documenti.
+
+**Fuori, e non per dimenticanza:**
+
+- **l'OCR** (`ocr_extracted`, `ocr_confidence`, `ai_job_id`, `document_id`,
+  `pending_review`): è il punto 4 della lista dei moduli, e i trait dei provider
+  vanno definiti allora. In questa fetta la bolletta la digita una persona, le
+  colonne restano ai loro default e lo stato `pending_review` non lo scrive nessuno.
+  Lo schema tiene separato ciò che ha letto la macchina da ciò che ha confermato una
+  persona (`validated_by`, `validated_at`) proprio perché si possa misurare
+  l'accuratezza dopo: riempire le prime con valori umani distruggerebbe quel dato
+  prima di raccoglierlo;
+- **i pagamenti** (`app.payments`): sono il modulo successivo, ed è la ragione per
+  cui `paid` e `partially_paid` restano stati che l'applicazione **non scrive mai**.
+  Ne segue una conseguenza da dire ad alta voce e da documentare nell'API:
+  `paid_amount` vale sempre `0.00` in questa fetta, e `outstanding_amount` coincide
+  sempre con `amount`. Non è un difetto della vista, è l'assenza di righe in
+  `app.payments`;
+- **il pagamento della bolletta al fornitore** (`bill_status = 'paid'`): non è
+  modellato affatto — `app.payable_type` è `('charge','expense_share','settlement')`
+  e **non comprende `utility_bill`**, quindi non esiste un posto dove registrare che
+  il proprietario ha pagato l'utenza. Lo stato resta nell'enum e nessuno lo scrive;
+- **la contestazione al fornitore** (`disputed`): manca la via di ritorno. Uno stato
+  in cui si entra e da cui non si esce è peggio di nessuno stato, e disegnare
+  l'uscita significa decidere cosa succede alle bollette già riaddebitate. Nessuno
+  ha posto la domanda;
+- **la generazione ricorrente dei canoni** (`generation_key`): richiede uno
+  scheduler, che [ADR-019](08-decisioni.md#adr-019) ha deliberatamente evitato di
+  introdurre. La colonna resta nulla; l'indice unico `charges_generation_uk` è ciò
+  che rende additivo aggiungerla il giorno in cui un client o uno scheduler la
+  useranno;
+- **la ripartizione fra coinquilini** di una stessa bolletta: è il modulo delle spese
+  co-living (`expenses`, `expense_shares`), che ha il vincolo differito a garantire
+  che le quote sommino esattamente. Qui una bolletta si riaddebita **a un contratto
+  per volta**, e riaddebitarla a più contratti in parti è possibile ripetendo
+  l'operazione — senza che nulla verifichi che le parti sommino al totale, vedi la
+  decisione 5;
+- **la dashboard** (`v_owner_dashboard`): è il punto 5 della lista. La vista esiste e
+  già conta `total_outstanding`, `overdue_charges` e `bills_pending_review`; nessun
+  endpoint la legge.
+
+### Decisioni prese, con il perché
+
+#### 1. L'addebito nasce **emesso**, e `draft` non si scrive mai
+
+`app.charge_status` ha `draft`, e la tentazione è il flusso in due passi — si prepara
+l'addebito, poi lo si emette. Non regge, per due ragioni che si sommano.
+
+La prima è che **una bozza sarebbe già visibile all'inquilino**. La policy
+`charges_select` è `org_id = current_org_id() AND app.can_access_lease(lease_id)`: non
+guarda lo stato. Un addebito in bozza comparirebbe nell'elenco di chi deve pagarlo
+esattamente come uno emesso, e sarebbe una «bozza» solo nel nome.
+
+La seconda è che **emettere non manda niente a nessuno**: la porta `Notifier` è
+dichiarata e senza adattatore. Fra i due stati non ci sarebbe alcuna differenza
+osservabile — nessun invio, nessuna visibilità diversa, nessun effetto sul saldo, che
+la vista calcola su `amount` senza guardare `status`.
+
+Quindi: l'addebito nasce `issued` con `issued_at` valorizzato, e un addebito
+sbagliato **si annulla** — `void` esiste per questo. È la stessa forma della
+segnalazione aperta sull'immobile sbagliato, che si annulla e si riapre invece di
+essere spostata.
+
+**Cosa costerebbe cambiare idea.** Introdurre una bozza vera richiede *due*
+migration, non una: restringere `charges_select` con `status <> 'draft' OR
+app.is_org_staff(org_id)` **e** correggere `app.can_access_attachment`, che per
+`charge` risolve su `can_access_lease` e lascerebbe quindi vedere all'inquilino gli
+allegati di un addebito che non può vedere. È additivo — l'inquilino vedrebbe meno
+righe, non di più — ma va fatto in due punti, e questo è il posto dove sta scritto
+quali sono.
+
+#### 2. Lo stato **scaduto si deriva**, non si memorizza
+
+`app.charge_status` ha `overdue`, e nessuno lo scriverà. Un addebito scaduto è un
+addebito `issued` la cui `due_date` è passata e il cui residuo è positivo: è una
+**conseguenza**, e le conseguenze si derivano. È esattamente
+[ADR-019](08-decisioni.md#adr-019), che ha già stabilito la regola per i contratti
+dopo averla pagata: lo stato memorizzato invecchia da solo perché nessuno lo
+aggiorna, e la dashboard finisce per contare cose finite mesi prima.
+
+La definizione vive **in un posto solo**, e quel posto è la vista:
+`v_charge_balances.is_past_due` è `due_date < CURRENT_DATE AND amount > paid_amount`.
+La risposta dell'API porta due stati, come i contratti:
+
+- `status`, quello memorizzato, che cambia solo su azioni esplicite;
+- `effective_status`, che vale `overdue` quando `is_past_due` è vero mentre `status`
+  resta `issued`.
+
+Il dominio ripete la formula in `Charge::is_past_due(today)` per poterla verificare
+senza database — stessa coppia di `app.lease_in_force` e `Lease::is_in_force`, e
+stesso obbligo di rispondere la stessa cosa.
+
+Conseguenza sul filtro dell'elenco: `?status=overdue` risponde **422** indicando
+`?outstanding=true`, come `?status=expiring` sui contratti. Restituire una pagina
+vuota sarebbe il modo peggiore di dire che quello stato in database non c'è.
+
+#### 3. Un addebito emesso **non si riscrive**: privilegi di colonna su `app.charges`
+
+Un addebito è una **pretesa verso una persona**. Riscriverne l'importo dopo averla
+comunicata non è una correzione, è cambiare le carte in tavola: la traccia resta in
+`audit_log`, ma la riga che l'inquilino rilegge dice un'altra cifra senza che nulla,
+nella riga stessa, ricordi la prima.
+
+Lo schema non lo impedisce. `charges_update` ha `USING` e `WITH CHECK` identici —
+`org_id = app.current_org_id() AND app.is_org_staff(org_id)` — e una `WITH CHECK` che
+nomina il solo `org_id` **lascia libera ogni altra colonna**: è la stessa
+constatazione di [ADR-021](08-decisioni.md#adr-021) e di
+[ADR-026](08-decisioni.md#adr-026), e vale qui identica, perché una policy non può
+confrontare la riga nuova con quella vecchia.
+
+Rientra nel **secondo criterio** dichiarato da ADR-026 — «una colonna non ha un motivo
+legittimo di cambiare e lo schema non ha un vincolo che ne difenda la coerenza» — e
+qui il criterio produce una lista corta come nessun'altra:
+
+```sql
+REVOKE UPDATE ON app.charges FROM propflow_app;
+GRANT  UPDATE (status) ON app.charges TO propflow_app;
+```
+
+**Una colonna sola.** Tutto il resto — `lease_id`, `charge_type`, `amount`,
+`currency`, `due_date`, `period_start`, `period_end`, `description`,
+`utility_bill_id`, `generation_key`, `issued_at`, `document_id`, `notes`,
+`deleted_at` — descrive la pretesa nel momento in cui è stata fatta, e cambiare
+significa farne un'altra: si annulla e si riemette. `updated_at` non compare perché
+la scrive il trigger `set_updated_at`, che è `BEFORE UPDATE` e non è soggetto ai
+privilegi di colonna del chiamante.
+
+Il modulo dei pagamenti non avrà bisogno di altro: riconciliare un incasso porta
+l'addebito a `partially_paid` o `paid`, cioè scrive `status`, che è concessa.
+
+**Conseguenza da dire ad alta voce: non esiste un `PATCH` sugli addebiti.** Prorogare
+una scadenza — «ti do una settimana in più» — oggi si fa annullando e riemettendo. È
+scomodo ed è voluto: è il punto in cui ci si ferma a chiedersi se `due_date` debba
+davvero essere scrivibile, e il giorno in cui la risposta sarà sì è una migration
+nuova, una riga.
+
+#### 4. Sulle bollette lo strumento **non** si usa, e la ragione è la lunghezza della lista
+
+Sarebbe l'automatismo naturale — la tabella accanto, lo stesso difetto nella
+`WITH CHECK` — e sarebbe sbagliato. Una bolletta si **digita**, dodici campi alla
+volta, e finché non è validata correggerne uno è il lavoro previsto, non un'anomalia.
+La `GRANT` dovrebbe quindi nominare quasi ogni colonna, e **un elenco che contiene
+quasi tutto non difende niente**: si paga l'onere di manutenzione — ogni colonna
+aggiunta a una `UPDATE` va aggiunta anche là — senza comprare la proprietà per cui
+l'onere esisteva.
+
+L'immutabilità della bolletta è quindi un'invariante di **dominio** e non un
+privilegio: `UtilityBill::apply` rifiuta le modifiche da `allocated` in poi. Ed è la
+prima volta che ADR-026 viene applicato e dà «no»: il criterio serve a decidere, non
+a estendersi da sé.
+
+#### 5. Correggere una bolletta validata **disfa la validazione**
+
+Il `PATCH` è ammesso da `draft` e da `validated`; su una bolletta validata riporta lo
+stato a `draft` e azzera `validated_at` e `validated_by`. Non è un effetto
+collaterale: validare è l'affermazione «questi numeri sono quelli», e cambiare i
+numeri la smentisce — chi la valida di nuovo deve rifarlo apposta. È la stessa regola
+per cui riaprire una segnalazione cancella `closed_at` e la nota di risoluzione.
+
+Da `allocated` in poi la bolletta è **ferma**: quei numeri sono la base di una pretesa
+già fatta a qualcuno, e cambiarli sotto la pretesa è precisamente ciò che non deve
+succedere.
+
+**Alternativa scartata: `PATCH` solo in bozza, e correzione per annullamento e
+reinserimento.** Sembra più semplice e sbatte contro `utility_bills_dedup_uk`, che è
+unico su `(org_id, supplier_vat, invoice_number)` e — attenzione — è parziale su
+`deleted_at IS NULL`, **non** su `status <> 'void'`. Una bolletta annullata
+continuerebbe quindi a occupare la chiave, e la stessa fattura non si potrebbe
+reinserire mai più. Vedi la trappola dedicata.
+
+#### 6. Annullare una bolletta la **cancella**, annullare un addebito no
+
+L'asimmetria è deliberata e ha una ragione sola.
+
+Un addebito annullato **resta visibile**: qualcuno si è visto chiedere quella somma, e
+deve poter vedere che la richiesta è caduta. `status = 'void'`, `deleted_at` intatto.
+
+Una bolletta annullata **sparisce**: `status = 'void'` **e** `deleted_at = now()`. Non
+c'è nessuno a cui dirlo — è un documento nostro inserito male — e c'è invece una
+ragione tecnica per liberare la riga: `utility_bills_dedup_uk` è parziale su
+`deleted_at IS NULL`, quindi senza il soft delete la stessa fattura non sarebbe più
+reinseribile. La traccia di ciò che è stato annullato resta in `audit_log`, che è
+append-only.
+
+#### 7. Il riaddebito è una **sotto-risorsa della bolletta**
+
+`POST /api/v1/utility-bills/{id}/recharge` crea l'addebito, lo collega
+(`charges.utility_bill_id`) e porta la bolletta ad `allocated`, tutto nella stessa
+transazione e con due eventi. L'alternativa — accettare `utility_bill_id` nel corpo di
+`POST /api/v1/leases/{id}/charges` — nasconderebbe in una creazione un effetto su un
+altro aggregato, che è lo stesso motivo per cui le transizioni delle segnalazioni sono
+sotto-risorse e non un `PATCH` sullo stato. `POST /leases/{id}/charges` quindi **non
+accetta** `utility_bill_id`: c'è una via sola perché una bolletta e un addebito si
+leghino, ed è quella che tiene onesto lo stato della bolletta.
+
+Il riaddebito è ammesso da `validated` **e da `allocated`**: riaddebitare una bolletta
+in parti a più contratti — il caso del co-living con contratti per stanza — è una
+ripetizione dell'operazione, come riassegnare una segnalazione già assegnata.
+
+**Nessuno verifica che le parti sommino al totale**, e non è una dimenticanza. Lo
+schema non ha un vincolo; un controllo applicativo sarebbe soggetto a race condition
+fra due riaddebiti concorrenti, che è esattamente il criterio di
+[ADR-015](08-decisioni.md#adr-015) per cui quel genere di invariante sta nel database o
+non sta da nessuna parte; e il posto in cui «le parti sommano» è già espresso
+correttamente è il `CONSTRAINT TRIGGER … DEFERRABLE` di `expense_shares`, cioè il
+modulo co-living. Riaddebitare più del totale è oggi possibile, ed è registrato qui
+invece che scoperto dopo.
+
+#### 8. La valuta resta **una sola**, e la ragione non è l'importo: è la vista dei saldi
+
+È la domanda che i ticket hanno rinviato qui per nome, e la risposta è no — con una
+motivazione che nel modulo delle segnalazioni non si poteva ancora vedere.
+
+`v_charge_balances` calcola `amount - SUM(payments.amount - refunded_amount)` **senza
+confrontare `currency`**, e `v_owner_dashboard.total_outstanding` somma
+`outstanding_amount` di tutta l'organizzazione allo stesso modo. Bastano due valute
+perché quei due numeri diventino silenziosamente falsi: non un errore di
+arrotondamento, una somma di grandezze diverse. `Money` non implementa `PartialOrd`
+proprio per rendere impossibile quel confronto nel dominio ([ADR-002](08-decisioni.md#adr-002));
+le viste lo fanno lo stesso, perché il SQL non ha quel tipo.
+
+Il costo di rendere la valuta dichiarabile non sta quindi nella colonna — c'è già, con
+il suo default — ma nelle **due viste** e nella decisione su cosa significhi un totale
+insoluto multi-valuta. È una migration e una scelta di prodotto, non un campo in un
+DTO. Fino ad allora `currency` non compare in nessuna `INSERT` né in nessuna `UPDATE`,
+resta al default `EUR`, ed è fra le colonne che il controllo delle invarianti verifica
+non essere scrivibili.
+
+#### 9. Il costo di una riparazione **non** diventa un addebito
+
+L'altra domanda rinviata dai ticket. La risposta è no, e la ragione sta nello schema
+prima che nel prodotto: **`app.charges` non ha una colonna per la segnalazione**.
+`utility_bill_id` c'è, con il suo indice; `ticket_id` no. Un addebito generato da una
+riparazione arriverebbe all'inquilino come una riga di testo libero, e la domanda «per
+cosa sono questi 180 euro» resterebbe senza risposta interrogabile — esattamente dove
+serve, perché è la riga che qualcuno contesterà.
+
+C'è anche una ragione che non è nostra: in una locazione italiana la manutenzione
+ordinaria è a carico dell'inquilino e la straordinaria del proprietario, e quella
+distinzione il modello non la rappresenta. Deciderla di striscio, dentro un endpoint,
+significherebbe deciderla per sempre.
+
+Quindi: `charge_type = 'maintenance'` esiste, e un proprietario che voglia riaddebitare
+una riparazione **crea l'addebito a mano** scrivendo nella descrizione a cosa si
+riferisce. Il giorno in cui il legame debba diventare di prima classe è una migration
+che aggiunge `charges.ticket_id` e il suo indice, e quello è il momento in cui si
+decide anche la questione ordinaria/straordinaria.
+
+#### 10. Il saldo si **legge** dalla vista, non si ricalcola
+
+Le letture — elenco e dettaglio — passano da `app.v_charge_balances`, che è
+`security_invoker` e quindi applica la RLS del chiamante. La definizione di «pagato»
+resta una sola: il giorno in cui il modulo dei pagamenti aggiungerà uno stato
+all'array `('succeeded','partially_refunded')`, cambierà in un posto e non in due.
+
+Copiare la `LEFT JOIN LATERAL` della vista dentro il repository sarebbe la seconda
+definizione, e divergerebbe alla prima modifica. Il prezzo pagato è che `app.charges`
+viene attraversata due volte quando la lettura serve anche le colonne che la vista non
+porta (`description`, `period_*`, `issued_at`, `utility_bill_id`, `notes`): la porta ha
+quindi **due metodi di lettura distinti** — `find_by_id`, che legge la sola tabella ed
+è ciò che usano le transizioni, e `find_balance_by_id` / `list_balances`, che uniscono
+la vista e sono ciò che usa il bordo HTTP. Le scritture non pagano un join che non
+useranno.
+
+#### 11. Gli allegati riusano `AttachmentOwner`, e chiedono **una correzione** alla RLS
+
+`app.attachment_owner_type` ha già `utility_bill` e `charge`, e
+`app.can_access_attachment` li risolve già: è il dividendo di aver fatto i documenti
+per primi, come lo è stato per le segnalazioni. Due varianti d'enum di dominio e
+quattro rotte, senza toccare gli use case dei documenti.
+
+Ma **`can_access_attachment` per `utility_bill` è più largo della policy della
+bolletta**, e finché nessuna bolletta aveva allegati la cosa non si vedeva. Risolve su
+`app.can_access_property(b.property_id)`, mentre `utility_bills_select` chiede staff
+**oppure** parte del contratto indicato. In un co-living con contratti per stanza,
+`can_access_property` è vera per **ogni** inquilino dell'immobile: aprendo le rotte
+degli allegati, il coinquilino A potrebbe scaricare la scansione della bolletta
+imputata al contratto di B — la bolletta con il nome, l'indirizzo e i consumi di B —
+senza poter vedere la riga della bolletta stessa.
+
+La correzione è una migration che riallinea la funzione alla policy («il documento di
+una bolletta si vede se si vede la bolletta»), ed è parte di questa fetta perché è
+questa fetta ad aprire la porta. La conseguenza sui documenti già esistenti è nulla:
+nessun documento ha oggi `owner_type = 'utility_bill'`.
+
+#### 12. Gli stati che l'enum ha e l'applicazione non scrive
+
+Riepilogo, perché è lungo e sparso: `bill_status.pending_review` (OCR),
+`bill_status.paid` (pagamento al fornitore, non modellato),
+`bill_status.disputed` (manca l'uscita), `charge_status.draft` (decisione 1),
+`charge_status.overdue` (decisione 2), `charge_status.paid` e
+`charge_status.partially_paid` (modulo pagamenti). Tutti vanno **comunque** nella
+tabella di conversione di `string_enum!`: una riga scritta a mano potrebbe
+contenerli, e un valore sconosciuto in lettura deve dare errore e non un default. È
+la regola di `docs/06` §Aggiungere un enum, e qui riguarda sette valori su quindici.
+
+### Decomposizione
+
+Ogni passo è eseguibile e verificabile da solo, nell'ordine di `docs/06` §Aggiungere
+un caso d'uso.
+
+**Il punto di taglio è il passo 12**, se la fetta risulta troppo grande in esecuzione:
+gli allegati sono additivi e chiusi — due varianti d'enum, una migration di
+riallineamento e quattro rotte che riusano gli use case dei documenti senza toccarli.
+Tagliato, resta un modulo completo. Tagliare più in alto non è un'opzione: il passo 11
+è il bordo HTTP e senza quello non c'è niente da usare.
+
+1. **Dominio: gli enum e i value object.** `UtilityType`, `BillStatus`, `ChargeType`,
+   `ChargeStatus` come enum di dominio con le righe in `string_enum!`. Value object
+   per ciò che ha limiti propri: `InvoiceNumber`, `SupplierVat` (testo libero a
+   schema — il vincolo è nostro), `Consumption` — **non** un `Money`, perché
+   `NUMERIC(14,4)` ha quattro decimali e `Money::new` ne rifiuta più di due. Il tetto
+   di `description` e `notes` è nostro, come per la descrizione delle segnalazioni.
+2. **Dominio: l'aggregato `UtilityBill`.** Campi privati, `register`, `apply`
+   (rifiutata da `allocated` in poi, e da `validated` disfa la validazione),
+   `validate`, `mark_allocated`, `void` (che valorizza anche `archived_at`/soft
+   delete). Test unitari sulla macchina: le transizioni ammesse **e** quelle
+   rifiutate.
+3. **Dominio: l'aggregato `Charge`.** `issue` come unico costruttore — nasce `issued`
+   con `issued_at` — più `void`, `write_off`, e `is_past_due(today)` che ripete la
+   formula della vista. Nessun `apply`: un addebito emesso non si riscrive.
+4. **Dominio: gli eventi.** `UtilityBillRegistered`, `UtilityBillUpdated` (nomi dei
+   campi, non valori), `UtilityBillStatusChanged`, `ChargeIssued`,
+   `ChargeStatusChanged`. **Nessun importo viaggia**: è la stessa regola di
+   `TicketCostsUpdated` e di `RoomUpdated`, che non porta il canone. Nemmeno
+   `supplier_name` e `supplier_vat`, che per un fornitore individuale nominano una
+   persona.
+5. **Porte di persistenza.** `UtilityBillRepository` (`find_by_id`, `list`, `insert`,
+   `update`) e `ChargeRepository` (`find_by_id`, `find_balance_by_id`,
+   `list_balances`, `insert`, `update`), con le due letture distinte della decisione
+   10. `UtilityBillQuery` e `ChargeQuery` con cursore keyset. Nessun `soft_delete`
+   sugli addebiti: si annullano, e l'annullamento è uno stato.
+6. **Use case: le bollette.** `RegisterUtilityBill`, `UpdateUtilityBill`,
+   `ValidateUtilityBill`, `VoidUtilityBill`, `ListUtilityBills`, `GetUtilityBill`.
+   `ensure_staff` su tutto ciò che scrive, `ensure_member` sulle letture — la policy
+   mostra all'inquilino la bolletta imputata al suo contratto, e *quali* siano sue lo
+   decide lei, non un ramo applicativo sul ruolo. La registrazione verifica che
+   `room_id` e `lease_id` appartengano all'immobile, leggendoli dai rispettivi
+   repository: lo schema non lo verifica, vedi le trappole.
+7. **Use case: gli addebiti.** `IssueCharge`, `VoidCharge`, `WriteOffCharge`,
+   `ListCharges`, `GetCharge`. `IssueCharge` **deve** leggere il contratto dal proprio
+   repository prima di inserire: la `WITH CHECK` di `charges_insert` non chiama
+   `can_access_lease`, e senza il controllo si scrive una riga che nessuno potrà mai
+   rileggere. Vedi le trappole.
+8. **Use case: il riaddebito.** `RechargeUtilityBill`, che in una transazione sola
+   verifica lo stato della bolletta, risolve il contratto, costruisce l'addebito, porta
+   la bolletta ad `allocated` ed emette i due eventi.
+9. **Migration `0022`: `can_access_attachment` riallineata.** `CREATE OR REPLACE
+   FUNCTION` che per `utility_bill` chiede staff **oppure** parte del contratto
+   indicato, come `utility_bills_select`. Viene **prima** del bordo HTTP che apre le
+   rotte degli allegati, non dopo.
+10. **Migration `0023`: i privilegi di colonna su `app.charges`.** `REVOKE UPDATE`,
+    `GRANT UPDATE (status)`, con la guardia per l'ambiente in cui il ruolo non esiste.
+    Estende l'elenco del **controllo 12** delle invarianti con le colonne
+    dell'addebito, mantenendo il nome `colonna-strutturale-scrivibile`: il criterio è
+    quello di ADR-026, non uno nuovo, e inventargli un terzo nome renderebbe
+    illeggibile la ragione di tutti e tre. Viene **prima** dell'infrastruttura: le
+    colonne concesse e quelle scritte dalle query sono la stessa lista, e scriverla
+    due volte in ordine inverso è il modo di farle divergere.
+11. **Infrastruttura.** `PgUtilityBillRepository` e `PgChargeRepository`. Query come
+    letterali statici con `concat!`, cast espliciti sugli enum e sui domini. I tre
+    stati dell'insoluto come **letterale SQL** in una macro `outstanding_statuses!`,
+    per la stessa ragione di `working_statuses!`: `charges_outstanding_ix` è parziale
+    su quell'elenco esatto. Mappatura di `utility_bills_dedup_uk` su un `Conflict`
+    nominato.
+12. **Bordo HTTP.** Le rotte, i DTO, `utoipa`, la registrazione in `openapi.rs` e nel
+    router. Importi come stringhe decimali, `effective_status` accanto a `status`,
+    `paid_amount` e `outstanding_amount` nella risposta.
+13. **Allegati.** `AttachmentOwner::UtilityBill` e `::Charge`, più
+    `POST`/`GET /api/v1/utility-bills/{id}/documents` e
+    `POST`/`GET /api/v1/charges/{id}/documents`, che riusano gli use case dei documenti
+    senza modificarli. Il test degli enum che oggi verifica «un `utility_bill` in
+    lettura dà errore» si sposta sul primo owner rimasto fuori: la regola non cambia,
+    si sposta il confine del perimetro.
+14. **Test.** Unitari di dominio sulle due macchine a stati e sui value object; di
+    persistenza con database reale — RLS dell'inquilino su addebiti e bollette, le
+    colonne dell'addebito che danno `permission denied`, la deduplica che dà
+    conflitto, il saldo letto dalla vista, la riga fantasma impedita; di contratto HTTP
+    sull'intero giro, compreso il `422` su `?status=overdue` e il coinquilino che non
+    scarica la bolletta dell'altro.
+15. **Documentazione.** Endpoint in `docs/05-api.md`, il modulo spostato da «non
+    implementato» a «implementato» in questa roadmap, l'esito del piano, e **quattro
+    ADR**: lo stato scaduto derivato (estende ADR-019 agli addebiti), l'addebito che
+    nasce emesso e non si riscrive (applica ADR-026 e dice perché non alle bollette),
+    la valuta unica motivata dalla vista, e il documento della bolletta che si vede se
+    si vede la bolletta.
+
+### Trappole
+
+Sono le vie che sembrano corrette e non lo sono. Tutte lette nello schema prima di
+scriverle qui; quelle marcate **da riprodurre** vanno verificate su database reale in
+esecuzione, come si è fatto per la `WITH CHECK` delle segnalazioni.
+
+**`charges_insert` non chiama `can_access_lease`, e la riga fantasma è dietro
+l'angolo.** La `WITH CHECK` è `org_id = app.current_org_id() AND
+app.is_org_staff(org_id)`: nomina l'organizzazione e **non** il contratto. Uno staff
+può quindi inserire un addebito con il **proprio** `org_id` e il `lease_id` di un
+contratto di un'altra organizzazione, se ne conosce l'UUID — la foreign key verso
+`app.leases` non guarda l'organizzazione, e su `app.charges` **non c'è** un trigger
+`assert_org_matches_*`, che invece esiste su `rooms`, `leases`, `tickets` e
+`utility_bills`. La riga entra e poi è invisibile a tutti: `charges_select` chiede
+`can_access_lease(lease_id)`, che è falsa per chi l'ha scritta (non è staff dell'altra
+organizzazione) e per l'altra organizzazione (l'`org_id` non è il suo). Non si può
+rileggere, non si può cancellare — il ruolo applicativo non ha `DELETE` — e non
+comparirà mai in nessun saldo. **Da riprodurre.** Il controllo sta in `IssueCharge`,
+che legge il contratto dal proprio repository prima di scrivere: è lo stesso
+`ensure_owner_is_visible` dei documenti, e per la stessa ragione.
+
+**`INSERT … RETURNING` qui funziona, e sapere perché conta più del fatto.** Sulle
+segnalazioni falliva perché `tickets_select` chiama `can_access_ticket(id)`, che
+interroga **la riga che si sta inserendo**, e la funzione è `STABLE`: vede lo snapshot
+di inizio statement, in cui la riga non c'è. `charges_select` chiama invece
+`can_access_lease(lease_id)`, che interroga `app.leases` — una tabella che la `INSERT`
+non tocca — quindi lo snapshot vecchio va benissimo. La regola generale, buona da
+ricordare: **il muro c'è solo quando la policy di `SELECT` dipende dalla riga stessa.**
+Non ce ne serviamo comunque, perché gli identificatori nascono nel dominio e nessuna
+colonna è assegnata dal database.
+
+**`utility_bills_dedup_uk` è parziale su `deleted_at IS NULL`, non su `status`.**
+`(org_id, supplier_vat, invoice_number)`, unico, quando entrambi i campi sono
+valorizzati. Una bolletta **annullata ma non cancellata** continuerebbe a occupare la
+chiave, e la stessa fattura non sarebbe reinseribile mai più: è la ragione per cui
+`void` sulle bollette valorizza anche `deleted_at` (decisione 6). Il vincolo scatta
+solo se `supplier_vat` **e** `invoice_number` sono entrambi presenti, quindi due
+bollette senza numero di fattura non danno conflitto — il che è corretto e va detto,
+perché sembra che la deduplica non funzioni.
+
+**`utility_bills_validated_ck` vincola una sola direzione.** È
+`status NOT IN ('validated','allocated','paid') OR validated_at IS NOT NULL`: obbliga
+ad avere una data quando si è validati, e **non** obbliga a toglierla tornando in
+bozza. Il database accetta senza dire niente una bolletta `draft` con
+`validated_at` valorizzato — cioè una bolletta che dichiara di essere stata controllata
+e risulta da controllare. Deve azzerarlo il dominio, in `apply`. È esattamente la forma
+di `tickets_closed_ck` e di `closed_at` alla riapertura, ed è la seconda volta che
+questo schema la presenta: la si cerchi in ogni `CHECK` scritto come `stato ≠ X OR
+colonna IS NOT NULL`.
+
+**`charges_issued_ck` fa lo stesso.** `status = 'draft' OR issued_at IS NOT NULL`.
+Poiché `draft` non si scrive mai, ogni addebito deve nascere con `issued_at`: dimenticarlo
+non dà una riga strana, dà un rifiuto all'inserimento. È la traduzione a schema della
+decisione 1, ed è la ragione per cui quella decisione è quasi gratuita.
+
+**`charges_outstanding_ix` è parziale sui tre stati dell'insoluto.**
+`WHERE deleted_at IS NULL AND status IN ('issued','partially_paid','overdue')`.
+L'elenco dello scadenzario — quello che la dashboard leggerà — usa l'indice solo se
+filtra `status` dentro quell'elenco **come letterale**: un array passato come parametro
+non permette al planner di dimostrare che il predicato della query implica quello
+dell'indice, perché al momento del piano non ne conosce il contenuto. Stessa
+situazione di `tickets_open_ix` e stessa soluzione, macro compresa, con un test che
+tiene insieme il letterale e la costante di dominio. Nota che l'elenco contiene
+`overdue`, che l'applicazione non scrive: l'indice resta corretto lo stesso — copre
+più di quanto serva — ma chi lo legge deve sapere che il terzo valore è lì per righe
+che non esistono.
+
+**Non esiste alcun vincolo fra `room_id`, `lease_id` e `property_id` di una
+bolletta.** È la trappola delle segnalazioni, identica: il trigger
+`assert_org_matches_property` su `app.utility_bills` verifica soltanto che l'`org_id`
+coincida con quello dell'immobile. Una stanza di un altro immobile o il contratto di un
+altro immobile passano senza una parola, e il risultato è una bolletta che nei report
+sta sotto un immobile e nell'interfaccia sotto un altro. Il controllo sta nel service
+layer, e — a differenza delle segnalazioni — **va ripetuto anche nel `PATCH`**, perché
+lì `room_id` e `lease_id` restano scrivibili: sulla bolletta dicono *chi deve pagare*,
+che è una decisione che cambia legittimamente finché la bolletta è una bozza, mentre
+sulla segnalazione dicono *dov'è il guasto*, che è un fatto fissato al momento in cui
+è stato segnalato. È il prezzo della decisione 4, ed è la ragione per cui il controllo
+vive in una funzione sola chiamata da due punti.
+
+**`can_access_attachment` per `utility_bill` è più largo della policy della
+bolletta.** Vedi la decisione 11: risolve su `can_access_property`, e in un co-living
+con contratti per stanza questo significa *ogni* inquilino dell'immobile. **Da
+riprodurre** prima e dopo la migration `0022`: è l'unico modo di sapere che la
+migration serve davvero e che ha funzionato.
+
+**Il saldo non guarda la valuta.** `v_charge_balances` sottrae
+`SUM(payments.amount - refunded_amount)` da `charges.amount` senza confrontare
+`currency`, e le due colonne esistono su entrambe le tabelle. Finché la valuta è una
+sola non fa danni; è la ragione per cui resta una sola (decisione 8), e va riletto il
+giorno in cui qualcuno vorrà dichiararla.
+
+**`is_past_due` usa `CURRENT_DATE`, che dipende dal fuso della sessione.** Un addebito
+in scadenza oggi diventa scaduto alla mezzanotte **del database**, non a quella di chi
+guarda. Con il container in UTC e un utente in Italia lo scarto è di una o due ore, una
+volta al giorno, sul solo giorno della scadenza. Non si corregge in questa fetta —
+correggerlo significa decidere di chi è il fuso orario di riferimento, che è una
+domanda di prodotto — ma va scritto, perché il sintomo (un addebito che risulta scaduto
+«troppo presto») è di quelli che si cercano nel posto sbagliato.
+
+**`taxable_amount + vat_amount` non deve fare `total_amount`, e nessuno lo verifichi.**
+Una bolletta di utenza italiana porta abitualmente più aliquote IVA, quote fisse e voci
+non imponibili: un controllo di uguaglianza rifiuterebbe bollette valide. Lo schema
+infatti non lo impone — i tre `CHECK` chiedono solo che siano non negativi — e il
+dominio non deve aggiungerlo per simmetria.
+
+**`consumption` è `NUMERIC(14,4)` e non è denaro.** Passarlo da `Money` lo farebbe
+rifiutare a `Money::new`, che ammette due decimali: serve un value object proprio.
+Sembra un dettaglio e costa mezza giornata quando un consumo di `123.4567 kWh`
+restituisce un `422` che parla di importi.
+
+**Due modi di allegare un documento a una bolletta, e uno solo va usato.**
+`utility_bills.document_id` è una colonna con FK verso `app.documents` — la
+«scansione» — e i documenti hanno già il riferimento polimorfico
+`(owner_type, owner_id)`. Si usa il secondo, e `document_id` **resta non popolata**,
+come `leases.contract_document_id` e `users.avatar_document_id` che l'API già non
+tocca. Popolarle entrambe significherebbe avere due risposte alla domanda «qual è il
+documento di questa bolletta» e doverle tenere allineate.
+
+**`ocr_extracted` è fra le colonne redatte nell'audit**, come `extracted_data` dei
+documenti. Non c'è nulla da fare in questa fetta — nessuno la scrive — ma è la prova
+che il modulo OCR è già atteso da quella parte dello schema, e la redazione non va
+tolta credendola inutile.
+
+**`app.charges` non è nella lista dei trigger di audit?** Lo è: compare nell'array della
+`0013` insieme a `settlements` e `tickets`, e `utility_bills` ha il proprio trigger con
+la redazione di `ocr_extracted`. Nessuna azione, ma è il primo posto da guardare quando
+si vuole sapere se una modifica lascia traccia — e per gli addebiti la risposta è sì,
+ogni `UPDATE` finisce in `audit_log`.
+
+**Gli identificatori nascono in Rust anche qui.** `utility_bills.id` e `charges.id`
+hanno `DEFAULT gen_random_uuid()`, cioè UUIDv4: se una riga fosse inserita senza
+specificare l'id, il cursore keyset per `id` restituirebbe un ordine casuale. Come per
+ogni altra tabella del progetto, l'`INSERT` nomina sempre l'id e lo genera il dominio
+con `generate()`, che è UUIDv7. Il `DEFAULT` resta lì per le righe che nessuno di noi
+scrive.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde con i test nuovi, e il controllo 12 delle
+invarianti verde con le colonne dell'addebito nell'elenco — verificato **anche al
+contrario**, concedendo `UPDATE (amount)` a mano e vedendolo fallire con
+`colonna-strutturale-scrivibile / charges.amount`.
+
+Un giro a mano contro il binario vero, PostgreSQL vero e MinIO vero, che percorra il
+mese del proprietario: registra una bolletta del gas sull'immobile, vi allega la
+scansione, si accorge di aver sbagliato il numero di fattura e la corregge, la valida,
+la riaddebita al contratto per 120 euro con scadenza fra dieci giorni; l'inquilino vede
+**l'addebito e la bolletta**, con `paid_amount` a `0.00` e `outstanding_amount` uguale
+all'importo; il proprietario emette anche il canone del mese; un addebito con scadenza
+nel passato risulta `effective_status: overdue` mentre `status` resta `issued`;
+annullare l'addebito lo lascia visibile all'inquilino come `void`, annullare la bolletta
+la fa sparire da entrambi e **libera il numero di fattura**, verificato reinserendola.
+
+E le prove che riguardano chi non deve vedere: un utente di un'altra organizzazione
+riceve `404` su bolletta, addebito, allegati e contenuto del documento, e l'elenco
+vuoto; in un immobile in co-living con due contratti per stanza, il coinquilino che non
+è parte del contratto della bolletta **non ne scarica la scansione** — la prova che la
+migration `0022` serviva; `?status=overdue` risponde `422` indicando `?outstanding=true`;
+e come `propflow_app`, sul database vivo, `UPDATE app.charges SET amount = …` dà
+`permission denied for table charges`.
+
+`docs/05-api.md` che descrive gli endpoint, e la guardia della configurazione verde
+senza toccarla: questa fetta non aggiunge impostazioni.
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Eseguito il **31 agosto 2026**, tutti e quindici i passi, senza usare il punto di
+taglio: gli allegati (passo 13) sono entrati nella fetta. Suite completa verde, **264
+test** (erano 204): 35 nuovi unitari di dominio, 10 di persistenza, 14 di contratto
+HTTP, più l'estensione delle tabelle di conversione degli enum.
+
+Il piano ha retto quasi per intero. Ciò che segue è **solo ciò che è cambiato**, perché
+è l'unica parte che il piano da solo non racconta.
+
+#### Quattro cose che il piano non aveva previsto
+
+**1. `Charge::is_past_due` ha due parametri, non uno.** Il piano scriveva
+`is_past_due(today)`. Non poteva funzionare: la formula della vista è
+`due_date < CURRENT_DATE AND amount > COALESCE(paid_amount, 0)`, e `paid_amount` **non
+è un dato dell'aggregato** — vive in `app.payments`. Una funzione con un argomento solo
+non sarebbe *la stessa* formula, sarebbe una che le somiglia finché non esistono
+pagamenti, cioè fino al modulo successivo. La firma è
+`is_past_due(today, paid_amount: Decimal)`, e in questa fetta il chiamante passa sempre
+zero. Registrato in [ADR-028](08-decisioni.md#adr-028).
+
+**2. La vista non guarda lo stato, e questo si è scoperto leggendola.** Il piano citava
+`is_past_due` come se filtrasse gli addebiti insoluti. Non lo fa: `v_charge_balances`
+non ha `status` nel predicato, quindi un addebito **annullato** con una scadenza nel
+passato ha `is_past_due` vero. Il dominio ripete la formula così com'è — deve — e a
+escludere quel caso è `effective_status`, che deriva `overdue` solo dagli stati
+dell'insoluto. Ne segue una conseguenza per la dashboard, che il piano non poteva
+vedere: `v_owner_dashboard.overdue_charges` conta con la definizione **più larga**, e
+conterà anche gli addebiti annullati scaduti. Va saputo prima di scoprirlo.
+
+**3. `void` sulle bollette non è ammesso da `allocated`.** Il piano non diceva da quali
+stati si annulla una bolletta. La sua stessa logica lo impone: da `allocated` la
+bolletta è la base di un addebito già emesso, e farla sparire — perché `void`
+valorizza `deleted_at` — lascerebbe quell'addebito a citare (`charges.utility_bill_id`)
+una riga che non si vede più. `void` è quindi ammesso da `draft` e `validated`, gli
+stessi stati in cui la bolletta è correggibile, e l'ordine è **annullare prima gli
+addebiti**.
+
+**4. `Consumption` porta anche l'unità.** Il piano chiedeva un value object per il
+numero, per via dei quattro decimali. Tenerci dentro anche l'unità è costato nulla e
+rende inesprimibile una riga che lo schema accetta: `consumption` valorizzata e
+`consumption_unit` nulla, cioè un numero che non dice niente. Stessa forma di `Money`,
+che tiene insieme importo e valuta.
+
+#### La cosa più cara imparata: un test che passa da uno strato non prova nulla sullo strato sotto
+
+Il piano marcava «**da riprodurre**» la trappola di `can_access_attachment`. La prima
+riproduzione è **fallita nel senso peggiore**: il test passava.
+
+Scritto attraverso lo use case (`ListDocuments`), restava verde **anche rimettendo la
+definizione sbagliata della `0014`** — verificato davvero, riportando la funzione
+indietro su un database vero. La ragione è che `ensure_owner_is_visible` rilegge la
+bolletta sotto `utility_bills_select` e restituisce `404` prima che la RLS entri in
+gioco: lo strato applicativo **mascherava il difetto invece di dimostrarlo**.
+
+La prova richiede di interrogare `can_access_attachment` **direttamente, sotto il
+contesto RLS del coinquilino** — installando le GUC come fa l'unità di lavoro — che è
+ciò che fa `documents_select` quando l'applicazione non c'è di mezzo. Fatto così, il
+test fallisce con la definizione vecchia e passa con la `0022`. Riprodotto in entrambe
+le direzioni; è la parte del lavoro che il ragionamento da solo non avrebbe dato, ed è
+in [ADR-031](08-decisioni.md#adr-031).
+
+La regola generale, che vale oltre questo caso: **la difesa in profondità si verifica
+solo interrogando lo strato che si vuole verificare.** Un test che passa dal bordo
+prova il bordo.
+
+#### Le trappole confermate
+
+Tutte quelle marcate nel piano si sono presentate come descritto, e nessuna ha
+richiesto di cambiare rotta:
+
+- `charges_insert` non chiama `can_access_lease`: il controllo in `IssueCharge` è ciò
+  che impedisce la riga fantasma, e un test di persistenza prova che dopo il rifiuto
+  `app.charges` è vuota — cioè che il controllo precede la scrittura;
+- `utility_bills_dedup_uk` è parziale su `deleted_at IS NULL`: un test reinserisce la
+  stessa fattura dopo l'annullamento e la vede passare;
+- `utility_bills_validated_ck` vincola una sola direzione: un test rilegge la riga dal
+  database dopo una correzione e verifica che `validated_at` sia `NULL`, non solo che
+  l'aggregato in memoria lo sia;
+- i privilegi di colonna della `0023`: verificati **anche al contrario**, concedendo
+  `UPDATE (amount)` a mano e vedendo il controllo 12 fallire con
+  `colonna-strutturale-scrivibile / charges.amount`, poi revocando e vedendolo tornare
+  verde;
+- `charges_issued_ck`: un addebito senza `issued_at` non dà una riga strana, dà un
+  rifiuto all'inserimento — ed è la ragione per cui «niente bozza» è quasi gratuito;
+- il vincolo assente fra `room_id`, `lease_id` e `property_id`: il controllo vive in
+  `ensure_belong_to_property`, **una funzione chiamata da due punti**, e un test di
+  contratto lo prova sia sulla registrazione sia sul `PATCH`.
+
+Una sola trappola si è rivelata più stretta del previsto, e riguarda i **test**: la
+regola «le stringhe SQL sono letterali statici» (`CLAUDE.md` §2.15) vale anche lì.
+Comporre con `format!` l'elenco delle colonne da provare non compila, e le cinque
+`UPDATE` del test sui privilegi sono cinque letterali.
+
+#### Cosa resta fuori, e resta fuori davvero
+
+Il perimetro dichiarato non si è allargato di un campo. Restano ai loro default e
+**nessuno li scrive**: `ocr_extracted`, `ocr_confidence`, `ai_job_id`,
+`document_id` (su entrambe le tabelle), `generation_key`, `metadata`, e gli stati
+`bill_status.pending_review`, `bill_status.paid`, `bill_status.disputed`,
+`charge_status.draft`, `charge_status.overdue`, `charge_status.partially_paid`,
+`charge_status.paid`.
+
+Sette valori d'enum su quindici sono nella tabella di conversione di `string_enum!` e
+non escono mai da una scrittura. È deliberato: una riga scritta a mano potrebbe
+contenerli, e un valore sconosciuto in lettura deve dare errore invece di ricadere su
+un default plausibile.
+
+#### Il giro a mano
+
+Eseguito il **31 agosto 2026** contro il binario vero, PostgreSQL vero e MinIO vero,
+percorrendo il mese del proprietario per intero. Tutto è tornato. Ciò che vale la pena
+registrare, perché è la parte che i test automatici non dicono:
+
+- la **normalizzazione della partita IVA** funziona sul filo: `it 123.456.789.01`
+  entra e diventa `IT12345678901`, che è ciò che rende utile l'indice di deduplica;
+- il **consumo** attraversa l'intera pila con i suoi quattro decimali
+  (`123.4567 Smc`), che era la ragione del value object;
+- la **scansione** ha fatto il giro completo dello storage: caricata, `307` verso
+  l'URL pre-firmato, scaricata da MinIO, e i byte coincidono con quelli caricati;
+- la **correzione disfa la validazione**, verificata due volte di seguito: validata,
+  corretta con una nota, tornata `draft` con `validated_at` e `validated_by` a `null`;
+- il riaddebito ha portato la bolletta ad `allocated` e l'addebito è nato `issued` con
+  `paid_amount: "0.00"` e `outstanding_amount` uguale all'importo, **e il periodo
+  copiato dalla bolletta** e non dal comando;
+- un addebito con scadenza nel passato risponde `effective_status: overdue` mentre
+  `status` resta `issued`; `?status=overdue` dà `422` con il rimedio nel messaggio, e
+  `?outstanding=true` restituisce lo scadenzario;
+- annullare l'addebito lo lascia **visibile all'inquilino** come `void`; annullare una
+  bolletta non riaddebitata la fa sparire (`404`) e **libera il numero di fattura**,
+  verificato reinserendo la stessa fattura con successo; una bolletta già riaddebitata
+  dà invece `409`;
+- un utente di un'altra organizzazione riceve `404` su bolletta, addebito, entrambi gli
+  elenchi di allegati e il contenuto del documento, e i due elenchi rispondono `200`
+  con zero elementi;
+- come `propflow_app` sul database vivo, `UPDATE app.charges SET amount = …` e
+  `SET due_date = …` danno `permission denied for table charges`, mentre
+  `SET status = …` è accettata.
+
+**La prova del co-living, quella per cui esiste la migration `0022`:** immobile con due
+contratti per stanza, bolletta imputata al contratto di B con la sua scansione.
+
+| | riga bolletta | elenco allegati | scansione |
+|---|---|---|---|
+| **B**, parte del contratto | `200` | `200` | `307` |
+| **A**, coinquilino di un altro contratto | `404` | `404` | **`404`** |
+
+Senza la `0022` l'ultima cella sarebbe stata un `307`, cioè la fattura di B — con il
+suo nome, il suo indirizzo e i suoi consumi — scaricabile da A.
+
+**Una cosa trovata dal giro e non dai test:** `.env.example` ha guadagnato la sezione
+`PROPFLOW__STORAGE__*` quando è arrivato lo storage oggetti, e un `.env` locale creato
+prima non ce l'ha. L'API non parte e dice
+`missing field access_key_id for key "default.storage"`, che non nomina la variabile
+d'ambiente da impostare. Non è un difetto di questa fetta e non si corregge qui, ma è
+il primo intoppo che incontra chi torna su un ambiente vecchio.
