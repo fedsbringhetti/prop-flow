@@ -18,6 +18,9 @@ use propflow_application::use_cases::invitation::{
 use propflow_application::use_cases::lease::{
     ActivateLease, AddLeaseParty, DraftLease, GetLease, ListLeases, TerminateLease,
 };
+use propflow_application::use_cases::payment::{
+    ConfirmPayment, DeclarePayment, GetPayment, ListPayments, RecordPayment, RejectPayment,
+};
 use propflow_application::use_cases::property::{
     ArchiveProperty, CreateProperty, GetProperty, ListProperties, UpdateProperty,
 };
@@ -100,6 +103,18 @@ pub struct AppState {
     /// pretesa già comunicata non si riscrive.
     pub void_charge: Arc<VoidCharge>,
     pub write_off_charge: Arc<WriteOffCharge>,
+
+    /// Due vie di ingresso e non una: registrare un incasso e dichiarare di aver
+    /// pagato producono righe con stati diversi, e a distinguerle è chi chiama —
+    /// che è autorizzazione, quindi service layer e non handler.
+    pub record_payment: Arc<RecordPayment>,
+    pub declare_payment: Arc<DeclarePayment>,
+    /// Le due uscite di `pending`, nate insieme a lui: uno stato in cui si entra e
+    /// da cui non si esce è peggio di nessuno stato.
+    pub confirm_payment: Arc<ConfirmPayment>,
+    pub reject_payment: Arc<RejectPayment>,
+    pub get_payment: Arc<GetPayment>,
+    pub list_payments: Arc<ListPayments>,
 
     pub invite_tenant: Arc<InviteTenant>,
     pub revoke_invitation: Arc<RevokeInvitation>,
@@ -316,6 +331,24 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
+            record_payment: Arc::new(RecordPayment::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            declare_payment: Arc::new(DeclarePayment::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            confirm_payment: Arc::new(ConfirmPayment::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            reject_payment: Arc::new(RejectPayment::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_payment: Arc::new(GetPayment::new(Arc::clone(&unit_of_work))),
+            list_payments: Arc::new(ListPayments::new(Arc::clone(&unit_of_work))),
             invite_tenant: Arc::new(InviteTenant::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),

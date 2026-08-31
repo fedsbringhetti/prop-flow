@@ -8,6 +8,7 @@ pub mod documents;
 pub mod health;
 pub mod invitations;
 pub mod leases;
+pub mod payments;
 pub mod properties;
 pub mod rooms;
 pub mod tickets;
