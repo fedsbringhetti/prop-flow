@@ -98,11 +98,12 @@ porta → use case → repository → endpoint → test.
    la consuma e non la restringe, quindi la fretta non ha un fondamento.
 
    Contro il farla prima c'è invece una ragione vera: **due delle sue semantiche non
-   sono decise** — vedi qui sotto — e questo progetto tiene fuori ciò la cui semantica
-   non è decisa, che è esattamente perché `bill_status.disputed` è rimasto fuori dalla
-   fetta contabile. Aggiungere un campo dopo è additivo; cambiare cosa significa un
-   campo già pubblicato è una rottura, ed è la stessa asimmetria che giustifica la
-   `0024`.
+   sono decise** — sono elencate in
+   [Perché la dashboard resta ultima](#perché-la-dashboard-resta-ultima) — e questo
+   progetto tiene fuori ciò la cui semantica non è decisa, che è esattamente perché
+   `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere un campo
+   dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura, ed è
+   la stessa asimmetria che giustifica la `0024`.
 
    **L'unico argomento per anticiparla** è che è la prima superficie di lettura che
    attraversa immobili, contratti, segnalazioni, bollette, addebiti e pagamenti
