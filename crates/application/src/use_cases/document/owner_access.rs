@@ -55,6 +55,25 @@ pub(super) async fn ensure_owner_is_visible(
             .await?
             .map(|_| ())
             .ok_or(AppError::not_found(Entity::Ticket)),
+        // La rilettura vale **doppio** per la bolletta. `can_access_attachment`
+        // risolveva `utility_bill` su `can_access_property`, più largo di
+        // `utility_bills_select`; la migration `0022` le riallinea, e questa riga è
+        // la metà applicativa dello stesso criterio — legge la bolletta sotto la
+        // policy che la governa, invece di riscriverne la condizione.
+        AttachmentOwner::UtilityBill(id) => uow
+            .utility_bills()
+            .find_by_id(id)
+            .await?
+            .map(|_| ())
+            .ok_or(AppError::not_found(Entity::UtilityBill)),
+        // `find_by_id` e non `find_balance_by_id`: qui serve sapere **se** la riga
+        // è visibile, non quanto è stato incassato.
+        AttachmentOwner::Charge(id) => uow
+            .charges()
+            .find_by_id(id)
+            .await?
+            .map(|_| ())
+            .ok_or(AppError::not_found(Entity::Charge)),
     }
 }
 

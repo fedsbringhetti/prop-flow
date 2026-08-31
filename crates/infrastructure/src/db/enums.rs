@@ -144,9 +144,9 @@ string_enum!("document_kind", DocumentKind, document_kind_to_db, document_kind_f
     Other => "other",
 });
 
-// `app.attachment_owner_type` ha undici valori, il dominio quattro: sono gli unici
+// `app.attachment_owner_type` ha undici valori, il dominio sei: sono gli unici
 // aggregati che hanno già dominio, caso d'uso ed endpoint. La conseguenza è che un
-// documento allegato a una bolletta dà **errore** in lettura invece di essere
+// documento allegato a un pagamento dà **errore** in lettura invece di essere
 // silenziosamente ignorato — è la stessa regola degli altri enum, e qui vale a
 // maggior ragione: un documento che l'API non sa mostrare non deve sparire
 // dall'elenco senza che nessuno se ne accorga.
@@ -155,6 +155,8 @@ string_enum!("attachment_owner_type", AttachmentOwnerType, attachment_owner_type
     Room => "room",
     Lease => "lease",
     Ticket => "ticket",
+    UtilityBill => "utility_bill",
+    Charge => "charge",
 });
 
 string_enum!("ticket_category", TicketCategory, ticket_category_to_db, ticket_category_from_db, {
@@ -365,6 +367,8 @@ mod tests {
             AttachmentOwnerType::Room,
             AttachmentOwnerType::Lease,
             AttachmentOwnerType::Ticket,
+            AttachmentOwnerType::UtilityBill,
+            AttachmentOwnerType::Charge,
         ] {
             assert_eq!(
                 attachment_owner_type_from_db(attachment_owner_type_to_db(owner)).expect("noto"),
@@ -508,9 +512,12 @@ mod tests {
         // ricadere silenziosamente su un valore plausibile.
         assert!(org_role_from_db("accountant").is_err());
         assert!(property_status_from_db("").is_err());
-        // Un owner fuori perimetro non ricade su un valore plausibile: nessuno dei
-        // quattro che l'API espone è "abbastanza vicino" a una bolletta.
-        assert!(attachment_owner_type_from_db("utility_bill").is_err());
+        // Un owner fuori perimetro non ricade su un valore plausibile. Il confine
+        // si è spostato con le bollette — `utility_bill` e `charge` ora sono
+        // dentro — ma la regola non è cambiata: il primo owner rimasto fuori dà
+        // errore, e non diventa il più simile fra quelli noti.
+        assert!(attachment_owner_type_from_db("payment").is_err());
+        assert!(attachment_owner_type_from_db("expense").is_err());
         assert!(ticket_status_from_db("escalated").is_err());
         assert!(ticket_actor_from_db("vendor").is_err());
         assert!(bill_status_from_db("archived").is_err());

@@ -8,7 +8,9 @@ use propflow_application::use_cases::document::{
 };
 use propflow_domain::DomainError;
 use propflow_domain::document::{AttachmentOwner, Document, DocumentKind};
-use propflow_domain::shared::{DocumentId, LeaseId, PropertyId, RoomId, TicketId};
+use propflow_domain::shared::{
+    ChargeId, DocumentId, LeaseId, PropertyId, RoomId, TicketId, UtilityBillId,
+};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -37,6 +39,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/tickets/{ticket_id}/documents",
             get(list_for_ticket),
+        )
+        .route(
+            "/api/v1/utility-bills/{utility_bill_id}/documents",
+            get(list_for_utility_bill),
+        )
+        .route(
+            "/api/v1/charges/{charge_id}/documents",
+            get(list_for_charge),
         )
         .route("/api/v1/documents/{id}/content", get(content))
         .route("/api/v1/documents/{id}", delete(archive))
@@ -67,6 +77,14 @@ pub fn upload_router(limit_bytes: usize) -> Router<AppState> {
         .route(
             "/api/v1/tickets/{ticket_id}/documents",
             post(upload_to_ticket),
+        )
+        .route(
+            "/api/v1/utility-bills/{utility_bill_id}/documents",
+            post(upload_to_utility_bill),
+        )
+        .route(
+            "/api/v1/charges/{charge_id}/documents",
+            post(upload_to_charge),
         )
         .layer(DefaultBodyLimit::max(limit_bytes))
         .layer(tower_http::limit::RequestBodyLimitLayer::new(limit_bytes))
@@ -159,6 +177,8 @@ pub enum AttachmentOwnerDto {
     Room,
     Lease,
     Ticket,
+    UtilityBill,
+    Charge,
 }
 
 /// Corpo `multipart/form-data` del caricamento.
@@ -207,6 +227,8 @@ impl DocumentResponse {
                 AttachmentOwner::Room(_) => AttachmentOwnerDto::Room,
                 AttachmentOwner::Lease(_) => AttachmentOwnerDto::Lease,
                 AttachmentOwner::Ticket(_) => AttachmentOwnerDto::Ticket,
+                AttachmentOwner::UtilityBill(_) => AttachmentOwnerDto::UtilityBill,
+                AttachmentOwner::Charge(_) => AttachmentOwnerDto::Charge,
             },
             owner_id: owner.owner_id(),
             original_filename: document.original_filename().as_str().to_owned(),
@@ -345,6 +367,60 @@ async fn upload_to_ticket(
         state,
         context,
         AttachmentOwner::Ticket(TicketId::from_uuid(ticket_id)),
+        multipart,
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/utility-bills/{utility_bill_id}/documents", tag = "documenti",
+    params(("utility_bill_id" = Uuid, Path, description = "Identificatore della bolletta")),
+    request_body(content = UploadDocumentForm, content_type = "multipart/form-data"),
+    security(("bearer" = [])),
+    responses(
+        (status = 201, description = "Scansione della bolletta caricata", body = DocumentResponse),
+        (status = 404, description = "Bolletta non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 413, description = "Corpo oltre il limite di caricamento", body = crate::error::ProblemDetails),
+        (status = 422, description = "Dati non validi", body = crate::error::ProblemDetails),
+    )
+)]
+async fn upload_to_utility_bill(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(utility_bill_id): Path<Uuid>,
+    multipart: Multipart,
+) -> ApiResult<(StatusCode, Json<DocumentResponse>)> {
+    upload(
+        state,
+        context,
+        AttachmentOwner::UtilityBill(UtilityBillId::from_uuid(utility_bill_id)),
+        multipart,
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/charges/{charge_id}/documents", tag = "documenti",
+    params(("charge_id" = Uuid, Path, description = "Identificatore dell'addebito")),
+    request_body(content = UploadDocumentForm, content_type = "multipart/form-data"),
+    security(("bearer" = [])),
+    responses(
+        (status = 201, description = "Documento allegato all'addebito", body = DocumentResponse),
+        (status = 404, description = "Addebito non trovato o non visibile", body = crate::error::ProblemDetails),
+        (status = 413, description = "Corpo oltre il limite di caricamento", body = crate::error::ProblemDetails),
+        (status = 422, description = "Dati non validi", body = crate::error::ProblemDetails),
+    )
+)]
+async fn upload_to_charge(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(charge_id): Path<Uuid>,
+    multipart: Multipart,
+) -> ApiResult<(StatusCode, Json<DocumentResponse>)> {
+    upload(
+        state,
+        context,
+        AttachmentOwner::Charge(ChargeId::from_uuid(charge_id)),
         multipart,
     )
     .await
@@ -567,6 +643,54 @@ async fn list_for_ticket(
         state,
         context,
         AttachmentOwner::Ticket(TicketId::from_uuid(ticket_id)),
+        params,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/utility-bills/{utility_bill_id}/documents", tag = "documenti",
+    params(("utility_bill_id" = Uuid, Path, description = "Identificatore della bolletta"), ListQueryParams),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Pagina di documenti", body = DocumentPageResponse),
+        (status = 404, description = "Bolletta non trovata o non visibile", body = crate::error::ProblemDetails),
+    )
+)]
+async fn list_for_utility_bill(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(utility_bill_id): Path<Uuid>,
+    Query(params): Query<ListQueryParams>,
+) -> ApiResult<Json<DocumentPageResponse>> {
+    list(
+        state,
+        context,
+        AttachmentOwner::UtilityBill(UtilityBillId::from_uuid(utility_bill_id)),
+        params,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/charges/{charge_id}/documents", tag = "documenti",
+    params(("charge_id" = Uuid, Path, description = "Identificatore dell'addebito"), ListQueryParams),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Pagina di documenti", body = DocumentPageResponse),
+        (status = 404, description = "Addebito non trovato o non visibile", body = crate::error::ProblemDetails),
+    )
+)]
+async fn list_for_charge(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(charge_id): Path<Uuid>,
+    Query(params): Query<ListQueryParams>,
+) -> ApiResult<Json<DocumentPageResponse>> {
+    list(
+        state,
+        context,
+        AttachmentOwner::Charge(ChargeId::from_uuid(charge_id)),
         params,
     )
     .await
