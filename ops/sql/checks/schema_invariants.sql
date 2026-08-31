@@ -139,14 +139,28 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
 
--- 12. Colonne strutturali di una segnalazione non devono essere aggiornabili dal
---     ruolo applicativo. Il criterio è **diverso** da quello del controllo 11:
---     qui non c'è un confine di isolamento da difendere — l'inquilino che le
---     riscrivesse resterebbe dentro la propria organizzazione — ma una classe di
---     incoerenze che nessuna policy può esprimere, perché una policy non può
---     confrontare la riga nuova con quella vecchia. Lo schema non ha alcun vincolo
---     fra `room_id`, `lease_id` e `property_id`, e la `WITH CHECK` di
---     `tickets_update` nomina il solo `org_id`. Vedi migrations/0020 e ADR-026.
+-- 12. Colonne strutturali che non devono essere aggiornabili dal ruolo
+--     applicativo. Il criterio è **diverso** da quello del controllo 11: qui non
+--     c'è un confine di isolamento da difendere — chi le riscrivesse resterebbe
+--     dentro la propria organizzazione — ma una classe di incoerenze che nessuna
+--     policy può esprimere, perché una policy non può confrontare la riga nuova
+--     con quella vecchia. Vedi migrations/0020, migrations/0023 e ADR-026.
+--
+--     Per le **segnalazioni**: lo schema non ha alcun vincolo fra `room_id`,
+--     `lease_id` e `property_id`, e la `WITH CHECK` di `tickets_update` nomina il
+--     solo `org_id`. Una segnalazione aperta sull'immobile sbagliato si annulla e
+--     si riapre, non si sposta.
+--
+--     Per gli **addebiti**: la `WITH CHECK` di `charges_update` ha lo stesso
+--     difetto, e qui l'elenco è quasi la tabella intera perché un addebito è una
+--     **pretesa verso una persona** — riscriverne l'importo dopo averlo comunicato
+--     non è una correzione. La sola colonna concessa è `status`, che basta anche
+--     al modulo dei pagamenti. `deleted_at` è fra le negate: un addebito annullato
+--     resta visibile a chi se l'era visto chiedere.
+--
+--     Un nome solo per due tabelle, e non un terzo controllo: il criterio è quello
+--     di ADR-026 in entrambi i casi, e inventargli un nome nuovo renderebbe
+--     illeggibile la ragione comune.
 INSERT INTO invariant_violations
 SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
   FROM (
@@ -154,7 +168,14 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
            ('tickets', 'lease_id'),    ('tickets', 'reported_by'),
            ('tickets', 'reported_by_kind'),
            ('tickets', 'title'),       ('tickets', 'description'),
-           ('tickets', 'reference'),   ('tickets', 'currency')
+           ('tickets', 'reference'),   ('tickets', 'currency'),
+           ('charges', 'lease_id'),        ('charges', 'charge_type'),
+           ('charges', 'amount'),          ('charges', 'currency'),
+           ('charges', 'due_date'),        ('charges', 'period_start'),
+           ('charges', 'period_end'),      ('charges', 'description'),
+           ('charges', 'utility_bill_id'), ('charges', 'generation_key'),
+           ('charges', 'issued_at'),       ('charges', 'document_id'),
+           ('charges', 'notes'),           ('charges', 'deleted_at')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
