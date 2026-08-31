@@ -67,23 +67,49 @@ MinIO, 60 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no. È il **prossimo passo
-   suggerito**, ed è il più corto che resti: la vista conta già `total_outstanding`,
-   `overdue_charges`, `bills_pending_review`, occupazione e contratti in scadenza, e da
-   questa fetta quei numeri **dicono la verità** — la migration `0024` ha tolto dal
-   totale gli addebiti annullati e stornati, e i pagamenti hanno dato alla vista righe
-   da contare. Serve uno use case di lettura, un DTO e una rotta; nessuna migration.
-2. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
-   `settlements`) — la vista dei saldi esiste già. È anche il modulo che porterà
-   `payable_type` a valere davvero tre valori: oggi il dominio ne conosce uno solo, e
-   gli altri due danno errore in lettura invece di ricadere su `charge`.
-3. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+1. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+   `settlements`) — la vista dei saldi esiste già. È il **prossimo passo suggerito**,
+   ed è anche il modulo che porterà `payable_type` a valere davvero tre valori: oggi il
+   dominio ne conosce uno solo, e gli altri due danno errore in lettura invece di
+   ricadere su `charge`. È quindi l'unico modulo rimasto che **torna dentro** codice
+   già scritto — il dominio dei pagamenti, la conversione degli enum, il DTO — e questa
+   è la ragione per cui viene prima e non dopo.
+2. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento. È il modulo che
    riempirà `ocr_extracted`, `ocr_confidence` e lo stato `pending_review`, che la
    fetta contabile ha deliberatamente lasciato ai loro default: lo schema tiene
    separato ciò che ha letto la macchina da ciò che ha confermato una persona
    (`validated_by`, `validated_at`) proprio perché l'accuratezza si possa misurare, e
    riempire le prime con valori umani distruggerebbe quel dato prima di raccoglierlo.
+3. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
+   **ultima**, ed è una scelta da rileggere insieme alla sua alternativa, perché la
+   fetta dei pagamenti ha reso facile confondersi.
+
+   **È sbloccata**: sette dei suoi otto numeri sono completi e corretti — la `0017` ha
+   sistemato quelli sui contratti con `lease_in_force`, la `0024` ha tolto
+   dall'insoluto gli addebiti annullati e stornati, e i pagamenti hanno dato a
+   `paid_amount` righe da contare. L'ottavo, `bills_pending_review`, conta `draft` e
+   guadagnerà `pending_review` con l'OCR, il che è additivo. Costa uno use case di
+   lettura, un DTO e una rotta: nessuna migration, nessun aggregato, nessuna porta.
+
+   **Sbloccata non vuol dire prioritaria**, ed è l'errore che la fetta dei pagamenti ha
+   quasi commesso. La finestra in cui cambiare il significato di quei numeri è additivo
+   la chiude il **primo client**, non l'esistenza dell'endpoint: costruirla adesso non
+   la consuma e non la restringe, quindi la fretta non ha un fondamento.
+
+   Contro il farla prima c'è invece una ragione vera: **due delle sue semantiche non
+   sono decise** — vedi qui sotto — e questo progetto tiene fuori ciò la cui semantica
+   non è decisa, che è esattamente perché `bill_status.disputed` è rimasto fuori dalla
+   fetta contabile. Aggiungere un campo dopo è additivo; cambiare cosa significa un
+   campo già pubblicato è una rottura, ed è la stessa asimmetria che giustifica la
+   `0024`.
+
+   **L'unico argomento per anticiparla** è che è la prima superficie di lettura che
+   attraversa immobili, contratti, segnalazioni, bollette, addebiti e pagamenti
+   insieme, quindi il primo posto dove si vedrebbe un errore di integrazione fra le
+   fette. Vale se serve qualcosa di mostrabile presto; non vale come ordine di
+   costruzione.
+
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
 archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
 bollette e addebiti. Restano fuori, e non per dimenticanza, il versionamento (V2) e
@@ -143,33 +169,61 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La dashboard**, ed è il passo più corto che resti. `app.v_owner_dashboard` esiste
-dalla `0015` e non ha un endpoint; conta già immobili, contratti in essere, canone
-atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni e bollette
-da rivedere. Serve uno use case di lettura, un DTO e una rotta: **nessuna migration**,
-nessun aggregato nuovo, nessuna porta nuova.
+**Le spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+`settlements`). Lo schema c'è per intero, `app.v_expense_group_balances` calcola già il
+saldo netto per membro, e il `CONSTRAINT TRIGGER … DEFERRABLE` su `expense_shares` è
+l'unico posto del progetto dove una ripartizione ha la somma garantita dal database.
 
-Ed è il momento giusto, non uno qualsiasi: fino a questa fetta due dei suoi numeri
-mentivano. `total_outstanding` contava come credito anche gli addebiti annullati e
-stornati — la migration `0024` lo ha corretto, [ADR-032](08-decisioni.md#adr-032) — e
-`paid_amount` era zero ovunque perché `app.payments` era vuota. Entrambe le cause sono
-chiuse, e la finestra in cui cambiare il significato di quei numeri era additivo si è
-chiusa **con esse**: da qui in poi un client può leggerli.
+**Viene prima perché è l'unico modulo rimasto che torna dentro codice già scritto.**
+`app.payable_type` ha tre valori e il dominio dei pagamenti ne conosce uno:
+`Payable::Charge`. `expense_share` e `settlement` oggi **danno errore in lettura**, di
+proposito — un valore fuori perimetro non deve ricadere sul più simile fra quelli noti —
+e quel modulo dovrà aggiungere le due varianti, la loro conversione in
+`infrastructure::db::enums`, e decidere come si affacciano sul DTO, che oggi porta un
+`charge_id` e non una coppia polimorfica. Gli altri due moduli non toccano niente di
+esistente; questo sì, e un lavoro che modifica codice scritto conviene farlo mentre chi
+lo ha scritto se lo ricorda.
 
-Le due domande che quella fetta dovrà decidere, e che questa lascia aperte:
+Poi l'**OCR**, che riempirà `ocr_extracted`, `ocr_confidence` e lo stato
+`pending_review` lasciati ai loro default dalla fetta contabile. Poi la **dashboard**.
+
+### Perché la dashboard resta ultima
+
+Va detto qui perché è la conclusione **sbagliata** che questa fetta invitava a trarre, e
+il piano dei pagamenti l'aveva quasi presa.
+
+Fino a questa fetta due dei suoi numeri mentivano: `total_outstanding` contava come
+credito anche gli addebiti annullati e stornati — corretto dalla `0024`,
+[ADR-032](08-decisioni.md#adr-032) — e `paid_amount` era zero ovunque perché
+`app.payments` era vuota. Entrambe le cause sono chiuse, quindi la dashboard **è
+sbloccata**, e costa uno use case di lettura, un DTO e una rotta.
+
+**Sbloccata non è prioritaria.** La finestra in cui cambiare il significato di quei
+numeri è additivo la chiude il **primo client**, non l'esistenza dell'endpoint:
+costruirla adesso non la consuma, non la restringe, e non compra tempo su niente.
+Confondere «adesso si può» con «adesso conviene» è precisamente l'errore, ed è tanto più
+facile quanto più il modulo è a buon mercato.
+
+Contro l'anticiparla c'è invece una ragione di merito: **due delle sue semantiche non
+sono decise**, ed è ciò che questo progetto tiene fuori per principio — la stessa
+ragione per cui `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere
+un campo dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura.
+
+Le due domande, da decidere **prima** di scrivere l'endpoint e non dopo:
 
 - **`written_off` va riportato a parte come perdita?** Oggi esce dall'insoluto insieme
-  a `void`, e i due sono distinti nello stato ma indistinguibili in dashboard. La
+  a `void`, e i due sono distinti nello stato e indistinguibili in dashboard. La
   distinzione conta nei report, e la dashboard è il primo report;
 - **il credito da sovrapagamento va mostrato?** `outstanding_amount` negativo esiste ed
   è escluso dal totale dal `WHERE outstanding_amount > 0` della vista. Non compensa gli
   altri insoluti — probabilmente giusto — ma sparisce del tutto, e un credito verso
   l'inquilino che non compare da nessuna parte è un numero che qualcuno cercherà.
 
-Poi, in ordine di dipendenza: **spese co-living**, che è anche il modulo che porterà
-`app.payable_type` a valere davvero tre valori; e l'**OCR**, che riempirà
-`ocr_extracted`, `ocr_confidence` e lo stato `pending_review` che la fetta contabile ha
-lasciato ai loro default.
+L'unico argomento per anticiparla, e va riconosciuto perché è vero: è la prima
+superficie di lettura che attraversa **tutti** i moduli insieme, quindi il primo posto
+dove si vedrebbe un errore di integrazione fra le fette. È un argomento di
+dimostrabilità, non di costruzione: vale se serve qualcosa da mostrare presto, e in quel
+caso l'ordine si inverte deliberatamente e non per distrazione.
 
 **La fonte di verità resta la vista.** `outstanding_amount` continua a venire da
 `app.v_charge_balances` e non da `status`: lo stato memorizzato è una comodità
@@ -2352,5 +2406,9 @@ scritti); i pagamenti di quote e regolamenti, che sono il modulo co-living; il p
 della bolletta al fornitore, che non è modellato affatto perché `app.payable_type` non
 comprende `utility_bill`.
 
-E la **dashboard**, che è il passo successivo e che questa fetta ha reso possibile:
-fino a qui due dei suoi numeri mentivano, e adesso nessuno dei due mente più.
+E la **dashboard**, che questa fetta ha reso *possibile* e non *prossima*. Fino a qui
+due dei suoi numeri mentivano e adesso nessuno dei due mente più, ma la finestra su
+quei numeri la chiude il primo client e non l'endpoint: sbloccata non è prioritaria, e
+due delle sue semantiche restano da decidere. La distinzione è scritta in
+[Prossimo passo suggerito](#prossimo-passo-suggerito), perché è la conclusione sbagliata
+che questa fetta invitava a trarre.
