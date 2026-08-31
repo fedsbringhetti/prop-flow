@@ -10,9 +10,9 @@ pub use repositories::{
     ChargeBalancePage, ChargeQuery, ChargeRepository, DocumentPage, DocumentQuery,
     DocumentRepository, EventSink, InvitationRepository, LeaseOverlap, LeasePage,
     LeasePartyRepository, LeaseQuery, LeaseRepository, OrgMemberRepository, OrganizationRepository,
-    PropertyPage, PropertyQuery, PropertyRepository, RepositoryError, RepositoryResult,
-    RoomRepository, SessionRepository, TicketMessagePage, TicketMessageQuery,
-    TicketMessageRepository, TicketPage, TicketQuery, TicketRepository, UserRepository,
-    UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
+    PaymentPage, PaymentQuery, PaymentRepository, PropertyPage, PropertyQuery, PropertyRepository,
+    RepositoryError, RepositoryResult, RoomRepository, SessionRepository, TicketMessagePage,
+    TicketMessageQuery, TicketMessageRepository, TicketPage, TicketQuery, TicketRepository,
+    UserRepository, UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
 };
 pub use uow::{UnitOfWork, UnitOfWorkFactory};

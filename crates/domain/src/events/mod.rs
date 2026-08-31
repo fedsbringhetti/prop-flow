@@ -3,9 +3,10 @@ use chrono::{DateTime, Utc};
 use crate::billing::{BillStatus, Charge, ChargeStatus, UtilityBill};
 use crate::document::{AttachmentOwner, DocumentKind};
 use crate::identity::OrgRole;
+use crate::payment::Payment;
 use crate::shared::{
-    ChargeId, DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PropertyId, RoomId,
-    TicketId, TicketMessageId, UserId, UtilityBillId,
+    ChargeId, DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PaymentId,
+    PropertyId, RoomId, TicketId, TicketMessageId, UserId, UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketStatus};
 
@@ -131,6 +132,9 @@ pub enum DomainEventPayload {
     UtilityBillStatusChanged(UtilityBillStatusChanged),
     ChargeIssued(ChargeIssued),
     ChargeStatusChanged(ChargeStatusChanged),
+    PaymentDeclared(PaymentDeclared),
+    PaymentConfirmed(PaymentConfirmed),
+    PaymentRejected(PaymentRejected),
 }
 
 impl DomainEventPayload {
@@ -164,6 +168,9 @@ impl DomainEventPayload {
             Self::UtilityBillStatusChanged(_) => "billing.utility_bill.status_changed",
             Self::ChargeIssued(_) => "billing.charge.issued",
             Self::ChargeStatusChanged(_) => "billing.charge.status_changed",
+            Self::PaymentDeclared(_) => "payment.declared",
+            Self::PaymentConfirmed(_) => "payment.confirmed",
+            Self::PaymentRejected(_) => "payment.rejected",
         }
     }
 
@@ -202,6 +209,14 @@ impl DomainEventPayload {
             // `charge.issued` non saprebbe che la bolletta è stata usata, e chi
             // consuma il solo `utility_bill.status_changed` non saprebbe a chi.
             Self::ChargeIssued(_) | Self::ChargeStatusChanged(_) => "Charge",
+            // Il pagamento **è** un aggregato a sé, a differenza del messaggio di
+            // una segnalazione: ha il proprio ciclo di vita, la propria
+            // autorizzazione e la propria riga di audit. L'addebito che si muove di
+            // conseguenza produce il suo `billing.charge.status_changed`, come il
+            // riaddebito produce due eventi per due aggregati.
+            Self::PaymentDeclared(_) | Self::PaymentConfirmed(_) | Self::PaymentRejected(_) => {
+                "Payment"
+            }
         }
     }
 
@@ -235,6 +250,9 @@ impl DomainEventPayload {
             Self::UtilityBillStatusChanged(event) => event.utility_bill_id.as_uuid(),
             Self::ChargeIssued(event) => event.charge_id.as_uuid(),
             Self::ChargeStatusChanged(event) => event.charge_id.as_uuid(),
+            Self::PaymentDeclared(event) => event.payment_id.as_uuid(),
+            Self::PaymentConfirmed(event) => event.payment_id.as_uuid(),
+            Self::PaymentRejected(event) => event.payment_id.as_uuid(),
         }
     }
 
@@ -268,6 +286,9 @@ impl DomainEventPayload {
             Self::UtilityBillStatusChanged(event) => Some(event.org_id),
             Self::ChargeIssued(event) => Some(event.org_id),
             Self::ChargeStatusChanged(event) => Some(event.org_id),
+            Self::PaymentDeclared(event) => Some(event.org_id),
+            Self::PaymentConfirmed(event) => Some(event.org_id),
+            Self::PaymentRejected(event) => Some(event.org_id),
         }
     }
 }
@@ -797,6 +818,105 @@ impl ChargeStatusChanged {
             from_status: from_status.as_str(),
             to_status: to_status.as_str(),
             changed_by_role: role.as_str(),
+        }
+    }
+}
+
+/// Un inquilino dichiara di aver pagato.
+///
+/// **Nessun importo viaggia**, e qui a maggior ragione che altrove: la coppia
+/// «chi» e «quanto ha pagato» è esattamente il dato che non deve conservarsi su un
+/// broker. Vale la regola generale — un evento pubblicato è un dato che viaggia e
+/// si conserva — con l'aggravante che qui la coppia è finanziaria e riferita a una
+/// persona identificata.
+///
+/// Viaggiano invece gli identificatori, che chi consuma può risolvere sotto la
+/// propria autorizzazione, e il **metodo**: `card` e `cash` chiedono seguiti
+/// diversi, ed è ciò per cui questo evento esiste.
+///
+/// `charge_id` c'è perché una dichiarazione da sola non dice a chi si riferisce, e
+/// chi consuma non deve dover leggere il pagamento per saperlo.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PaymentDeclared {
+    pub payment_id: PaymentId,
+    pub org_id: OrgId,
+    pub charge_id: ChargeId,
+    pub declared_by: UserId,
+    pub method: &'static str,
+}
+
+impl PaymentDeclared {
+    #[must_use]
+    pub const fn new(payment: &Payment, declared_by: UserId) -> Self {
+        Self {
+            payment_id: payment.id(),
+            org_id: payment.org_id(),
+            charge_id: payment.payable().charge_id(),
+            declared_by,
+            method: payment.method().as_str(),
+        }
+    }
+}
+
+/// Il denaro è vero: il pagamento è entrato in `succeeded`.
+///
+/// **Le due vie convergono qui.** Lo emette sia la conferma di una dichiarazione
+/// sia la registrazione diretta di un incasso da parte dello staff, ed è
+/// deliberato: chi consuma reagisce al fatto che il denaro è diventato vero, non
+/// alla porta da cui è passato. A distinguere le due vie basta l'esistenza — o
+/// l'assenza — del [`PaymentDeclared`] che lo precede, che porta lo stesso
+/// `payment_id`.
+///
+/// **Nessun importo**, come per la dichiarazione. Chi ha bisogno della cifra la
+/// legge dall'aggregato sotto la propria autorizzazione.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PaymentConfirmed {
+    pub payment_id: PaymentId,
+    pub org_id: OrgId,
+    pub charge_id: ChargeId,
+    pub method: &'static str,
+    pub confirmed_by_role: &'static str,
+}
+
+impl PaymentConfirmed {
+    #[must_use]
+    pub const fn new(payment: &Payment, role: OrgRole) -> Self {
+        Self {
+            payment_id: payment.id(),
+            org_id: payment.org_id(),
+            charge_id: payment.payable().charge_id(),
+            method: payment.method().as_str(),
+            confirmed_by_role: role.as_str(),
+        }
+    }
+}
+
+/// Una dichiarazione è stata rifiutata: il pagamento va a `cancelled`.
+///
+/// **Non porta una motivazione**, e non è una dimenticanza: `app.payments` non ha
+/// una colonna dove metterla — `failure_message` descrive un fallimento presso un
+/// provider — e un evento che trasportasse un testo libero scritto da una persona
+/// su un pagamento di un'altra persona sarebbe il posto peggiore dove metterlo. Il
+/// giorno in cui una motivazione servisse, è una colonna e una migration.
+///
+/// Non è `failed`: quello significherebbe che il pagamento non è andato a buon fine
+/// **presso il provider**, e con `manual` un provider non c'è.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PaymentRejected {
+    pub payment_id: PaymentId,
+    pub org_id: OrgId,
+    pub charge_id: ChargeId,
+    pub rejected_by_role: &'static str,
+}
+
+impl PaymentRejected {
+    #[must_use]
+    pub const fn new(payment: &Payment, role: OrgRole) -> Self {
+        Self {
+            payment_id: payment.id(),
+            org_id: payment.org_id(),
+            charge_id: payment.payable().charge_id(),
+            rejected_by_role: role.as_str(),
         }
     }
 }

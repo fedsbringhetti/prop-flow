@@ -7,10 +7,11 @@ use crate::document::{AttachmentOwner, Document};
 use crate::events::DomainEvent;
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
+use crate::payment::{IdempotencyKey, Payment};
 use crate::property::{Property, PropertyStatus, Room};
 use crate::shared::{
-    ChargeId, DocumentId, Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, TicketId,
-    TicketMessageId, UserId, UtilityBillId,
+    ChargeId, DocumentId, Email, InvitationId, LeaseId, OrgId, PaymentId, PropertyId, RoomId,
+    TicketId, TicketMessageId, UserId, UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketReference, TicketStatus, TicketStatusChange};
 
@@ -589,6 +590,94 @@ pub trait ChargeRepository: Send {
     /// runtime con `permission denied`, ed è la difesa che rende impossibile
     /// riscrivere una pretesa già comunicata.
     async fn update_status(&mut self, charge: &Charge) -> RepositoryResult<()>;
+}
+
+/// Filtro di elenco dei pagamenti di un addebito, con paginazione keyset.
+///
+/// **Non c'è un filtro sullo stato**, e non è una dimenticanza: i pagamenti di un
+/// addebito sono pochi — uno, due, raramente di più — e un filtro su un elenco che
+/// sta in una pagina non compra niente. Chi vuole i soli incassi veri guarda
+/// `paid_amount` sul saldo, che è il numero per cui la vista esiste.
+#[derive(Debug, Clone)]
+pub struct PaymentQuery {
+    pub charge_id: ChargeId,
+    pub after: Option<PaymentId>,
+    pub limit: u16,
+}
+
+impl PaymentQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+#[derive(Debug)]
+pub struct PaymentPage {
+    pub items: Vec<Payment>,
+    pub next_cursor: Option<PaymentId>,
+}
+
+/// Pagamenti.
+///
+/// **Nessun `soft_delete`, e nessun filtro `deleted_at` nelle query**:
+/// `app.payments` non ha quella colonna — verificato, non dedotto — e il ruolo
+/// applicativo non ha `DELETE`. Un pagamento sbagliato si corregge muovendone lo
+/// stato. Copiare il pattern `AND deleted_at IS NULL` da un altro repository dà un
+/// errore di colonna inesistente: fastidioso e innocuo, perché fallisce subito.
+#[async_trait]
+pub trait PaymentRepository: Send {
+    async fn find_by_id(&mut self, id: PaymentId) -> RepositoryResult<Option<Payment>>;
+
+    /// Cerca un pagamento già registrato con la stessa chiave di idempotenza.
+    ///
+    /// **Va chiamata prima di [`Self::insert`], sempre.** È ciò che permette a una
+    /// chiave ripetuta di ottenere `200` con il pagamento già registrato invece di
+    /// inserirne un secondo: senza, un doppio invio farebbe scendere il saldo due
+    /// volte, e `audit_log` mostrerebbe due inserimenti perfettamente legittimi.
+    ///
+    /// La ricerca gira **sotto la RLS del chiamante**, e ne segue un caso residuo:
+    /// un inquilino non vede i pagamenti di cui non è il pagante, quindi una chiave
+    /// usata da qualcun altro non si trova qui e l'`INSERT` che segue viola
+    /// `payments_idempotency_uk`, dando un conflitto. È il solo `409` che questa
+    /// via può produrre, ed è irriducibile: distinguere «l'ho già mandato io» da
+    /// «qualcun altro ha usato la mia chiave» richiederebbe di leggere una riga che
+    /// al chiamante non spetta. Con chiavi generate dal client — UUID o ULID — la
+    /// collisione è teorica.
+    async fn find_by_idempotency_key(
+        &mut self,
+        key: &IdempotencyKey,
+    ) -> RepositoryResult<Option<Payment>>;
+
+    async fn list_for_charge(&mut self, query: &PaymentQuery) -> RepositoryResult<PaymentPage>;
+
+    /// Somma dei pagamenti che **contano nel saldo** di un addebito.
+    ///
+    /// I due stati sono quelli di `app.v_charge_balances`
+    /// (`'succeeded','partially_refunded'`) e **non** i tre di
+    /// `payments_payable_ix`, che comprende anche `authorized`: contare denaro
+    /// autorizzato e non incassato farebbe scendere l'insoluto su un incasso che
+    /// non è arrivato.
+    ///
+    /// Restituisce un [`Decimal`](rust_decimal::Decimal) e non un
+    /// [`Money`](crate::shared::Money) per la stessa ragione per cui
+    /// `Charge::is_past_due` prende un `Decimal`: è un totale, non l'importo di una
+    /// riga, e la valuta è una sola.
+    async fn sum_succeeded_for_charge(
+        &mut self,
+        charge_id: ChargeId,
+    ) -> RepositoryResult<rust_decimal::Decimal>;
+
+    async fn insert(&mut self, payment: &Payment) -> RepositoryResult<()>;
+
+    /// Aggiorna le sole colonne che l'applicazione scrive dopo l'inserimento:
+    /// `status`, `paid_at` e `reconciled_at`.
+    ///
+    /// L'elenco non è una scelta di stile: la migration `0025` revoca l'`UPDATE` su
+    /// `app.payments` e lo riconcede su quelle tre, perché la `WITH CHECK` di
+    /// `payments_update` nomina il solo `org_id` e lascia libera ogni altra colonna
+    /// (ADR-021, ADR-026). Importo, pagante, metodo e chiave di idempotenza **non
+    /// hanno motivo di cambiare** dopo l'inserimento, e una `UPDATE` che li
+    /// nominasse fallirebbe a runtime con `permission denied`.
+    async fn update_status(&mut self, payment: &Payment) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa

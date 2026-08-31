@@ -322,6 +322,66 @@ impl Charge {
         Ok(())
     }
 
+    /// Ricalcola lo stato dai pagamenti riusciti.
+    ///
+    /// È la **prima scrittura** che la `GRANT UPDATE (status)` della migration
+    /// `0023` rende possibile, ed è l'unica di cui il modulo dei pagamenti ha
+    /// bisogno: la fetta contabile l'aveva posata apposta, ed è la ragione per cui
+    /// i pagamenti non portano con sé alcuna migration sugli addebiti.
+    ///
+    /// Lo stato si **ricalcola**, non si dichiara: chi chiama passa la somma dei
+    /// pagamenti che contano nel saldo — gli stessi due che conta
+    /// `app.v_charge_balances`, mai gli `authorized` — e le tre soglie sono quelle
+    /// dell'aritmetica, non di un comando.
+    ///
+    /// ```text
+    ///   paid <= 0        →  issued
+    ///   0 < paid < amount →  partially_paid
+    ///   paid >= amount    →  paid
+    /// ```
+    ///
+    /// **Restituisce `false` quando non c'è niente da cambiare**, così un secondo
+    /// pagamento su un addebito già coperto non produce `UPDATE`, evento e riga di
+    /// audit per nulla. È la stessa forma di `Property::apply`.
+    ///
+    /// **Da `void` e `written_off` è rifiutato.** La pretesa è caduta, e incassare
+    /// su una pretesa caduta è un'incoerenza, non un caso d'uso — è lo stesso
+    /// elenco che la vista azzera, e la coincidenza non è casuale: dove lo stato è
+    /// l'autorità sul residuo, un pagamento non ha un residuo da toccare.
+    ///
+    /// **Il sovrapagamento non è impedito.** `paid > amount` porta semplicemente a
+    /// `paid`, e nella vista `outstanding_amount` diventa **negativo**, che è un
+    /// credito verso l'inquilino — rappresentabile, perché `app.money_amount`
+    /// ammette i negativi. Un controllo applicativo sarebbe soggetto a race
+    /// condition fra due pagamenti concorrenti, e vale il criterio di ADR-015: quel
+    /// genere di invariante sta nel database o non sta da nessuna parte. Lo schema
+    /// non ha il vincolo, quindi non sta da nessuna parte, ed è registrato invece
+    /// che scoperto dopo.
+    pub fn apply_payment(
+        &mut self,
+        paid_amount: Decimal,
+        now: DateTime<Utc>,
+    ) -> DomainResult<bool> {
+        if self.status.is_claim_dropped() {
+            return Err(DomainError::Invariant(Invariant::ChargeNotPayable));
+        }
+
+        let recalculated = if paid_amount <= Decimal::ZERO {
+            ChargeStatus::Issued
+        } else if paid_amount < self.amount.amount() {
+            ChargeStatus::PartiallyPaid
+        } else {
+            ChargeStatus::Paid
+        };
+
+        if recalculated == self.status {
+            return Ok(false);
+        }
+        self.status = recalculated;
+        self.updated_at = now;
+        Ok(true)
+    }
+
     /// `true` se l'addebito è scaduto e non ancora coperto.
     ///
     /// **Stessa formula di `v_charge_balances.is_past_due`**, deliberatamente:
@@ -700,6 +760,63 @@ mod tests {
         );
         assert!(!ChargeStatus::Paid.is_claim_dropped());
         assert!(!ChargeStatus::Draft.is_claim_dropped());
+    }
+
+    /// Le tre soglie del ricalcolo, e il fatto che sia un **ricalcolo**: lo stato
+    /// non è un comando, è la conseguenza di quanto è entrato.
+    #[test]
+    fn the_state_is_recalculated_from_the_payments_across_three_thresholds() {
+        let now = Utc::now();
+
+        let mut running = charge(); // 800.00, issued
+        assert!(
+            !running.apply_payment(Decimal::ZERO, now).expect("ammesso"),
+            "senza pagamenti non c'è niente da cambiare, e niente da scrivere"
+        );
+        assert_eq!(running.status(), ChargeStatus::Issued);
+
+        assert!(running.apply_payment(dec("300.00"), now).expect("ammesso"));
+        assert_eq!(running.status(), ChargeStatus::PartiallyPaid);
+
+        assert!(running.apply_payment(dec("800.00"), now).expect("ammesso"));
+        assert_eq!(running.status(), ChargeStatus::Paid);
+
+        assert!(
+            !running.apply_payment(dec("800.00"), now).expect("ammesso"),
+            "un secondo pagamento che non muove lo stato non produce scrittura"
+        );
+
+        // Il sovrapagamento è possibile e non lo si impedisce: porta a `paid`, e il
+        // credito lo mostra la vista con un `outstanding_amount` negativo.
+        let mut overpaid = charge();
+        assert!(overpaid.apply_payment(dec("900.00"), now).expect("ammesso"));
+        assert_eq!(overpaid.status(), ChargeStatus::Paid);
+
+        // Il confine è `>=`, non `>`: coperto per intero è pagato.
+        let mut exact = charge();
+        assert!(exact.apply_payment(dec("800.00"), now).expect("ammesso"));
+        assert_eq!(exact.status(), ChargeStatus::Paid);
+
+        let mut almost = charge();
+        assert!(almost.apply_payment(dec("799.99"), now).expect("ammesso"));
+        assert_eq!(almost.status(), ChargeStatus::PartiallyPaid);
+    }
+
+    /// Incassare su una pretesa caduta è un'incoerenza, non un caso d'uso — ed è
+    /// lo stesso elenco che la vista azzera.
+    #[test]
+    fn a_dropped_claim_refuses_a_payment() {
+        let now = Utc::now();
+
+        let mut voided = charge();
+        voided.void(now).expect("annullato");
+        assert!(voided.apply_payment(dec("100.00"), now).is_err());
+        assert_eq!(voided.status(), ChargeStatus::Void);
+
+        let mut written_off = charge();
+        written_off.write_off(now).expect("stornato");
+        assert!(written_off.apply_payment(dec("100.00"), now).is_err());
+        assert_eq!(written_off.status(), ChargeStatus::WrittenOff);
     }
 
     /// Il cuore della decisione 2: lo stato memorizzato non cambia mai da sé.

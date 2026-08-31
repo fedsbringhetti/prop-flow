@@ -17,6 +17,7 @@ pub mod error;
 pub mod events;
 pub mod identity;
 pub mod lease;
+pub mod payment;
 pub mod ports;
 pub mod property;
 pub mod shared;
