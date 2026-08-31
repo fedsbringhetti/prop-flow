@@ -68,12 +68,16 @@ In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: domin
 porta → use case → repository → endpoint → test.
 
 1. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
-   `settlements`) — la vista dei saldi esiste già. È il **prossimo passo suggerito**,
-   ed è anche il modulo che porterà `payable_type` a valere davvero tre valori: oggi il
-   dominio ne conosce uno solo, e gli altri due danno errore in lettura invece di
-   ricadere su `charge`. È quindi l'unico modulo rimasto che **torna dentro** codice
-   già scritto — il dominio dei pagamenti, la conversione degli enum, il DTO — e questa
-   è la ragione per cui viene prima e non dopo.
+   `settlements`) — la vista dei saldi esiste già. È il **prossimo passo suggerito**, ed
+   è **pianificato**, non ancora implementato: il piano è in fondo,
+   [Piano — Spese co-living, fetta 1](#piano-spese-co-living-fetta-1), con le dieci
+   decisioni prese, i quindici passi e le trappole lette nello schema.
+
+   **Non** porta `payable_type` a tre valori, contrariamente a quanto questa voce
+   diceva prima che il piano fosse scritto: un regolamento fra coinquilini non è denaro
+   che l'organizzazione incassa, quindi non diventa una riga in `app.payments` e
+   `Payable` resta a una variante. È la decisione 6 del piano, ed è registrata qui
+   perché era una previsione ereditata dalla fetta dei pagamenti, non una scelta fatta.
 2. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento. È il modulo che
    riempirà `ocr_extracted`, `ocr_confidence` e lo stato `pending_review`, che la
@@ -175,15 +179,21 @@ cambia il contesto.
 saldo netto per membro, e il `CONSTRAINT TRIGGER … DEFERRABLE` su `expense_shares` è
 l'unico posto del progetto dove una ripartizione ha la somma garantita dal database.
 
-**Viene prima perché è l'unico modulo rimasto che torna dentro codice già scritto.**
-`app.payable_type` ha tre valori e il dominio dei pagamenti ne conosce uno:
-`Payable::Charge`. `expense_share` e `settlement` oggi **danno errore in lettura**, di
-proposito — un valore fuori perimetro non deve ricadere sul più simile fra quelli noti —
-e quel modulo dovrà aggiungere le due varianti, la loro conversione in
-`infrastructure::db::enums`, e decidere come si affacciano sul DTO, che oggi porta un
-`charge_id` e non una coppia polimorfica. Gli altri due moduli non toccano niente di
-esistente; questo sì, e un lavoro che modifica codice scritto conviene farlo mentre chi
-lo ha scritto se lo ricorda.
+**Viene prima perché è l'ultimo modulo dell'MVP che ha lo schema e non il codice**, ed è
+quello che chiude il perimetro funzionale: senza, un co-living non può dividere niente.
+
+Il piano è scritto in fondo — [Piano — Spese co-living, fetta 1](#piano-spese-co-living-fetta-1)
+— e comprende **tre migration**: la policy che lascia iscriversi chi crea un gruppo,
+senza la quale il gruppo nasce inutilizzabile per il suo creatore; la correzione della
+vista dei saldi, che oggi perde chi esce dal gruppo portandosi via il debito; e i
+privilegi di colonna su `app.expenses`, che chiudono un buco vero — il trigger che
+difende l'invariante contabile guarda le **quote** e non la **spesa**, quindi
+aggiornarne l'importo da solo sbilancia i conti in silenzio.
+
+Le tre scelte che richiedevano una risposta di prodotto sono state date: chi crea un
+gruppo ne diventa il primo membro, la ripartizione è `equal` e `weighted` con i
+centesimi di resto ai primi in ordine, e la vista si corregge invece di rifiutare
+l'uscita a saldo aperto.
 
 Poi l'**OCR**, che riempirà `ocr_extracted`, `ocr_confidence` e lo stato
 `pending_review` lasciati ai loro default dalla fetta contabile. Poi la **dashboard**.
@@ -2413,3 +2423,389 @@ quei numeri la chiude il primo client e non l'endpoint: sbloccata non è priorit
 due delle sue semantiche restano da decidere. La distinzione è scritta in
 [Prossimo passo suggerito](#prossimo-passo-suggerito), perché è la conclusione sbagliata
 che questa fetta invitava a trarre.
+
+---
+
+<a id="piano-spese-co-living-fetta-1"></a>
+
+## Piano — Spese co-living, fetta 1
+
+Pianificato il **1 settembre 2026**. Il piano resta sotto come è stato scritto: serve a
+eseguirlo, e servirà a capire perché il codice è com'è. L'esito va in fondo a esecuzione
+conclusa, come per documenti, segnalazioni, bollette e pagamenti.
+
+### Obiettivo
+
+Il denaro che i coinquilini si devono **fra loro**, che è una cosa diversa da tutto ciò
+che il progetto ha fatto finora: non è una pretesa del proprietario verso l'inquilino,
+è un conto fra pari. Il proprietario può guardarlo — è staff dell'organizzazione — ma
+non ne è parte.
+
+Uno compra la spesa per la casa, il sistema divide, ognuno vede cosa deve a chi, e chi
+salda lo dichiara. È l'ultimo modulo dell'MVP che ha lo schema e non il codice, ed è
+anche **l'unico che torna dentro codice già scritto**: `app.payable_type` ha tre valori
+e il dominio dei pagamenti ne conosce uno.
+
+**Dentro:** gruppi di spesa e composizione; registrazione di una spesa con ripartizione
+`equal` e `weighted`; lettura dei saldi dalla vista; regolamenti fra due membri, con
+conferma di chi riceve; correzione della vista dei saldi perché non perda chi è uscito
+con un conto aperto; privilegi di colonna su `app.expenses`.
+
+**Fuori, e non per dimenticanza:**
+
+- **la semplificazione dei debiti** (il «chi paga chi» a numero minimo di bonifici): la
+  vista dà il saldo netto per membro, e da quello un client sa già chi è in credito e
+  chi in debito. L'algoritmo che minimizza i trasferimenti è una comodità di
+  presentazione, non un fatto contabile, e nessuno l'ha chiesta;
+- **`percentage`, `exact` e `by_usage`** come metodi di ripartizione: restano
+  nell'enum non scritti, come `overdue` sugli addebiti. `by_usage` in più richiederebbe
+  letture di contatori, che non esistono da nessuna parte;
+- **`expense_shares.is_settled` e `settled_at`**: restano ai loro default. Vedi la
+  decisione 7 — sono una seconda definizione di «saldato» che la vista non guarda;
+- **il legame fra regolamento e pagamento**: `settlements.payment_id` resta nullo e
+  `payments.payable_type = 'settlement'` resta non scritto. Vedi la decisione 6;
+- **la ripartizione automatica di una bolletta** (`expenses.utility_bill_id`): il
+  legame esiste a schema con il suo indice unico, ed è additivo. Richiede però di
+  decidere *quale* bolletta di un immobile riguarda *quale* gruppo, che è una domanda a
+  cui oggi non c'è modo di rispondere: `expense_groups.property_id` è opzionale;
+- **gli allegati alle spese** (`expenses.document_id`): `AttachmentOwner` non comprende
+  `expense`, e allargarlo è la stessa migration additiva già fatta per bollette e
+  addebiti. Si fa quando serve, non adesso.
+
+### Decisioni prese, con il perché
+
+#### 1. Chi crea un gruppo ne diventa il primo membro, e serve una migration
+
+Lo schema, letto com'è, produce un gruppo **inutilizzabile da chi lo ha creato**:
+
+| | |
+|---|---|
+| `expense_groups_insert` | `org_id = current_org_id() AND is_org_member(org_id)` |
+| `expense_group_members_insert` | `org_id = current_org_id() AND can_access_expense_group(group_id)` |
+| `can_access_expense_group` | `is_org_staff(org_id) OR` esiste una membership attiva |
+
+Un inquilino soddisfa la prima e **non** la seconda: appena creato il gruppo non ne è
+membro, quindi non può aggiungere nessuno — nemmeno sé stesso. Il gruppo nasce vuoto e
+resta vuoto, a meno che non passi lo staff.
+
+La migration `0026` estende `expense_group_members_insert` con un secondo ramo: chi ha
+creato il gruppo può iscrivere **sé stesso**, e nessun altro. `user_id =
+app.current_user_id()` è la parte che non si può omettere — senza, chiunque crei un
+gruppo potrebbe infilarci chiunque.
+
+**Alternativa scartata: solo lo staff crea e popola.** Non richiede migration e dà
+ragione allo schema come è, ma fa passare dal proprietario ogni coinquilino che arriva,
+e un co-living che non può organizzarsi da sé non è il prodotto descritto in
+[01 — Prodotto](01-prodotto.md).
+
+**Alternativa scartata: allargare `can_access_expense_group` con `created_by`.** Una
+riga sola e sbagliata: quella funzione governa anche la `SELECT`, quindi chi ha creato
+un gruppo e ne è poi uscito continuerebbe a leggerne per sempre spese e saldi. Il
+permesso che serve è stretto — iscrivere sé stessi, una volta — e va scritto stretto.
+
+#### 2. Due metodi di ripartizione, e la colonna che li giustifica
+
+`equal` divide fra i membri attivi. `weighted` usa `expense_group_members.weight`, che
+lo schema ha già con il proprio commento — «peso per split `weighted` (es. stanza doppia
+= 2)» — ed è il caso co-living vero: chi occupa la doppia paga di più.
+
+Gli altri tre restano nell'enum e nessuno li scrive, per ragioni diverse fra loro:
+`percentage` ed `exact` chiedono un input per membro, cioè una forma di richiesta
+diversa dalle altre due, con la sua validazione e i suoi test, per un caso che nessuno
+ha chiesto; `by_usage` chiede letture di contatori che non esistono.
+
+`weight` è `NUMERIC(6,3)` mentre gli importi sono `NUMERIC(14,2)`: **il peso non è un
+importo**, e passarcelo come `Money` è l'errore che il value object deve impedire — è la
+stessa ragione per cui `Consumption` esiste separato nelle bollette.
+
+#### 3. Il centesimo va ai primi in ordine, e l'ordine è per `user_id`
+
+100,00 diviso tre fa 33,33 tre volte e avanza un centesimo. Le quote **devono** sommare
+esattamente all'importo o il trigger `expense_shares_balanced` rifiuta la transazione,
+quindi il resto non si può buttare: va assegnato a qualcuno.
+
+La regola è quella di Splitwise: i centesimi di resto si distribuiscono **uno per uno ai
+primi partecipanti**, in un ordine fisso. L'ordine è per `user_id` crescente — non per
+data di iscrizione, non per nome — perché deve essere **riproducibile**: la stessa spesa
+ricalcolata deve dare le stesse quote, e `joined_at` può cambiare se qualcuno esce e
+rientra.
+
+**Alternativa scartata: il resto a chi ha anticipato.** Più semplice da spiegare, e
+concentra su una persona sola tutti i centesimi di tutte le spese che ha pagato lei —
+che su un anno di spesa quotidiana non è più un arrotondamento.
+
+**Alternativa scartata: a rotazione fra le spese.** La più equa e la peggiore da
+implementare: richiede uno stato che ricordi a chi è toccato l'ultima volta, quindi una
+colonna e una migration, e rende il calcolo di una quota non riproducibile guardando la
+sola spesa.
+
+**Vale per entrambi i metodi**, `weighted` compreso, dove la regola concorrente sarebbe
+«il resto a chi ha la parte frazionaria più grande». Si sceglie la riproducibilità:
+un'unica regola, un unico test, e nessuna sorpresa fra i due metodi.
+
+#### 4. La vista non perde chi è uscito con un conto aperto
+
+`v_expense_group_balances` parte da `app.expense_group_members` con
+`WHERE m.left_at IS NULL`. Chi lascia il gruppo **sparisce dai saldi portandosi via il
+debito**: il coinquilino che deve 200 euro esce, e quei 200 euro non risultano più a
+nessuno.
+
+È lo stesso difetto delle viste dei saldi degli addebiti — un numero che mente in
+silenzio — e si corregge nello stesso posto e nello stesso modo: la migration `0027`
+include i membri usciti **finché il loro saldo netto è diverso da zero**.
+
+**Alternativa scartata: rifiutare l'uscita a saldo aperto.** Rende il difetto
+irraggiungibile invece di correggerlo, non costa una migration, e ha un prezzo che si
+paga sul caso reale: il coinquilino che se ne va davvero senza pagare resta membro per
+sempre e il gruppo non può chiudersi. Il debito è del gruppo, non della membership.
+
+**Alternativa scartata: accettare e documentare.** Sarebbe la seconda volta che questo
+progetto lascia una vista mentire, e la prima è costata una migration correttiva e due
+ADR. Si fa adesso, mentre nessun client legge quei numeri.
+
+#### 5. Il regolamento è a due tempi, e conferma chi **riceve**
+
+Chi paga dichiara di aver saldato — la riga nasce `pending` — e chi riceve conferma che
+il denaro è arrivato. È la forma dei pagamenti, con una differenza che conta: là
+confermava lo **staff**, qui conferma il **creditore**, perché è lui l'unico che sa.
+
+Lo schema lo dice già, e non lo si sta forzando:
+
+| | |
+|---|---|
+| `settlements_insert` | `from_user_id = current_user_id() OR is_org_staff(org_id)` |
+| `settlements_update` | `to_user_id` **oppure** `from_user_id` **oppure** staff |
+| `settlements.confirmed_by` | esiste, e la colonna dice a chi tocca |
+
+`rejected` è l'uscita negativa e nasce insieme a `pending`, per la ragione di sempre:
+uno stato in cui si entra e da cui non si esce è peggio di nessuno stato. `cancelled` è
+l'uscita di chi ha dichiarato — la `USING` ammette anche `from_user_id`, quindi qui, a
+differenza dei pagamenti, **chi dichiara può ritirare**. È l'asimmetria da dire ad alta
+voce: fra pari il ritiro è lecito, verso il proprietario no.
+
+**Solo il saldo `confirmed` muove i conti**: la vista somma `WHERE st.status =
+'confirmed'`, e questo lo decide lei, non noi.
+
+#### 6. Il regolamento **non** crea un pagamento, e le due strade restano una
+
+`settlements.payment_id` è una foreign key verso `app.payments`, e `app.payable_type`
+comprende `settlement`. Sono **due modi diversi** di legare la stessa coppia di righe, e
+tenerli entrambi significa avere due risposte alla domanda «qual è il pagamento di
+questo regolamento» — la stessa constatazione per cui `utility_bills.document_id` non è
+popolata e la scansione passa dal riferimento polimorfico dei documenti.
+
+In questa fetta **nessuno dei due si scrive**, e la ragione non è solo la simmetria: un
+regolamento fra coinquilini non è denaro che l'organizzazione incassa, e farne una riga
+in `app.payments` metterebbe nel registro degli incassi del proprietario un movimento
+che non lo riguarda. Il giorno in cui servisse — perché il pagamento passa da un
+provider vero — si sceglie **una** delle due strade e si scrive quella.
+
+Ne segue che `Payable` resta a una variante sola. Il piano dei pagamenti prevedeva che
+questo modulo la portasse a tre; la previsione era sbagliata, e va detto perché è
+esattamente il genere di conclusione che si eredita senza riverificarla.
+
+#### 7. `is_settled` non si scrive, e la fonte di verità resta la vista
+
+`app.expense_shares` ha `is_settled` e `settled_at`, e
+`v_expense_group_balances` **non li guarda**: il saldo netto è
+`anticipato − dovuto + uscite − entrate`, tutto derivato dai movimenti.
+
+Scriverli sarebbe una seconda definizione di «saldato» che nessuno riconcilia, cioè
+esattamente il rapporto fra `charges.status` e `v_charge_balances` — con l'aggravante
+che qui non esiste un'operazione che li produca: un regolamento è un **trasferimento
+netto** fra due persone, e imputarlo alle singole quote richiederebbe un algoritmo di
+allocazione che nessuno ha chiesto e che nessuna colonna registra.
+
+Restano quindi a `false`, come `refunded_amount` sui pagamenti, e va saputo leggendoli.
+
+#### 8. La spesa rilegge il gruppo, e il gruppo rilegge l'immobile
+
+Terza e quarta occorrenza dello stesso rimedio, dopo `ensure_owner_is_visible` dei
+documenti, `build_issued_charge` degli addebiti e `visible_charge` dei pagamenti.
+
+`app.expense_groups` **non ha** il trigger `tg_assert_org_matches_property`, che invece
+esiste su `rooms`, `leases`, `tickets` e `utility_bills` — verificato nella `0013`, non
+dedotto. Quindi un `property_id` di un'altra organizzazione entra senza che nulla
+protesti, e la riga resta a citare un immobile che chi l'ha scritta non vede.
+
+Sulla spesa il problema è diverso e vale lo stesso rimedio: `expenses_insert` chiede
+`can_access_expense_group(group_id)`, quindi il gruppo è già protetto dalla policy — ma
+`paid_by_user_id` **no**, e nulla impedisce di dichiarare che ha anticipato una persona
+che nel gruppo non c'è. Va verificato nello use case contro i membri attivi.
+
+#### 9. Privilegi di colonna su `app.expenses`, e la ragione non è ADR-026
+
+È una migration che nasce da un **buco vero**, non dall'applicazione di un criterio.
+
+Il trigger `expense_shares_balanced` è `AFTER INSERT OR UPDATE OR DELETE ON
+app.expense_shares`: guarda le **quote**. Aggiornare `app.expenses.amount` senza toccare
+le quote **non lo fa scattare**, e lascia la somma delle quote diversa dall'importo
+della spesa — l'invariante contabile che quel trigger esiste per difendere, aggirata
+dalla porta accanto.
+
+La `WITH CHECK` di `expenses_update` nomina il solo `org_id`, come sempre. La migration
+`0028` revoca l'`UPDATE` e lo riconcede sulle colonne che una correzione legittima
+tocca: `description`, `category`, `expense_date`, `notes`, `deleted_at`. Restano fuori
+`amount`, `group_id`, `paid_by_user_id`, `split_method` e `currency`: cambiarli
+significa descrivere un'altra spesa, e `amount` in particolare romperebbe l'invariante
+in silenzio.
+
+**Una spesa sbagliata si annulla e si riscrive**, come un addebito. La differenza con la
+bolletta — dove ADR-026 ha dato «no» perché la GRANT avrebbe nominato quasi tutto — è
+che qui l'elenco delle negate è corto e ognuna ha una ragione propria.
+
+#### 10. Niente `INSERT … RETURNING` sul gruppo, e stavolta il muro c'è
+
+`expense_groups_select` chiama `can_access_expense_group(id)`, cioè interroga **la riga
+che si sta inserendo**, e la funzione è `STABLE`: vede lo snapshot di inizio statement,
+in cui la riga non c'è. È il muro già incontrato sulle segnalazioni, e la regola
+generale vale ancora: **il muro c'è solo quando la policy di `SELECT` dipende dalla riga
+stessa**.
+
+Sugli addebiti non c'era, perché `charges_select` interroga `app.leases`. Qui c'è.
+L'identificatore lo assegna il dominio, come ovunque, quindi non se ne sente la
+mancanza — ma va scritto, perché è la seconda volta e la prima è costata tempo.
+
+### Decomposizione
+
+**Il punto di taglio** è il passo 9, i regolamenti: senza di essi resta un registro di
+spese con i saldi che si leggono e non si chiudono, che è una fetta coerente e
+dichiarabile. Il passo 2 invece **non** si taglia: la vista corretta è ciò che rende i
+saldi veri, ed è lo stesso argomento del passo 1 dei pagamenti.
+
+1. **Migration `0026`: il creatore può iscrivere sé stesso.** Una funzione
+   `app.created_expense_group(uuid)` `SECURITY DEFINER` con `SET search_path`, più
+   `DROP`/`CREATE` di `expense_group_members_insert` con il secondo ramo. **La funzione
+   non è un vezzo**: una sottoquery dentro una policy è soggetta alla RLS della tabella
+   che legge, quindi un `EXISTS` su `app.expense_groups` scritto nella policy vedrebbe
+   zero righe proprio per il creatore che deve autorizzare. Vedi le trappole.
+2. **Migration `0027`: la vista che non perde chi è uscito con un conto aperto.**
+   `CREATE OR REPLACE VIEW` conservando nomi, ordine e tipi delle colonne, con
+   `security_invoker = true` ripetuto per esteso.
+3. **Migration `0028`: privilegi di colonna su `app.expenses`.** Estende il controllo 12
+   delle invarianti, mantenendo il nome. Verificare al contrario.
+4. **Dominio: gli enum e i value object.** `ExpenseGroupKind`, `ExpenseCategory`,
+   `SplitMethod` (cinque valori, due scritti), `SettlementStatus` (quattro, tutti
+   scritti tranne `cancelled`… da decidere eseguendo), e `Weight` come value object con
+   i tre decimali di `NUMERIC(6,3)`.
+5. **Dominio: `ExpenseGroup` e la sua composizione.** `create`, `join`, `leave`,
+   `archive`. `leave` valorizza `left_at` e **non** cancella la riga.
+6. **Dominio: la ripartizione.** È il cuore aritmetico della fetta e va per primo fra le
+   cose che calcolano: `Split::equal(amount, members)` e
+   `Split::weighted(amount, members)`, entrambe che restituiscono quote la cui somma è
+   **esattamente** l'importo. Test sulle soglie: 100,00 su 3; 0,01 su 3; 10,00 su 3 con
+   pesi 1/1/2; un peso che porta una quota a 0,00.
+7. **Dominio: `Expense`.** `record`, che costruisce spesa e quote **insieme** — non
+   esiste una spesa senza quote, e il trigger lo impone al commit.
+8. **Dominio: gli eventi.** `ExpenseRecorded`, `SettlementDeclared`,
+   `SettlementConfirmed`. **Nessun importo viaggia**, come per i pagamenti.
+9. **Dominio: `Settlement`** e la macchina a due tempi, con le transizioni ammesse e
+   quelle rifiutate.
+10. **Porte:** `ExpenseGroupRepository`, `ExpenseRepository` (con le quote, che si
+    scrivono nella stessa transazione), `SettlementRepository`, e la lettura dei saldi
+    dalla vista.
+11. **Use case.** `CreateExpenseGroup` (e l'iscrizione del creatore nella stessa
+    transazione), `AddGroupMember`, `LeaveGroup`, `RecordExpense`, `ListExpenses`,
+    `GetGroupBalances`, `DeclareSettlement`, `ConfirmSettlement`, `RejectSettlement`.
+12. **Infrastruttura.** I repository, con attenzione al `RETURNING` che qui non si può
+    usare e al mapping dell'errore differito del trigger.
+13. **Bordo HTTP.** Le rotte, i DTO, l'OpenAPI.
+14. **Test.** Unitari sull'aritmetica della ripartizione e sulle due macchine; di
+    persistenza con database reale — il trigger differito che rifiuta al commit, il
+    creatore che si iscrive, il membro uscito che resta nei saldi se deve dei soldi, la
+    spesa di un altro gruppo rifiutata; di contratto HTTP sull'intero giro.
+15. **Documentazione.** `docs/05-api.md`, l'esito del piano, e **due ADR**: la regola di
+    arrotondamento delle quote, e i privilegi di colonna che difendono un'invariante che
+    il trigger non copre.
+
+### Trappole
+
+Tutte lette nello schema prima di scriverle qui; quelle marcate **da riprodurre** vanno
+verificate su database reale in esecuzione.
+
+**Una sottoquery dentro una policy subisce la RLS della tabella che legge.** È la
+trappola del passo 1, ed è quella che farebbe perdere più tempo: scrivere
+`EXISTS (SELECT 1 FROM app.expense_groups g WHERE g.id = group_id AND g.created_by =
+app.current_user_id())` dentro `expense_group_members_insert` sembra corretto e non
+funziona, perché quel `SELECT` passa da `expense_groups_select`, che chiede
+`can_access_expense_group` — falsa proprio per il creatore che si sta cercando di
+autorizzare. Serve una funzione `SECURITY DEFINER`, ed è la ragione per cui tutte le
+`can_access_*` di questo progetto lo sono. **Da riprodurre**: la versione senza funzione
+deve fallire.
+
+**Il trigger `expense_shares_balanced` è `DEFERRABLE INITIALLY DEFERRED`: l'errore
+arriva al `COMMIT`.** Non all'`INSERT`. In una Unit of Work questo significa che la
+violazione esce da `uow.commit()` e non dalla query che l'ha causata, quindi il
+`RepositoryError` va mappato **là**, e uno `unwrap` sul commit trasformerebbe un errore
+di dominio in un `500`. **Da riprodurre**: quote che non sommano, e l'errore che compare
+al commit.
+
+**Il trigger è `FOR EACH ROW` su una tabella di quote.** Con quattro coinquilini scatta
+quattro volte e ogni volta risomma tutte le quote. Irrilevante a queste dimensioni, e va
+saputo prima di inserire quote a centinaia.
+
+**Il trigger non guarda `app.expenses`.** Aggiornare `expenses.amount` da solo non lo fa
+scattare e sbilancia l'invariante in silenzio. È il buco che la migration `0028` chiude,
+ed è l'unica trappola di questo elenco che **non** si difende da sé.
+
+**`INSERT … RETURNING` su `app.expense_groups` non restituisce la riga** al creatore non
+staff. Il muro delle segnalazioni, seconda occorrenza.
+
+**`expenses_bill_uk` è unico e parziale: una bolletta si ripartisce una volta sola.**
+È l'asimmetria con il riaddebito degli addebiti, che è **ripetibile** apposta — la stessa
+bolletta si riaddebita a più contratti. Qui no. Non ci tocca in questa fetta perché il
+legame resta fuori, e va saputo dal giorno in cui entra.
+
+**Tre tabelle su quattro non hanno `deleted_at`.** `expense_group_members` ha `left_at`,
+`expense_shares` e `settlements` non hanno niente. Filtrare `deleted_at` per abitudine dà
+un errore di colonna inesistente: fastidioso e innocuo, perché fallisce subito, ma è la
+terza volta che questa nota serve dopo pagamenti e allegati.
+
+**`settlements_confirmed_ck` vincola una sola direzione.** È
+`status <> 'confirmed' OR confirmed_at IS NOT NULL`: **quarta occorrenza** dello stesso
+pattern dopo `tickets_closed_ck`, `utility_bills_validated_ck` e `payments_succeeded_ck`.
+Ormai non è più una trappola, è una convenzione dello schema: l'azzeramento tocca sempre
+al dominio.
+
+**`expense_group_members_group_user_uk` è unico su `(group_id, user_id)` e non è
+parziale.** Chi esce e vuole rientrare **non** può avere una seconda riga: il rientro è
+un `UPDATE` che rimette `left_at` a `NULL`, non un `INSERT`. Chi scrive `join` come un
+inserimento incondizionato prende un conflitto sul vincolo.
+
+**`weight` è `NUMERIC(6,3)` e gli importi sono `NUMERIC(14,2)`.** Un peso passato come
+`Money` verrebbe rifiutato o troncato; è la stessa distinzione che `Consumption` fa
+nelle bollette, e merita un value object per la stessa ragione.
+
+**La somma delle quote deve tornare esattamente, e `Decimal` non arrotonda da sé.**
+`rust_decimal` mantiene la scala che gli si dà: una divisione produce molte cifre, e una
+quota costruita senza troncare a due decimali fa fallire il `CHECK` del dominio prima
+ancora del trigger. La ripartizione va scritta come «tronca a due decimali, poi
+distribuisci il resto», non come «dividi e arrotonda».
+
+**`v_expense_group_balances` parte dai membri, non dalle spese.** Un utente che non è
+mai stato membro non compare, anche se figura come `paid_by_user_id` di una spesa —
+cosa che lo schema permette, perché su `expenses.paid_by_user_id` non c'è alcun vincolo
+verso la membership. È la ragione della verifica applicativa della decisione 8.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde con i test nuovi, e il controllo delle invarianti
+verde con le colonne di `app.expenses` nell'elenco — verificato **anche al contrario**,
+come per la fetta contabile e per quella dei pagamenti.
+
+**L'aritmetica verificata sui casi che rompono**, e non solo su quelli che tornano:
+100,00 fra tre dà 33,34 / 33,33 / 33,33 e somma 100,00; 0,01 fra tre dà 0,01 / 0,00 /
+0,00; 10,00 fra tre con pesi 1/1/2 dà quote che sommano 10,00 esatti. Il criterio è uno
+solo e vale per ogni caso: **la somma delle quote è l'importo**, altrimenti il trigger
+rifiuta al commit.
+
+**Il difetto della vista verificato al contrario**, come per la `0024`: un membro che
+deve 200 euro esce dal gruppo, e il suo saldo **resta** nella vista; un membro a zero che
+esce sparisce. Con la vista della `0015` il primo scompariva, e il test deve fallire su
+quella definizione.
+
+Un giro a mano contro il binario vero: un inquilino crea un gruppo e **si ritrova
+dentro**; aggiunge due coinquilini; registra una spesa da 100,00 divisa in tre e i saldi
+dicono +66,67 / −33,33 / −33,34; uno dichiara di aver saldato e **il saldo non si muove**
+finché il creditore non conferma; una spesa con quote che non sommano viene **rifiutata
+al commit**; e una spesa su un gruppo di un'altra organizzazione riceve `404`.
