@@ -2681,8 +2681,13 @@ async fn a_dropped_claim_no_longer_counts_as_outstanding() {
     )
     .await;
 
+    // L'annullato scade **nel passato**, e non è un dettaglio dello scenario: con
+    // una scadenza futura `is_past_due` sarebbe falso anche con la vista vecchia, e
+    // né quell'assert né `overdue_charges` distinguerebbero le due definizioni. Con
+    // la scadenza passata la vista vecchia risponde 960.00 e **due** scaduti, la
+    // nuova 840.00 e uno.
     let outstanding = issue_charge(&env, &owner, lease.id(), "800.00", 30).await;
-    let to_void = issue_charge(&env, &owner, lease.id(), "120.00", 30).await;
+    let to_void = issue_charge(&env, &owner, lease.id(), "120.00", -3).await;
     let overdue = issue_charge(&env, &owner, lease.id(), "40.00", -5).await;
 
     VoidCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
@@ -2726,7 +2731,7 @@ async fn a_dropped_claim_no_longer_counts_as_outstanding() {
     );
     assert_eq!(
         overdue_count, 1,
-        "solo l'addebito scaduto e ancora dovuto conta come scaduto"
+        "prima della 0024 erano due: l'annullato era scaduto quanto l'altro"
     );
 
     // I due che restano sono quelli attesi.
