@@ -296,7 +296,10 @@ dati, va nel database.
 
 Deliberatamente **non** nel database: lo stato di un addebito calcolato dai
 pagamenti. Sarebbe workflow. Il saldo si legge da `app.v_charge_balances`, lo stato
-lo scrive il service layer.
+lo scrive il service layer — `Charge::apply_payment`, che passa dalla
+`GRANT UPDATE (status)` della migration `0023`. Le due definizioni di «pagato» non
+devono diventare due: il repository dei pagamenti somma con lo stesso
+`amount - refunded_amount` sugli stessi due stati della vista.
 
 ## Riferimenti polimorfici
 
@@ -310,6 +313,16 @@ perché la verifica di esistenza non deve dipendere dalla visibilità RLS del
 chiamante. I valori degli enum corrispondono al nome tabella al singolare, così la
 mappatura è centralizzata in una funzione invece di essere una FK per tipo.
 
+**Il trigger verifica che la riga esista e non guarda l'organizzazione**, e va detto
+perché è una porta aperta che qualcun altro deve chiudere: si può inserire un
+pagamento con il proprio `org_id` che punta all'addebito di un'altra organizzazione,
+e il trigger lo accetta — la riga esiste davvero, e `SECURITY DEFINER` la vede a
+prescindere dalla RLS del chiamante. A chiuderla è il service layer, che rilegge la
+riga referenziata dal proprio repository sotto la RLS del chiamante prima di
+scrivere. È lo stesso rimedio di `ensure_owner_is_visible` sui documenti e di
+`build_issued_charge` sugli addebiti, e vale per **ogni** riferimento polimorfico che
+verrà aggiunto.
+
 ## Viste
 
 Tutte con `security_invoker = true`, quindi applicano la RLS del chiamante.
@@ -317,7 +330,7 @@ Contengono solo aggregazioni derivabili, nessuna regola di business.
 
 | Vista | Contenuto |
 |---|---|
-| `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto |
+| `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto. **Residuo azzerato e mai scaduto** per `void` e `written_off` |
 | `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living |
 | `v_property_occupancy` | Stanze totali e occupate, percentuale, contratti in essere e loro canone |
 | `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
