@@ -1,13 +1,16 @@
 use async_trait::async_trait;
 
+use crate::billing::{
+    BillStatus, Charge, ChargeBalance, ChargeStatus, ChargeType, UtilityBill, UtilityType,
+};
 use crate::document::{AttachmentOwner, Document};
 use crate::events::DomainEvent;
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::property::{Property, PropertyStatus, Room};
 use crate::shared::{
-    DocumentId, Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, TicketId, TicketMessageId,
-    UserId,
+    ChargeId, DocumentId, Email, InvitationId, LeaseId, OrgId, PropertyId, RoomId, TicketId,
+    TicketMessageId, UserId, UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketReference, TicketStatus, TicketStatusChange};
 
@@ -429,6 +432,163 @@ pub trait TicketMessageRepository: Send {
         &mut self,
         query: &TicketMessageQuery,
     ) -> RepositoryResult<TicketMessagePage>;
+}
+
+/// Filtro di elenco delle bollette con paginazione keyset.
+#[derive(Debug, Clone)]
+pub struct UtilityBillQuery {
+    pub property_id: Option<PropertyId>,
+    pub lease_id: Option<LeaseId>,
+    pub status: Option<BillStatus>,
+    pub utility_type: Option<UtilityType>,
+    pub after: Option<UtilityBillId>,
+    pub limit: u16,
+}
+
+impl UtilityBillQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+impl Default for UtilityBillQuery {
+    fn default() -> Self {
+        Self {
+            property_id: None,
+            lease_id: None,
+            status: None,
+            utility_type: None,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct UtilityBillPage {
+    pub items: Vec<UtilityBill>,
+    pub next_cursor: Option<UtilityBillId>,
+}
+
+/// Bollette delle utenze.
+///
+/// Nessun `soft_delete` separato: annullare una bolletta la **cancella** — vedi
+/// [`UtilityBill::void`], che valorizza `deleted_at` insieme allo stato — e resta
+/// quindi una transizione, che passa da `update`. Farne un metodo a parte
+/// permetterebbe di cancellare una riga senza portarla a `void`, cioè di
+/// nasconderla lasciandola dichiarare di essere valida.
+#[async_trait]
+pub trait UtilityBillRepository: Send {
+    async fn find_by_id(&mut self, id: UtilityBillId) -> RepositoryResult<Option<UtilityBill>>;
+    async fn list(&mut self, query: &UtilityBillQuery) -> RepositoryResult<UtilityBillPage>;
+    async fn insert(&mut self, bill: &UtilityBill) -> RepositoryResult<()>;
+
+    /// Aggiorna le colonne che l'applicazione può scrivere.
+    ///
+    /// A differenza di [`ChargeRepository::update`] l'elenco **non** è ristretto
+    /// da una `GRANT` di colonna, ed è una scelta: una bolletta si digita, dodici
+    /// campi alla volta, e finché non è validata correggerne uno è il lavoro
+    /// previsto. La `GRANT` dovrebbe nominare quasi ogni colonna, e un elenco che
+    /// contiene quasi tutto non difende niente — si pagherebbe l'onere di
+    /// manutenzione senza comprare la proprietà per cui l'onere esisteva.
+    /// L'immutabilità della bolletta è quindi un'invariante di **dominio**
+    /// (`UtilityBill::apply` rifiuta da `allocated` in poi) e non un privilegio.
+    async fn update(&mut self, bill: &UtilityBill) -> RepositoryResult<()>;
+}
+
+/// Filtro di elenco degli addebiti con paginazione keyset.
+#[derive(Debug, Clone)]
+pub struct ChargeQuery {
+    pub lease_id: Option<LeaseId>,
+    pub charge_type: Option<ChargeType>,
+    /// **Non accetta `overdue`**, e chi chiama deve averlo già rifiutato: quello
+    /// stato non esiste in database, si deriva. Il bordo HTTP risponde `422`
+    /// indicando `?outstanding=true`, come fa con `?status=expiring` sui
+    /// contratti — restituire una pagina vuota sarebbe il modo peggiore di dirlo.
+    pub status: Option<ChargeStatus>,
+    /// `Some(true)` = solo gli addebiti ancora da incassare.
+    ///
+    /// Il ramo positivo enumera i tre stati di [`ChargeStatus::OUTSTANDING`]
+    /// invece di scrivere una disuguaglianza, ed è la ragione per cui esiste:
+    /// l'indice `charges_outstanding_ix` è **parziale** su quell'elenco esatto.
+    /// È lo scadenzario, e ciò che la dashboard leggerà.
+    pub outstanding: Option<bool>,
+    pub after: Option<ChargeId>,
+    pub limit: u16,
+}
+
+impl ChargeQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+impl Default for ChargeQuery {
+    fn default() -> Self {
+        Self {
+            lease_id: None,
+            charge_type: None,
+            status: None,
+            outstanding: None,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ChargeBalancePage {
+    pub items: Vec<ChargeBalance>,
+    pub next_cursor: Option<ChargeId>,
+}
+
+/// Addebiti verso l'inquilino.
+///
+/// **Due letture distinte, e non è una duplicazione da accorpare.** Il saldo si
+/// legge da `app.v_charge_balances`, che è `security_invoker` e applica quindi la
+/// RLS del chiamante; copiarne la `LEFT JOIN LATERAL` dentro il repository sarebbe
+/// una seconda definizione di «pagato» e divergerebbe alla prima modifica — il
+/// giorno in cui il modulo dei pagamenti aggiungerà uno stato all'array
+/// `('succeeded','partially_refunded')` deve cambiare in un posto solo.
+///
+/// Il prezzo è che `app.charges` viene attraversata due volte quando servono anche
+/// le colonne che la vista non porta (`description`, `period_*`, `issued_at`,
+/// `utility_bill_id`, `notes`). Da qui la separazione: [`Self::find_by_id`] legge
+/// la sola tabella ed è ciò che usano le transizioni, mentre
+/// [`Self::find_balance_by_id`] e [`Self::list_balances`] uniscono la vista e sono
+/// ciò che usa il bordo HTTP. **Le scritture non pagano un join che non
+/// useranno.**
+///
+/// Nessun `soft_delete`: un addebito non si cancella, si **annulla** — e resta
+/// visibile a chi doveva pagarlo, che è precisamente il punto.
+#[async_trait]
+pub trait ChargeRepository: Send {
+    /// Legge la sola riga di `app.charges`, senza saldo. È ciò che serve alle
+    /// transizioni, che non guardano quanto è stato incassato.
+    async fn find_by_id(&mut self, id: ChargeId) -> RepositoryResult<Option<Charge>>;
+
+    /// Legge l'addebito **con il saldo**, unendo `app.v_charge_balances`.
+    async fn find_balance_by_id(&mut self, id: ChargeId)
+    -> RepositoryResult<Option<ChargeBalance>>;
+
+    async fn list_balances(&mut self, query: &ChargeQuery) -> RepositoryResult<ChargeBalancePage>;
+
+    /// Inserisce l'addebito.
+    ///
+    /// Chi chiama **deve** aver già verificato che il contratto sia visibile: la
+    /// `WITH CHECK` di `charges_insert` nomina il solo `org_id` e non chiama
+    /// `can_access_lease`, e su `app.charges` non esiste un trigger
+    /// `assert_org_matches_*`. Senza quel controllo si scrive una riga che nessuno
+    /// potrà rileggere né cancellare, e che non comparirà in nessun saldo.
+    async fn insert(&mut self, charge: &Charge) -> RepositoryResult<()>;
+
+    /// Aggiorna la **sola colonna `status`**.
+    ///
+    /// Non è una restrizione di stile: la migration `0023` revoca l'`UPDATE` su
+    /// `app.charges` e lo riconcede sulla sola `status`, perché la `WITH CHECK` di
+    /// `charges_update` nomina il solo `org_id` e lascia libera ogni altra colonna
+    /// (ADR-021, ADR-026). Una `UPDATE` che nominasse `amount` fallirebbe a
+    /// runtime con `permission denied`, ed è la difesa che rende impossibile
+    /// riscrivere una pretesa già comunicata.
+    async fn update_status(&mut self, charge: &Charge) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa
