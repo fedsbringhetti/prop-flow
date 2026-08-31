@@ -3,6 +3,7 @@ pub mod billing;
 pub mod document;
 pub mod invitation;
 pub mod lease;
+pub mod payment;
 pub mod property;
 pub mod room;
 pub mod ticket;

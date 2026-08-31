@@ -31,6 +31,10 @@ use propflow_application::use_cases::lease::{
     ActivateLease, ActivateLeaseCommand, AddLeaseParty, AddLeasePartyCommand, DraftLease,
     DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery,
 };
+use propflow_application::use_cases::payment::{
+    ConfirmPayment, DeclarePayment, DeclarePaymentCommand, ListPayments, ListPaymentsQuery,
+    RecordPayment, RecordPaymentCommand, RejectPayment,
+};
 use propflow_application::use_cases::property::{
     ArchiveProperty, ArchivePropertyCommand, CreateProperty, CreatePropertyCommand, ListProperties,
     ListPropertiesQuery,
@@ -50,6 +54,7 @@ use propflow_domain::billing::{
 use propflow_domain::document::{AttachmentOwner, DocumentKind};
 use propflow_domain::identity::OrgRole;
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
+use propflow_domain::payment::{IdempotencyKey, PaymentMethod, PaymentStatus};
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
@@ -2615,4 +2620,617 @@ async fn registering_a_bill_writes_the_event_without_the_supplier_or_the_amount(
         "il fornitore o il numero di fattura sono finiti nell'evento: {payload}"
     );
     assert!(payload.contains("gas"), "payload: {payload}");
+}
+
+// ---------------------------------------------------------------------------
+// Pagamenti
+// ---------------------------------------------------------------------------
+
+/// Emette un addebito e ne restituisce l'identificatore.
+async fn issue_charge(
+    env: &common::TestEnv,
+    owner: &RequestContext,
+    lease_id: propflow_domain::shared::LeaseId,
+    amount: &str,
+    due_in_days: i64,
+) -> propflow_domain::billing::Charge {
+    IssueCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            owner,
+            IssueChargeCommand {
+                lease_id,
+                charge_type: ChargeType::Rent,
+                description: Some(format!("Canone da {amount}")),
+                period_start: None,
+                period_end: None,
+                amount: amount.parse().expect("decimale"),
+                due_date: days_from_today(due_in_days),
+                notes: None,
+            },
+        )
+        .await
+        .expect("addebito emesso")
+}
+
+fn key(label: &str) -> IdempotencyKey {
+    IdempotencyKey::parse(&format!("{label}-{}", uuid::Uuid::now_v7())).expect("chiave valida")
+}
+
+/// **Il difetto delle viste, verificato al contrario.**
+///
+/// È il caso già documentato fra i debiti e in ADR-028, riprodotto su database vero
+/// prima della migration `0024`: 800.00 emesso, 120.00 **annullato**, 40.00 scaduto
+/// davano `total_outstanding = 960.00`, dove il numero vero è 840.00 —
+/// all'inquilino era stato detto che quei 120 euro non li doveva più, e il numero di
+/// testa della dashboard continuava a contarli come credito.
+///
+/// Una vista sola rimette a posto due numeri: `v_owner_dashboard` filtra già
+/// `outstanding_amount > 0` e conta su `is_past_due`, quindi non è stata toccata.
+#[tokio::test]
+async fn a_dropped_claim_no_longer_counts_as_outstanding() {
+    let env = require_db!();
+    let owner = register_owner(&env, "saldo-vista").await;
+    let property_id = create_property(&env, &owner, "Immobile dei saldi", "Genova").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-60),
+        Some(days_from_today(305)),
+    )
+    .await;
+
+    // L'annullato scade **nel passato**, e non è un dettaglio dello scenario: con
+    // una scadenza futura `is_past_due` sarebbe falso anche con la vista vecchia, e
+    // né quell'assert né `overdue_charges` distinguerebbero le due definizioni. Con
+    // la scadenza passata la vista vecchia risponde 960.00 e **due** scaduti, la
+    // nuova 840.00 e uno.
+    let outstanding = issue_charge(&env, &owner, lease.id(), "800.00", 30).await;
+    let to_void = issue_charge(&env, &owner, lease.id(), "120.00", -3).await;
+    let overdue = issue_charge(&env, &owner, lease.id(), "40.00", -5).await;
+
+    VoidCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, to_void.id())
+        .await
+        .expect("annullato");
+
+    // La riga **resta**, ed è il punto: `find_balance_by_id` serve il dettaglio di
+    // un addebito annullato, che l'inquilino deve poter vedere. Togliere le righe
+    // dalla vista sarebbe stata la via ovvia e sbagliata.
+    let voided_balance = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&owner, to_void.id())
+        .await
+        .expect("l'addebito annullato resta leggibile");
+    assert_eq!(voided_balance.charge.status(), ChargeStatus::Void);
+    assert_eq!(
+        voided_balance.outstanding_amount.amount(),
+        rust_decimal::Decimal::ZERO,
+        "la pretesa è caduta: non è dovuto niente"
+    );
+    assert!(
+        !voided_balance.is_past_due,
+        "un addebito annullato non è scaduto, per quanto la data sia passata"
+    );
+
+    // E i due numeri della dashboard, letti dalla vista che li produce.
+    let org_id = owner.org_id().expect("org").as_uuid();
+    let (total, overdue_count): (rust_decimal::Decimal, i64) = sqlx::query_as(
+        "SELECT total_outstanding::numeric, overdue_charges
+           FROM app.v_owner_dashboard WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("dashboard letta");
+
+    assert_eq!(
+        total,
+        "840.00".parse::<rust_decimal::Decimal>().expect("decimale"),
+        "prima della 0024 questo numero era 960.00: contava anche l'annullato"
+    );
+    assert_eq!(
+        overdue_count, 1,
+        "prima della 0024 erano due: l'annullato era scaduto quanto l'altro"
+    );
+
+    // I due che restano sono quelli attesi.
+    assert!(outstanding.amount().amount() > rust_decimal::Decimal::ZERO);
+    assert!(overdue.due_date() < chrono::Utc::now().date_naive());
+}
+
+/// Il giro a mano del modulo, contro il binario vero.
+///
+/// La dichiarazione **non** muove il saldo — è ciò che il flusso in due tempi
+/// compra — e la conferma lo azzera portando l'addebito a `paid`.
+#[tokio::test]
+async fn a_declaration_does_not_move_the_balance_and_the_confirmation_does() {
+    let env = require_db!();
+    let owner = register_owner(&env, "pagamento-giro").await;
+    let property_id = create_property(&env, &owner, "Immobile incassi", "Verona").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    activate(&env, &owner, lease.id()).await.expect("attivato");
+    let tenant = tenant_on_lease(&env, &owner, lease.id(), "pagamento-inquilino").await;
+
+    let charge = issue_charge(&env, &owner, lease.id(), "800.00", 20).await;
+
+    let declared = DeclarePayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &tenant,
+            DeclarePaymentCommand {
+                charge_id: charge.id(),
+                amount: "800.00".parse().expect("decimale"),
+                method: PaymentMethod::BankTransfer,
+                paid_at: None,
+                reference: Some("Bonifico del 3".to_owned()),
+                idempotency_key: key("dichiarazione"),
+            },
+        )
+        .await
+        .expect("dichiarazione accettata");
+    assert!(!declared.replayed);
+    assert_eq!(declared.payment.status(), PaymentStatus::Pending);
+    assert_eq!(declared.payment.payer_user_id(), tenant.user_id());
+
+    // Il saldo **non** si è mosso, e lo stato memorizzato nemmeno.
+    let before = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&owner, charge.id())
+        .await
+        .expect("saldo letto");
+    assert_eq!(before.paid_amount.amount(), rust_decimal::Decimal::ZERO);
+    assert_eq!(before.outstanding_amount, charge.amount());
+    assert_eq!(before.charge.status(), ChargeStatus::Issued);
+
+    let confirmed = ConfirmPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, declared.payment.id())
+        .await
+        .expect("confermato");
+    assert_eq!(confirmed.status(), PaymentStatus::Succeeded);
+    assert!(
+        confirmed.paid_at().is_some(),
+        "`payments_succeeded_ck` rifiuterebbe la scrittura senza la data"
+    );
+    assert!(confirmed.reconciled_at().is_some());
+
+    let after = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&tenant, charge.id())
+        .await
+        .expect("l'inquilino vede il proprio saldo");
+    assert_eq!(after.paid_amount, charge.amount());
+    assert_eq!(
+        after.outstanding_amount.amount(),
+        rust_decimal::Decimal::ZERO
+    );
+    assert_eq!(
+        after.charge.status(),
+        ChargeStatus::Paid,
+        "lo stato si ricalcola dai pagamenti: è la prima scrittura che la GRANT della 0023 concede"
+    );
+    assert_eq!(after.effective_status(), ChargeStatus::Paid);
+
+    // L'inquilino vede il proprio pagamento nell'elenco dell'addebito.
+    let listed = ListPayments::new(Arc::clone(&env.factory))
+        .execute(
+            &tenant,
+            ListPaymentsQuery {
+                charge_id: charge.id(),
+                after: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert_eq!(listed.items.len(), 1);
+    assert_eq!(listed.items[0].id(), declared.payment.id());
+}
+
+/// **La decisione più importante della fetta, verificata**: un secondo invio con la
+/// stessa chiave restituisce il pagamento di prima e **non** fa scendere il saldo
+/// una seconda volta.
+#[tokio::test]
+async fn the_same_idempotency_key_never_takes_the_money_twice() {
+    let env = require_db!();
+    let owner = register_owner(&env, "idempotenza").await;
+    let property_id = create_property(&env, &owner, "Immobile idempotente", "Trieste").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    let charge = issue_charge(&env, &owner, lease.id(), "800.00", 20).await;
+
+    let record = RecordPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let idempotency_key = key("doppio-invio");
+    let command = || RecordPaymentCommand {
+        charge_id: charge.id(),
+        amount: "400.00".parse().expect("decimale"),
+        method: PaymentMethod::BankTransfer,
+        paid_at: None,
+        reference: None,
+        payer_user_id: None,
+        idempotency_key: idempotency_key.clone(),
+    };
+
+    let first = record
+        .execute(&owner, command())
+        .await
+        .expect("primo invio");
+    assert!(!first.replayed);
+    assert_eq!(first.payment.status(), PaymentStatus::Succeeded);
+
+    let second = record
+        .execute(&owner, command())
+        .await
+        .expect("secondo invio: assorbito, non rifiutato");
+    assert!(
+        second.replayed,
+        "una chiave ripetuta restituisce il pagamento già registrato, non un 409"
+    );
+    assert_eq!(second.payment.id(), first.payment.id());
+
+    let balance = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&owner, charge.id())
+        .await
+        .expect("saldo letto");
+    assert_eq!(
+        balance.paid_amount.amount(),
+        "400.00".parse::<rust_decimal::Decimal>().expect("decimale"),
+        "il saldo è sceso una volta sola: senza l'idempotenza sarebbe sceso di 800"
+    );
+    assert_eq!(
+        balance.charge.status(),
+        ChargeStatus::PartiallyPaid,
+        "400 su 800 è un pagamento parziale"
+    );
+
+    // La stessa chiave verso un **altro** addebito non è un doppio invio: è un
+    // riuso, e un 200 con un pagamento diverso da quello chiesto sarebbe una bugia.
+    let other = issue_charge(&env, &owner, lease.id(), "50.00", 20).await;
+    let reused = record
+        .execute(
+            &owner,
+            RecordPaymentCommand {
+                charge_id: other.id(),
+                ..command()
+            },
+        )
+        .await;
+    assert!(matches!(
+        reused,
+        Err(propflow_application::AppError::Conflict(
+            propflow_application::error::Conflict::PaymentIdempotencyKeyReused
+        ))
+    ));
+}
+
+/// Una dichiarazione rifiutata lascia il saldo dov'era, e **perde la data
+/// dichiarata**: `payments_succeeded_ck` vincola una sola direzione, quindi
+/// l'azzeramento tocca al dominio.
+#[tokio::test]
+async fn a_rejected_declaration_leaves_the_balance_where_it_was() {
+    let env = require_db!();
+    let owner = register_owner(&env, "rifiuto").await;
+    let property_id = create_property(&env, &owner, "Immobile del rifiuto", "Ancona").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    activate(&env, &owner, lease.id()).await.expect("attivato");
+    let tenant = tenant_on_lease(&env, &owner, lease.id(), "rifiuto-inquilino").await;
+    let charge = issue_charge(&env, &owner, lease.id(), "800.00", 20).await;
+
+    let declared = DeclarePayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &tenant,
+            DeclarePaymentCommand {
+                charge_id: charge.id(),
+                amount: "800.00".parse().expect("decimale"),
+                method: PaymentMethod::Cash,
+                paid_at: Some(chrono::Utc::now() - chrono::Duration::days(1)),
+                reference: None,
+                idempotency_key: key("da-rifiutare"),
+            },
+        )
+        .await
+        .expect("dichiarazione accettata");
+    assert!(declared.payment.paid_at().is_some());
+
+    let rejected = RejectPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, declared.payment.id())
+        .await
+        .expect("rifiutato");
+    assert_eq!(rejected.status(), PaymentStatus::Cancelled);
+    assert_eq!(
+        rejected.paid_at(),
+        None,
+        "un pagamento che non è avvenuto non ha una data in cui è avvenuto"
+    );
+
+    let balance = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&owner, charge.id())
+        .await
+        .expect("saldo letto");
+    assert_eq!(balance.paid_amount.amount(), rust_decimal::Decimal::ZERO);
+    assert_eq!(
+        balance.charge.status(),
+        ChargeStatus::Issued,
+        "il rifiuto non ricalcola lo stato: `pending` non contava"
+    );
+
+    // E non si riapre: `pending` ha due uscite e nessun ingresso di ritorno.
+    let again = ConfirmPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, declared.payment.id())
+        .await;
+    assert!(again.is_err());
+}
+
+/// **La trappola del trigger polimorfico, riprodotta.**
+///
+/// `app.tg_check_polymorphic_ref` verifica che la riga referenziata esista ed è
+/// `SECURITY DEFINER`: **non guarda l'organizzazione**. Il primo assert lo dimostra
+/// inserendo a mano un pagamento di un'organizzazione verso l'addebito di un'altra e
+/// vedendo che il trigger lo accetta. Il secondo mostra che a chiudere la strada è
+/// lo use case, che rilegge l'addebito sotto la RLS del chiamante.
+#[tokio::test]
+async fn the_polymorphic_trigger_accepts_a_charge_of_another_organization_and_the_use_case_does_not()
+ {
+    let env = require_db!();
+    let alfa = register_owner(&env, "pagamenti-alfa").await;
+    let beta = register_owner(&env, "pagamenti-beta").await;
+
+    let property_id = create_property(&env, &beta, "Immobile di Beta", "Bari").await;
+    let lease = draft_lease(
+        &env,
+        &beta,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    let charge = issue_charge(&env, &beta, lease.id(), "500.00", 20).await;
+
+    // Il trigger accetta il riferimento incrociato: la riga di Beta **esiste**, e
+    // il trigger non chiede altro. Lo stato è `pending` perché la riga non deve
+    // sporcare il saldo di Beta: la dimostrazione riguarda il trigger, non il saldo.
+    let accepted = sqlx::query(
+        "INSERT INTO app.payments (org_id, payable_type, payable_id, amount, idempotency_key, status)
+         VALUES ($1, 'charge', $2, 10.00, $3, 'pending')",
+    )
+    .bind(alfa.org_id().expect("org").as_uuid())
+    .bind(charge.id().as_uuid())
+    .bind(format!("trigger-{}", uuid::Uuid::now_v7()))
+    .execute(env.pools.privileged())
+    .await;
+    assert!(
+        accepted.is_ok(),
+        "il trigger doveva accettare un riferimento a un'altra organizzazione: {:?}",
+        accepted.err()
+    );
+
+    // Lo use case no: sotto la RLS di Alfa, l'addebito di Beta non si trova.
+    let refused = RecordPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &alfa,
+            RecordPaymentCommand {
+                charge_id: charge.id(),
+                amount: "10.00".parse().expect("decimale"),
+                method: PaymentMethod::BankTransfer,
+                paid_at: None,
+                reference: None,
+                payer_user_id: None,
+                idempotency_key: key("altra-organizzazione"),
+            },
+        )
+        .await;
+    assert!(matches!(
+        refused,
+        Err(propflow_application::AppError::NotFound(
+            propflow_domain::Entity::Charge
+        ))
+    ));
+}
+
+/// Incassare su una pretesa caduta è un'incoerenza, non un caso d'uso.
+#[tokio::test]
+async fn a_dropped_claim_refuses_a_payment() {
+    let env = require_db!();
+    let owner = register_owner(&env, "pretesa-caduta").await;
+    let property_id = create_property(&env, &owner, "Immobile annullato", "Perugia").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    let charge = issue_charge(&env, &owner, lease.id(), "200.00", 20).await;
+
+    VoidCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, charge.id())
+        .await
+        .expect("annullato");
+
+    let refused = RecordPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            RecordPaymentCommand {
+                charge_id: charge.id(),
+                amount: "200.00".parse().expect("decimale"),
+                method: PaymentMethod::BankTransfer,
+                paid_at: None,
+                reference: None,
+                payer_user_id: None,
+                idempotency_key: key("su-annullato"),
+            },
+        )
+        .await;
+    assert!(matches!(
+        refused,
+        Err(propflow_application::AppError::Validation(
+            propflow_domain::DomainError::Invariant(propflow_domain::Invariant::ChargeNotPayable)
+        ))
+    ));
+
+    // E nessuna riga è rimasta dietro: il rifiuto avviene prima dell'inserimento.
+    let payments: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM app.payments WHERE payable_id = $1")
+            .bind(charge.id().as_uuid())
+            .fetch_one(env.pools.privileged())
+            .await
+            .expect("conteggio");
+    assert_eq!(payments, 0);
+}
+
+/// Il sovrapagamento è possibile e non lo si impedisce: `outstanding_amount` diventa
+/// **negativo**, che è un credito verso l'inquilino. Registrato invece che scoperto
+/// dopo — e `app.money_amount` lo ammette, quindi la vista non si rompe.
+#[tokio::test]
+async fn an_overpayment_drives_the_outstanding_amount_negative() {
+    let env = require_db!();
+    let owner = register_owner(&env, "sovrapagamento").await;
+    let property_id = create_property(&env, &owner, "Immobile pagato troppo", "Lecce").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    let charge = issue_charge(&env, &owner, lease.id(), "100.00", 20).await;
+
+    RecordPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            RecordPaymentCommand {
+                charge_id: charge.id(),
+                amount: "150.00".parse().expect("decimale"),
+                method: PaymentMethod::BankTransfer,
+                paid_at: None,
+                reference: None,
+                payer_user_id: None,
+                idempotency_key: key("sovrapagamento"),
+            },
+        )
+        .await
+        .expect("registrato");
+
+    let balance = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&owner, charge.id())
+        .await
+        .expect("saldo letto");
+    assert_eq!(
+        balance.outstanding_amount.amount(),
+        "-50.00".parse::<rust_decimal::Decimal>().expect("decimale")
+    );
+    assert_eq!(balance.charge.status(), ChargeStatus::Paid);
+    assert!(!balance.is_past_due);
+
+    // La dashboard filtra `outstanding_amount > 0`: il credito **non compensa** gli
+    // altri insoluti, che è probabilmente il comportamento giusto e va comunque
+    // saputo.
+    let total: rust_decimal::Decimal = sqlx::query_scalar(
+        "SELECT total_outstanding::numeric FROM app.v_owner_dashboard WHERE org_id = $1",
+    )
+    .bind(owner.org_id().expect("org").as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("dashboard letta");
+    assert_eq!(total, rust_decimal::Decimal::ZERO);
+}
+
+/// I privilegi di colonna della migration `0025`, verificati **anche al contrario**.
+///
+/// Il privilegio viene verificato prima delle policy e prima che le righe vengano
+/// esaminate, quindi il tentativo fallisce anche su un identificatore inesistente:
+/// il test non ha bisogno di ricostruire lo scenario per dimostrare che la strada è
+/// chiusa.
+///
+/// Le query sono letterali statici uno per uno e non composte in un ciclo: la
+/// regola 15 non ammette `format!` dentro `sqlx::query`, e il tipo lo impedisce —
+/// il che è esattamente ciò che deve fare, anche in un test.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_what_a_payment_records() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    // Ciò che il pagamento **registra**: chi ha pagato, quanto, come, con quale
+    // chiave. Un fatto non si corregge riscrivendolo.
+    for attempt in [
+        sqlx::query("UPDATE app.payments SET amount = 1.00 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET payer_user_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET idempotency_key = 'riscritta' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET refunded_amount = 1.00 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET org_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET method = 'cash' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+    ] {
+        let error = attempt.expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi, ottenuto: {error}"
+        );
+    }
+
+    // Le tre colonne che il dominio muove restano concesse: la restrizione riguarda
+    // ciò che il pagamento registra, non il suo avanzamento. `paid_at` è fra esse
+    // perché il rifiuto la **azzera**.
+    for allowed in [
+        sqlx::query("UPDATE app.payments SET status = 'cancelled' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET paid_at = NULL WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.payments SET reconciled_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+    ] {
+        assert!(
+            allowed.is_ok(),
+            "l'aggiornamento non doveva essere negato: {:?}",
+            allowed.err()
+        );
+    }
 }

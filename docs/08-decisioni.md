@@ -1034,16 +1034,23 @@ Il confronto è fra `Decimal` e non fra `Money`, che non implementa `PartialOrd`
 apposta ([ADR-002](#adr-002)). È lecito **solo** perché la valuta è una sola — vedi
 [ADR-030](#adr-030), dove quella limitazione ha esattamente questa origine.
 
-**La formula non guarda lo stato, e `effective_status` sì.** È la sola asimmetria fra
-i due, e va detta: `v_charge_balances.is_past_due` è vero anche per un addebito
-**annullato** con una scadenza nel passato, perché la vista non filtra su `status`. A
-escluderlo è `Charge::effective_status`, che deriva `overdue` solo dagli stati
+**La formula non guardava lo stato, e `effective_status` sì.** Era la sola asimmetria
+fra i due: `v_charge_balances.is_past_due` era vero anche per un addebito **annullato**
+con una scadenza nel passato, perché la vista non filtrava su `status`, e a escluderlo
+restava `Charge::effective_status`, che deriva `overdue` solo dagli stati
 dell'insoluto.
 
-**Chi legge la vista direttamente eredita quella definizione più larga**, e la
-conseguenza è peggiore di quanto questo ADR dicesse quando è stato scritto. Riprodotto
-su database vero dopo l'esecuzione della fetta, con tre addebiti sullo stesso
-contratto:
+**L'asimmetria è finita con la migration `0024`**, e questo paragrafo resta al passato
+perché la sua conseguenza — descritta qui sotto — è il difetto che quella migration ha
+chiuso. Vedi [ADR-032](#adr-032): la vista azzera residuo e scadenza per `void` e
+`written_off`, e `Charge::is_past_due` la segue, altrimenti smetterebbe di essere *la
+stessa* formula. `effective_status` resta com'era — il suo `is_outstanding()` esclude
+già più di quanto la vista escluda — e la sovrapposizione fra i due controlli è voluta.
+
+**Chi leggeva la vista direttamente ereditava quella definizione più larga**, e la
+conseguenza era peggiore di quanto questo ADR dicesse quando è stato scritto.
+Riprodotto su database vero dopo l'esecuzione della fetta contabile, con tre addebiti
+sullo stesso contratto:
 
 | stato | importo | `outstanding_amount` |
 |---|---|---|
@@ -1057,12 +1064,17 @@ richiesta era caduta — continua a contare come credito. `written_off` fa lo st
 è peggio, perché è una perdita e non un credito. Non è quindi solo `overdue_charges`:
 è anche il totale insoluto, che è il numero di testa della dashboard.
 
-Il difetto **non nasce con questa fetta** — la vista è così dalla `0015` — ma è questa
-fetta a renderlo raggiungibile, perché prima non esisteva alcun addebito.
-**L'elenco dell'API è invece corretto**: `?outstanding=true` enumera i tre stati
+Il difetto **non nasceva con quella fetta** — la vista era così dalla `0015` — ma è
+quella fetta ad averlo reso raggiungibile, perché prima non esisteva alcun addebito.
+**L'elenco dell'API era invece corretto**: `?outstanding=true` enumera i tre stati
 dell'insoluto come letterale nella query del repository, quindi `void` e `written_off`
-non vi entrano. Sbagliano le sole viste, e la correzione è registrata fra i debiti in
-[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+non vi entravano. Sbagliavano le sole viste.
+
+**Corretto dalla migration `0024`**, primo passo del modulo dei pagamenti: lo stesso
+scenario risponde ora `total_outstanding = 840.00`, ed è sotto test. La ragione per cui
+la correzione è arrivata *lì* e non prima è che «cosa significa insoluto» è la domanda
+di quel modulo, e deciderla altrove avrebbe voluto dire deciderla due volte. Vedi
+[ADR-032](#adr-032).
 
 **Conseguenza sul filtro dell'elenco.** `?status=overdue` risponde **422** con il
 codice `charge.derived_status_filter`, indicando `?outstanding=true`. È la stessa forma
@@ -1258,3 +1270,179 @@ dell'addebito: restringere `charges_select` con
 `status <> 'draft' OR is_org_staff(org_id)` senza toccare questa funzione lascerebbe
 l'inquilino a scaricare gli allegati di una bozza che non vede. Le due migration vanno
 insieme, ed è scritto sia qui sia nel commento della `0022`.
+
+---
+
+<a id="adr-032"></a>
+
+## ADR-032 — La vista azzera il residuo per gli stati terminali, e `paid` non è fra loro
+
+**Contesto.** [ADR-028](#adr-028) ha registrato, riproducendolo su database vero, che
+`app.v_charge_balances` non guarda `status`: un addebito **annullato** da 120.00
+continuava a portare `outstanding_amount = 120.00`, e
+`v_owner_dashboard.total_outstanding` rispondeva **960.00** dove il numero vero era
+840.00. All'inquilino era stato detto che quei 120 euro non li doveva più, e il numero
+di testa della dashboard continuava a contarli come credito. `written_off` fa lo stesso
+ed è peggio, perché è una perdita e non un credito.
+
+Il difetto non nasce con la fetta contabile — la vista è così dalla `0015` — ma è
+quella fetta a renderlo raggiungibile, perché prima non esisteva alcun addebito. Era il
+primo debito della tabella in [09](09-stato-e-roadmap.md#debiti-tecnici-noti), ed era
+**l'unico debito del progetto la cui finestra si chiude da sola**: finché nessun client
+legge quei campi, cambiarne il significato è additivo; dopo è una rottura.
+
+**Decisione.** La migration `0024` dà alla vista una condizione: quando lo stato è
+`void` o `written_off`, `outstanding_amount` vale `0` e `is_past_due` è falso.
+`paid_amount` resta quello vero, perché è un fatto e non una pretesa.
+
+Correggere la vista è **il primo passo del modulo dei pagamenti** e non un lavoro a
+parte: la domanda «cosa significa insoluto» *è* la domanda di quel modulo, e deciderla
+altrove avrebbe voluto dire deciderla due volte.
+
+### `paid` non è nell'elenco, ed è la parte che conta
+
+Due stati soli azzerano, e la tentazione di aggiungerne un terzo è forte perché
+`paid` sembra appartenere allo stesso insieme. Non ci appartiene.
+
+Azzerare per stato **dove l'aritmetica è già significativa** inverte il rapporto fra i
+due: lo stato memorizzato scavalcherebbe il calcolo fatto sui pagamenti. Se un giorno
+`status = 'paid'` e la somma dei pagamenti non torna, quello scarto va **visto**, non
+nascosto — in contabilità la deriva fra ciò che una riga dichiara e ciò che i movimenti
+dicono è precisamente il difetto che si vuole scoprire. Lo stesso vale per `draft`,
+che nessuno scrive.
+
+`void` e `written_off` sono diversi **in natura**: lì non è dovuto niente a prescindere
+dai pagamenti, perché la pretesa è caduta. È l'unico caso in cui lo stato è l'autorità
+sul residuo, e per questo l'elenco si scrive per esteso invece di derivarlo da
+`is_outstanding`.
+
+### Alternative scartate
+
+**Azzerare tutto ciò che non è nell'insoluto**, `draft` e `paid` compresi. Più
+simmetrico e peggiore, per la ragione qui sopra.
+
+**Togliere le righe dalla vista.** È la via che sembra ovvia ed è sbagliata:
+`find_balance_by_id` serve il dettaglio di un addebito annullato, che l'inquilino
+**deve** poter vedere — è l'asimmetria deliberata con la bolletta, che annullata sparisce
+— e senza la riga riceverebbe `404` su qualcosa che gli spetta. Un test della fetta
+contabile lo fissava già, e sarebbe fallito: il modo giusto di scoprirlo, ma meglio non
+scoprirlo affatto.
+
+### Conseguenze
+
+**Una vista sola rimette a posto due numeri.** `v_owner_dashboard` filtra già
+`outstanding_amount > 0` e conta su `is_past_due`: non è stata toccata, e non doveva
+esserlo.
+
+**L'asimmetria che ADR-028 dichiarava è finita, e il dominio l'ha seguita.** Quel
+documento diceva che la formula della vista «non guarda lo stato» mentre
+`Charge::effective_status` sì. Ora la vista guarda i due terminali, e
+`Charge::is_past_due` fa lo stesso: se non lo facesse smetterebbe di essere *la stessa*
+formula, che è l'unica ragione per cui quella funzione esiste. `effective_status` resta
+com'era — il suo `is_outstanding()` esclude già più di quanto la vista escluda — e la
+sovrapposizione fra i due controlli è voluta, non ridondanza da togliere.
+
+**Sull'API il cambiamento è di significato, non di forma:** `outstanding_amount` di un
+addebito annullato passa da `"120.00"` a `"0.00"`. Additivo solo perché nessun client
+lo legge ancora.
+
+**`security_invoker` va ripetuto per esteso.** `CREATE OR REPLACE VIEW` conserva le
+`reloptions` esistenti quando la clausola manca, ma affidarsi a quella conservazione
+significa che il giorno in cui qualcuno ricrea la vista da zero la RLS si apre in
+silenzio: la vista girerebbe con i diritti del proprietario e ogni organizzazione
+vedrebbe i saldi di tutte. Il piano temeva questo passaggio più di ogni altro e
+prevedeva di aggiungere un controllo alle invarianti; il controllo **c'era già** — è il
+numero 3, `vista-senza-security-invoker`, che verifica ogni vista di `app` — e la
+migration lo ha attraversato verde. È il caso raro in cui una trappola prevista si
+scopre già disinnescata, e vale la pena scriverlo perché la prossima volta si guardi
+l'elenco delle invarianti prima di temere.
+
+---
+
+<a id="adr-033"></a>
+
+## ADR-033 — La chiave di idempotenza è obbligatoria e la fornisce il client
+
+**Contesto.** `app.payments.idempotency_key` è `NOT NULL` dalla migration `0008`, con
+l'indice unico `payments_idempotency_uk` su `(org_id, idempotency_key)`. Lo schema
+esigeva una chiave e non diceva **chi** la genera: è la sola domanda di questa fetta in
+cui sbagliare costa denaro.
+
+**Decisione.** La chiave la fornisce il **client**, in un header `Idempotency-Key`
+obbligatorio sulle due rotte che creano un pagamento. Il service layer la rilegge
+**prima** di inserire; se la trova, restituisce il pagamento già registrato con `200`.
+
+### Perché non il server
+
+Se a generarla fosse il server, ogni ritentativo produrrebbe una chiave nuova, quindi
+**un secondo pagamento**, quindi un saldo che scende **due volte**. Un doppio invio — un
+tap ripetuto, un retry di rete, un client che non ha visto la risposta — dimezzerebbe
+l'insoluto senza che nessuno se ne accorga, e la traccia in `audit_log` mostrerebbe due
+inserimenti perfettamente legittimi: due righe valide, ciascuna con il proprio autore e
+il proprio istante, nessuna anomalia da cercare.
+
+Toglierebbe cioè ogni protezione **proprio dove il danno è denaro**, e lo farebbe in
+silenzio. È l'inverso del criterio con cui questo progetto sceglie dove mettere le
+invarianti: si difende ciò che, se cede, non si vede cedere.
+
+### Perché un header e non un campo del corpo
+
+È una proprietà della **richiesta**, non del pagamento: la stessa chiave deve poter
+accompagnare il medesimo invio ripetuto, e un campo del corpo inviterebbe a rigenerarla
+insieme al resto. È anche la convenzione con cui i client la trattano già.
+
+Assente dà `400 request.missing_header` e non `422`: non c'è nulla di malformato nel
+corpo, manca un pezzo del trasporto.
+
+### Perché `200` e non `409` sulla chiave ripetuta
+
+Un `409` costringerebbe il client a distinguere «l'ho già mandato io» da «qualcun altro
+ha usato la mia chiave», distinzione che **non può fare**. Il `200` con il pagamento
+già registrato è la convenzione dell'idempotenza e lascia il client dove voleva essere:
+con la risposta che non aveva ricevuto.
+
+**Il `409` resta per due casi che la rilettura non assorbe**, ed è giusto che restino
+distinti:
+
+- la stessa chiave verso un **altro** addebito. Non è un doppio invio, è un riuso, e un
+  `200` con un pagamento diverso da quello chiesto sarebbe una bugia;
+- una chiave già usata da qualcuno di cui il chiamante **non vede** i pagamenti. La
+  rilettura gira sotto la RLS del chiamante, quindi non la trova, e l'inserimento viola
+  l'indice unico. È irriducibile: distinguere i due casi richiederebbe di leggere una
+  riga che al chiamante non spetta. Con chiavi generate dal client — UUID o ULID — la
+  collisione è teorica.
+
+Entrambi rispondono `payment.idempotency_key_reused`, che dice al client la sola cosa
+azionabile: quella chiave è occupata, ne serve una nuova.
+
+### La cassa non si normalizza
+
+`A1` e `a1` restano chiavi diverse. Il generatore è il client e nulla dice che le tratti
+come uguali; confonderle rifiuterebbe come duplicato un pagamento **legittimo**, che è
+il danno opposto e peggiore. Si normalizzano invece gli spazi ai bordi e si rifiuta
+tutto ciò che non sia ASCII stampabile: il valore arriva da un header, e uno spazio
+interno o un byte di controllo non sopravvive intatto al primo proxy — mentre due chiavi
+che differiscono per uno spazio sono due pagamenti per l'indice e uno solo per chi
+guarda. È lo stesso ragionamento con cui `InvoiceNumber` e `SupplierVat` si
+normalizzano perché `utility_bills_dedup_uk` possa fare il proprio lavoro, applicato
+dove il costo dell'errore è più alto — con la differenza che lì normalizzare **di più**
+era giusto, e qui sarebbe il danno.
+
+### Il complemento: la chiave non si riscrive
+
+L'indice unico protegge dall'inserimento doppio e non dalla **riscrittura**: uno staff
+che potesse cambiare `idempotency_key` su una riga esistente libererebbe la chiave per
+un secondo inserimento, cioè per lo stesso saldo che scende due volte. La migration
+`0025` la mette fuori dalla `GRANT UPDATE`, insieme a tutto ciò che il pagamento
+registra — importo, pagante, metodo, riferimento polimorfico — applicando il criterio di
+[ADR-026](#adr-026): un pagamento **registra un fatto già avvenuto**, e un fatto non si
+corregge riscrivendolo. Le sole colonne concesse sono `status`, `paid_at` e
+`reconciled_at`, cioè le tre che il dominio muove.
+
+`paid_at` è fra le concesse **proprio perché il rifiuto la azzera**:
+`payments_succeeded_ck` è `status <> 'succeeded' OR paid_at IS NOT NULL` e vincola una
+sola direzione — obbliga ad avere la data quando si è riusciti, non a toglierla
+muovendosi altrove. È la terza volta che questo schema presenta questa forma, dopo
+`tickets_closed_ck` e `utility_bills_validated_ck`: ormai è un pattern, e la regola è
+cercarla in ogni `CHECK` scritto come `stato ≠ X OR colonna IS NOT NULL` e assumere che
+l'azzeramento tocchi al dominio.

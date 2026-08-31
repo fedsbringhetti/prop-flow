@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **31 agosto 2026**.
+Stato al **1 settembre 2026**.
 
 ## Come si usa questo documento
 
@@ -20,7 +20,7 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 23 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 25 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
 170 indici, 65 policy RLS, 50 trigger, 4 viste, 29 funzioni.
 
@@ -50,14 +50,15 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Segnalazioni: apertura, elenco filtrato, dettaglio con storico, thread con note interne, sette transizioni, costi, allegati | completo per la fetta 1 |
 | Bollette: registrazione manuale, correzione, validazione, annullamento, riaddebito, allegati | completo per la fetta 1 |
 | Addebiti: emissione, elenco e dettaglio con il saldo dalla vista, annullamento, rinuncia all'incasso, allegati | completo per la fetta 1 |
+| Pagamenti: incasso registrato dallo staff, dichiarazione dell'inquilino, conferma e rifiuto, elenco e dettaglio, idempotenza fornita dal client, stato dell'addebito ricalcolato dai pagamenti | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-264 test: 133 unitari di dominio, 16 applicativi, 10 di infrastruttura, 6 unitari
-del bordo HTTP, 38 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 55 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+293 test: 147 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
+del bordo HTTP, 46 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 60 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -66,27 +67,49 @@ MinIO, 55 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Pagamenti** (`payments`) — provider `manual` per l'MVP. È il **prossimo passo
-   suggerito**, ed è **pianificato**, non ancora implementato: il piano è in fondo,
-   [Piano — Pagamenti, fetta 1](#piano-pagamenti-fetta-1), e comprende come **primo
-   passo** la correzione delle viste dei saldi. La fetta contabile gli ha già posato
-   ciò che gli serve: la
-   `GRANT UPDATE (status)` della migration `0023` basta a portare un addebito a
-   `partially_paid` o `paid`, quindi il modulo si aggiunge con un metodo di dominio su
-   `Charge` e uno use case, senza migration sullo schema degli addebiti. Finché non
-   esiste, `paid_amount` vale sempre `0.00` in ogni risposta.
-2. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
-   `settlements`) — la vista dei saldi esiste già.
-3. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+1. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+   `settlements`) — la vista dei saldi esiste già. È il **prossimo passo suggerito**,
+   ed è anche il modulo che porterà `payable_type` a valere davvero tre valori: oggi il
+   dominio ne conosce uno solo, e gli altri due danno errore in lettura invece di
+   ricadere su `charge`. È quindi l'unico modulo rimasto che **torna dentro** codice
+   già scritto — il dominio dei pagamenti, la conversione degli enum, il DTO — e questa
+   è la ragione per cui viene prima e non dopo.
+2. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento. È il modulo che
    riempirà `ocr_extracted`, `ocr_confidence` e lo stato `pending_review`, che la
    fetta contabile ha deliberatamente lasciato ai loro default: lo schema tiene
    separato ciò che ha letto la macchina da ciò che ha confermato una persona
    (`validated_by`, `validated_at`) proprio perché l'accuratezza si possa misurare, e
    riempire le prime con valori umani distruggerebbe quel dato prima di raccoglierlo.
-4. **Dashboard** — `v_owner_dashboard` esiste, l'endpoint no. La vista conta già
-   `total_outstanding`, `overdue_charges` e `bills_pending_review`, e da questa fetta
-   quei numeri hanno finalmente righe da contare.
+3. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
+   **ultima**, ed è una scelta da rileggere insieme alla sua alternativa, perché la
+   fetta dei pagamenti ha reso facile confondersi.
+
+   **È sbloccata**: sette dei suoi otto numeri sono completi e corretti — la `0017` ha
+   sistemato quelli sui contratti con `lease_in_force`, la `0024` ha tolto
+   dall'insoluto gli addebiti annullati e stornati, e i pagamenti hanno dato a
+   `paid_amount` righe da contare. L'ottavo, `bills_pending_review`, conta `draft` e
+   guadagnerà `pending_review` con l'OCR, il che è additivo. Costa uno use case di
+   lettura, un DTO e una rotta: nessuna migration, nessun aggregato, nessuna porta.
+
+   **Sbloccata non vuol dire prioritaria**, ed è l'errore che la fetta dei pagamenti ha
+   quasi commesso. La finestra in cui cambiare il significato di quei numeri è additivo
+   la chiude il **primo client**, non l'esistenza dell'endpoint: costruirla adesso non
+   la consuma e non la restringe, quindi la fretta non ha un fondamento.
+
+   Contro il farla prima c'è invece una ragione vera: **due delle sue semantiche non
+   sono decise** — sono elencate in
+   [Perché la dashboard resta ultima](#perché-la-dashboard-resta-ultima) — e questo
+   progetto tiene fuori ciò la cui semantica non è decisa, che è esattamente perché
+   `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere un campo
+   dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura, ed è
+   la stessa asimmetria che giustifica la `0024`.
+
+   **L'unico argomento per anticiparla** è che è la prima superficie di lettura che
+   attraversa immobili, contratti, segnalazioni, bollette, addebiti e pagamenti
+   insieme, quindi il primo posto dove si vedrebbe un errore di integrazione fra le
+   fette. Vale se serve qualcosa di mostrabile presto; non vale come ordine di
+   costruzione.
 
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
 archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
@@ -94,6 +117,14 @@ bollette e addebiti. Restano fuori, e non per dimenticanza, il versionamento (V2
 l'OCR (punto 3); allargare gli owner ad avatar, spese e pagamenti è additivo e si fa
 quando quei moduli esistono. Il resoconto è in fondo:
 [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
+
+**Pagamenti** è implementato nella fetta 1: incasso registrato dallo staff,
+dichiarazione dell'inquilino in `pending`, conferma e rifiuto, elenco e dettaglio dei
+pagamenti di un addebito, idempotenza fornita dal client, e stato dell'addebito
+ricalcolato dai pagamenti. Restano fuori, e non per dimenticanza, i rimborsi, i
+provider veri con i loro webhook, i pagamenti di quote e regolamenti (punto 2) e il
+pagamento della bolletta al fornitore, che non è modellato affatto. Il resoconto è in
+fondo: [Piano — Pagamenti, fetta 1](#piano-pagamenti-fetta-1).
 
 **Segnalazioni** è implementato nella fetta 1: apertura, elenco filtrato, dettaglio
 con lo storico degli stati, thread con note interne, le sette transizioni del ciclo di
@@ -118,7 +149,6 @@ cambia il contesto.
 
 | Debito | Dettaglio | Quando affrontarlo |
 |---|---|---|
-| **Le viste dei saldi non filtrano sullo stato** | `v_charge_balances` ha il solo `WHERE c.deleted_at IS NULL`, e `v_owner_dashboard` somma da lì senza filtrare a sua volta: `total_outstanding` conta anche gli addebiti `void` e `written_off`, e `overdue_charges` fa lo stesso con `is_past_due`. Riprodotto su database vero — 800.00 emesso + 120.00 **annullato** + 40.00 scaduto hanno dato `total_outstanding = 960.00`, dove il vero è 840.00. L'inquilino si è visto dire che quei 120 euro non li deve più. Non nasce con la fetta contabile — la vista è così dalla `0015` — ma è quella fetta a renderlo raggiungibile. **L'elenco dell'API è corretto**: `?outstanding=true` enumera i tre stati come letterale. Vedi [ADR-028](08-decisioni.md#adr-028) | **Prima della dashboard.** È una riga di `WHERE` per vista, ma cambia il significato di due numeri: finché nessun client li legge è additivo, dopo è una rottura. Richiede prima una decisione di prodotto — *outstanding* significa `issued` + `partially_paid`, e `written_off` si riporta a parte come perdita? |
 | Query non verificate a compile time | [ADR-006](08-decisioni.md#adr-006). La copertura dipende dai test di integrazione | Se compaiono errori SQL che i test non intercettano |
 | Filtri di elenco con `($1 IS NULL OR col = $1)` | Il pattern può impedire al planner di usare l'indice sul filtro | Quando gli immobili per organizzazione passano l'ordine delle migliaia |
 | `Cargo.lock` dipende dai crate presenti | Rende scomodo dividere il workspace fra branch: su un branch privo di `crates/api` un build `--locked` fallisce | Non si ripresenta se il workspace non viene più diviso |
@@ -133,58 +163,83 @@ cambia il contesto.
 | `retention_until` non viene applicato da nessuno | La colonna esiste e nessuna riga la valorizza; anche valorizzata, nessun job la legge. Lo schema la prevede come job applicativo e non come trigger, deliberatamente | Prima del primo dato reale soggetto a un obbligo di conservazione |
 | Il caricamento tiene il file intero in memoria | `UploadDocument` riceve `Vec<u8>` e lo passa allo storage. Con il limite di 25 MiB e poche richieste concorrenti è sostenibile; non lo è con caricamenti grandi e concorrenza alta | Quando i caricamenti superano le decine di MiB, o quando il profilo di memoria dell'API lo mostra. Lo streaming verso lo storage richiede di cambiare la firma della porta |
 | Il caricamento apre due transazioni | La prima verifica che l'owner sia visibile prima di scrivere l'oggetto, la seconda registra la riga: l'oggetto va scritto fuori transazione, e senza la verifica preliminare chiunque potrebbe riempire il bucket puntando a identificatori a caso | Se il costo si vede sul pool di connessioni. La verifica non si toglie: è ciò che impedisce di scrivere byte per una richiesta che finirà `404` |
+| L'incasso non attribuito è invisibile a chi ha pagato | `payments_select` mostra la riga a staff, pagante e incassante. Uno staff che registri un incasso senza valorizzare `payer_user_id` produce un pagamento che l'inquilino **non vede nel proprio elenco**, pur vedendone l'effetto in `paid_amount` sul saldo. È lecito — un bonifico da un conto che non si sa a chi ricondurre esiste — ma oggi è anche il comportamento di chi semplicemente omette il campo, cioè il caso più facile | Con il primo client: è lì che si vede se l'attribuzione debba diventare obbligatoria, o se convenga dedurla dalle parti del contratto |
+| Nessuna via per ritirare una dichiarazione | `payments_update` è staff soltanto, quindi chi dichiara di aver pagato può creare qualcosa che poi non può disfare. L'uscita esiste ed è il rifiuto dello staff, ma l'inquilino che si accorge subito di aver sbagliato importo non ha rimedio proprio. Darglielo non è una rotta in più: richiede una policy che ammetta l'`UPDATE` del pagante sulla **propria** riga in `pending`, cioè una migration e un secondo `WITH CHECK` da scrivere con attenzione | Se il caso si presenta davvero. Documentato nell'API perché è controintuitivo |
+| `refunded_amount` è sottratto e non è mai valorizzato | Il repository somma `amount - refunded_amount` come fa la vista, e la colonna vale sempre zero. È deliberato — è ciò che rende la formula *la stessa* il giorno in cui non varrà più zero — e va saputo, perché letto oggi sembra codice per un caso che non esiste | Con i rimborsi, che sono anche il momento in cui la `GRANT` della `0025` va allargata |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-**Prima di tutto, due righe di `WHERE`.** Le viste dei saldi non filtrano sullo stato,
-quindi `total_outstanding` conta come credito anche gli addebiti annullati e stornati —
-riprodotto, 960.00 dove il vero è 840.00, ed è il primo debito della tabella qui sopra.
-Va corretto **prima della dashboard** e prima che qualcuno legga quei numeri: finché
-nessun client li consuma cambiarne il significato è additivo, dopo è una rottura. È
-poco lavoro e una decisione di prodotto, ed è l'unico debito del progetto la cui
-finestra si chiude da sola. **È il passo 1 del piano dei pagamenti**, perché la domanda
-«cosa significa insoluto» è la domanda di quel modulo, e deciderla altrove vorrebbe dire
-deciderla due volte.
+**Le spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
+`settlements`). Lo schema c'è per intero, `app.v_expense_group_balances` calcola già il
+saldo netto per membro, e il `CONSTRAINT TRIGGER … DEFERRABLE` su `expense_shares` è
+l'unico posto del progetto dove una ripartizione ha la somma garantita dal database.
 
-Poi, il modulo:
+**Viene prima perché è l'unico modulo rimasto che torna dentro codice già scritto.**
+`app.payable_type` ha tre valori e il dominio dei pagamenti ne conosce uno:
+`Payable::Charge`. `expense_share` e `settlement` oggi **danno errore in lettura**, di
+proposito — un valore fuori perimetro non deve ricadere sul più simile fra quelli noti —
+e quel modulo dovrà aggiungere le due varianti, la loro conversione in
+`infrastructure::db::enums`, e decidere come si affacciano sul DTO, che oggi porta un
+`charge_id` e non una coppia polimorfica. Gli altri due moduli non toccano niente di
+esistente; questo sì, e un lavoro che modifica codice scritto conviene farlo mentre chi
+lo ha scritto se lo ricorda.
 
-**Pagamenti** (`app.payments`), provider `manual`. Il piano è scritto in fondo a questo
-documento — [Piano — Pagamenti, fetta 1](#piano-pagamenti-fetta-1) — con le otto
-decisioni prese, la decomposizione in dodici passi e le trappole lette nello schema. Le
-tre scelte che richiedevano una risposta di prodotto sono state date: la vista azzera il
-residuo per gli stati terminali, l'inquilino può dichiarare un pagamento in `pending` e
-lo staff lo conferma, e la correzione delle viste sta dentro la fetta come primo passo.
+Poi l'**OCR**, che riempirà `ocr_extracted`, `ocr_confidence` e lo stato
+`pending_review` lasciati ai loro default dalla fetta contabile. Poi la **dashboard**.
 
-La fetta contabile lo ha reso il
-passo più corto che resti: la `GRANT UPDATE (status)` della migration `0023` è già
-tutto ciò che serve a portare un addebito a `partially_paid` o `paid`, quindi il modulo
-si aggiunge con un metodo di dominio su `Charge` — che oggi **non** ha un `apply`,
-apposta — e uno use case che, in una transazione, inserisce il pagamento, rilegge
-l'addebito e ne scrive lo stato. **Nessuna migration sullo schema degli addebiti.**
+### Perché la dashboard resta ultima
 
-È anche il modulo che rende vero un numero che oggi è sempre lo stesso:
-`paid_amount` vale `0.00` in ogni risposta perché `app.payments` è vuota, non perché
-il calcolo sbagli. Finché resta così, `outstanding_amount` coincide con `amount` e la
-dashboard non ha nulla da distinguere.
+Va detto qui perché è la conclusione **sbagliata** che questa fetta invitava a trarre, e
+il piano dei pagamenti l'aveva quasi presa.
 
-Ciò che quel modulo dovrà decidere, e che questa fetta ha lasciato aperto: chi può
-registrare un incasso (solo staff, o anche l'inquilino che dichiara di aver pagato),
-come si gestisce l'`idempotency_key` che lo schema richiede, e se `void` e
-`write_off` restino ammessi da `partially_paid` — oggi partono dal solo `issued`,
-perché annullare un addebito su cui è già entrato del denaro chiede prima di dire cosa
-ne è di quel denaro.
+Fino a questa fetta due dei suoi numeri mentivano: `total_outstanding` contava come
+credito anche gli addebiti annullati e stornati — corretto dalla `0024`,
+[ADR-032](08-decisioni.md#adr-032) — e `paid_amount` era zero ovunque perché
+`app.payments` era vuota. Entrambe le cause sono chiuse, quindi la dashboard **è
+sbloccata**, e costa uno use case di lettura, un DTO e una rotta.
 
-**La fonte di verità resta la vista**, anche dopo. `outstanding_amount` continuerà a
-venire da `app.v_charge_balances` e non da `status`: lo stato memorizzato è una
-comodità interrogabile — l'indice `charges_outstanding_ix` è parziale su quei tre
-valori — che il modulo dei pagamenti tiene allineata come effetto secondario. Le due
-definizioni non devono diventare due.
+**Sbloccata non è prioritaria.** La finestra in cui cambiare il significato di quei
+numeri è additivo la chiude il **primo client**, non l'esistenza dell'endpoint:
+costruirla adesso non la consuma, non la restringe, e non compra tempo su niente.
+Confondere «adesso si può» con «adesso conviene» è precisamente l'errore, ed è tanto più
+facile quanto più il modulo è a buon mercato.
+
+Contro l'anticiparla c'è invece una ragione di merito: **due delle sue semantiche non
+sono decise**, ed è ciò che questo progetto tiene fuori per principio — la stessa
+ragione per cui `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere
+un campo dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura.
+
+Le due domande, da decidere **prima** di scrivere l'endpoint e non dopo:
+
+- **`written_off` va riportato a parte come perdita?** Oggi esce dall'insoluto insieme
+  a `void`, e i due sono distinti nello stato e indistinguibili in dashboard. La
+  distinzione conta nei report, e la dashboard è il primo report;
+- **il credito da sovrapagamento va mostrato?** `outstanding_amount` negativo esiste ed
+  è escluso dal totale dal `WHERE outstanding_amount > 0` della vista. Non compensa gli
+  altri insoluti — probabilmente giusto — ma sparisce del tutto, e un credito verso
+  l'inquilino che non compare da nessuna parte è un numero che qualcuno cercherà.
+
+L'unico argomento per anticiparla, e va riconosciuto perché è vero: è la prima
+superficie di lettura che attraversa **tutti** i moduli insieme, quindi il primo posto
+dove si vedrebbe un errore di integrazione fra le fette. È un argomento di
+dimostrabilità, non di costruzione: vale se serve qualcosa da mostrare presto, e in quel
+caso l'ordine si inverte deliberatamente e non per distrazione.
+
+**La fonte di verità resta la vista.** `outstanding_amount` continua a venire da
+`app.v_charge_balances` e non da `status`: lo stato memorizzato è una comodità
+interrogabile — l'indice `charges_outstanding_ix` è parziale su quei tre valori — che il
+modulo dei pagamenti tiene allineata come effetto secondario, non un secondo calcolo. Le
+due definizioni non devono diventare due, ed è la ragione per cui
+`PaymentRepository::sum_succeeded_for_charge` ripete `amount - refunded_amount` sugli
+stessi due stati della vista invece di sommare gli importi e basta.
 
 Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
 proprietario. Va implementata prima di considerare l'onboarding pronto per utenti
-reali, ed è oggi l'ultima porta senza implementazione.
+reali, ed è oggi l'ultima porta senza implementazione — e da questa fetta ha un secondo
+consumatore in attesa: una dichiarazione di pagamento in `pending` non avvisa nessuno,
+quindi lo staff la scopre solo guardando.
 
 ---
 
@@ -1905,9 +1960,10 @@ il primo intoppo che incontra chi torna su un ambiente vecchio.
 
 ## Piano — Pagamenti, fetta 1
 
-Pianificato il **31 agosto 2026**. Il piano resta sotto come è stato scritto: serve a
-eseguirlo, e servirà a capire perché il codice è com'è. L'esito va in fondo a
-esecuzione conclusa, come per documenti, segnalazioni e bollette.
+Pianificato il **31 agosto 2026**, **implementato il 1 settembre 2026**. Il piano resta sotto come è stato
+scritto: quello che segue serviva a eseguirlo, e serve ancora a capire perché il codice
+è com'è. Ciò che l'esecuzione ha confermato, cambiato e scoperto è in fondo, in
+[Esito](#esito-pagamenti-fetta-1).
 
 ### Obiettivo
 
@@ -2196,3 +2252,164 @@ resta `issued`; lo staff conferma e il saldo scende a zero mentre l'addebito pas
 `paid`; **un secondo invio con la stessa `Idempotency-Key` restituisce `200` e non fa
 scendere il saldo una seconda volta**; una seconda dichiarazione rifiutata lascia il
 saldo dov'era; e un pagamento verso l'addebito di un'altra organizzazione riceve `404`.
+
+<a id="esito-pagamenti-fetta-1"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Eseguita il **1 settembre 2026**, nell'ordine del piano. I dodici passi sono tutti
+dentro: il punto di taglio al passo 7 non è servito.
+
+`./ops/ci/test-integration.sh` verde, 293 test (erano 264): 147 unitari di dominio,
+16 applicativi, 12 di infrastruttura, 6 unitari del bordo HTTP, 46 di integrazione
+sulla persistenza, 3 sull'adattatore S3, 60 di contratto HTTP, 3 di guardia sulla
+documentazione della configurazione. Invarianti dello schema verdi, e **verificate al
+contrario**: riconcedendo `GRANT UPDATE ON app.payments` il controllo 12 riporta
+tredici violazioni con i nomi delle colonne, una per una.
+
+#### Le cinque cose che il piano non aveva previsto
+
+**1. La trappola più temuta era già disinnescata.** Il piano diceva che il controllo
+delle invarianti «non verifica `security_invoker` oggi — vale la pena aggiungerlo
+mentre si è lì». Il controllo **c'era già**: è il numero 3,
+`vista-senza-security-invoker`, e verifica ogni vista di `app`. La migration `0024` lo
+ha attraversato verde al primo colpo. È il caso raro in cui una trappola prevista si
+scopre disinnescata, e la lezione è banale e utile: **guardare l'elenco delle
+invarianti prima di temere**, perché è cresciuto più della memoria di chi lo ha
+scritto.
+
+**2. Correggere la vista obbliga a correggere il dominio.** Il piano trattava il passo
+1 come una migration sola. Non lo è: [ADR-028](08-decisioni.md#adr-028) aveva
+dichiarato che `Charge::is_past_due` ripete la formula della vista **e non guarda lo
+stato**, con un test che lo fissava. Cambiata la vista, quel test asseriva l'opposto
+del vero. La correzione è di tre righe — `!self.status.is_claim_dropped() && …` — ma va
+vista: una funzione che esiste **solo** per essere la stessa formula smette di avere
+ragione di esistere nel momento in cui la formula diverge. Il test è stato riscritto
+nella direzione nuova, e dice esplicitamente che prima asseriva l'opposto.
+
+**3. `payer_user_id` non è anagrafica, ed è la scelta che il piano non aveva visto.**
+Il piano descriveva chi può inserire, non **a chi la riga risulta visibile**.
+`payments_select` mostra il pagamento a staff, pagante e incassante: un incasso
+registrato dallo staff senza valorizzare `payer_user_id` è invisibile all'inquilino nel
+proprio elenco. Il campo è quindi diventato opzionale nel comando di registrazione e
+**assente** in quello di dichiarazione — lì il pagante è sempre chi chiama, perché la
+policy lo esige. È registrato fra i debiti: il caso più facile, omettere il campo, è
+anche quello che nasconde il pagamento a chi lo ha fatto.
+
+**4. Due rotte di creazione e non una.** Il piano nominava cinque use case e non diceva
+come si affacciassero sull'HTTP. Una rotta sola avrebbe richiesto all'handler di
+scegliere fra `RecordPayment` e `DeclarePayment` guardando il ruolo di chi chiama, e
+quel ramo è **autorizzazione**: la regola 3 di `CLAUDE.md` lo vieta, e non per
+formalismo — l'autorizzazione duplicata in due strati diverge. Da qui
+`POST /charges/{id}/payments` per lo staff e
+`POST /charges/{id}/payment-declarations` per il membro, con la conseguenza gradita di
+una specifica OpenAPI che dice la verità: due operazioni, due esiti.
+
+**5. Il `409` residuo sull'idempotenza esiste, ed è irriducibile.** Il piano diceva
+«una chiave ripetuta restituisce `200`». Vero, ma la rilettura gira sotto la RLS del
+chiamante: se la chiave appartiene a un pagamento che il chiamante **non vede**, non la
+trova e l'`INSERT` viola `payments_idempotency_uk`. Si aggiunge il caso della stessa
+chiave verso un **altro** addebito, dove un `200` con un pagamento diverso da quello
+chiesto sarebbe una bugia. Entrambi rispondono `payment.idempotency_key_reused`, ed
+entrambi sono documentati: distinguerli richiederebbe di leggere una riga che al
+chiamante non spetta. Vedi [ADR-033](08-decisioni.md#adr-033).
+
+#### Le trappole, verificate una per una
+
+| Trappola | Esito |
+|---|---|
+| L'elenco dell'indice **non** è quello della vista | **Confermata, e messa sotto test.** Il letterale del repository è quello della vista; due test lo tengono fermo, uno contro la costante di dominio e uno che asserisce che `authorized` **non** compaia. È l'errore che avrebbe fatto scendere il saldo su denaro non incassato |
+| `payments_succeeded_ck` vincola una direzione sola | **Confermata**, e l'azzeramento è finito nel dominio: `Payment::reject` toglie `paid_at`. Terza occorrenza dello stesso pattern dopo `tickets_closed_ck` e `utility_bills_validated_ck` |
+| `tg_check_polymorphic_ref` non guarda l'organizzazione | **Riprodotta.** Il test `the_polymorphic_trigger_accepts_a_charge_of_another_organization_and_the_use_case_does_not` inserisce a mano un pagamento di un'organizzazione verso l'addebito di un'altra e verifica che il trigger **lo accetti**; poi verifica che lo use case risponda `404`. È la prova che il controllo applicativo serve, non una supposizione |
+| L'inquilino inserisce ma non aggiorna | **Confermata**, e diventata contratto dell'API: non esiste una rotta di ritiro, ed è detto nella documentazione perché è controintuitivo |
+| `app.payments` non ha `deleted_at` | **Confermata.** Nessuna query lo filtra, ed è scritto sopra le macro delle colonne perché è la prima cosa che si copierebbe da un altro repository |
+| Il `CREATE OR REPLACE VIEW` può perdere `security_invoker` | **Non si è presentata**: la clausola è ripetuta per esteso e il controllo 3 delle invarianti la verifica comunque. Vedi il punto 1 qui sopra |
+| La vista comincia davvero a fare il join | **Confermata come fatto**, non misurata: nessuna prova di prestazioni è stata fatta né prima né dopo, e dirlo è più onesto che dedurne qualcosa |
+| Il sovrapagamento porta `outstanding_amount` negativo | **Riprodotta**, con il test `an_overpayment_drives_the_outstanding_amount_negative`: 150.00 su un addebito da 100.00 dà `-50.00`, l'addebito va a `paid`, e `total_outstanding` della dashboard resta zero perché la vista filtra `> 0`. Il credito non compensa gli altri insoluti |
+| Il fuso orario di `paid_at` | **Confermata e non corretta**, come per gli addebiti: correggerla significa decidere di chi è il fuso di riferimento, che è una domanda di prodotto. Detto nell'API, dove si vede |
+
+#### Scelte prese eseguendo, che il piano lasciava aperte
+
+**`reconciled_at` si scrive, e il piano non diceva quando.** Lo elencava fra le tre
+colonne concesse dalla `0025` senza dire chi la valorizza. Scelta: la scrivono la
+registrazione diretta e la conferma, perché in entrambe **una persona riconosce il
+movimento** — che è la sola riconciliazione che questo MVP ha. Ne segue che
+`payments_unreconciled_ix` resta vuoto oggi e comincerà a servire con i provider veri,
+dove un webhook produce un `succeeded` che nessuno ha ancora guardato.
+
+**`RejectPayment` non rilegge l'addebito.** Il piano diceva «tutti rileggono l'addebito
+prima di scrivere, per la decisione 6». La decisione 6 riguarda però l'**inserimento**,
+dove il trigger polimorfico è l'unico controllo: sul rifiuto il pagamento è stato
+trovato sotto la RLS del chiamante, quindi l'organizzazione è già provata, e non c'è
+niente da scrivere sull'addebito perché `pending` non contava. Una rilettura lì sarebbe
+una query che non difende nulla. `ConfirmPayment` invece lo rilegge, perché gli serve
+davvero.
+
+**Le due vie convergono su `PaymentConfirmed`.** Il piano nominava tre eventi senza
+dire quale emette la registrazione diretta, che nasce già `succeeded`. Emette
+`PaymentConfirmed`: chi consuma reagisce al fatto che il denaro è diventato vero, non
+alla porta da cui è passato, e a distinguere le due vie basta l'esistenza — o l'assenza
+— del `PaymentDeclared` che porta lo stesso `payment_id`.
+
+**L'addebito che si muove produce il proprio evento.** `billing.charge.status_changed`
+viene emesso quando il ricalcolo cambia davvero lo stato, e non viene emesso quando non
+lo cambia — `Charge::apply_payment` restituisce `false` e non si scrive né `UPDATE` né
+evento né riga di audit. È la forma già stabilita dal riaddebito: due aggregati che si
+muovono, due eventi.
+
+**`Payable` ha una variante sola.** `app.payable_type` ne ha tre; `expense_share` e
+`settlement` appartengono al modulo co-living e in lettura **danno errore** invece di
+ricadere su `charge`. È la scelta di `AttachmentOwner`, e regge per la stessa ragione:
+l'applicazione è l'unica a scrivere su quella tabella, quindi righe simili non possono
+esistere.
+
+**Il rifiuto non porta una motivazione.** `app.payments` non ha una colonna dove
+metterla — `failure_message` descrive un fallimento presso un provider — e un evento
+che trasportasse un testo libero scritto da una persona su un pagamento di un'altra
+persona sarebbe il posto peggiore dove metterlo. Se servirà, è una colonna e una
+migration.
+
+#### Come si è verificato
+
+Il giro a mano che il piano chiedeva, tutto sotto test e non a mano:
+
+- **la correzione delle viste al contrario** —
+  `a_dropped_claim_no_longer_counts_as_outstanding` ricostruisce il caso documentato
+  (800.00 emesso, 120.00 annullato, 40.00 scaduto) e legge
+  `v_owner_dashboard.total_outstanding`: **840.00**, dove prima della `0024` erano
+  960.00, con `overdue_charges` che smette di contare l'annullato. L'addebito annullato
+  **resta leggibile**, con `outstanding_amount` a zero e `amount` intatto;
+- **il flusso in due tempi** — `a_declaration_does_not_move_the_balance_and_the_confirmation_does`
+  sulla persistenza e `a_declaration_becomes_real_only_when_the_staff_confirms_it` sul
+  filo HTTP: l'inquilino dichiara e il saldo resta `800.00` insoluto con l'addebito
+  `issued`; lo staff conferma e il saldo scende a zero con l'addebito `paid`;
+- **l'idempotenza** — `the_same_idempotency_key_never_takes_the_money_twice` e il suo
+  omologo HTTP: il secondo invio con la stessa chiave risponde `200`, restituisce lo
+  stesso `id`, e il saldo è sceso **una volta sola**. Lo stesso test verifica il `409`
+  sulla chiave riusata verso un altro addebito, e la versione HTTP verifica il `400`
+  con l'header assente e il `422` con l'header malformato;
+- **il rifiuto** — il saldo resta dov'era, l'addebito resta `issued`, `paid_at` torna
+  nullo e una seconda conferma dà `409 payment.invalid_transition`;
+- **l'isolamento** — un pagamento verso l'addebito di un'altra organizzazione riceve
+  `404`, e il test dimostra prima che il trigger lo avrebbe accettato;
+- **i privilegi di colonna** — sei `UPDATE` negate (`amount`, `payer_user_id`,
+  `idempotency_key`, `refunded_amount`, `org_id`, `method`) e tre concesse (`status`,
+  `paid_at`, `reconciled_at`), come letterali statici uno per uno: la regola 15 non
+  ammette `format!` dentro `sqlx::query`, e il tipo lo impedisce anche in un test — il
+  primo tentativo non compilava, il che è esattamente ciò che deve succedere.
+
+#### Cosa resta fuori, e resta fuori davvero
+
+I rimborsi (`refunded_amount` resta zero, `refunded` e `partially_refunded` non si
+scrivono — pur essendo il secondo **contato** dalla vista); i provider veri e i loro
+webhook (`provider` resta `manual`, e con lui `authorized` e `failed` restano non
+scritti); i pagamenti di quote e regolamenti, che sono il modulo co-living; il pagamento
+della bolletta al fornitore, che non è modellato affatto perché `app.payable_type` non
+comprende `utility_bill`.
+
+E la **dashboard**, che questa fetta ha reso *possibile* e non *prossima*. Fino a qui
+due dei suoi numeri mentivano e adesso nessuno dei due mente più, ma la finestra su
+quei numeri la chiude il primo client e non l'endpoint: sbloccata non è prioritaria, e
+due delle sue semantiche restano da decidere. La distinzione è scritta in
+[Prossimo passo suggerito](#prossimo-passo-suggerito), perché è la conclusione sbagliata
+che questa fetta invitava a trarre.

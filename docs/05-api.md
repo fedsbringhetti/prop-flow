@@ -77,7 +77,8 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | `code` | Stato | Condizione |
 |---|---|---|
-| `request.invalid_header` | 400 | `X-Org-Id` non è testo valido o non è un UUID |
+| `request.invalid_header` | 400 | `X-Org-Id` o `Idempotency-Key` non sono testo valido, o `X-Org-Id` non è un UUID |
+| `request.missing_header` | 400 | manca un header obbligatorio per la rotta: oggi solo `Idempotency-Key` sulle due rotte che creano un pagamento |
 | `request.payload_too_large` | 413 | corpo oltre il limite della rotta |
 | `auth.token_missing` | 401 | nessun header `Authorization: Bearer` |
 | `auth.token_invalid` | 401 | firma o forma del token rifiutate |
@@ -94,7 +95,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -108,6 +109,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `membership.already_exists` | 409 | l'utente appartiene già all'organizzazione |
 | `lease.period_overlap` | 409 | il periodo si sovrappone a una locazione attiva |
 | `utility_bill.duplicate` | 409 | fattura già registrata per questo fornitore: `utility_bills_dedup_uk` è unico su `(org_id, supplier_vat, invoice_number)` e scatta solo quando **entrambi** sono valorizzati |
+| `payment.idempotency_key_reused` | 409 | la chiave di idempotenza è già stata usata per un **altro** pagamento. Non è il doppio invio, che risponde `200`: è la stessa chiave verso un addebito diverso, oppure una chiave già usata da qualcuno di cui il chiamante non vede i pagamenti |
 | `conflict.constraint_violated` | 409 | vincolo violato che l'API non sa ancora nominare |
 
 **Stato non ammesso**
@@ -126,7 +128,8 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `ticket.invalid_transition` | 409 | classificazione, assegnazione, avvio, sospensione, chiusura, riapertura o annullamento non ammessi nello stato attuale |
 | `ticket.cancelled` | 409 | la segnalazione è annullata e non si modifica più |
 | `utility_bill.invalid_transition` | 409 | correzione, validazione, riaddebito o annullamento non ammessi nello stato attuale |
-| `charge.invalid_transition` | 409 | annullamento o rinuncia all'incasso non ammessi nello stato attuale |
+| `charge.invalid_transition` | 409 | annullamento o rinuncia all'incasso non ammessi nello stato attuale, **oppure** un pagamento verso un addebito `void` o `written_off` |
+| `payment.invalid_transition` | 409 | conferma o rifiuto non ammessi nello stato attuale: `pending` è l'unico da cui si esce |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -686,6 +689,9 @@ riferimento polimorfico dei documenti, come per ogni altro aggregato.
 | POST | `/api/v1/charges/{id}/write-off` | staff | `200`. Rinuncia all'incasso: diverso dall'annullamento |
 | POST | `/api/v1/charges/{id}/documents` | membro | `201` |
 | GET | `/api/v1/charges/{id}/documents` | membro | `200`, pagina keyset |
+| POST | `/api/v1/charges/{charge_id}/payments` | staff | `201`. Vedi [Pagamenti](#pagamenti) |
+| POST | `/api/v1/charges/{charge_id}/payment-declarations` | membro | `201`. Vedi [Pagamenti](#pagamenti) |
+| GET | `/api/v1/charges/{charge_id}/payments` | membro | `200`, pagina keyset |
 
 **Non esiste un `PATCH`**, e non è una dimenticanza: un addebito emesso è una
 **pretesa verso una persona**, e riscriverne l'importo dopo averla comunicata non è una
@@ -723,19 +729,35 @@ filtro darebbe sempre zero righe, e una pagina vuota sarebbe il modo peggiore di
 (`issued`, `partially_paid`, `overdue`) invece di scrivere una disuguaglianza: l'indice
 `charges_outstanding_ix` è parziale su quell'elenco esatto.
 
-#### Il saldo, e perché oggi è sempre lo stesso
+#### Il saldo
 
 `paid_amount` e `outstanding_amount` si leggono da `app.v_charge_balances`, che è
-`security_invoker` e applica quindi la RLS del chiamante.
+`security_invoker` e applica quindi la RLS del chiamante. Sono **veri dal modulo dei
+pagamenti**: fino a quello `paid_amount` valeva sempre `"0.00"` non per un difetto del
+calcolo ma per l'assenza di righe in `app.payments`.
 
-**In questa fetta `paid_amount` vale sempre `"0.00"` e `outstanding_amount` coincide
-sempre con `amount`.** Non è un difetto del calcolo: è l'**assenza di righe in
-`app.payments`**, che è il modulo successivo. Va detto perché chi legge la risposta
-altrimenti pensa che il campo sia rotto.
+`partially_paid` e `paid` sono di conseguenza stati che l'API **produce**, e non li
+dichiara nessuno: si ricalcolano dai pagamenti che contano nel saldo, sulle tre soglie
+`paid <= 0` → `issued`, `0 < paid < amount` → `partially_paid`, `paid >= amount` →
+`paid`. La scrittura passa dalla `GRANT UPDATE (status)` della migration `0023`, che la
+fetta contabile aveva posato apposta.
 
-Per la stessa ragione `partially_paid` e `paid` sono stati che l'API non produce: li
-scriverà la riconciliazione del modulo dei pagamenti, che ha già la
-`GRANT UPDATE (status)` che le serve e non richiederà altre migration.
+**`outstanding_amount` vale `"0.00"` su un addebito `void` o `written_off`**, e
+`effective_status` non diventa mai `overdue` per quei due: la pretesa è caduta, e non è
+dovuto niente a prescindere dai pagamenti. La riga **resta comunque leggibile** — chi
+si era visto chiedere quella somma deve poter vedere che la richiesta non c'è più — e
+`amount` continua a dire quanto era stato chiesto. È la migration `0024` e
+[ADR-032](08-decisioni.md#adr-032).
+
+`paid` **non** è nell'elenco che azzera, ed è la parte che conta: dove l'aritmetica è
+già significativa, azzerare per stato farebbe scavalcare i pagamenti dallo stato
+memorizzato, nascondendo esattamente lo scarto che la contabilità esiste per scoprire.
+
+**Il sovrapagamento porta `outstanding_amount` negativo**, che è un credito verso
+l'inquilino. Non è impedito: lo schema non ha il vincolo, e un controllo applicativo
+sarebbe soggetto a race condition fra due pagamenti concorrenti
+([ADR-015](08-decisioni.md#adr-015)). La dashboard filtra `outstanding_amount > 0`,
+quindi il credito **non compensa** gli altri insoluti.
 
 #### La valuta
 
@@ -763,6 +785,128 @@ curl -X POST http://localhost:8080/api/v1/utility-bills/$BILL/recharge   -H "aut
 
 # Lo scadenzario del proprietario.
 curl -s 'http://localhost:8080/api/v1/charges?outstanding=true'   -H "authorization: Bearer $OWNER_TOKEN"
+```
+
+### Pagamenti
+
+Il denaro che entra. Due vie di ingresso, e una sola porta da cui il saldo si muove.
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/charges/{charge_id}/payments` | staff | `201`, stato iniziale **`succeeded`**: l'incasso visto sull'estratto conto. `200` se la chiave di idempotenza era già stata usata |
+| POST | `/api/v1/charges/{charge_id}/payment-declarations` | membro | `201`, stato iniziale **`pending`**: l'inquilino dichiara di aver pagato. **Non muove il saldo.** `200` sulla chiave ripetuta |
+| GET | `/api/v1/charges/{charge_id}/payments` | membro | `200`, pagina keyset. `404` se l'addebito non è visibile |
+| GET | `/api/v1/payments/{id}` | membro | `200` o `404` |
+| POST | `/api/v1/payments/{id}/confirm` | staff | `200`. Porta a `succeeded`: da qui il saldo si muove e lo stato dell'addebito si ricalcola |
+| POST | `/api/v1/payments/{id}/reject` | staff | `200`. Porta a `cancelled` e **azzera `paid_at`**. Il saldo resta dov'era |
+
+#### `Idempotency-Key`: obbligatoria, e la fornisce il client
+
+Le due rotte che creano un pagamento richiedono l'header **`Idempotency-Key`**. Assente
+dà `400 request.missing_header`; malformato — spazi, byte di controllo, caratteri non
+ASCII stampabili — dà `422` con `errors[].field = "idempotency_key"`.
+
+**Una chiave ripetuta risponde `200` con il pagamento già registrato**, non `201` e non
+`409`. È la convenzione dell'idempotenza, e un `409` costringerebbe il client a
+distinguere «l'ho già mandato io» da «qualcun altro ha usato la mia chiave» —
+distinzione che non può fare.
+
+La chiave la genera **il client**, e non è una comodità: se la generasse il server ogni
+ritentativo produrrebbe una chiave nuova, quindi un secondo pagamento, quindi un saldo
+che scende **due volte**, e `audit_log` mostrerebbe due inserimenti perfettamente
+legittimi. Vedi [ADR-033](08-decisioni.md#adr-033). Un UUID o un ULID per richiesta va
+bene; la cassa **non** viene normalizzata, quindi `A1` e `a1` sono due chiavi.
+
+Il `409 payment.idempotency_key_reused` resta per i due casi che la rilettura non
+assorbe: la stessa chiave verso un **altro** addebito — dove un `200` con un pagamento
+diverso da quello chiesto sarebbe una bugia — e una chiave già usata da qualcuno di cui
+il chiamante non vede i pagamenti, che la RLS gli nasconde.
+
+#### Perché due rotte di creazione e non una
+
+Registrare un incasso e dichiarare di aver pagato producono **righe diverse**:
+`succeeded` la prima, `pending` la seconda. Una rotta sola con un ramo sul ruolo di chi
+chiama metterebbe una decisione di autorizzazione dentro un handler, che deserializza e
+serializza e nient'altro. Due rotte rendono anche la specifica OpenAPI vera: le due
+operazioni hanno esiti diversi, e un client sa quale sta chiamando.
+
+Non è una scelta che si sta forzando sullo schema: `payments_insert` ammette
+`is_org_staff(org_id) OR payer_user_id = app.current_user_id()`, e quelle due
+condizioni sono le due rotte.
+
+#### Chi dichiara non può ritirare
+
+**Non esiste una rotta per annullare la propria dichiarazione**, ed è controintuitivo
+abbastanza da doverlo dire: si può creare qualcosa che poi non si può disfare. Non è
+una scelta di prodotto rivedibile nel codice — `payments_update` è **staff soltanto**,
+quindi un ritiro otterrebbe zero righe aggiornate, cioè `auth.denied_by_policy`, il
+codice riservato ai nostri difetti. L'uscita da `pending` esiste ed è il rifiuto, che è
+dello staff.
+
+Il rifiuto porta a `cancelled` e **non** a `failed`: `failed` significa che il pagamento
+non è andato a buon fine **presso il provider**, e con `provider = 'manual'` un provider
+non c'è.
+
+#### `payer_user_id`, che non è anagrafica
+
+`payments_select` mostra la riga a chi ha pagato
+(`payer_user_id = app.current_user_id()`), oltre che allo staff. Ne segue che
+**valorizzarlo è ciò che rende il pagamento visibile all'inquilino**:
+
+- sulla **dichiarazione** è sempre chi chiama, e il corpo non lo accetta: la policy
+  esige `payer_user_id = current_user_id()`, e lasciarlo scegliere produrrebbe zero
+  righe inserite;
+- sulla **registrazione** è un campo opzionale del corpo. Omesso, l'incasso resta
+  visibile allo staff soltanto — lecito, un bonifico da un conto che non si sa a chi
+  ricondurre esiste, ma va scelto e non subìto.
+
+Il totale incassato resta comunque visibile a chiunque veda l'addebito, nel
+`paid_amount` del saldo, che viene dalla vista e non dall'elenco dei pagamenti.
+
+#### `paid_at`, e il fuso di chi guarda
+
+`paid_at` è l'istante in cui il denaro si è mosso, dichiarato da chi paga. Assente
+significa «adesso». La conferma **non lo riscrive**: è il fatto dichiarato, non il
+momento in cui qualcuno l'ha guardato. Il rifiuto invece lo **azzera**, perché un
+pagamento che non è avvenuto non ha una data in cui è avvenuto.
+
+È un `TIMESTAMPTZ`, e va interpretato: «ieri» per chi dichiara e il `CURRENT_DATE` **del
+database** che decide `is_past_due` non sono necessariamente lo stesso giorno. È lo
+stesso scarto già registrato per la scadenza degli addebiti in
+[ADR-028](08-decisioni.md#adr-028), e qui si vede una seconda volta.
+
+`reconciled_at` è valorizzato quando una persona riconosce il movimento: alla
+registrazione diretta e alla conferma. Resta nullo su una dichiarazione pendente e su
+una rifiutata.
+
+#### Fuori dall'API in questa fetta
+
+- **i rimborsi**: `refunded_amount` è sempre `"0.00"`, e gli stati `refunded` e
+  `partially_refunded` non si scrivono. `partially_refunded` è comunque **contato** dal
+  saldo, il che va saputo;
+- **i provider veri** (`stripe`, `gocardless`): `provider` resta `manual`,
+  `provider_payment_id` e `provider_payload` restano ai default. Gli stati `authorized`
+  e `failed` descrivono ciò che accade presso un provider, e non si scrivono;
+- **i pagamenti di quote e regolamenti**: `payable_type` li contempla, ma
+  `expense_share` e `settlement` appartengono al modulo delle spese co-living. La
+  risposta porta `charge_id` e non una coppia polimorfica;
+- **il pagamento della bolletta al fornitore**: non è modellato affatto,
+  `app.payable_type` non comprende `utility_bill`.
+
+**Un pagamento non si cancella, nemmeno soft.** `app.payments` non ha `deleted_at` e il
+ruolo applicativo non ha `DELETE`: un pagamento sbagliato si corregge muovendone lo
+stato.
+
+```bash
+# L'inquilino dichiara. Il saldo non si muove.
+KEY=$(uuidgen)
+PAYMENT=$(curl -sX POST http://localhost:8080/api/v1/charges/$CHARGE/payment-declarations   -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG"   -H "idempotency-key: $KEY" -H 'content-type: application/json'   -d '{ "amount": "800.00", "method": "bank_transfer", "reference": "Bonifico del 3" }' | jq -r .id)
+
+# Lo staff conferma. Ora sì.
+curl -X POST http://localhost:8080/api/v1/payments/$PAYMENT/confirm   -H "authorization: Bearer $OWNER_TOKEN"
+
+# Lo stesso invio ripetuto: 200, e il saldo scende una volta sola.
+curl -sX POST http://localhost:8080/api/v1/charges/$CHARGE/payment-declarations   -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG"   -H "idempotency-key: $KEY" -H 'content-type: application/json'   -d '{ "amount": "800.00", "method": "bank_transfer" }' -o /dev/null -w '%{http_code}\n'
 ```
 
 ### Inviti

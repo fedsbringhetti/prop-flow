@@ -26,6 +26,8 @@ pub enum Entity {
     UtilityBill,
     #[error("Charge not found")]
     Charge,
+    #[error("Payment not found")]
+    Payment,
     /// Rotta sconosciuta. Sta qui e non nel bordo HTTP perché un `404` di rotta e
     /// un `404` di risorsa devono avere la stessa forma per il client.
     #[error("Endpoint not found")]
@@ -44,6 +46,7 @@ impl Entity {
             Self::Ticket => "ticket.not_found",
             Self::UtilityBill => "utility_bill.not_found",
             Self::Charge => "charge.not_found",
+            Self::Payment => "payment.not_found",
             Self::Endpoint => "endpoint.not_found",
         }
     }
@@ -184,6 +187,15 @@ pub enum Invariant {
     ChargeNotVoidable,
     #[error("Only an issued charge can be written off")]
     ChargeNotWriteOffable,
+    /// La pretesa è caduta: incassare su un addebito annullato o stornato è
+    /// un'incoerenza, non un caso d'uso.
+    #[error("A voided or written off charge cannot take a payment")]
+    ChargeNotPayable,
+
+    #[error("Only a pending payment can be confirmed")]
+    PaymentNotConfirmable,
+    #[error("Only a pending payment can be rejected")]
+    PaymentNotRejectable,
 
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
@@ -228,7 +240,17 @@ impl Invariant {
             | Self::UtilityBillNotValidatable
             | Self::UtilityBillNotAllocatable
             | Self::UtilityBillNotVoidable => "utility_bill.invalid_transition",
-            Self::ChargeNotVoidable | Self::ChargeNotWriteOffable => "charge.invalid_transition",
+            Self::ChargeNotVoidable | Self::ChargeNotWriteOffable | Self::ChargeNotPayable => {
+                "charge.invalid_transition"
+            }
+            // Stesso trattamento degli altri aggregati: il rimedio è rileggere lo
+            // stato attuale e chiedere una transizione ammessa. Il codice è
+            // **distinto** da `charge.invalid_transition` perché un pagamento che
+            // non si può confermare e un addebito che non accetta incassi si
+            // rimediano in due posti diversi.
+            Self::PaymentNotConfirmable | Self::PaymentNotRejectable => {
+                "payment.invalid_transition"
+            }
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }
@@ -308,6 +330,7 @@ mod tests {
             Entity::Ticket.code(),
             Entity::UtilityBill.code(),
             Entity::Charge.code(),
+            Entity::Payment.code(),
             Entity::Endpoint.code(),
             Denial::AuthenticationRequired.code(),
             Denial::OrgNotSelected.code(),
@@ -347,6 +370,9 @@ mod tests {
             Invariant::UtilityBillNotVoidable.code(),
             Invariant::ChargeNotVoidable.code(),
             Invariant::ChargeNotWriteOffable.code(),
+            Invariant::ChargeNotPayable.code(),
+            Invariant::PaymentNotConfirmable.code(),
+            Invariant::PaymentNotRejectable.code(),
             Invariant::RefreshTokenReused.code(),
             DomainError::validation("field", "message").code(),
         ]
@@ -426,12 +452,31 @@ mod tests {
         for invariant in [
             Invariant::ChargeNotVoidable,
             Invariant::ChargeNotWriteOffable,
+            Invariant::ChargeNotPayable,
         ] {
             assert_eq!(invariant.code(), "charge.invalid_transition");
         }
         assert_ne!(
             Invariant::UtilityBillNotVoidable.code(),
             Invariant::ChargeNotVoidable.code()
+        );
+    }
+
+    /// Le due transizioni del pagamento condividono un codice fra loro e **non**
+    /// con l'addebito: un pagamento che non si può confermare e un addebito che
+    /// non accetta incassi si rimediano in due posti diversi, e un client che
+    /// instrada su questi codici deve poterli distinguere.
+    #[test]
+    fn payment_transitions_have_their_own_code() {
+        for invariant in [
+            Invariant::PaymentNotConfirmable,
+            Invariant::PaymentNotRejectable,
+        ] {
+            assert_eq!(invariant.code(), "payment.invalid_transition");
+        }
+        assert_ne!(
+            Invariant::PaymentNotConfirmable.code(),
+            Invariant::ChargeNotPayable.code()
         );
     }
 }

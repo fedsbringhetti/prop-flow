@@ -3043,3 +3043,366 @@ async fn a_bill_cannot_point_at_a_lease_of_another_property() {
         "il controllo va rifatto a ogni correzione: {problem}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Pagamenti
+// ---------------------------------------------------------------------------
+
+/// Prepara un addebito da 800.00 su un contratto attivo con un inquilino vero, e
+/// restituisce `(token del proprietario, org, token dell'inquilino, id addebito)`.
+async fn charge_with_a_real_tenant(app: &TestApp, label: &str) -> (String, String, String, String) {
+    let (owner, owner_org) = common::register_and_login(app, label).await;
+    let property = create_property(app, &owner, &format!("Immobile {label}")).await;
+    let lease = draft_lease(app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email(&format!("{label}-inquilino"));
+    add_tenant(app, &owner, &lease, "Inquilino Pagante", Some(&email)).await;
+    app.post_auth(
+        &format!("/api/v1/leases/{lease}/activate"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+    let (_, accept_token) = invite_tenant(app, &owner, &lease, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(app, &email).await;
+    app.post_auth(
+        "/api/v1/auth/accept-invitation",
+        &tenant,
+        serde_json::json!({ "token": accept_token }),
+    )
+    .await;
+
+    let (_, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "800.00",
+                "due_date": day(15),
+            }),
+        )
+        .await;
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    (owner, owner_org, tenant, charge_id)
+}
+
+fn idempotency_key(label: &str) -> String {
+    format!("{label}-{}", uuid::Uuid::now_v7())
+}
+
+/// Il giro a mano della fetta, dal bordo HTTP: l'inquilino dichiara e il saldo non
+/// si muove, lo staff conferma e si muove.
+#[tokio::test]
+async fn a_declaration_becomes_real_only_when_the_staff_confirms_it() {
+    let app = require_app!();
+    let (owner, owner_org, tenant, charge) = charge_with_a_real_tenant(&app, "conferma-http").await;
+
+    let (status, declared) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payment-declarations"),
+            &tenant,
+            Some(&owner_org),
+            Some(&idempotency_key("dichiaro")),
+            serde_json::json!({
+                "amount": "800.00",
+                "method": "bank_transfer",
+                "reference": "Bonifico del 3",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {declared}");
+    assert_eq!(declared["status"], "pending", "corpo: {declared}");
+    assert_eq!(declared["charge_id"], charge);
+
+    // Il saldo non si è mosso: `pending` rende la dichiarazione visibile senza
+    // renderla vera.
+    let (status, before) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {before}");
+    assert_eq!(before["paid_amount"], "0.00", "corpo: {before}");
+    assert_eq!(before["outstanding_amount"], "800.00");
+    assert_eq!(before["status"], "issued");
+
+    // L'inquilino **non** può confermare la propria dichiarazione, e nemmeno
+    // ritirarla: `payments_update` è staff soltanto, e non esiste una rotta di
+    // ritiro.
+    let payment = declared["id"].as_str().expect("id").to_owned();
+    let (status, refused) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/payments/{payment}/confirm"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {refused}");
+    assert_eq!(
+        refused["code"], "org.staff_role_required",
+        "corpo: {refused}"
+    );
+
+    let (status, confirmed) = app
+        .post_auth(
+            &format!("/api/v1/payments/{payment}/confirm"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {confirmed}");
+    assert_eq!(confirmed["status"], "succeeded");
+    assert!(confirmed["paid_at"].is_string(), "corpo: {confirmed}");
+    assert!(confirmed["reconciled_at"].is_string());
+
+    let (_, after) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(after["paid_amount"], "800.00", "corpo: {after}");
+    assert_eq!(after["outstanding_amount"], "0.00");
+    assert_eq!(
+        after["status"], "paid",
+        "lo stato dell'addebito si ricalcola dai pagamenti: {after}"
+    );
+    assert_eq!(after["effective_status"], "paid");
+
+    // L'inquilino vede il proprio pagamento nell'elenco dell'addebito.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge}/payments"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    assert_eq!(page["items"].as_array().expect("items").len(), 1);
+    assert_eq!(page["items"][0]["id"], payment);
+}
+
+/// L'header `Idempotency-Key` è **obbligatorio**, e una chiave ripetuta dà `200`
+/// con il pagamento già registrato — non `201` e non `409`.
+#[tokio::test]
+async fn the_idempotency_key_is_required_and_a_repeat_never_takes_the_money_twice() {
+    let app = require_app!();
+    let (owner, _, _, charge) = charge_with_a_real_tenant(&app, "idempotenza-http").await;
+    let body = serde_json::json!({ "amount": "400.00", "method": "bank_transfer" });
+
+    // Assente: `400`, non `422`. Non c'è nulla di malformato nel corpo, manca un
+    // pezzo del trasporto.
+    let (status, problem) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            None,
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "request.missing_header",
+        "corpo: {problem}"
+    );
+
+    // Malformata: la chiave viene da un header, e uno spazio non sopravvive intatto
+    // al primo proxy.
+    let (status, problem) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some("chiave con spazi"),
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "idempotency_key");
+
+    let key = idempotency_key("doppio-invio");
+    let (status, first) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some(&key),
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first}");
+    assert_eq!(first["status"], "succeeded");
+
+    let (status, second) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some(&key),
+            body,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "una chiave ripetuta risponde 200 con il pagamento di prima: {second}"
+    );
+    assert_eq!(second["id"], first["id"]);
+
+    let (_, balance) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(
+        balance["paid_amount"], "400.00",
+        "il saldo è sceso una volta sola: {balance}"
+    );
+    assert_eq!(balance["outstanding_amount"], "400.00");
+    assert_eq!(balance["status"], "partially_paid");
+}
+
+/// Una dichiarazione rifiutata lascia il saldo dov'era e perde la data dichiarata.
+#[tokio::test]
+async fn a_rejected_declaration_leaves_the_balance_alone() {
+    let app = require_app!();
+    let (owner, owner_org, tenant, charge) = charge_with_a_real_tenant(&app, "rifiuto-http").await;
+
+    let (_, declared) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payment-declarations"),
+            &tenant,
+            Some(&owner_org),
+            Some(&idempotency_key("da-rifiutare")),
+            serde_json::json!({
+                "amount": "800.00",
+                "method": "cash",
+                "paid_at": "2026-08-30T10:00:00Z",
+            }),
+        )
+        .await;
+    let payment = declared["id"].as_str().expect("id").to_owned();
+    assert_eq!(declared["paid_at"], "2026-08-30T10:00:00Z");
+
+    let (status, rejected) = app
+        .post_auth(
+            &format!("/api/v1/payments/{payment}/reject"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {rejected}");
+    assert_eq!(rejected["status"], "cancelled");
+    assert!(
+        rejected["paid_at"].is_null(),
+        "un pagamento che non è avvenuto non ha una data in cui è avvenuto: {rejected}"
+    );
+
+    let (_, balance) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(balance["paid_amount"], "0.00", "corpo: {balance}");
+    assert_eq!(balance["status"], "issued");
+
+    // `pending` ha due uscite e nessun ingresso di ritorno.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/payments/{payment}/confirm"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "payment.invalid_transition",
+        "corpo: {problem}"
+    );
+}
+
+/// Un pagamento verso l'addebito di un'altra organizzazione riceve `404`: sotto la
+/// RLS del chiamante quell'addebito non esiste, e il trigger polimorfico da solo lo
+/// avrebbe accettato.
+#[tokio::test]
+async fn a_payment_towards_a_charge_of_another_organization_is_not_found() {
+    let app = require_app!();
+    let (_, _, _, charge) = charge_with_a_real_tenant(&app, "altra-org-http").await;
+    let (stranger, _) = common::register_and_login(&app, "estraneo-pagamenti").await;
+
+    let (status, problem) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &stranger,
+            None,
+            Some(&idempotency_key("estraneo")),
+            serde_json::json!({ "amount": "10.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "charge.not_found", "corpo: {problem}");
+}
+
+/// Un addebito annullato non accetta incassi, e il suo residuo è `"0.00"` — che è
+/// il cambiamento della migration `0024` visto dal filo.
+#[tokio::test]
+async fn a_voided_charge_shows_no_outstanding_amount_and_takes_no_payment() {
+    let app = require_app!();
+    let (owner, _, _, charge) = charge_with_a_real_tenant(&app, "annullato-http").await;
+
+    app.post_auth(
+        &format!("/api/v1/charges/{charge}/void"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let (status, voided) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {voided}");
+    assert_eq!(voided["status"], "void");
+    assert_eq!(
+        voided["outstanding_amount"], "0.00",
+        "prima della 0024 qui c'era ancora l'intero importo: {voided}"
+    );
+    assert_eq!(voided["amount"], "800.00", "l'importo resta quello che era");
+
+    let (status, problem) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some(&idempotency_key("su-annullato")),
+            serde_json::json!({ "amount": "800.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "charge.invalid_transition",
+        "corpo: {problem}"
+    );
+}

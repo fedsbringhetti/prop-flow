@@ -16,6 +16,7 @@ mod lease;
 mod lease_party;
 mod member;
 mod organization;
+mod payment;
 mod property;
 mod room;
 mod session;

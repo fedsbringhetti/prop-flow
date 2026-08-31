@@ -38,6 +38,17 @@ pub enum Conflict {
     /// la deduplica non funzioni.
     #[error("A bill with this invoice number from this supplier already exists")]
     DuplicateUtilityBill,
+    /// `payments_idempotency_uk`
+    ///
+    /// **Non è il caso normale del doppio invio**, che risponde `200` con il
+    /// pagamento già registrato: quello si riconosce rileggendo la chiave prima di
+    /// inserire. Questo codice resta per i due casi in cui quella rilettura non
+    /// basta — la stessa chiave usata per un **altro** addebito, dove un `200` con
+    /// un pagamento diverso da quello chiesto sarebbe una bugia, e la chiave già
+    /// usata da qualcuno di cui il chiamante non vede i pagamenti, che la RLS gli
+    /// nasconde. Vedi ADR-033.
+    #[error("This idempotency key was already used for a different payment")]
+    PaymentIdempotencyKeyReused,
 }
 
 impl Conflict {
@@ -50,6 +61,7 @@ impl Conflict {
             Self::LeasePrimaryPartyExists => "lease.primary_party_exists",
             Self::MembershipAlreadyExists => "membership.already_exists",
             Self::DuplicateUtilityBill => "utility_bill.duplicate",
+            Self::PaymentIdempotencyKeyReused => "payment.idempotency_key_reused",
         }
     }
 }
@@ -231,6 +243,7 @@ mod tests {
             Conflict::LeasePrimaryPartyExists.code(),
             Conflict::MembershipAlreadyExists.code(),
             Conflict::DuplicateUtilityBill.code(),
+            Conflict::PaymentIdempotencyKeyReused.code(),
         ];
         let mut unique = codes.to_vec();
         unique.sort_unstable();
