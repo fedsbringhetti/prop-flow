@@ -2266,3 +2266,780 @@ async fn a_ticket_validates_its_text() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
     assert_eq!(problem["errors"][0]["field"], "body");
 }
+
+// ---------------------------------------------------------------------------
+// Bollette e addebiti
+// ---------------------------------------------------------------------------
+
+/// Registra una bolletta sull'immobile e restituisce il suo id.
+///
+/// Il numero di fattura è irripetibile: `utility_bills_dedup_uk` è unico su
+/// `(org_id, supplier_vat, invoice_number)` e i test girano sullo stesso
+/// database.
+async fn register_bill(
+    app: &TestApp,
+    token: &str,
+    property: &str,
+    lease: Option<&str>,
+    invoice_number: &str,
+) -> String {
+    let mut body = serde_json::json!({
+        "utility_type": "gas",
+        "supplier_vat": "IT12345678901",
+        "invoice_number": invoice_number,
+        "period_start": day(-90),
+        "period_end": day(-31),
+        "total_amount": "184.20",
+    });
+    if let Some(lease) = lease {
+        body["lease_id"] = serde_json::json!(lease);
+    }
+
+    let (status, created) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            token,
+            body,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["status"], "draft", "corpo: {created}");
+    created["id"].as_str().expect("id").to_owned()
+}
+
+/// Il mese del proprietario, dal bordo HTTP: registra, corregge, valida,
+/// riaddebita; l'inquilino vede addebito e bolletta con il saldo a zero.
+#[tokio::test]
+async fn a_bill_becomes_a_charge_the_tenant_can_read() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "bollette-proprietario").await;
+    let property = create_property(&app, &owner, "Immobile con utenze").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email("bollette-inquilino");
+    add_tenant(&app, &owner, &lease, "Inquilino Bollette", Some(&email)).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/H/1").await;
+
+    // Il numero di fattura era sbagliato: si corregge, e la bolletta resta in
+    // bozza perché nessuno l'aveva ancora validata.
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            Some(serde_json::json!({ "invoice_number": "2026/H/2" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["invoice_number"], "2026/H/2");
+    assert_eq!(corrected["status"], "draft");
+
+    let (status, validated) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {validated}");
+    assert_eq!(validated["status"], "validated");
+    assert!(validated["validated_at"].is_string(), "corpo: {validated}");
+
+    let (status, recharged) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({
+                "lease_id": lease,
+                "amount": "120.00",
+                "due_date": day(10),
+                "description": "Gas, bimestre",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {recharged}");
+    assert_eq!(recharged["utility_bill"]["status"], "allocated");
+    assert_eq!(recharged["charge"]["charge_type"], "utility_recharge");
+    assert_eq!(recharged["charge"]["utility_bill_id"], bill);
+    let charge = recharged["charge"]["id"].as_str().expect("id").to_owned();
+
+    // L'inquilino legge l'addebito, con il saldo che dice che non ha pagato.
+    let (status, seen) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {seen}");
+    assert_eq!(seen["amount"], "120.00");
+    assert_eq!(
+        seen["paid_amount"], "0.00",
+        "senza il modulo dei pagamenti il saldo è per forza zero: {seen}"
+    );
+    assert_eq!(seen["outstanding_amount"], "120.00");
+    assert_eq!(seen["status"], "issued");
+    assert_eq!(seen["effective_status"], "issued");
+
+    // E vede anche la bolletta, perché è imputata al suo contratto.
+    let (status, bill_seen) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {bill_seen}");
+    assert_eq!(bill_seen["total_amount"], "184.20");
+}
+
+/// Lo stato scaduto compare in `effective_status` e **non** in `status`.
+#[tokio::test]
+async fn an_overdue_charge_says_so_without_the_column_ever_saying_it() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "addebiti-scaduti").await;
+    let property = create_property(&app, &owner, "Immobile morosi").await;
+    let lease = draft_lease(&app, &owner, &property, None, -30, Some(335)).await;
+
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "800.00",
+                "due_date": day(-5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    // Nasce **emesso**: non esiste uno stato di bozza.
+    assert_eq!(charge["status"], "issued", "corpo: {charge}");
+    assert!(charge["issued_at"].is_string(), "corpo: {charge}");
+    let id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, read) = app
+        .send("GET", &format!("/api/v1/charges/{id}"), Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["effective_status"], "overdue", "corpo: {read}");
+    assert_eq!(
+        read["status"], "issued",
+        "la colonna non porta mai `overdue`: lo stato si deriva (ADR-019)"
+    );
+}
+
+/// `?status=overdue` è un `422` con il rimedio, non una pagina vuota.
+///
+/// Stessa forma di `?status=expiring` sui contratti: restituire zero righe sarebbe
+/// il modo peggiore di dire che in database quel valore non esiste.
+#[tokio::test]
+async fn filtering_charges_by_the_derived_status_is_refused_with_a_hint() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "filtro-derivato").await;
+
+    let (status, problem) = app
+        .send("GET", "/api/v1/charges?status=overdue", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "charge.derived_status_filter",
+        "corpo: {problem}"
+    );
+    // Il rimedio viaggia in `errors[].message`, dove sta l'errore per campo: la
+    // forma della risposta resta quella di una validazione, cambia solo il codice.
+    assert_eq!(problem["errors"][0]["field"], "status", "corpo: {problem}");
+    assert!(
+        problem["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("outstanding")),
+        "il messaggio deve dire come si fa: {problem}"
+    );
+
+    // Il filtro giusto risponde invece `200`.
+    let (status, page) = app
+        .send(
+            "GET",
+            "/api/v1/charges?outstanding=true",
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+}
+
+/// L'asimmetria fra i due annullamenti, dal bordo HTTP.
+#[tokio::test]
+async fn a_voided_charge_stays_visible_and_a_voided_bill_frees_its_invoice_number() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "annulli-http").await;
+    let property = create_property(&app, &owner, "Immobile annulli HTTP").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email("annulli-inquilino");
+    add_tenant(&app, &owner, &lease, "Inquilino Annulli", Some(&email)).await;
+    app.post_auth(
+        &format!("/api/v1/leases/{lease}/activate"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    app.post_auth(
+        "/api/v1/auth/accept-invitation",
+        &tenant,
+        serde_json::json!({ "token": accept_token }),
+    )
+    .await;
+
+    let (_, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "800.00",
+                "due_date": day(15),
+            }),
+        )
+        .await;
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, voided) = app
+        .post_auth(
+            &format!("/api/v1/charges/{charge_id}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {voided}");
+    assert_eq!(voided["status"], "void");
+
+    // L'inquilino continua a vederlo: si era visto chiedere quella somma.
+    let (status, seen) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {seen}");
+    assert_eq!(seen["status"], "void");
+
+    // Annullare due volte è una transizione non ammessa.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/charges/{charge_id}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "charge.invalid_transition");
+
+    // La bolletta invece sparisce, e il numero di fattura torna libero.
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/I/1").await;
+    let (status, voided_bill) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {voided_bill}");
+
+    let (status, gone) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "una bolletta annullata sparisce: {gone}"
+    );
+
+    let reinserted = register_bill(&app, &owner, &property, Some(&lease), "2026/I/1").await;
+    assert_ne!(
+        reinserted, bill,
+        "il numero di fattura doveva tornare libero"
+    );
+}
+
+/// La stessa fattura due volte è un conflitto **nominato**.
+#[tokio::test]
+async fn the_same_invoice_twice_is_a_named_conflict() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "deduplica-http").await;
+    let property = create_property(&app, &owner, "Immobile doppioni HTTP").await;
+
+    register_bill(&app, &owner, &property, None, "2026/L/1").await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            &owner,
+            serde_json::json!({
+                "utility_type": "gas",
+                "supplier_vat": "IT12345678901",
+                "invoice_number": "2026/L/1",
+                "total_amount": "10.00",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "utility_bill.duplicate",
+        "corpo: {problem}"
+    );
+}
+
+/// Da `allocated` in poi la bolletta è ferma, e la correzione è un `409`.
+#[tokio::test]
+async fn a_recharged_bill_can_no_longer_be_corrected_or_voided() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "bolletta-ferma").await;
+    let property = create_property(&app, &owner, "Immobile fermo").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/M/1").await;
+
+    app.post_auth(
+        &format!("/api/v1/utility-bills/{bill}/validate"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+    let (status, recharged) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({
+                "lease_id": lease,
+                "amount": "50.00",
+                "due_date": day(20),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {recharged}");
+
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            Some(serde_json::json!({ "total_amount": "1.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "utility_bill.invalid_transition");
+
+    // E non si annulla: c'è un addebito che la cita.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+
+    // Riaddebitarla ancora invece sì: è il caso del co-living per stanza.
+    let (status, again) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({
+                "lease_id": lease,
+                "amount": "70.00",
+                "due_date": day(20),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {again}");
+}
+
+/// Correggere una bolletta **validata** la riporta in bozza.
+#[tokio::test]
+async fn correcting_a_validated_bill_takes_the_validation_away() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "revoca-validazione").await;
+    let property = create_property(&app, &owner, "Immobile revisioni HTTP").await;
+    let bill = register_bill(&app, &owner, &property, None, "2026/N/1").await;
+
+    app.post_auth(
+        &format!("/api/v1/utility-bills/{bill}/validate"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            Some(serde_json::json!({ "total_amount": "200.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(
+        corrected["status"], "draft",
+        "cambiare i numeri smentisce la validazione: {corrected}"
+    );
+    assert!(corrected["validated_at"].is_null(), "corpo: {corrected}");
+    assert!(corrected["validated_by"].is_null(), "corpo: {corrected}");
+}
+
+/// L'inquilino legge ma non scrive: la contabilità è dello staff.
+#[tokio::test]
+async fn a_tenant_reads_the_accounting_but_never_writes_it() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "contabilita-inquilino").await;
+    let property = create_property(&app, &owner, "Immobile in affitto").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email("contabilita-tenant");
+    add_tenant(&app, &owner, &lease, "Inquilino Contabile", Some(&email)).await;
+    app.post_auth(
+        &format!("/api/v1/leases/{lease}/activate"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    app.post_auth(
+        "/api/v1/auth/accept-invitation",
+        &tenant,
+        serde_json::json!({ "token": accept_token }),
+    )
+    .await;
+
+    // Registrare una bolletta: `403`, e il codice parla di ruolo.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "utility_type": "water",
+                "total_amount": "10.00",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "org.staff_role_required");
+
+    // Emettere un addebito a sé stesso: idem.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/leases/{lease}/charges"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "charge_type": "rent",
+                "amount": "1.00",
+                "due_date": day(30),
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+
+    // Ma l'elenco degli addebiti lo legge.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/charges",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+}
+
+/// Un'altra organizzazione riceve `404` su tutto, e l'elenco vuoto.
+#[tokio::test]
+async fn billing_of_another_organization_is_not_found() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "contabilita-riservata").await;
+    let property = create_property(&app, &owner, "Immobile riservato HTTP").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/O/1").await;
+    let (_, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "deposit",
+                "amount": "1600.00",
+                "due_date": day(7),
+            }),
+        )
+        .await;
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (stranger, _) = common::register_and_login(&app, "contabilita-estranea").await;
+
+    for path in [
+        format!("/api/v1/utility-bills/{bill}"),
+        format!("/api/v1/charges/{charge_id}"),
+        format!("/api/v1/utility-bills/{bill}/documents"),
+        format!("/api/v1/charges/{charge_id}/documents"),
+    ] {
+        let (status, problem) = app.send("GET", &path, Some(&stranger), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path} → {problem}");
+    }
+
+    for path in [
+        format!("/api/v1/utility-bills/{bill}/validate"),
+        format!("/api/v1/utility-bills/{bill}/void"),
+        format!("/api/v1/charges/{charge_id}/void"),
+        format!("/api/v1/charges/{charge_id}/write-off"),
+    ] {
+        let (status, problem) = app.post_auth(&path, &stranger, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path} → {problem}");
+    }
+
+    let (status, page) = app
+        .send("GET", "/api/v1/utility-bills", Some(&stranger), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(0),
+        "l'elenco di un estraneo deve essere vuoto: {page}"
+    );
+}
+
+/// La scansione si allega alla bolletta e si scarica.
+#[tokio::test]
+async fn a_bill_carries_its_scan() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "scansione-bolletta").await;
+    let property = create_property(&app, &owner, "Immobile con scansioni").await;
+    let bill = register_bill(&app, &owner, &property, None, "2026/P/1").await;
+
+    let (status, uploaded) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/utility-bills/{bill}/documents"),
+            token: &owner,
+            org: None,
+            filename: "bolletta-gas.pdf",
+            content_type: "application/pdf",
+            content: b"%PDF-1.7 finto",
+            kind: Some("utility_bill"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {uploaded}");
+    assert_eq!(uploaded["owner_type"], "utility_bill", "corpo: {uploaded}");
+    assert_eq!(uploaded["owner_id"], bill);
+
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/documents"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
+}
+
+/// Un `PATCH` su un addebito **non esiste**: la rotta non c'è.
+///
+/// Non è un dettaglio di routing: la migration `0023` toglie al ruolo applicativo
+/// il privilegio di riscrivere qualunque colonna dell'addebito che non sia
+/// `status`, quindi un `PATCH` non avrebbe nulla da scrivere. Prorogare una
+/// scadenza si fa annullando e riemettendo.
+#[tokio::test]
+async fn a_charge_has_no_patch_route_at_all() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "niente-patch").await;
+    let property = create_property(&app, &owner, "Immobile senza patch").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let (_, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "800.00",
+                "due_date": day(10),
+            }),
+        )
+        .await;
+    let id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, _) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/charges/{id}"),
+            Some(&owner),
+            Some(serde_json::json!({ "amount": "1.00" })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::METHOD_NOT_ALLOWED,
+        "l'API non deve offrire un modo di riscrivere una pretesa già comunicata"
+    );
+}
+
+/// La rinuncia all'incasso è diversa dall'annullamento, e i due si escludono.
+#[tokio::test]
+async fn writing_off_is_not_the_same_as_voiding() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "rinuncia").await;
+    let property = create_property(&app, &owner, "Immobile perdite").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let (_, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "late_fee",
+                "amount": "40.00",
+                "due_date": day(-2),
+            }),
+        )
+        .await;
+    let id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, written_off) = app
+        .post_auth(
+            &format!("/api/v1/charges/{id}/write-off"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {written_off}");
+    assert_eq!(written_off["status"], "written_off");
+    assert_eq!(
+        written_off["effective_status"], "written_off",
+        "una rinuncia non diventa scaduta col passare del tempo: {written_off}"
+    );
+
+    // E ora non si annulla più: le due uscite si escludono.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/charges/{id}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+}
+
+/// Il consumo ammette **quattro** decimali, gli importi due.
+///
+/// È la trappola del value object: passare il consumo come importo darebbe un
+/// `422` che parla di «amount», mandando a cercare l'errore fra le cifre della
+/// bolletta invece che nel tipo sbagliato.
+#[tokio::test]
+async fn a_consumption_keeps_four_decimals_while_amounts_keep_two() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "consumo").await;
+    let property = create_property(&app, &owner, "Immobile consumi").await;
+
+    let (status, created) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            &owner,
+            serde_json::json!({
+                "utility_type": "electricity",
+                "total_amount": "184.20",
+                "consumption": { "value": "123.4567", "unit": "kWh" },
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["consumption"]["value"], "123.4567");
+    assert_eq!(created["consumption"]["unit"], "kWh");
+
+    // Un importo con quattro decimali invece è rifiutato.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            &owner,
+            serde_json::json!({
+                "utility_type": "electricity",
+                "total_amount": "184.2000000",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+}
+
+/// Stanza e contratto devono appartenere all'immobile: lo schema non lo verifica.
+#[tokio::test]
+async fn a_bill_cannot_point_at_a_lease_of_another_property() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "riferimenti-bolletta").await;
+    let first = create_property(&app, &owner, "Primo immobile").await;
+    let second = create_property(&app, &owner, "Secondo immobile").await;
+    let lease_on_second = draft_lease(&app, &owner, &second, None, 0, Some(365)).await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/properties/{first}/utility-bills"),
+            &owner,
+            serde_json::json!({
+                "utility_type": "water",
+                "total_amount": "50.00",
+                "lease_id": lease_on_second,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    // E lo stesso vale sul `PATCH`, dove quelle colonne restano scrivibili: è la
+    // differenza con le segnalazioni, dove il controllo basta all'apertura.
+    let bill = register_bill(&app, &owner, &first, None, "2026/Q/1").await;
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            Some(serde_json::json!({ "lease_id": lease_on_second })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "il controllo va rifatto a ogni correzione: {problem}"
+    );
+}

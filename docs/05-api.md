@@ -94,7 +94,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -107,6 +107,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `lease.primary_party_exists` | 409 | il contratto ha già un intestatario principale |
 | `membership.already_exists` | 409 | l'utente appartiene già all'organizzazione |
 | `lease.period_overlap` | 409 | il periodo si sovrappone a una locazione attiva |
+| `utility_bill.duplicate` | 409 | fattura già registrata per questo fornitore: `utility_bills_dedup_uk` è unico su `(org_id, supplier_vat, invoice_number)` e scatta solo quando **entrambi** sono valorizzati |
 | `conflict.constraint_violated` | 409 | vincolo violato che l'API non sa ancora nominare |
 
 **Stato non ammesso**
@@ -124,6 +125,8 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `document.archived` | 409 | il documento è già archiviato |
 | `ticket.invalid_transition` | 409 | classificazione, assegnazione, avvio, sospensione, chiusura, riapertura o annullamento non ammessi nello stato attuale |
 | `ticket.cancelled` | 409 | la segnalazione è annullata e non si modifica più |
+| `utility_bill.invalid_transition` | 409 | correzione, validazione, riaddebito o annullamento non ammessi nello stato attuale |
+| `charge.invalid_transition` | 409 | annullamento o rinuncia all'incasso non ammessi nello stato attuale |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -132,6 +135,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 |---|---|---|
 | `validation.failed` | 422 | uno o più campi non validi; il dettaglio è in `errors[]` |
 | `lease.derived_status_filter` | 422 | filtro su uno stato derivato: usare `in_force` |
+| `charge.derived_status_filter` | 422 | filtro su `status=overdue`: è derivato dalla scadenza, usare `outstanding=true` |
 | `internal.error` | 500 | errore non previsto |
 
 Tre scelte deliberate:
@@ -323,10 +327,14 @@ occupato" sarebbe falso, perché le altre stanze restano libere.
 | POST | `/api/v1/rooms/{room_id}/documents` | membro | come sopra |
 | POST | `/api/v1/leases/{lease_id}/documents` | membro | come sopra |
 | POST | `/api/v1/tickets/{ticket_id}/documents` | membro | come sopra |
+| POST | `/api/v1/utility-bills/{utility_bill_id}/documents` | membro | come sopra. La scansione della bolletta |
+| POST | `/api/v1/charges/{charge_id}/documents` | membro | come sopra |
 | GET | `/api/v1/properties/{property_id}/documents` | membro | `200`, pagina keyset |
 | GET | `/api/v1/rooms/{room_id}/documents` | membro | come sopra |
 | GET | `/api/v1/leases/{lease_id}/documents` | membro | come sopra |
 | GET | `/api/v1/tickets/{ticket_id}/documents` | membro | come sopra |
+| GET | `/api/v1/utility-bills/{utility_bill_id}/documents` | membro | come sopra |
+| GET | `/api/v1/charges/{charge_id}/documents` | membro | come sopra |
 | GET | `/api/v1/documents/{id}/content` | membro | `307` verso l'URL pre-firmato, in `Location` |
 | DELETE | `/api/v1/documents/{id}` | membro, e staff **o** chi lo ha caricato | `204`. Archiviazione |
 
@@ -400,15 +408,25 @@ ripristino: la policy `documents_update` ha `deleted_at IS NULL` nella `USING`, 
 un update su una riga archiviata aggiorna zero righe senza dare errore, e ripristinare
 richiederebbe una migration sulla policy.
 
-Gli owner esposti sono **quattro** su undici: immobile, stanza, contratto e
-segnalazione. Le rotte sulle segnalazioni sono arrivate con quel modulo e sono costate
-una variante d'enum e due rotte, senza toccare gli use case dei documenti:
-`app.attachment_owner_type` aveva già `ticket`, e `can_access_attachment` lo risolveva
-già su `can_access_ticket`. Allargare agli owner rimasti — avatar, bollette, spese — è
-altrettanto additivo, e si fa quando quei moduli esistono.
+Gli owner esposti sono **sei** su undici: immobile, stanza, contratto, segnalazione,
+bolletta e addebito. Ogni modulo ne ha portati i propri, e il costo è stato ogni volta
+una variante d'enum e due rotte, senza toccare gli use case dei documenti — è il
+dividendo di aver fatto i documenti per primi. Allargare agli owner rimasti — avatar,
+spese, pagamenti — è altrettanto additivo, e si fa quando quei moduli esistono.
 
-`users.avatar_document_id` e `leases.contract_document_id` restano **non popolati
-dall'API**.
+**Con una sola eccezione, che vale la pena ricordare.** Il ramo `utility_bill` di
+`app.can_access_attachment` esisteva dal primo giorno ed era **più largo** della policy
+della bolletta: risolveva su `can_access_property`, vera per *ogni* inquilino
+dell'immobile, mentre `utility_bills_select` chiede di essere parte del contratto
+indicato. In un co-living con contratti per stanza, il coinquilino avrebbe scaricato la
+scansione della bolletta imputata all'altro senza poterne vedere la riga. La migration
+`0022` riallinea la funzione alla policy, ed è arrivata **prima** delle rotte che
+aprivano quella porta ([ADR-031](08-decisioni.md#adr-031)).
+
+`users.avatar_document_id`, `leases.contract_document_id`, `utility_bills.document_id`
+e `charges.document_id` restano **non popolati dall'API**: il documento si allega con
+il riferimento polimorfico, e popolare anche la colonna darebbe due risposte alla
+domanda «qual è il documento di questa riga».
 
 ### Segnalazioni
 
@@ -597,6 +615,154 @@ curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/triage \
 curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/close \
   -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json' \
   -d '{ "resolution_notes": "sostituita la valvola di sicurezza" }'
+```
+
+### Bollette
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/properties/{property_id}/utility-bills` | staff | `201`, stato iniziale `draft`. `409` se la stessa fattura è già registrata; `422` se stanza o contratto sono di un altro immobile |
+| GET | `/api/v1/utility-bills` | membro | `200`, pagina keyset. Filtri `property_id`, `lease_id`, `status`, `utility_type` |
+| GET | `/api/v1/utility-bills/{id}` | membro | `200`, o `404` |
+| PATCH | `/api/v1/utility-bills/{id}` | staff | `200`. **Su una bolletta validata riporta lo stato a `draft`.** `409` da `allocated` in poi |
+| POST | `/api/v1/utility-bills/{id}/validate` | staff | `200`. Valorizza `validated_at` e `validated_by` |
+| POST | `/api/v1/utility-bills/{id}/void` | staff | `200`. La bolletta **sparisce** dagli elenchi. `409` se già riaddebitata |
+| POST | `/api/v1/utility-bills/{id}/recharge` | staff | `201` con **addebito e bolletta**. Ripetibile: la stessa bolletta si riaddebita a più contratti |
+| POST | `/api/v1/utility-bills/{id}/documents` | membro | `201`. La scansione |
+| GET | `/api/v1/utility-bills/{id}/documents` | membro | `200`, pagina keyset |
+
+**Ruolo minimo `membro` sulle letture, `staff` su tutto ciò che scrive.** Registrare
+una bolletta è contabilità; *quali* bollette un inquilino veda lo decide la policy
+`utility_bills_select` — staff **oppure** parte del contratto indicato — e non un ramo
+applicativo sul ruolo. Ne segue che **una bolletta senza `lease_id` non la vede nessun
+inquilino**, nemmeno quello che consuma l'utenza: è il campo da valorizzare perché la
+bolletta sia visibile a chi la paga.
+
+**La correzione disfa la validazione**, e non è un effetto collaterale. Validare è
+l'affermazione «questi numeri sono quelli», e cambiare i numeri la smentisce: chi la
+valida di nuovo deve rifarlo apposta. È la stessa regola per cui riaprire una
+segnalazione cancella `closed_at` e la nota di risoluzione.
+
+**Annullare una bolletta la fa sparire, annullare un addebito no.** L'asimmetria è
+deliberata e ha due ragioni che si sommano. Una bolletta inserita male è un documento
+nostro e non c'è nessuno a cui dirlo; e `utility_bills_dedup_uk` è parziale su
+`deleted_at IS NULL`, quindi senza il soft delete la stessa fattura non sarebbe
+**reinseribile mai più**. La traccia resta in `audit_log`, che è append-only.
+
+**Il riaddebito è una sotto-risorsa della bolletta**, e `POST /leases/{id}/charges`
+**non accetta `utility_bill_id`**: c'è una via sola perché una bolletta e un addebito
+si leghino, ed è quella che tiene onesto lo stato della bolletta. Il tipo dell'addebito
+lo decide l'endpoint (`utility_recharge`) e il periodo è quello della bolletta: sono i
+due campi che, lasciati al chiamante, permetterebbero di emettere un canone che cita
+una bolletta o di dichiarare un periodo diverso da quello fatturato.
+
+**Nessuno verifica che le quote riaddebitate sommino al totale.** Lo schema non ha un
+vincolo, e un controllo applicativo sarebbe soggetto a race condition fra due
+riaddebiti concorrenti — il criterio di [ADR-015](08-decisioni.md#adr-015) per cui quel
+genere di invariante sta nel database o non sta da nessuna parte. La ripartizione con
+garanzia di somma è il modulo delle spese co-living, che ha il
+`CONSTRAINT TRIGGER … DEFERRABLE` di `expense_shares`. **Riaddebitare più del totale è
+oggi possibile.**
+
+**Il consumo ammette quattro decimali**, gli importi due: la colonna è
+`NUMERIC(14,4)`. Valore e unità viaggiano insieme in un oggetto `consumption`, perché
+`123.4567` senza unità non dice niente.
+
+**Fuori dall'API in questa fetta:** l'OCR (`ocr_extracted`, `ocr_confidence`,
+`ai_job_id`) e gli stati `pending_review`, `paid` — il pagamento *al fornitore* non è
+modellato affatto, `app.payable_type` non comprende `utility_bill` — e `disputed`, che
+non ha una via di ritorno disegnata. Le colonne esistono e restano ai loro default.
+`utility_bills.document_id` **non è popolata**: la scansione si allega con il
+riferimento polimorfico dei documenti, come per ogni altro aggregato.
+
+### Addebiti
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/leases/{lease_id}/charges` | staff | `201`, stato iniziale **`issued`**. `404` se il contratto non è visibile |
+| GET | `/api/v1/charges` | membro | `200`, pagina keyset con il saldo. Filtri `lease_id`, `charge_type`, `status`, `outstanding` |
+| GET | `/api/v1/charges/{id}` | membro | `200` con il saldo, o `404` |
+| POST | `/api/v1/charges/{id}/void` | staff | `200`. **Resta visibile** a chi doveva pagarlo |
+| POST | `/api/v1/charges/{id}/write-off` | staff | `200`. Rinuncia all'incasso: diverso dall'annullamento |
+| POST | `/api/v1/charges/{id}/documents` | membro | `201` |
+| GET | `/api/v1/charges/{id}/documents` | membro | `200`, pagina keyset |
+
+**Non esiste un `PATCH`**, e non è una dimenticanza: un addebito emesso è una
+**pretesa verso una persona**, e riscriverne l'importo dopo averla comunicata non è una
+correzione. La migration `0023` toglie al ruolo applicativo il privilegio di scrivere
+qualunque colonna che non sia `status`, quindi un `PATCH` non avrebbe nulla da
+scrivere. Prorogare una scadenza si fa **annullando e riemettendo**
+([ADR-029](08-decisioni.md#adr-029)).
+
+**Non esiste nemmeno uno stato di bozza.** `draft` è nell'enum del database e nessuno
+lo scrive: la policy `charges_select` non guarda lo stato, quindi una bozza comparirebbe
+nell'elenco di chi deve pagarla esattamente come un addebito emesso; ed emettere non
+manda niente a nessuno, perché la porta `Notifier` è dichiarata e senza adattatore. Fra
+i due stati non resterebbe alcuna differenza osservabile.
+
+**`void` e `write_off` non sono sinonimi.** `void` dice «non doveva essere chiesto»,
+`write_off` dice «era dovuto e ci rinunciamo». Entrambi escono dall'insoluto, ma solo il
+secondo è una perdita, e la distinzione conta nei report.
+
+#### `status` ed `effective_status`
+
+La risposta porta **due** stati, come i contratti:
+
+| Campo | Significato |
+|---|---|
+| `status` | quello **memorizzato**, che cambia solo su azioni esplicite |
+| `effective_status` | vale `overdue` quando la scadenza è passata e il residuo è positivo |
+
+`overdue` **non è mai memorizzato**: è derivato, per la stessa ragione di `expiring`
+sui contratti ([ADR-019](08-decisioni.md#adr-019), esteso agli addebiti da
+[ADR-028](08-decisioni.md#adr-028)). Ne segue che **`?status=overdue` risponde `422`**
+con il codice `charge.derived_status_filter`, indicando `?outstanding=true`: quel
+filtro darebbe sempre zero righe, e una pagina vuota sarebbe il modo peggiore di dirlo.
+
+`?outstanding=true` è lo **scadenzario**, ed enumera i tre stati dell'insoluto
+(`issued`, `partially_paid`, `overdue`) invece di scrivere una disuguaglianza: l'indice
+`charges_outstanding_ix` è parziale su quell'elenco esatto.
+
+#### Il saldo, e perché oggi è sempre lo stesso
+
+`paid_amount` e `outstanding_amount` si leggono da `app.v_charge_balances`, che è
+`security_invoker` e applica quindi la RLS del chiamante.
+
+**In questa fetta `paid_amount` vale sempre `"0.00"` e `outstanding_amount` coincide
+sempre con `amount`.** Non è un difetto del calcolo: è l'**assenza di righe in
+`app.payments`**, che è il modulo successivo. Va detto perché chi legge la risposta
+altrimenti pensa che il campo sia rotto.
+
+Per la stessa ragione `partially_paid` e `paid` sono stati che l'API non produce: li
+scriverà la riconciliazione del modulo dei pagamenti, che ha già la
+`GRANT UPDATE (status)` che le serve e non richiederà altre migration.
+
+#### La valuta
+
+`currency` è sempre `"EUR"` e **non è dichiarabile** — non compare in nessun corpo di
+richiesta. La ragione non è la colonna, che c'è già con il suo default: sono le due
+viste dei saldi, che sommano importi **senza confrontare la valuta**. Due valute
+renderebbero `outstanding_amount` e `total_outstanding` silenziosamente falsi. Vedi
+[ADR-030](08-decisioni.md#adr-030).
+
+```bash
+# Il mese del proprietario: registra, valida, riaddebita.
+BILL=$(curl -sX POST http://localhost:8080/api/v1/properties/$PROPERTY/utility-bills   -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json'   -d '{
+        "utility_type": "gas",
+        "lease_id": "'$LEASE'",
+        "supplier_vat": "IT12345678901",
+        "invoice_number": "2026/A/00417",
+        "period_start": "2026-06-01", "period_end": "2026-07-31",
+        "total_amount": "184.20",
+        "consumption": { "value": "123.4567", "unit": "Smc" }
+      }' | jq -r .id)
+
+curl -X POST http://localhost:8080/api/v1/utility-bills/$BILL/validate   -H "authorization: Bearer $OWNER_TOKEN"
+
+curl -X POST http://localhost:8080/api/v1/utility-bills/$BILL/recharge   -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json'   -d '{ "lease_id": "'$LEASE'", "amount": "120.00", "due_date": "2026-09-10" }'
+
+# Lo scadenzario del proprietario.
+curl -s 'http://localhost:8080/api/v1/charges?outstanding=true'   -H "authorization: Bearer $OWNER_TOKEN"
 ```
 
 ### Inviti

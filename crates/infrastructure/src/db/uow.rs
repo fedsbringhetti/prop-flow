@@ -3,10 +3,10 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use propflow_domain::RequestContext;
 use propflow_domain::ports::{
-    DocumentRepository, EventSink, InvitationRepository, LeasePartyRepository, LeaseRepository,
-    OrgMemberRepository, OrganizationRepository, PropertyRepository, RepositoryResult,
-    RoomRepository, SessionRepository, TicketMessageRepository, TicketRepository, UnitOfWork,
-    UnitOfWorkFactory, UserRepository,
+    ChargeRepository, DocumentRepository, EventSink, InvitationRepository, LeasePartyRepository,
+    LeaseRepository, OrgMemberRepository, OrganizationRepository, PropertyRepository,
+    RepositoryResult, RoomRepository, SessionRepository, TicketMessageRepository, TicketRepository,
+    UnitOfWork, UnitOfWorkFactory, UserRepository, UtilityBillRepository,
 };
 
 use super::db_enums;
@@ -61,6 +61,12 @@ impl UnitOfWork for PgUnitOfWork {
         self
     }
     fn ticket_messages(&mut self) -> &mut dyn TicketMessageRepository {
+        self
+    }
+    fn utility_bills(&mut self) -> &mut dyn UtilityBillRepository {
+        self
+    }
+    fn charges(&mut self) -> &mut dyn ChargeRepository {
         self
     }
     fn events(&mut self) -> &mut dyn EventSink {

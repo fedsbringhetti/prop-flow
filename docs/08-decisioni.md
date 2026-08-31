@@ -997,3 +997,264 @@ due aperture dopo.
 decisione senza pagarla, ma toglie al proprietario un numero corto da citare al
 telefono, che è l'unica ragione per cui una colonna del genere esiste accanto a un
 UUID.
+
+---
+
+<a id="adr-028"></a>
+
+## ADR-028 — Lo stato «scaduto» di un addebito si deriva, come quello di un contratto
+
+**Contesto.** [ADR-019](#adr-019) ha stabilito per i contratti che gli stati
+conseguenza del **calendario** non si memorizzano: `expiring` ed `expired` esistono
+nell'enum e nessuno li scrive, perché uno stato memorizzato invecchia da solo — nessuno
+lo aggiorna quando la data passa — e la dashboard finisce per contare cose finite mesi
+prima. Gli addebiti pongono lo stesso caso: `app.charge_status` ha `overdue`.
+
+**Decisione.** `overdue` non si scrive mai. Un addebito scaduto è un addebito `issued`
+la cui `due_date` è passata e il cui residuo è positivo, e la risposta dell'API porta
+**due** stati, come i contratti:
+
+- `status`, quello memorizzato, che cambia solo su azioni esplicite;
+- `effective_status`, che vale `overdue` quando la scadenza è passata.
+
+**La definizione vive in un posto solo, e quel posto è la vista.**
+`app.v_charge_balances.is_past_due` è
+`due_date < CURRENT_DATE AND amount > COALESCE(paid_amount, 0)`. Il dominio la ripete
+in `Charge::is_past_due(today, paid_amount)` per poterla verificare senza database —
+stessa coppia di `app.lease_in_force` e `Lease::is_in_force`, e stesso obbligo di
+rispondere la stessa cosa.
+
+**Il secondo parametro non è una comodità.** Il piano prevedeva `is_past_due(today)`,
+con un argomento. Non poteva funzionare: `paid_amount` **non è un dato
+dell'aggregato** — vive in `app.payments` e lo calcola la vista — e una funzione che
+lo ignorasse non sarebbe *la stessa* formula, sarebbe una che le somiglia finché non
+esistono pagamenti. Passarlo esplicitamente è ciò che rende verificabile l'uguaglianza.
+
+Il confronto è fra `Decimal` e non fra `Money`, che non implementa `PartialOrd`
+apposta ([ADR-002](#adr-002)). È lecito **solo** perché la valuta è una sola — vedi
+[ADR-030](#adr-030), dove quella limitazione ha esattamente questa origine.
+
+**La formula non guarda lo stato, e `effective_status` sì.** È la sola asimmetria fra
+i due, e va detta: `v_charge_balances.is_past_due` è vero anche per un addebito
+**annullato** con una scadenza nel passato, perché la vista non filtra su `status`. A
+escluderlo è `Charge::effective_status`, che deriva `overdue` solo dagli stati
+dell'insoluto.
+
+**Chi legge la vista direttamente eredita quella definizione più larga**, e la
+conseguenza è peggiore di quanto questo ADR dicesse quando è stato scritto. Riprodotto
+su database vero dopo l'esecuzione della fetta, con tre addebiti sullo stesso
+contratto:
+
+| stato | importo | `outstanding_amount` |
+|---|---|---|
+| `issued` | 800.00 | 800.00 |
+| **`void`** | **120.00** | **120.00** |
+| `issued`, scaduto | 40.00 | 40.00 |
+
+`v_owner_dashboard.total_outstanding` ha risposto **960.00**, dove il numero vero è
+840.00: l'addebito annullato — quello per cui all'inquilino è stato detto che la
+richiesta era caduta — continua a contare come credito. `written_off` fa lo stesso, ed
+è peggio, perché è una perdita e non un credito. Non è quindi solo `overdue_charges`:
+è anche il totale insoluto, che è il numero di testa della dashboard.
+
+Il difetto **non nasce con questa fetta** — la vista è così dalla `0015` — ma è questa
+fetta a renderlo raggiungibile, perché prima non esisteva alcun addebito.
+**L'elenco dell'API è invece corretto**: `?outstanding=true` enumera i tre stati
+dell'insoluto come letterale nella query del repository, quindi `void` e `written_off`
+non vi entrano. Sbagliano le sole viste, e la correzione è registrata fra i debiti in
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+
+**Conseguenza sul filtro dell'elenco.** `?status=overdue` risponde **422** con il
+codice `charge.derived_status_filter`, indicando `?outstanding=true`. È la stessa forma
+di `?status=expiring` sui contratti: restituire una pagina vuota sarebbe il modo
+peggiore di dire che quello stato in database non c'è.
+
+**Conseguenza sul fuso orario, da dire ad alta voce.** `CURRENT_DATE` dipende dal fuso
+della sessione PostgreSQL. Un addebito in scadenza oggi diventa scaduto alla mezzanotte
+**del database**, non a quella di chi guarda: con il container in UTC e un utente in
+Italia lo scarto è di una o due ore, una volta al giorno, sul solo giorno della
+scadenza. Non si corregge qui — correggerlo significa decidere di chi è il fuso orario
+di riferimento, che è una domanda di prodotto — ma il sintomo («scaduto troppo
+presto») è di quelli che si cercano nel posto sbagliato. Per questo `ChargeBalance`
+porta `is_past_due` **dalla vista** invece di ricalcolarlo: in caso di scarto vince la
+definizione che ha prodotto il numero mostrato accanto.
+
+---
+
+<a id="adr-029"></a>
+
+## ADR-029 — Un addebito emesso non si riscrive, e sulle bollette lo stesso strumento non si usa
+
+**Contesto.** [ADR-026](#adr-026) ha dichiarato il criterio per cui i privilegi di
+colonna convengono anche senza un confine da difendere: «una colonna non ha un motivo
+legittimo di cambiare e lo schema non ha un vincolo che ne difenda la coerenza». Il
+modulo contabile è il primo che lo applica **due volte con esiti opposti**, ed è la
+prova che il criterio serve a decidere e non a estendersi da sé.
+
+**Difetto osservato.** La `WITH CHECK` di `charges_update` è identica alla `USING` —
+entrambe `org_id = app.current_org_id() AND app.is_org_staff(org_id)` — e una
+`WITH CHECK` che nomina il solo `org_id` lascia libera ogni altra colonna. È la stessa
+constatazione di ADR-021 e ADR-026: **una policy non può confrontare la riga nuova con
+quella vecchia**.
+
+Concretamente, uno staff può riscrivere l'`amount` di un addebito già emesso. Non è
+una violazione dell'isolamento — resta dentro la propria organizzazione, ed è
+registrata in `audit_log`, perché `app.charges` è fra le tabelle con il trigger di
+audit della `0013` — ma è la corruzione che **conta di più** fra quelle possibili,
+perché un addebito non è un dato interno: è una **pretesa verso una persona**.
+Riscriverne l'importo dopo averla comunicata non è una correzione, è cambiare le carte
+in tavola. La traccia resta nell'audit, ma la riga che l'inquilino rilegge dice
+un'altra cifra senza che nulla, **nella riga stessa**, ricordi la prima.
+
+**Decisione, parte prima: sugli addebiti sì.**
+`migrations/0023_charge_column_privileges.sql` revoca a `propflow_app` l'`UPDATE`
+sull'intera `app.charges` e gliela riconcede su **una colonna sola**:
+
+```sql
+REVOKE UPDATE ON app.charges FROM propflow_app;
+GRANT  UPDATE (status) ON app.charges TO propflow_app;
+```
+
+È la `GRANT` più corta del progetto, e la lunghezza è la misura di quanto il criterio
+si applichi qui: tutto il resto — `lease_id`, `charge_type`, `amount`, `currency`,
+`due_date`, `period_start`, `period_end`, `description`, `utility_bill_id`,
+`generation_key`, `issued_at`, `document_id`, `notes`, `deleted_at` — descrive la
+pretesa **nel momento in cui è stata fatta**, e cambiarla significa farne un'altra.
+
+`deleted_at` è fra le negate, e non per completezza: un addebito **non si cancella**.
+L'asimmetria con la bolletta — che annullata sparisce, vedi sotto — diventa così
+strutturale invece di restare una convenzione.
+
+**Il modulo dei pagamenti non avrà bisogno di altro.** Riconciliare un incasso porta
+l'addebito a `partially_paid` o `paid`, cioè scrive `status`, che è concessa. È il
+motivo per cui questa migration si scrive **adesso** e non insieme ai pagamenti:
+posarla ora rende il modulo successivo additivo — un metodo di dominio nuovo su
+`Charge` e uno use case, nessuna migration.
+
+**Decisione, parte seconda: sulle bollette no**, ed è la prima volta che ADR-026 dà
+«no». Sarebbe l'automatismo naturale: la tabella accanto, lo stesso difetto nella
+`WITH CHECK`. Sarebbe sbagliato. Una bolletta si **digita**, dodici campi alla volta, e
+finché non è validata correggerne uno è il lavoro previsto, non un'anomalia. La `GRANT`
+dovrebbe quindi nominare quasi ogni colonna, e **un elenco che contiene quasi tutto non
+difende niente**: si pagherebbe l'onere di manutenzione — ogni colonna aggiunta a una
+`UPDATE` va aggiunta anche là — senza comprare la proprietà per cui l'onere esisteva.
+
+L'immutabilità della bolletta è quindi un'invariante di **dominio**:
+`UtilityBill::apply` rifiuta le modifiche da `allocated` in poi, cioè da quando quei
+numeri sono la base di una pretesa già fatta a qualcuno.
+
+**Conseguenza da dire ad alta voce: non esiste un `PATCH` sugli addebiti.** Prorogare
+una scadenza — «ti do una settimana in più» — oggi si fa annullando e riemettendo. È
+scomodo ed è voluto: è il punto in cui ci si ferma a chiedersi se `due_date` debba
+davvero essere scrivibile, e il giorno in cui la risposta sarà sì è una migration
+nuova, una riga. Un test di contratto fissa che la rotta non esista (`405`), perché
+altrimenti la sua assenza si leggerebbe come una dimenticanza.
+
+**Conseguenze e manutenzione.** Il controllo 12 delle invarianti
+(`ops/sql/checks/schema_invariants.sql`) estende l'elenco `colonna-strutturale-scrivibile`
+con le tredici colonne dell'addebito, **mantenendo il nome**: il criterio è quello di
+ADR-026 in entrambi i casi, e inventargli un terzo nome renderebbe illeggibile la
+ragione comune. Verificato anche al contrario, concedendo `UPDATE (amount)` a mano e
+vedendo il controllo fallire con `colonna-strutturale-scrivibile / charges.amount`.
+
+---
+
+<a id="adr-030"></a>
+
+## ADR-030 — La valuta resta una sola, e la ragione non è l'importo: è la vista dei saldi
+
+**Contesto.** La domanda è stata rinviata due volte. Il modulo delle segnalazioni l'ha
+posta sui costi di una riparazione e l'ha spostata qui per nome; qui ha una risposta,
+con una motivazione che allora non si poteva ancora vedere.
+
+**Decisione.** `currency` resta al default `EUR` e **non è dichiarabile**: non compare
+in nessuna `INSERT` né in nessuna `UPDATE` del modulo contabile, ed è fra le colonne
+che il controllo 12 delle invarianti verifica non essere scrivibili.
+
+**La ragione non è la colonna.** La colonna c'è già, su `app.utility_bills` e su
+`app.charges`, con il suo default: accettarla come parametro sarebbe un campo in un
+DTO. La ragione sono le **due viste**:
+
+- `app.v_charge_balances` calcola
+  `amount - SUM(payments.amount - refunded_amount)` **senza confrontare `currency`**,
+  e le due colonne esistono su entrambe le tabelle;
+- `app.v_owner_dashboard.total_outstanding` somma `outstanding_amount` di tutta
+  l'organizzazione allo stesso modo.
+
+Bastano due valute perché quei due numeri diventino **silenziosamente falsi**: non un
+errore di arrotondamento, una somma di grandezze diverse.
+
+**Il dominio lo aveva già previsto, e il SQL no.** `Money` non implementa `PartialOrd`
+proprio per rendere impossibile quel confronto ([ADR-002](#adr-002)); le viste lo fanno
+lo stesso, perché il SQL non ha quel tipo. È il caso in cui una difesa di tipo esiste a
+un livello e non all'altro, e la difesa che manca decide.
+
+**Cosa costerebbe cambiare idea.** Una migration sulle due viste e una **scelta di
+prodotto** su cosa significhi un totale insoluto multi-valuta — un numero per valuta?
+una conversione, e a quale tasso, e del giorno di quale evento? Finché quella domanda
+non ha una risposta, la colonna scrivibile sarebbe un modo di renderla urgente per
+sbaglio.
+
+**Conseguenza sul dominio.** `Charge::is_past_due` confronta `Decimal` e non `Money`,
+e può farlo **solo** grazie a questa decisione: è la riga da rileggere il giorno in cui
+qualcuno vorrà dichiarare la valuta.
+
+---
+
+<a id="adr-031"></a>
+
+## ADR-031 — Il documento di una bolletta si vede se si vede la bolletta
+
+**Difetto osservato.** `app.can_access_attachment` risolveva il ramo `utility_bill` su
+`app.can_access_property(b.property_id)`, mentre la policy `utility_bills_select`
+chiede staff **oppure** essere parte del contratto indicato:
+
+```
+utility_bills_select  →  is_org_staff(org_id)
+                         OR (lease_id IS NOT NULL AND can_access_lease(lease_id))
+can_access_attachment →  can_access_property(b.property_id)
+```
+
+`can_access_property` è vera per **ogni** inquilino dell'immobile. In un co-living con
+contratti per stanza, il coinquilino A soddisfa quindi la seconda e non la prima: non
+vede la riga della bolletta imputata al contratto di B, e ne scaricherebbe la
+scansione — la fattura con il nome, l'indirizzo e i consumi di B.
+
+Finché nessuna bolletta aveva allegati la cosa non si vedeva. È la fetta contabile ad
+aprire le rotte `/api/v1/utility-bills/{id}/documents`, ed è quindi quella fetta a
+doverla correggere: **la migration viene prima del bordo HTTP**, non dopo.
+
+**Decisione.** `migrations/0022_bill_attachment_access.sql` riallinea il ramo alla
+policy con un `CREATE OR REPLACE FUNCTION`. La regola diventa quella che si legge in
+una riga: *il documento di una bolletta si vede se si vede la bolletta.*
+
+**Il ramo `charge` non si tocca, ed è corretto così.** Risolve su
+`can_access_lease(c.lease_id)`, che è **esattamente** la condizione di
+`charges_select`. Le due parti già coincidono, e allinearle di nuovo per simmetria
+significherebbe riscrivere una riga giusta.
+
+**Come si è saputo che la migration serviva.** Non dal ragionamento, e questa è la
+parte che vale la pena ricordare. Il primo test scritto passava dallo use case
+(`ListDocuments`), e passava **anche con la funzione sbagliata**: il controllo
+applicativo `ensure_owner_is_visible` rilegge la bolletta sotto la policy e restituisce
+`404` prima che la RLS entri in gioco. Lo strato applicativo **mascherava il difetto
+invece di dimostrarlo**.
+
+La prova richiede di interrogare `can_access_attachment` **direttamente, sotto il
+contesto RLS del coinquilino**, che è ciò che fa `documents_select` quando
+l'applicazione non c'è di mezzo. Fatto così, il test fallisce con la definizione della
+`0014` e passa con quella della `0022` — riprodotto su database reale in entrambe le
+direzioni. È la lezione generale: **un test che passa da uno strato non prova nulla
+sullo strato sotto**, e la difesa in profondità che [ADR-016](#adr-016) chiede si
+verifica solo interrogando lo strato che si vuole verificare.
+
+**Conseguenze sui dati esistenti: nessuna.** Nessun documento aveva
+`owner_type = 'utility_bill'`, perché l'enum di dominio non lo contemplava e il
+caricamento lo rifiutava. La correzione **restringe** l'accesso — si vede meno, non di
+più — quindi non può aprire nulla che fosse chiuso.
+
+**Quando tornerà disallineato.** Il giorno in cui qualcuno introducesse la bozza vera
+dell'addebito: restringere `charges_select` con
+`status <> 'draft' OR is_org_staff(org_id)` senza toccare questa funzione lascerebbe
+l'inquilino a scaricare gli allegati di una bozza che non vede. Le due migration vanno
+insieme, ed è scritto sia qui sia nel commento della `0022`.

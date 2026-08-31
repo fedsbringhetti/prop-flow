@@ -22,6 +22,10 @@ pub enum Entity {
     Document,
     #[error("Ticket not found")]
     Ticket,
+    #[error("Utility bill not found")]
+    UtilityBill,
+    #[error("Charge not found")]
+    Charge,
     /// Rotta sconosciuta. Sta qui e non nel bordo HTTP perché un `404` di rotta e
     /// un `404` di risorsa devono avere la stessa forma per il client.
     #[error("Endpoint not found")]
@@ -38,6 +42,8 @@ impl Entity {
             Self::Invitation => "invitation.not_found",
             Self::Document => "document.not_found",
             Self::Ticket => "ticket.not_found",
+            Self::UtilityBill => "utility_bill.not_found",
+            Self::Charge => "charge.not_found",
             Self::Endpoint => "endpoint.not_found",
         }
     }
@@ -163,6 +169,22 @@ pub enum Invariant {
     #[error("A cancelled ticket cannot be modified")]
     TicketCancelled,
 
+    #[error("Only a draft or a validated bill can be corrected")]
+    UtilityBillNotEditable,
+    #[error("Only a draft bill can be validated")]
+    UtilityBillNotValidatable,
+    #[error("Only a validated or already allocated bill can be recharged")]
+    UtilityBillNotAllocatable,
+    /// Da `allocated` in poi la bolletta è la base di un addebito già emesso:
+    /// farla sparire lascerebbe quell'addebito a citare una riga invisibile.
+    #[error("A bill that has already been recharged cannot be voided")]
+    UtilityBillNotVoidable,
+
+    #[error("Only an issued charge can be voided")]
+    ChargeNotVoidable,
+    #[error("Only an issued charge can be written off")]
+    ChargeNotWriteOffable,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -198,6 +220,15 @@ impl Invariant {
             | Self::TicketNotReopenable
             | Self::TicketNotCancellable => "ticket.invalid_transition",
             Self::TicketCancelled => "ticket.cancelled",
+            // Stesso trattamento delle transizioni di contratto e di
+            // segnalazione: il rimedio è lo stesso — rileggere lo stato attuale e
+            // chiedere una transizione ammessa — e i due aggregati restano
+            // distinti perché il rimedio *non* è lo stesso fra loro.
+            Self::UtilityBillNotEditable
+            | Self::UtilityBillNotValidatable
+            | Self::UtilityBillNotAllocatable
+            | Self::UtilityBillNotVoidable => "utility_bill.invalid_transition",
+            Self::ChargeNotVoidable | Self::ChargeNotWriteOffable => "charge.invalid_transition",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }
@@ -275,6 +306,8 @@ mod tests {
             Entity::Invitation.code(),
             Entity::Document.code(),
             Entity::Ticket.code(),
+            Entity::UtilityBill.code(),
+            Entity::Charge.code(),
             Entity::Endpoint.code(),
             Denial::AuthenticationRequired.code(),
             Denial::OrgNotSelected.code(),
@@ -308,6 +341,12 @@ mod tests {
             Invariant::TicketNotReopenable.code(),
             Invariant::TicketNotCancellable.code(),
             Invariant::TicketCancelled.code(),
+            Invariant::UtilityBillNotEditable.code(),
+            Invariant::UtilityBillNotValidatable.code(),
+            Invariant::UtilityBillNotAllocatable.code(),
+            Invariant::UtilityBillNotVoidable.code(),
+            Invariant::ChargeNotVoidable.code(),
+            Invariant::ChargeNotWriteOffable.code(),
             Invariant::RefreshTokenReused.code(),
             DomainError::validation("field", "message").code(),
         ]
@@ -367,6 +406,32 @@ mod tests {
         assert_ne!(
             Invariant::TicketCancelled.code(),
             Invariant::TicketNotClosable.code()
+        );
+    }
+
+    /// I due aggregati contabili condividono un codice **ciascuno**, e non fra
+    /// loro: da una bolletta che non si può correggere e da un addebito che non
+    /// si può annullare non si esce nello stesso modo, e un client che instrada
+    /// su questi codici deve poterli distinguere.
+    #[test]
+    fn billing_transitions_share_one_code_per_aggregate() {
+        for invariant in [
+            Invariant::UtilityBillNotEditable,
+            Invariant::UtilityBillNotValidatable,
+            Invariant::UtilityBillNotAllocatable,
+            Invariant::UtilityBillNotVoidable,
+        ] {
+            assert_eq!(invariant.code(), "utility_bill.invalid_transition");
+        }
+        for invariant in [
+            Invariant::ChargeNotVoidable,
+            Invariant::ChargeNotWriteOffable,
+        ] {
+            assert_eq!(invariant.code(), "charge.invalid_transition");
+        }
+        assert_ne!(
+            Invariant::UtilityBillNotVoidable.code(),
+            Invariant::ChargeNotVoidable.code()
         );
     }
 }

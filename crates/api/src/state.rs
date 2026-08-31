@@ -4,6 +4,11 @@ use propflow_application::ports::{
     ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::billing::{
+    GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, RechargeUtilityBill,
+    RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge, VoidUtilityBill,
+    WriteOffCharge,
+};
 use propflow_application::use_cases::document::{
     ArchiveDocument, DownloadDocument, ListDocuments, UploadDocument,
 };
@@ -78,12 +83,35 @@ pub struct AppState {
     pub reopen_ticket: Arc<ReopenTicket>,
     pub cancel_ticket: Arc<CancelTicket>,
 
+    pub register_utility_bill: Arc<RegisterUtilityBill>,
+    pub get_utility_bill: Arc<GetUtilityBill>,
+    pub list_utility_bills: Arc<ListUtilityBills>,
+    pub update_utility_bill: Arc<UpdateUtilityBill>,
+    pub validate_utility_bill: Arc<ValidateUtilityBill>,
+    pub void_utility_bill: Arc<VoidUtilityBill>,
+    /// Il riaddebito è l'**unica** via per cui una bolletta e un addebito si
+    /// legano: `POST /leases/{id}/charges` non accetta `utility_bill_id`.
+    pub recharge_utility_bill: Arc<RechargeUtilityBill>,
+
+    pub issue_charge: Arc<IssueCharge>,
+    pub get_charge: Arc<GetCharge>,
+    pub list_charges: Arc<ListCharges>,
+    /// Le due sole transizioni dell'addebito: non esiste un `PATCH`, perché una
+    /// pretesa già comunicata non si riscrive.
+    pub void_charge: Arc<VoidCharge>,
+    pub write_off_charge: Arc<WriteOffCharge>,
+
     pub invite_tenant: Arc<InviteTenant>,
     pub revoke_invitation: Arc<RevokeInvitation>,
     pub accept_invitation: Arc<AcceptInvitation>,
 
     /// Serve al middleware di autenticazione per verificare gli access token.
     pub tokens: Arc<dyn TokenIssuer>,
+    /// Serve al bordo HTTP per derivare `effective_status` di un addebito quando
+    /// la risposta non viene dalla vista dei saldi — emissione e transizioni, che
+    /// non pagano il join. La data viene da qui e non da `Utc::now()` perché
+    /// l'orologio è iniettato e i test lo sostituiscono.
+    pub clock: Arc<dyn propflow_domain::ports::Clock>,
     /// Serve al middleware per risolvere il ruolo quando il client cambia
     /// organizzazione con l'header `X-Org-Id`.
     pub unit_of_work: Arc<dyn UnitOfWorkFactory>,
@@ -252,6 +280,42 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
+            register_utility_bill: Arc::new(RegisterUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_utility_bill: Arc::new(GetUtilityBill::new(Arc::clone(&unit_of_work))),
+            list_utility_bills: Arc::new(ListUtilityBills::new(Arc::clone(&unit_of_work))),
+            update_utility_bill: Arc::new(UpdateUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            validate_utility_bill: Arc::new(ValidateUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            void_utility_bill: Arc::new(VoidUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            recharge_utility_bill: Arc::new(RechargeUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            issue_charge: Arc::new(IssueCharge::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_charge: Arc::new(GetCharge::new(Arc::clone(&unit_of_work))),
+            list_charges: Arc::new(ListCharges::new(Arc::clone(&unit_of_work))),
+            void_charge: Arc::new(VoidCharge::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            write_off_charge: Arc::new(WriteOffCharge::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
             invite_tenant: Arc::new(InviteTenant::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),
@@ -264,9 +328,10 @@ impl AppState {
             accept_invitation: Arc::new(AcceptInvitation::new(
                 Arc::clone(&unit_of_work),
                 invitation_tokens,
-                clock,
+                Arc::clone(&clock),
             )),
             tokens,
+            clock,
             unit_of_work,
             pools,
         }
