@@ -30,6 +30,14 @@ pub enum Conflict {
     /// `org_members_org_user`
     #[error("The user already belongs to this organization")]
     MembershipAlreadyExists,
+    /// `utility_bills_dedup_uk`
+    ///
+    /// L'indice è unico su `(org_id, supplier_vat, invoice_number)` e scatta solo
+    /// quando **entrambi** i campi sono valorizzati: due bollette senza numero di
+    /// fattura non danno conflitto, il che è corretto e va detto perché sembra che
+    /// la deduplica non funzioni.
+    #[error("A bill with this invoice number from this supplier already exists")]
+    DuplicateUtilityBill,
 }
 
 impl Conflict {
@@ -41,6 +49,7 @@ impl Conflict {
             Self::InvitationAlreadyPending => "invitation.already_pending",
             Self::LeasePrimaryPartyExists => "lease.primary_party_exists",
             Self::MembershipAlreadyExists => "membership.already_exists",
+            Self::DuplicateUtilityBill => "utility_bill.duplicate",
         }
     }
 }
@@ -56,6 +65,14 @@ impl Conflict {
 pub enum UnsupportedQuery {
     #[error("`expiring` and `expired` are derived from the dates: filter by `in_force` instead")]
     LeaseDerivedStatusFilter,
+    /// `?status=overdue` sugli addebiti.
+    ///
+    /// Stessa forma del filtro sui contratti e stessa ragione: `overdue` è
+    /// derivato dalla scadenza e nessuna riga lo porta memorizzato, quindi
+    /// filtrarci sopra darebbe **sempre** zero risultati. Una pagina vuota sarebbe
+    /// il modo peggiore di dirlo.
+    #[error("`overdue` is derived from the due date: filter by `outstanding` instead")]
+    ChargeDerivedStatusFilter,
 }
 
 impl UnsupportedQuery {
@@ -63,6 +80,7 @@ impl UnsupportedQuery {
     pub const fn code(self) -> &'static str {
         match self {
             Self::LeaseDerivedStatusFilter => "lease.derived_status_filter",
+            Self::ChargeDerivedStatusFilter => "charge.derived_status_filter",
         }
     }
 
@@ -71,7 +89,7 @@ impl UnsupportedQuery {
     #[must_use]
     pub const fn field(self) -> &'static str {
         match self {
-            Self::LeaseDerivedStatusFilter => "status",
+            Self::LeaseDerivedStatusFilter | Self::ChargeDerivedStatusFilter => "status",
         }
     }
 }
@@ -212,6 +230,7 @@ mod tests {
             Conflict::InvitationAlreadyPending.code(),
             Conflict::LeasePrimaryPartyExists.code(),
             Conflict::MembershipAlreadyExists.code(),
+            Conflict::DuplicateUtilityBill.code(),
         ];
         let mut unique = codes.to_vec();
         unique.sort_unstable();
