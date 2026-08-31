@@ -14,6 +14,12 @@ mod common;
 use std::sync::Arc;
 
 use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
+use propflow_application::use_cases::billing::{
+    GetCharge, IssueCharge, IssueChargeCommand, ListCharges, ListChargesQuery, ListUtilityBills,
+    ListUtilityBillsQuery, RechargeUtilityBill, RechargeUtilityBillCommand, RegisterUtilityBill,
+    RegisterUtilityBillCommand, UpdateUtilityBill, ValidateUtilityBill, VoidCharge,
+    VoidUtilityBill,
+};
 use propflow_application::use_cases::document::{
     ArchiveDocument, ArchiveDocumentCommand, ListDocuments, ListDocumentsCommand, UploadDocument,
     UploadDocumentCommand,
@@ -37,6 +43,10 @@ use propflow_application::use_cases::ticket::{
     TriageTicketCommand,
 };
 use propflow_domain::RequestContext;
+use propflow_domain::billing::{
+    BillStatus, ChargeStatus, ChargeType, InvoiceNumber, SupplierVat, UtilityBillChanges,
+    UtilityType,
+};
 use propflow_domain::document::{AttachmentOwner, DocumentKind};
 use propflow_domain::identity::OrgRole;
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
@@ -1747,4 +1757,862 @@ async fn a_thread_message_can_never_be_rewritten() {
         vec!["ticket_messages_insert", "ticket_messages_select"],
         "una policy in più su ticket_messages cambia una proprietà del thread"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Bollette e addebiti
+// ---------------------------------------------------------------------------
+
+/// Registra una bolletta sull'immobile, con numero di fattura irripetibile.
+///
+/// Il numero è unico per invocazione perché `utility_bills_dedup_uk` è unico su
+/// `(org_id, supplier_vat, invoice_number)` e i test girano sullo stesso database:
+/// un numero fisso farebbe fallire il secondo test perché il primo è passato.
+async fn register_bill(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+    lease_id: Option<propflow_domain::shared::LeaseId>,
+    invoice_number: &str,
+) -> propflow_domain::billing::UtilityBill {
+    RegisterUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            RegisterUtilityBillCommand {
+                property_id,
+                room_id: None,
+                lease_id,
+                utility_type: UtilityType::Gas,
+                supplier_name: None,
+                supplier_vat: Some(SupplierVat::parse("IT12345678901").expect("valida")),
+                invoice_number: Some(InvoiceNumber::parse(invoice_number).expect("valido")),
+                issue_date: Some(days_from_today(-30)),
+                due_date: Some(days_from_today(10)),
+                period_start: Some(days_from_today(-90)),
+                period_end: Some(days_from_today(-31)),
+                total_amount: "184.20".parse().expect("decimale"),
+                taxable_amount: None,
+                vat_amount: None,
+                consumption: None,
+                notes: None,
+            },
+        )
+        .await
+        .expect("bolletta registrata")
+}
+
+/// Porta un inquilino dentro l'organizzazione come parte del contratto indicato,
+/// e restituisce il suo contesto.
+///
+/// Passa dall'invito vero e non da una `INSERT` a mano: è il solo modo in cui la
+/// membership e il collegamento della parte contrattuale esistono davvero, ed è da
+/// quel collegamento che dipende tutto ciò che l'inquilino vede.
+async fn tenant_on_lease(
+    env: &common::TestEnv,
+    owner: &RequestContext,
+    lease_id: propflow_domain::shared::LeaseId,
+    label: &str,
+) -> RequestContext {
+    let tenant = register_owner(env, label).await;
+    let tenant_email = {
+        let mut uow = env
+            .factory
+            .begin(&tenant)
+            .await
+            .expect("transazione aperta");
+        uow.users()
+            .find_by_id(tenant.user_id().expect("utente"))
+            .await
+            .expect("query riuscita")
+            .expect("utente visibile a sé stesso")
+            .email()
+            .clone()
+    };
+
+    let issued = InviteTenant::new(
+        Arc::clone(&env.factory),
+        Arc::new(OpaqueTokenGenerator),
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        owner,
+        InviteTenantCommand {
+            lease_id,
+            email: tenant_email,
+            full_name: format!("Inquilino {label}"),
+        },
+    )
+    .await
+    .expect("invito emesso");
+
+    let accepted = AcceptInvitation::new(
+        Arc::clone(&env.factory),
+        Arc::new(OpaqueTokenGenerator),
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        &tenant,
+        AcceptInvitationCommand {
+            token: issued.token,
+        },
+    )
+    .await
+    .expect("invito accettato");
+
+    RequestContext::authenticated(tenant.user_id().expect("utente"))
+        .with_org(accepted.org_id, OrgRole::Tenant)
+}
+
+/// Il giro completo del mese del proprietario, contro il database vero.
+#[tokio::test]
+async fn a_bill_travels_from_draft_to_a_charge_the_tenant_can_see() {
+    let env = require_db!();
+    let owner = register_owner(&env, "bolletta-giro").await;
+    let property_id = create_property(&env, &owner, "Immobile con gas", "Bologna").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    activate(&env, &owner, lease.id()).await.expect("attivato");
+    let tenant = tenant_on_lease(&env, &owner, lease.id(), "bolletta-inquilino").await;
+
+    let bill = register_bill(&env, &owner, property_id, Some(lease.id()), "2026/A/1").await;
+    assert_eq!(bill.status(), BillStatus::Draft);
+
+    // Correggere una bozza la lascia in bozza.
+    let corrected = UpdateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            bill.id(),
+            UtilityBillChanges {
+                invoice_number: Some(Some(InvoiceNumber::parse("2026/A/2").expect("valido"))),
+                ..UtilityBillChanges::default()
+            },
+        )
+        .await
+        .expect("correzione riuscita");
+    assert_eq!(corrected.status(), BillStatus::Draft);
+    assert_eq!(
+        corrected.invoice_number().map(|n| n.as_str()),
+        Some("2026/A/2")
+    );
+
+    let validated = ValidateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, bill.id())
+        .await
+        .expect("validata");
+    assert_eq!(validated.status(), BillStatus::Validated);
+    assert_eq!(validated.validated_by(), owner.user_id());
+    assert!(validated.validated_at().is_some());
+
+    let recharge = RechargeUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            bill.id(),
+            RechargeUtilityBillCommand {
+                lease_id: lease.id(),
+                amount: "120.00".parse().expect("decimale"),
+                due_date: days_from_today(10),
+                description: Some("Gas, bimestre".to_owned()),
+                notes: None,
+            },
+        )
+        .await
+        .expect("riaddebitata");
+
+    assert_eq!(recharge.bill.status(), BillStatus::Allocated);
+    assert_eq!(recharge.charge.status(), ChargeStatus::Issued);
+    assert_eq!(recharge.charge.charge_type(), ChargeType::UtilityRecharge);
+    assert_eq!(recharge.charge.utility_bill_id(), Some(bill.id()));
+    assert!(
+        recharge.charge.issued_at().is_some(),
+        "`charges_issued_ck` rifiuterebbe l'inserimento senza la data"
+    );
+    // Il periodo dell'addebito è quello della bolletta, non uno dichiarato a parte.
+    assert_eq!(recharge.charge.period_start(), bill.period_start());
+
+    // L'inquilino vede **entrambi**, e il saldo dice che non ha ancora pagato.
+    let seen = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&tenant, recharge.charge.id())
+        .await
+        .expect("l'inquilino vede l'addebito");
+    assert_eq!(
+        seen.paid_amount.amount(),
+        rust_decimal::Decimal::ZERO,
+        "senza righe in app.payments il saldo è per forza zero"
+    );
+    assert_eq!(seen.outstanding_amount, seen.charge.amount());
+    assert_eq!(seen.effective_status(), ChargeStatus::Issued);
+
+    let bills = ListUtilityBills::new(Arc::clone(&env.factory))
+        .execute(&tenant, ListUtilityBillsQuery::default())
+        .await
+        .expect("elenco riuscito");
+    assert!(
+        bills.items.iter().any(|item| item.id() == bill.id()),
+        "l'inquilino non vede la bolletta imputata al proprio contratto"
+    );
+}
+
+/// Lo stato scaduto **si deriva**: la vista lo calcola, la colonna resta `issued`.
+#[tokio::test]
+async fn an_overdue_charge_keeps_its_stored_state() {
+    let env = require_db!();
+    let owner = register_owner(&env, "addebito-scaduto").await;
+    let property_id = create_property(&env, &owner, "Immobile scadenze", "Padova").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-30),
+        Some(days_from_today(335)),
+    )
+    .await;
+
+    let charge = IssueCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            IssueChargeCommand {
+                lease_id: lease.id(),
+                charge_type: ChargeType::Rent,
+                description: Some("Canone arretrato".to_owned()),
+                period_start: None,
+                period_end: None,
+                amount: "800.00".parse().expect("decimale"),
+                due_date: days_from_today(-5),
+                notes: None,
+            },
+        )
+        .await
+        .expect("addebito emesso");
+
+    let balance = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&owner, charge.id())
+        .await
+        .expect("saldo letto");
+
+    assert!(
+        balance.is_past_due,
+        "la vista deve calcolare `is_past_due` su una scadenza nel passato"
+    );
+    assert_eq!(balance.effective_status(), ChargeStatus::Overdue);
+    assert_eq!(
+        balance.charge.status(),
+        ChargeStatus::Issued,
+        "lo stato memorizzato non cambia da sé: è ADR-019 applicato agli addebiti"
+    );
+
+    // E il dominio risponde la stessa cosa senza database, che è l'obbligo della
+    // coppia `app.lease_in_force` / `Lease::is_in_force`.
+    assert!(
+        balance
+            .charge
+            .is_past_due(chrono::Utc::now().date_naive(), rust_decimal::Decimal::ZERO),
+        "dominio e vista devono rispondere la stessa cosa"
+    );
+
+    // Il filtro sull'insoluto lo trova; quello sullo stato derivato è rifiutato dal
+    // service layer prima di arrivare al database.
+    let outstanding = ListCharges::new(Arc::clone(&env.factory))
+        .execute(
+            &owner,
+            ListChargesQuery {
+                outstanding: Some(true),
+                ..ListChargesQuery::default()
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert!(
+        outstanding
+            .items
+            .iter()
+            .any(|item| item.charge.id() == charge.id())
+    );
+
+    let refused = ListCharges::new(Arc::clone(&env.factory))
+        .execute(
+            &owner,
+            ListChargesQuery {
+                status: Some(ChargeStatus::Overdue),
+                ..ListChargesQuery::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            refused,
+            Err(propflow_application::AppError::UnsupportedQuery(_))
+        ),
+        "`?status=overdue` deve dire come si fa, non restituire una pagina vuota"
+    );
+}
+
+/// L'asimmetria fra i due annullamenti, verificata su database vero.
+#[tokio::test]
+async fn voiding_a_charge_keeps_it_visible_and_voiding_a_bill_frees_the_invoice_number() {
+    let env = require_db!();
+    let owner = register_owner(&env, "annullamenti").await;
+    let property_id = create_property(&env, &owner, "Immobile annulli", "Genova").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    activate(&env, &owner, lease.id()).await.expect("attivato");
+    let tenant = tenant_on_lease(&env, &owner, lease.id(), "annulli-inquilino").await;
+
+    let charge = IssueCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            IssueChargeCommand {
+                lease_id: lease.id(),
+                charge_type: ChargeType::Rent,
+                description: None,
+                period_start: None,
+                period_end: None,
+                amount: "800.00".parse().expect("decimale"),
+                due_date: days_from_today(15),
+                notes: None,
+            },
+        )
+        .await
+        .expect("emesso");
+
+    VoidCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, charge.id())
+        .await
+        .expect("annullato");
+
+    // **Resta visibile all'inquilino**: si è visto chiedere quella somma e deve
+    // poter vedere che la richiesta è caduta.
+    let seen = GetCharge::new(Arc::clone(&env.factory))
+        .execute(&tenant, charge.id())
+        .await
+        .expect("l'addebito annullato resta leggibile");
+    assert_eq!(seen.charge.status(), ChargeStatus::Void);
+    assert_eq!(
+        seen.effective_status(),
+        ChargeStatus::Void,
+        "un addebito annullato non diventa scaduto col passare del tempo"
+    );
+
+    // La bolletta invece sparisce, e libera la chiave di deduplica.
+    let bill = register_bill(&env, &owner, property_id, Some(lease.id()), "2026/B/1").await;
+    VoidUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, bill.id())
+        .await
+        .expect("annullata");
+
+    let bills = ListUtilityBills::new(Arc::clone(&env.factory))
+        .execute(&owner, ListUtilityBillsQuery::default())
+        .await
+        .expect("elenco riuscito");
+    assert!(
+        !bills.items.iter().any(|item| item.id() == bill.id()),
+        "una bolletta annullata deve sparire: il soft delete è ciò che libera la chiave"
+    );
+
+    // E la stessa fattura si reinserisce, che è la ragione tecnica del soft delete.
+    let reinserted = register_bill(&env, &owner, property_id, Some(lease.id()), "2026/B/1").await;
+    assert_ne!(reinserted.id(), bill.id());
+}
+
+/// La deduplica scatta e arriva come conflitto **parlante**, non come «vincolo
+/// violato».
+#[tokio::test]
+async fn the_same_invoice_from_the_same_supplier_is_refused_once() {
+    let env = require_db!();
+    let owner = register_owner(&env, "deduplica").await;
+    let property_id = create_property(&env, &owner, "Immobile doppioni", "Verona").await;
+
+    register_bill(&env, &owner, property_id, None, "2026/C/1").await;
+
+    let second = RegisterUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            RegisterUtilityBillCommand {
+                property_id,
+                room_id: None,
+                lease_id: None,
+                utility_type: UtilityType::Gas,
+                supplier_name: None,
+                supplier_vat: Some(SupplierVat::parse("IT12345678901").expect("valida")),
+                invoice_number: Some(InvoiceNumber::parse("2026/C/1").expect("valido")),
+                issue_date: None,
+                due_date: None,
+                period_start: None,
+                period_end: None,
+                total_amount: "10.00".parse().expect("decimale"),
+                taxable_amount: None,
+                vat_amount: None,
+                consumption: None,
+                notes: None,
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(
+            second,
+            Err(propflow_application::AppError::Conflict(
+                propflow_application::Conflict::DuplicateUtilityBill
+            ))
+        ),
+        "atteso un conflitto nominato, ottenuto {second:?}"
+    );
+}
+
+/// La **riga fantasma**: `charges_insert` non chiama `can_access_lease`, quindi
+/// senza il controllo applicativo si scriverebbe un addebito invisibile a tutti e
+/// impossibile da cancellare — il ruolo applicativo non ha `DELETE`.
+///
+/// Il test verifica che lo use case si fermi prima: il contratto dell'altra
+/// organizzazione, letto sotto la RLS di chi chiede, semplicemente non si trova.
+#[tokio::test]
+async fn a_charge_cannot_be_issued_against_a_lease_of_another_organization() {
+    let env = require_db!();
+    let stranger = register_owner(&env, "fantasma-estraneo").await;
+    let stranger_property = create_property(&env, &stranger, "Immobile altrui", "Palermo").await;
+    let stranger_lease = draft_lease(
+        &env,
+        &stranger,
+        stranger_property,
+        None,
+        days_from_today(0),
+        Some(days_from_today(365)),
+    )
+    .await;
+
+    // Chi attacca conosce l'UUID del contratto altrui e usa il **proprio** org_id:
+    // la `WITH CHECK` di `charges_insert` nomina l'organizzazione e non il
+    // contratto, e la foreign key verso `app.leases` non guarda l'organizzazione.
+    let attacker = register_owner(&env, "fantasma-attaccante").await;
+    let attempt = IssueCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &attacker,
+            IssueChargeCommand {
+                lease_id: stranger_lease.id(),
+                charge_type: ChargeType::Rent,
+                description: None,
+                period_start: None,
+                period_end: None,
+                amount: "1.00".parse().expect("decimale"),
+                due_date: days_from_today(30),
+                notes: None,
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(
+            attempt,
+            Err(propflow_application::AppError::NotFound(
+                propflow_domain::Entity::Lease
+            ))
+        ),
+        "senza questo controllo la riga entrerebbe e non sarebbe più leggibile né \
+         cancellabile: ottenuto {attempt:?}"
+    );
+
+    // E nulla è stato scritto: la prova che il controllo precede la scrittura.
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM app.charges WHERE lease_id = $1")
+        .bind(stranger_lease.id().as_uuid())
+        .fetch_one(env.pools.privileged())
+        .await
+        .expect("conteggio riuscito");
+    assert_eq!(count.0, 0, "una riga fantasma è finita in app.charges");
+}
+
+/// I privilegi di colonna della migration `0023`, verificati **al contrario**.
+///
+/// Il privilegio è controllato prima delle policy e prima che le righe vengano
+/// esaminate, quindi il tentativo fallisce anche su un identificatore inesistente:
+/// il test non ha bisogno di costruire lo scenario per dimostrare che la strada è
+/// chiusa.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_a_claim_it_has_already_made() {
+    let env = require_db!();
+
+    // Le query sono letterali statici anche qui: `sqlx` 0.9 rifiuta le stringhe
+    // composte a runtime, ed è la stessa regola che vale nel codice di produzione
+    // (`CLAUDE.md` §2.15). Comporle con `format!` per brevità non compilerebbe.
+    let refused: [(&str, &'static str); 5] = [
+        (
+            "amount",
+            "UPDATE app.charges SET amount = 1.00 WHERE id = gen_random_uuid()",
+        ),
+        (
+            "due_date",
+            "UPDATE app.charges SET due_date = CURRENT_DATE WHERE id = gen_random_uuid()",
+        ),
+        (
+            "lease_id",
+            "UPDATE app.charges SET lease_id = gen_random_uuid() WHERE id = gen_random_uuid()",
+        ),
+        (
+            "description",
+            "UPDATE app.charges SET description = 'altro' WHERE id = gen_random_uuid()",
+        ),
+        (
+            "deleted_at",
+            "UPDATE app.charges SET deleted_at = now() WHERE id = gen_random_uuid()",
+        ),
+    ];
+    for (column, statement) in refused {
+        let attempt = sqlx::query(statement)
+            .execute(env.pools.application())
+            .await;
+        let error = attempt.expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "`{column}` doveva essere negata, ottenuto: {error}"
+        );
+    }
+
+    // `status` invece resta concessa: è ciò che l'applicazione scrive, ed è tutto
+    // ciò di cui avrà bisogno anche il modulo dei pagamenti.
+    let allowed =
+        sqlx::query("UPDATE app.charges SET status = 'void' WHERE id = gen_random_uuid()")
+            .execute(env.pools.application())
+            .await;
+    assert!(
+        allowed.is_ok(),
+        "l'aggiornamento di status non doveva essere negato: {:?}",
+        allowed.err()
+    );
+}
+
+/// L'isolamento fra organizzazioni sui due aggregati nuovi.
+#[tokio::test]
+async fn bills_and_charges_are_isolated_between_organizations() {
+    let env = require_db!();
+    let owner = register_owner(&env, "isolamento-contabile").await;
+    let property_id = create_property(&env, &owner, "Immobile riservato", "Torino").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(0),
+        Some(days_from_today(365)),
+    )
+    .await;
+    let bill = register_bill(&env, &owner, property_id, Some(lease.id()), "2026/D/1").await;
+    let charge = IssueCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            IssueChargeCommand {
+                lease_id: lease.id(),
+                charge_type: ChargeType::Deposit,
+                description: None,
+                period_start: None,
+                period_end: None,
+                amount: "1600.00".parse().expect("decimale"),
+                due_date: days_from_today(7),
+                notes: None,
+            },
+        )
+        .await
+        .expect("emesso");
+
+    let stranger = register_owner(&env, "isolamento-estraneo").await;
+
+    let mut uow = env
+        .factory
+        .begin(&stranger)
+        .await
+        .expect("transazione aperta");
+    assert!(
+        uow.utility_bills()
+            .find_by_id(bill.id())
+            .await
+            .expect("query riuscita")
+            .is_none(),
+        "una bolletta di un'altra organizzazione non deve essere leggibile"
+    );
+    assert!(
+        uow.charges()
+            .find_by_id(charge.id())
+            .await
+            .expect("query riuscita")
+            .is_none()
+    );
+    assert!(
+        uow.charges()
+            .find_balance_by_id(charge.id())
+            .await
+            .expect("query riuscita")
+            .is_none(),
+        "la vista dei saldi è security_invoker: applica la RLS del chiamante"
+    );
+}
+
+/// La correzione di una bolletta validata **disfa la validazione**, e la scrittura
+/// arriva davvero in database — non solo nell'aggregato in memoria.
+#[tokio::test]
+async fn correcting_a_validated_bill_sends_it_back_to_draft_in_the_database() {
+    let env = require_db!();
+    let owner = register_owner(&env, "disfa-validazione").await;
+    let property_id = create_property(&env, &owner, "Immobile revisioni", "Ancona").await;
+    let bill = register_bill(&env, &owner, property_id, None, "2026/E/1").await;
+
+    ValidateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, bill.id())
+        .await
+        .expect("validata");
+
+    UpdateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            bill.id(),
+            UtilityBillChanges {
+                total_amount: Some("999.99".parse().expect("decimale")),
+                ..UtilityBillChanges::default()
+            },
+        )
+        .await
+        .expect("corretta");
+
+    // Riletta dal database: è il punto del test. `utility_bills_validated_ck`
+    // vincola una sola direzione, quindi il database accetterebbe senza dire niente
+    // una bolletta `draft` con `validated_at` valorizzato.
+    let row: (
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<uuid::Uuid>,
+    ) = sqlx::query_as(
+        "SELECT status::text, validated_at, validated_by
+               FROM app.utility_bills WHERE id = $1",
+    )
+    .bind(bill.id().as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("riga presente");
+
+    assert_eq!(row.0, "draft");
+    assert_eq!(
+        row.1, None,
+        "una bozza con la data di validazione è una riga che mente"
+    );
+    assert_eq!(row.2, None);
+}
+
+/// In un co-living con contratti per stanza, il coinquilino **non** scarica la
+/// bolletta imputata al contratto dell'altro.
+///
+/// È la prova che la migration `0022` serviva: prima, `can_access_attachment`
+/// risolveva `utility_bill` su `can_access_property`, vera per *ogni* inquilino
+/// dell'immobile, mentre `utility_bills_select` chiede di essere parte del
+/// contratto indicato. Il coinquilino non vedeva la riga della bolletta e ne
+/// avrebbe scaricato la scansione — con nome, indirizzo e consumi dell'altro.
+#[tokio::test]
+async fn a_cotenant_cannot_reach_the_bill_of_the_other_room() {
+    let env = require_db!();
+    let owner = register_owner(&env, "coliving-bollette").await;
+    let property_id = create_property(&env, &owner, "Co-living", "Milano").await;
+
+    let room_a = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            CreateRoomCommand {
+                property_id,
+                name: "Stanza A".to_owned(),
+                attributes: RoomChanges::default(),
+            },
+        )
+        .await
+        .expect("stanza A");
+    let room_b = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            CreateRoomCommand {
+                property_id,
+                name: "Stanza B".to_owned(),
+                attributes: RoomChanges::default(),
+            },
+        )
+        .await
+        .expect("stanza B");
+
+    let lease_a = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        Some(room_a.id()),
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    let lease_b = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        Some(room_b.id()),
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    activate(&env, &owner, lease_a.id())
+        .await
+        .expect("A attivo");
+    activate(&env, &owner, lease_b.id())
+        .await
+        .expect("B attivo");
+
+    let tenant_a = tenant_on_lease(&env, &owner, lease_a.id(), "coliving-a").await;
+    let _tenant_b = tenant_on_lease(&env, &owner, lease_b.id(), "coliving-b").await;
+
+    // La bolletta è imputata al contratto di B.
+    let bill_b = register_bill(&env, &owner, property_id, Some(lease_b.id()), "2026/F/1").await;
+
+    // A non vede la riga: è la policy, e questo funzionava già.
+    let mut uow = env
+        .factory
+        .begin(&tenant_a)
+        .await
+        .expect("transazione aperta");
+    assert!(
+        uow.utility_bills()
+            .find_by_id(bill_b.id())
+            .await
+            .expect("query riuscita")
+            .is_none(),
+        "la policy della bolletta non lascia vedere quella dell'altro contratto"
+    );
+    drop(uow);
+
+    // Il caso d'uso lo ferma: `ensure_owner_is_visible` rilegge la bolletta sotto
+    // la policy, e per A non c'è.
+    let listing = ListDocuments::new(Arc::clone(&env.factory))
+        .execute(
+            &tenant_a,
+            ListDocumentsCommand {
+                owner: AttachmentOwner::UtilityBill(bill_b.id()),
+                after: None,
+                limit: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            listing,
+            Err(propflow_application::AppError::NotFound(
+                propflow_domain::Entity::UtilityBill
+            ))
+        ),
+        "il coinquilino non deve raggiungere gli allegati della bolletta altrui: \
+         ottenuto {listing:?}"
+    );
+
+    // **E lo ferma anche lo strato sotto**, che è il punto di questo test.
+    //
+    // Il controllo applicativo qui sopra passerebbe *comunque*, anche con la
+    // funzione sbagliata: maschera il difetto invece di dimostrarlo — verificato
+    // rimettendo la definizione della `0014` e vedendo il test restare verde. Per
+    // sapere se la migration `0022` serviva davvero bisogna interrogare
+    // `can_access_attachment` **direttamente, sotto il contesto RLS di A**, che è
+    // ciò che fa la policy `documents_select` quando l'applicazione non c'è di
+    // mezzo.
+    //
+    // Con la definizione originale questa asserzione fallisce: il ramo
+    // `utility_bill` risolveva su `can_access_property`, vera per ogni inquilino
+    // dell'immobile. È la difesa in profondità che ADR-016 chiede, e senza questa
+    // riga non sapremmo di averla.
+    let mut connection = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione aperta");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, $3)")
+        .bind(tenant_a.user_id().expect("utente").as_uuid())
+        .bind(tenant_a.org_id().expect("org").as_uuid())
+        .bind("tenant")
+        .execute(&mut *connection)
+        .await
+        .expect("contesto installato");
+
+    let reachable: (bool,) = sqlx::query_as("SELECT app.can_access_attachment('utility_bill', $1)")
+        .bind(bill_b.id().as_uuid())
+        .fetch_one(&mut *connection)
+        .await
+        .expect("funzione interrogabile");
+    assert!(
+        !reachable.0,
+        "can_access_attachment lascia il coinquilino raggiungere la bolletta \
+         dell'altro contratto: è il difetto che la migration 0022 corregge"
+    );
+
+    // Il ramo `charge` era invece già allineato a `charges_select`, e il test lo
+    // fissa: riscriverlo per simmetria avrebbe toccato una riga giusta.
+    let charge_b = IssueCharge::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            IssueChargeCommand {
+                lease_id: lease_b.id(),
+                charge_type: ChargeType::Rent,
+                description: None,
+                period_start: None,
+                period_end: None,
+                amount: "500.00".parse().expect("decimale"),
+                due_date: days_from_today(20),
+                notes: None,
+            },
+        )
+        .await
+        .expect("emesso");
+
+    let charge_reachable: (bool,) =
+        sqlx::query_as("SELECT app.can_access_attachment('charge', $1)")
+            .bind(charge_b.id().as_uuid())
+            .fetch_one(&mut *connection)
+            .await
+            .expect("funzione interrogabile");
+    assert!(
+        !charge_reachable.0,
+        "il ramo `charge` risolve su can_access_lease e non deve lasciar passare A"
+    );
+}
+
+/// L'evento della bolletta non porta né importi né dati del fornitore.
+#[tokio::test]
+async fn registering_a_bill_writes_the_event_without_the_supplier_or_the_amount() {
+    let env = require_db!();
+    let owner = register_owner(&env, "bolletta-evento").await;
+    let property_id = create_property(&env, &owner, "Immobile eventi", "Lecce").await;
+    let bill = register_bill(&env, &owner, property_id, None, "2026/G/99887").await;
+
+    let row: (String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT event_type, aggregate_type, payload
+           FROM app.domain_events
+          WHERE aggregate_id = $1",
+    )
+    .bind(bill.id().as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("evento presente");
+
+    assert_eq!(row.0, "billing.utility_bill.registered");
+    assert_eq!(row.1, "UtilityBill");
+    let payload = row.2.to_string();
+    assert!(
+        !payload.contains("184.20"),
+        "l'importo è finito nell'evento: {payload}"
+    );
+    assert!(
+        !payload.contains("IT12345678901") && !payload.contains("99887"),
+        "il fornitore o il numero di fattura sono finiti nell'evento: {payload}"
+    );
+    assert!(payload.contains("gas"), "payload: {payload}");
 }
