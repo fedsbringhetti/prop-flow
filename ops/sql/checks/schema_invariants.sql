@@ -158,8 +158,19 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     al modulo dei pagamenti. `deleted_at` è fra le negate: un addebito annullato
 --     resta visibile a chi se l'era visto chiedere.
 --
---     Un nome solo per due tabelle, e non un terzo controllo: il criterio è quello
---     di ADR-026 in entrambi i casi, e inventargli un nome nuovo renderebbe
+--     Per i **pagamenti**: la `WITH CHECK` di `payments_update` ha lo stesso
+--     difetto, e l'elenco è di nuovo quasi la tabella intera perché un pagamento
+--     **registra un fatto già avvenuto** — chi ha pagato, quanto, come — e un
+--     fatto non si corregge riscrivendolo. Le sole colonne concesse sono `status`,
+--     `paid_at` e `reconciled_at`, cioè le tre che il dominio muove; `paid_at` fra
+--     esse perché il rifiuto di una dichiarazione la **azzera**, e
+--     `payments_succeeded_ck` vincola una sola direzione. `idempotency_key` è
+--     quella la cui riscrittura costa denaro: è metà di
+--     `payments_idempotency_uk`, e liberarla apre a un secondo inserimento, cioè
+--     a un saldo che scende due volte. Vedi migrations/0025 e ADR-033.
+--
+--     Un nome solo per tre tabelle, e non un controllo per ciascuna: il criterio è
+--     quello di ADR-026 in tutti i casi, e inventargli un nome nuovo renderebbe
 --     illeggibile la ragione comune.
 INSERT INTO invariant_violations
 SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
@@ -175,7 +186,14 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
            ('charges', 'period_end'),      ('charges', 'description'),
            ('charges', 'utility_bill_id'), ('charges', 'generation_key'),
            ('charges', 'issued_at'),       ('charges', 'document_id'),
-           ('charges', 'notes'),           ('charges', 'deleted_at')
+           ('charges', 'notes'),           ('charges', 'deleted_at'),
+           ('payments', 'org_id'),          ('payments', 'payable_type'),
+           ('payments', 'payable_id'),      ('payments', 'payer_user_id'),
+           ('payments', 'payee_user_id'),   ('payments', 'amount'),
+           ('payments', 'currency'),        ('payments', 'method'),
+           ('payments', 'idempotency_key'), ('payments', 'reference'),
+           ('payments', 'refunded_amount'), ('payments', 'provider'),
+           ('payments', 'provider_payment_id')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
