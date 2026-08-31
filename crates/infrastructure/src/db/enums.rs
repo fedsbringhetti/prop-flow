@@ -7,6 +7,7 @@
 //! testuale ha lo stesso comportamento su qualunque connessione e rende visibile
 //! nel SQL quale tipo si sta usando.
 
+use propflow_domain::billing::{BillStatus, ChargeStatus, ChargeType, UtilityType};
 use propflow_domain::document::{AttachmentOwnerType, DocumentKind};
 use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, UserStatus};
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, LeaseType, RentFrequency};
@@ -203,6 +204,58 @@ string_enum!("ticket_actor", TicketActor, ticket_actor_to_db, ticket_actor_from_
     Ai => "ai",
 });
 
+string_enum!("utility_type", UtilityType, utility_type_to_db, utility_type_from_db, {
+    Electricity => "electricity",
+    Gas => "gas",
+    Water => "water",
+    Heating => "heating",
+    Waste => "waste",
+    Internet => "internet",
+    CondoFees => "condo_fees",
+    Other => "other",
+});
+
+// Tre valori che l'applicazione non scrive mai, ciascuno per una ragione sua:
+// `pending_review` appartiene all'OCR (modulo successivo); `paid` significherebbe
+// «il proprietario ha pagato il fornitore» e non è modellato affatto, perché
+// `app.payable_type` non comprende `utility_bill`; `disputed` è una contestazione
+// senza via di ritorno disegnata. Restano nella tabella di conversione perché una
+// riga scritta a mano potrebbe contenerli, e un valore sconosciuto in lettura deve
+// dare errore.
+string_enum!("bill_status", BillStatus, bill_status_to_db, bill_status_from_db, {
+    Draft => "draft",
+    PendingReview => "pending_review",
+    Validated => "validated",
+    Allocated => "allocated",
+    Paid => "paid",
+    Disputed => "disputed",
+    Void => "void",
+});
+
+string_enum!("charge_type", ChargeType, charge_type_to_db, charge_type_from_db, {
+    Rent => "rent",
+    Deposit => "deposit",
+    UtilityRecharge => "utility_recharge",
+    LateFee => "late_fee",
+    Maintenance => "maintenance",
+    Adjustment => "adjustment",
+    Other => "other",
+});
+
+// Quattro valori su sette che l'applicazione non scrive: `draft` perché un
+// addebito nasce emesso, `overdue` perché si deriva dalla scadenza (ADR-019), e
+// `partially_paid`/`paid` perché li produrrà la riconciliazione del modulo dei
+// pagamenti. Valgono le stesse ragioni di `lease_status`.
+string_enum!("charge_status", ChargeStatus, charge_status_to_db, charge_status_from_db, {
+    Draft => "draft",
+    Issued => "issued",
+    PartiallyPaid => "partially_paid",
+    Paid => "paid",
+    Overdue => "overdue",
+    Void => "void",
+    WrittenOff => "written_off",
+});
+
 // Le classi energetiche restano maiuscole anche nel database: 'A4', 'B', 'G'.
 string_enum!("energy_class", EnergyClass, energy_class_to_db, energy_class_from_db, {
     A4 => "A4",
@@ -380,6 +433,71 @@ mod tests {
                 actor
             );
         }
+        for utility in [
+            UtilityType::Electricity,
+            UtilityType::Gas,
+            UtilityType::Water,
+            UtilityType::Heating,
+            UtilityType::Waste,
+            UtilityType::Internet,
+            UtilityType::CondoFees,
+            UtilityType::Other,
+        ] {
+            assert_eq!(
+                utility_type_from_db(utility_type_to_db(utility)).expect("noto"),
+                utility
+            );
+            assert_eq!(utility_type_to_db(utility), utility.as_str());
+        }
+        for status in [
+            BillStatus::Draft,
+            BillStatus::PendingReview,
+            BillStatus::Validated,
+            BillStatus::Allocated,
+            BillStatus::Paid,
+            BillStatus::Disputed,
+            BillStatus::Void,
+        ] {
+            assert_eq!(
+                bill_status_from_db(bill_status_to_db(status)).expect("noto"),
+                status
+            );
+            assert_eq!(bill_status_to_db(status), status.as_str());
+        }
+        for charge_type in [
+            ChargeType::Rent,
+            ChargeType::Deposit,
+            ChargeType::UtilityRecharge,
+            ChargeType::LateFee,
+            ChargeType::Maintenance,
+            ChargeType::Adjustment,
+            ChargeType::Other,
+        ] {
+            assert_eq!(
+                charge_type_from_db(charge_type_to_db(charge_type)).expect("noto"),
+                charge_type
+            );
+            assert_eq!(charge_type_to_db(charge_type), charge_type.as_str());
+        }
+        for status in [
+            ChargeStatus::Draft,
+            ChargeStatus::Issued,
+            ChargeStatus::PartiallyPaid,
+            ChargeStatus::Paid,
+            ChargeStatus::Overdue,
+            ChargeStatus::Void,
+            ChargeStatus::WrittenOff,
+        ] {
+            assert_eq!(
+                charge_status_from_db(charge_status_to_db(status)).expect("noto"),
+                status
+            );
+            // Come per `TicketStatus`: la costante `ChargeStatus::OUTSTANDING`
+            // compare come letterale SQL nel repository, e una rinomina che
+            // toccasse solo uno dei due farebbe smettere lo scadenzario di usare
+            // `charges_outstanding_ix`.
+            assert_eq!(charge_status_to_db(status), status.as_str());
+        }
         assert_eq!(lease_type_to_db(LeaseType::WholeProperty), "whole_property");
         assert_eq!(energy_class_to_db(EnergyClass::A4), "A4");
     }
@@ -395,5 +513,8 @@ mod tests {
         assert!(attachment_owner_type_from_db("utility_bill").is_err());
         assert!(ticket_status_from_db("escalated").is_err());
         assert!(ticket_actor_from_db("vendor").is_err());
+        assert!(bill_status_from_db("archived").is_err());
+        assert!(charge_status_from_db("refunded").is_err());
+        assert!(utility_type_from_db("sewage").is_err());
     }
 }
