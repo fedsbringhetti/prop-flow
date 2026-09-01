@@ -189,17 +189,32 @@ Nessuno dei tre può scrivere su `audit_log`: la traccia la scrive il trigger, c
 
 ### Privilegi di colonna
 
-Su quattro tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle
-colonne che i repository scrivono: `org_invitations` e `lease_parties`
+Su sei tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle colonne
+che i repository scrivono: `org_invitations` e `lease_parties`
 ([ADR-021](08-decisioni.md#adr-021), migration `0019`), `tickets`
 ([ADR-026](08-decisioni.md#adr-026), migration `0020`, estesa dalla `0021` con
-`resolution_notes`) e `charges`
-([ADR-029](08-decisioni.md#adr-029), migration `0023`).
+`resolution_notes`), `charges` ([ADR-029](08-decisioni.md#adr-029), migration `0023`),
+`payments` ([ADR-033](08-decisioni.md#adr-033), migration `0025`) ed `expenses`
+([ADR-035](08-decisioni.md#adr-035), migration `0028`).
 
 Su `charges` la concessione è di **una colonna sola**, `status`: un addebito emesso è
 una pretesa verso una persona, e tutto ciò che la descrive — a chi, quanto, per cosa,
-entro quando — è fissato all'emissione. È anche la `GRANT` che basterà al modulo dei
+entro quando — è fissato all'emissione. È anche la `GRANT` che basta al modulo dei
 pagamenti, che scrive solo lo stato.
+
+Su `payments` sono tre — `status`, `paid_at`, `reconciled_at` — perché un pagamento
+**registra un fatto già avvenuto**, e un fatto non si corregge riscrivendolo.
+`idempotency_key` è la negata che costa denaro: è metà di `payments_idempotency_uk`, e
+liberarla apre a un secondo inserimento, cioè a un saldo che scende due volte.
+
+**Su `expenses` il criterio vale due volte**, e la seconda è la ragione della migration:
+oltre alla `WITH CHECK` che nomina il solo `org_id`, il trigger `expense_shares_balanced`
+è definito su `app.expense_shares` e **non scatta** su una `UPDATE` di `app.expenses`.
+Riscrivere `amount` da solo sbilancia l'invariante contabile in silenzio, ed è l'unico
+posto del progetto dove un privilegio di colonna difende ciò che un trigger dovrebbe
+difendere e non copre. `deleted_at` è qui fra le **concesse**, al contrario degli
+addebiti: `app.expenses` non ha una colonna di stato, quindi il soft delete *è*
+l'annullamento di una spesa.
 
 **Su `utility_bills` lo strumento non si usa**, ed è la prima volta che il criterio di
 ADR-026 dà «no»: una bolletta si digita, dodici campi alla volta, e la `GRANT` dovrebbe
@@ -331,7 +346,7 @@ Contengono solo aggregazioni derivabili, nessuna regola di business.
 | Vista | Contenuto |
 |---|---|
 | `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto. **Residuo azzerato e mai scaduto** per `void` e `written_off` |
-| `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living |
+| `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living. **Comprende chi è uscito** finché il suo netto è diverso da zero |
 | `v_property_occupancy` | Stanze totali e occupate, percentuale, contratti in essere e loro canone |
 | `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
 
@@ -339,6 +354,17 @@ Le due viste sui contratti non filtrano `status = 'active'` ma
 `app.lease_in_force(status, start_date, end_date)`: lo stato memorizzato resta
 `active` anche dopo la scadenza, perché nessuno lo aggiorna, e contarlo gonfiava
 occupazione e canone atteso. Storia in [ADR-019](08-decisioni.md#adr-019).
+
+`v_expense_group_balances` parte dalla **membership** e non dalle spese, e fino alla
+migration `0027` filtrava `left_at IS NULL`: chi lasciava il gruppo spariva dai saldi
+**portandosi via il debito**, e la somma dei netti di un gruppo — che deve fare zero —
+smetteva di farlo. Dalla `0027` chi è uscito resta finché il suo netto è diverso da
+zero. È lo stesso difetto della `0024` sui saldi degli addebiti, corretto nello stesso
+modo e per la stessa ragione: un numero che mente in silenzio.
+
+Ne segue che un utente mai stato membro non compare, anche se figura come
+`paid_by_user_id` di una spesa — cosa che lo schema permette, perché su quella colonna
+non c'è alcun vincolo verso la membership. A impedirlo è il service layer.
 
 `app.lease_in_force` è l'unica definizione di "in essere": la usano le viste e il
 filtro `in_force` dell'elenco dei contratti, e il dominio ripete la stessa formula
@@ -381,7 +407,7 @@ un'eccezione** se ne viola uno, così la pipeline si ferma:
 9. policy di SELECT che filtrano il soft delete
 10. `_sqlx_migrations` duplicata fuori da `public`
 11. colonne di **confine** aggiornabili dal ruolo applicativo ([ADR-021](08-decisioni.md#adr-021))
-12. colonne **strutturali** di una segnalazione o di un addebito aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026), [ADR-029](08-decisioni.md#adr-029))
+12. colonne **strutturali** di una segnalazione, di un addebito, di un pagamento o di una spesa aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026), [ADR-029](08-decisioni.md#adr-029), [ADR-033](08-decisioni.md#adr-033), [ADR-035](08-decisioni.md#adr-035))
 
 Il controllo 4 ha trovato cinque foreign key senza indice durante la prima
 scrittura dello schema; i controlli 9 e 10 sono i guardiani di due bug reali, e gli

@@ -20,9 +20,9 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 25 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 28 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
-170 indici, 65 policy RLS, 50 trigger, 4 viste, 29 funzioni.
+170 indici, 65 policy RLS, 50 trigger, 4 viste, 30 funzioni.
 
 Coperti a schema: utenti e organizzazioni, immobili e stanze, contratti e parti
 contrattuali, documenti con allegato polimorfico, segnalazioni con thread e storico,
@@ -51,14 +51,15 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Bollette: registrazione manuale, correzione, validazione, annullamento, riaddebito, allegati | completo per la fetta 1 |
 | Addebiti: emissione, elenco e dettaglio con il saldo dalla vista, annullamento, rinuncia all'incasso, allegati | completo per la fetta 1 |
 | Pagamenti: incasso registrato dallo staff, dichiarazione dell'inquilino, conferma e rifiuto, elenco e dettaglio, idempotenza fornita dal client, stato dell'addebito ricalcolato dai pagamenti | completo per la fetta 1 |
+| Spese co-living: gruppi con il creatore già dentro, composizione con uscita e rientro, spese con ripartizione `equal` e `weighted`, saldi letti dalla vista, regolamenti a due tempi confermati da chi riceve | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-293 test: 147 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
-del bordo HTTP, 46 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 60 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+342 test: 181 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
+del bordo HTTP, 57 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 64 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -67,25 +68,14 @@ MinIO, 60 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **Spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
-   `settlements`) — la vista dei saldi esiste già. È il **prossimo passo suggerito**, ed
-   è **pianificato**, non ancora implementato: il piano è in fondo,
-   [Piano — Spese co-living, fetta 1](#piano-spese-co-living-fetta-1), con le dieci
-   decisioni prese, i quindici passi e le trappole lette nello schema.
-
-   **Non** porta `payable_type` a tre valori, contrariamente a quanto questa voce
-   diceva prima che il piano fosse scritto: un regolamento fra coinquilini non è denaro
-   che l'organizzazione incassa, quindi non diventa una riga in `app.payments` e
-   `Payable` resta a una variante. È la decisione 6 del piano, ed è registrata qui
-   perché era una previsione ereditata dalla fetta dei pagamenti, non una scelta fatta.
-2. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
+1. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
    verificando la reference del fornitore scelto in quel momento. È il modulo che
    riempirà `ocr_extracted`, `ocr_confidence` e lo stato `pending_review`, che la
    fetta contabile ha deliberatamente lasciato ai loro default: lo schema tiene
    separato ciò che ha letto la macchina da ciò che ha confermato una persona
    (`validated_by`, `validated_at`) proprio perché l'accuratezza si possa misurare, e
    riempire le prime con valori umani distruggerebbe quel dato prima di raccoglierlo.
-3. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
+2. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
    **ultima**, ed è una scelta da rileggere insieme alla sua alternativa, perché la
    fetta dei pagamenti ha reso facile confondersi.
 
@@ -118,7 +108,7 @@ porta → use case → repository → endpoint → test.
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
 archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
 bollette e addebiti. Restano fuori, e non per dimenticanza, il versionamento (V2) e
-l'OCR (punto 3); allargare gli owner ad avatar, spese e pagamenti è additivo e si fa
+l'OCR (punto 1); allargare gli owner ad avatar, spese e pagamenti è additivo e si fa
 quando quei moduli esistono. Il resoconto è in fondo:
 [Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
 
@@ -126,13 +116,34 @@ quando quei moduli esistono. Il resoconto è in fondo:
 dichiarazione dell'inquilino in `pending`, conferma e rifiuto, elenco e dettaglio dei
 pagamenti di un addebito, idempotenza fornita dal client, e stato dell'addebito
 ricalcolato dai pagamenti. Restano fuori, e non per dimenticanza, i rimborsi, i
-provider veri con i loro webhook, i pagamenti di quote e regolamenti (punto 2) e il
+provider veri con i loro webhook, i pagamenti di quote e regolamenti — che restano
+fuori **per sempre**, non in attesa: vedi sotto — e il
 pagamento della bolletta al fornitore, che non è modellato affatto. Il resoconto è in
 fondo: [Piano — Pagamenti, fetta 1](#piano-pagamenti-fetta-1).
 
+**Spese co-living** è implementato nella fetta 1: gruppi con chi li crea già dentro,
+composizione con uscita e rientro, spese ripartite `equal` e `weighted` con la somma
+delle quote garantita dal database, saldi letti dalla vista, e regolamenti a due tempi
+confermati da **chi riceve**. Ha richiesto **tre migration** — la `0026` per la policy
+che lascia iscriversi chi crea il gruppo, la `0027` per la vista che perdeva chi usciva
+con un conto aperto, la `0028` per i privilegi di colonna che chiudono un buco vero del
+trigger contabile — e due ADR, [034](08-decisioni.md#adr-034) e
+[035](08-decisioni.md#adr-035). Restano fuori, e non per dimenticanza, la
+semplificazione dei debiti, i tre metodi di ripartizione oltre `equal` e `weighted`,
+`is_settled`, il legame fra regolamento e pagamento, la ripartizione automatica di una
+bolletta e gli allegati alle spese. Il resoconto è in fondo:
+[Piano — Spese co-living, fetta 1](#piano-spese-co-living-fetta-1).
+
+**`payable_type` resta a un valore su tre, e non è un lavoro rinviato.**
+`expense_share` e `settlement` non si scriveranno: un regolamento fra coinquilini non è
+denaro che l'organizzazione incassa, e farne una riga in `app.payments` metterebbe nel
+registro degli incassi del proprietario un movimento che non lo riguarda. Il piano dei
+pagamenti prevedeva il contrario; la previsione era sbagliata, ed è registrata qui
+perché è il genere di conclusione che si eredita senza riverificarla.
+
 **Segnalazioni** è implementato nella fetta 1: apertura, elenco filtrato, dettaglio
 con lo storico degli stati, thread con note interne, le sette transizioni del ciclo di
-vita, costi e allegati. Restano fuori, e non per dimenticanza, il triage AI (punto 3),
+vita, costi e allegati. Restano fuori, e non per dimenticanza, il triage AI (punto 1),
 la ricerca full-text (V2), gli SLA, la programmazione, gli allegati sui singoli
 messaggi e le note di risoluzione. Il resoconto è in fondo:
 [Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
@@ -170,33 +181,33 @@ cambia il contesto.
 | L'incasso non attribuito è invisibile a chi ha pagato | `payments_select` mostra la riga a staff, pagante e incassante. Uno staff che registri un incasso senza valorizzare `payer_user_id` produce un pagamento che l'inquilino **non vede nel proprio elenco**, pur vedendone l'effetto in `paid_amount` sul saldo. È lecito — un bonifico da un conto che non si sa a chi ricondurre esiste — ma oggi è anche il comportamento di chi semplicemente omette il campo, cioè il caso più facile | Con il primo client: è lì che si vede se l'attribuzione debba diventare obbligatoria, o se convenga dedurla dalle parti del contratto |
 | Nessuna via per ritirare una dichiarazione | `payments_update` è staff soltanto, quindi chi dichiara di aver pagato può creare qualcosa che poi non può disfare. L'uscita esiste ed è il rifiuto dello staff, ma l'inquilino che si accorge subito di aver sbagliato importo non ha rimedio proprio. Darglielo non è una rotta in più: richiede una policy che ammetta l'`UPDATE` del pagante sulla **propria** riga in `pending`, cioè una migration e un secondo `WITH CHECK` da scrivere con attenzione | Se il caso si presenta davvero. Documentato nell'API perché è controintuitivo |
 | `refunded_amount` è sottratto e non è mai valorizzato | Il repository somma `amount - refunded_amount` come fa la vista, e la colonna vale sempre zero. È deliberato — è ciò che rende la formula *la stessa* il giorno in cui non varrà più zero — e va saputo, perché letto oggi sembra codice per un caso che non esiste | Con i rimborsi, che sono anche il momento in cui la `GRANT` della `0025` va allargata |
+| Nessun endpoint elenca le persone di un'organizzazione | I corpi delle spese co-living nominano le persone (`paid_by_user_id`, `to_user_id`, `user_id` di un membro) e non c'è un modo diretto di scoprire quegli identificatori. Oggi un client li trova dalle parti del contratto (`GET /leases/{id}`) o dalla composizione di un gruppo che già lo comprende: per un co-living, dove i coinquilini stanno sullo stesso immobile, funziona. Non funziona per un gruppo che non sia legato a un contratto, e `expense_groups.property_id` è opzionale | Con il primo client: è lì che si vede se serva `GET /organizations/{id}/members` e con quale visibilità — elencare le persone di un'organizzazione è una superficie con implicazioni di privacy, non un elenco qualsiasi |
+| `app.expense_group_members` non ha privilegi di colonna | La `WITH CHECK` di `expense_group_members_update` nomina il solo `org_id`, quindi un membro attivo può riscrivere `user_id` o `weight` di chiunque nel gruppo — e il peso cambia le quote di tutti nella prossima spesa. È il criterio di [ADR-026](08-decisioni.md#adr-026) applicabile a una quarta tabella; non è stato fatto perché fuori dal perimetro dichiarato della fetta, che nominava `app.expenses`. La stessa migration potrebbe stringere la `USING` con `user_id = app.current_user_id() OR app.is_org_staff(org_id)`, rendendo un confine di sicurezza vero ciò che oggi è una regola del service layer (vedi la voce sotto) | Insieme, in una migration sola: sono due difetti della stessa policy, e affrontarli separatamente vorrebbe dire toccare `expense_group_members` due volte |
+| «Si esce da un gruppo per sé stessi» non è un confine di sicurezza | `LeaveGroup` rifiuta con `expense_group.membership_not_yours` chi prova a togliere un altro senza essere staff, ma la `USING` di `expense_group_members_update` ammette qualunque membro attivo: una query scritta a mano passerebbe. La restrizione vive nel contratto dell'API, ed è il genere di regola che si legge come una garanzia quando non lo è. Il test `a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them` fissa entrambe le metà | **Insieme al debito qui sopra**, di cui è la stessa migration |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-**Le spese co-living** (`expense_groups`, `expenses`, `expense_shares`,
-`settlements`). Lo schema c'è per intero, `app.v_expense_group_balances` calcola già il
-saldo netto per membro, e il `CONSTRAINT TRIGGER … DEFERRABLE` su `expense_shares` è
-l'unico posto del progetto dove una ripartizione ha la somma garantita dal database.
-
-**Viene prima perché è l'ultimo modulo dell'MVP che ha lo schema e non il codice**, ed è
-quello che chiude il perimetro funzionale: senza, un co-living non può dividere niente.
-
-Il piano è scritto in fondo — [Piano — Spese co-living, fetta 1](#piano-spese-co-living-fetta-1)
-— e comprende **tre migration**: la policy che lascia iscriversi chi crea un gruppo,
-senza la quale il gruppo nasce inutilizzabile per il suo creatore; la correzione della
-vista dei saldi, che oggi perde chi esce dal gruppo portandosi via il debito; e i
-privilegi di colonna su `app.expenses`, che chiudono un buco vero — il trigger che
-difende l'invariante contabile guarda le **quote** e non la **spesa**, quindi
-aggiornarne l'importo da solo sbilancia i conti in silenzio.
-
-Le tre scelte che richiedevano una risposta di prodotto sono state date: chi crea un
-gruppo ne diventa il primo membro, la ripartizione è `equal` e `weighted` con i
-centesimi di resto ai primi in ordine, e la vista si corregge invece di rifiutare
-l'uscita a saldo aperto.
-
-Poi l'**OCR**, che riempirà `ocr_extracted`, `ocr_confidence` e lo stato
+**L'OCR** (`ai_jobs`), che riempirà `ocr_extracted`, `ocr_confidence` e lo stato
 `pending_review` lasciati ai loro default dalla fetta contabile. Poi la **dashboard**.
+
+**Il perimetro funzionale dell'MVP è chiuso.** Con le spese co-living non resta alcun
+modulo che abbia lo schema e non il codice: i due punti che restano sono un modulo
+nuovo — l'OCR, che richiede di scegliere un fornitore e definirne i trait allora, non
+adesso — e una superficie di lettura su viste che esistono già.
+
+Ne segue un cambiamento nel modo di scegliere che cosa fare, e vale la pena dirlo
+perché finora l'ordine se lo dettava lo schema: da qui in poi **l'ordine non è più
+derivabile**. Le prossime decisioni sono di prodotto — quali sono i due numeri della
+dashboard la cui semantica non è decisa, se serva un client mostrabile presto, se
+l'accuratezza dell'OCR valga il costo di misurarla — e non hanno una risposta che si
+possa leggere in `migrations/`.
+
+Le due cose che questa fetta ha lasciato scoperte e che un client incontrerà per prime
+sono registrate fra i debiti: **non esiste un endpoint che elenchi le persone di
+un'organizzazione**, e `app.expense_group_members` non ha privilegi di colonna. La
+prima si vede appena si costruisce l'interfaccia di un gruppo di spesa; la seconda no,
+ed è la ragione per cui sta scritta.
 
 ### Perché la dashboard resta ultima
 
@@ -2430,9 +2441,11 @@ che questa fetta invitava a trarre.
 
 ## Piano — Spese co-living, fetta 1
 
-Pianificato il **1 settembre 2026**. Il piano resta sotto come è stato scritto: serve a
-eseguirlo, e servirà a capire perché il codice è com'è. L'esito va in fondo a esecuzione
-conclusa, come per documenti, segnalazioni, bollette e pagamenti.
+Pianificato ed eseguito il **1 settembre 2026**. Il piano resta sotto **come è stato
+scritto**, senza correzioni a posteriori: serviva a eseguirlo, e serve a capire perché il
+codice è com'è. L'esito è in fondo, come per documenti, segnalazioni, bollette e
+pagamenti — ed è lì che si legge dove il piano aveva ragione, dove aveva ragione a metà,
+e le tre cose che non aveva previsto.
 
 ### Obiettivo
 
@@ -2809,3 +2822,264 @@ dentro**; aggiunge due coinquilini; registra una spesa da 100,00 divisa in tre e
 dicono +66,67 / −33,33 / −33,34; uno dichiara di aver saldato e **il saldo non si muove**
 finché il creditore non conferma; una spesa con quote che non sommano viene **rifiutata
 al commit**; e una spesa su un gruppo di un'altra organizzazione riceve `404`.
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Eseguito il **1 settembre 2026**, nell'ordine del piano. Le tre migration per prime, come
+richiesto, e verificate su database vero **prima** di scrivere una riga di Rust.
+
+La fetta è **completa**: nessun taglio al passo 9. I regolamenti sono dentro.
+
+#### Le trappole del piano, verificate una per una
+
+**«Una sottoquery dentro una policy subisce la RLS della tabella che legge»** — *vera, e
+riprodotta*. Con un gruppo di cui il chiamante non è ancora membro:
+
+```
+sottoquery_in_policy | funzione_definer | can_access
+---------------------+------------------+-----------
+ f                   | t                | f
+```
+
+La versione senza funzione avrebbe prodotto un ramo che **non scatta mai**, e il sintomo
+sarebbe stato identico a quello di prima della migration: gruppo creato, iscrizione
+rifiutata. Il test `whoever_creates_a_group_is_already_in_it` esegue entrambe le versioni
+e le confronta.
+
+**Il trigger differito** — *vero*. `expense_shares_balanced` non fa fallire l'`INSERT`,
+fa fallire il `COMMIT`. Riprodotto scrivendo a mano 50,00 di quote su una spesa da
+100,00: l'inserimento riesce, e il commit risponde `does not match expense amount`. Da
+qui `commit_expense` nel service layer, che mappa l'errore invece di lasciarlo diventare
+un `500`.
+
+**Il trigger non guarda `app.expenses`** — *vero, e peggio di come il piano lo
+descriveva*. Riprodotto: `UPDATE app.expenses SET amount = 500.00` su una spesa con
+100,00 di quote passa, **il commit riesce**, e il database resta con `importo_spesa =
+500.00` e `somma_quote = 100.00`. Nessuna protesta. È la ragione della `0028`, ed è
+diventato [ADR-035](08-decisioni.md#adr-035).
+
+**`INSERT … RETURNING` sui gruppi** — *non riprodotta, e non serviva*. Nessuna query di
+questa fetta ne aveva bisogno: gli identificatori li assegna il dominio. La nota resta
+nel codice perché è la seconda occorrenza del muro e la prima era costata tempo.
+
+**Il vincolo unico non parziale sulla membership** — *vera*. Il rientro è un `UPDATE`, e
+il test lo fissa verificando che dopo un giro esci-e-rientra ci sia **una** sola riga.
+
+**`settlements_confirmed_ck` vincola una sola direzione** — *vera, quarta occorrenza*.
+L'azzeramento di `settled_at` sulle due uscite negative tocca al dominio.
+
+**Tre tabelle su quattro senza `deleted_at`** — *vera*, e la nota è servita: le macro
+`select_*` dei tre repository lo dicono in testa.
+
+#### Le tre cose che il piano non aveva previsto
+
+**1. La funzione della `0026` deve ancorare il gruppo all'organizzazione attiva, e il
+piano non lo diceva.**
+
+La decisione 1 indicava `user_id = app.current_user_id()` come «la parte che non si può
+omettere». Ce n'è una **seconda**, e senza di essa la migration apre un buco fra
+organizzazioni.
+
+`app.current_org_id()` è una GUC impostata dall'applicazione e **non è una prova** — a
+renderla un fatto sono le funzioni che rileggono la membership dal database, come dice
+il commento di `app.set_request_context` dalla `0001`. Una funzione che verificasse il
+solo `created_by` lascerebbe questo giro: chi ha creato un gruppo nell'organizzazione A
+e ne è poi **uscito** può, con il contesto dell'organizzazione B di cui è ancora membro,
+inserire una riga di membership verso il gruppo di A — e da quel momento
+`can_access_expense_group` risponde vero per lui su un gruppo di un'organizzazione a cui
+non appartiene più.
+
+Verificato installando temporaneamente la versione ingenua:
+
+```
+--- Con la versione senza ancoraggio, la riga fra organizzazioni PASSA ---
+INSERT 0 1
+--- ...e da quel momento il gruppo di A gli è accessibile ---
+ accesso_al_gruppo_di_a
+------------------------
+ t
+```
+
+Con `g.org_id = app.current_org_id() AND app.is_org_member(g.org_id)` dentro la
+funzione, lo stesso inserimento è rifiutato. **È la cosa più cara imparata in questa
+fetta**, e la regola generale che se ne ricava è: quando una funzione `SECURITY DEFINER`
+legge una tabella per autorizzare una scrittura, deve verificare **anche** che la riga
+letta appartenga all'organizzazione attiva — bypassare la RLS significa bypassare pure
+l'isolamento, non solo la visibilità per ruolo.
+
+**2. Un `RAISE EXCEPTION` di PL/pgSQL non ha un nome di vincolo, quindi il messaggio del
+trigger non arriva al service layer.**
+
+`map_sqlx_error` costruisce i dettagli di una `check_violation` dal **nome del
+vincolo**, e un `RAISE EXCEPTION` non ne ha uno: `commit_expense` era stato scritto per
+riconoscere l'errore dal testo (`details.contains("shares total")`), e non avrebbe mai
+funzionato. Riconoscerlo dal messaggio era la via ovvia ed è sbagliata.
+
+Non serve: `expense_shares_balanced` è **l'unico vincolo differito dell'intero schema**
+— verificato, `DEFERRABLE` compare solo nella `0009` — e la transazione di
+`RecordExpense` scrive una spesa, le sue quote e una riga di outbox. Un'integrità che si
+manifesta al `COMMIT` di quella transazione è quella, e non può essere altro.
+
+**3. Un rientro deve ridichiarare il peso, e il primo tentativo lo perdeva in silenzio.**
+
+`AddGroupMember` sul ramo del rientro chiamava `member.rejoin(now)` e **ignorava** il
+peso passato nel comando: la riga tornava attiva con il peso di prima. Il difetto è
+uscito da un test — `rejoining_a_group_is_an_update_and_moves_the_joining_date` — e non
+sarebbe uscito da nessun'altra parte, perché il repository *scriveva* correttamente il
+peso dell'aggregato, che era quello vecchio.
+
+La firma è diventata `rejoin(weight, now)`, con il parametro **obbligatorio**: con un
+`Option` che ricade sul valore precedente, dimenticarlo sarebbe indistinguibile dal
+volerlo. Il caso reale è concreto — chi rientra può prendere una stanza diversa, e
+conservare il peso vecchio farebbe pagare la doppia a chi è tornato nella singola.
+
+#### Scelte prese eseguendo, che il piano lasciava aperte
+
+**1. Lo stato `cancelled` dei regolamenti si scrive.** Era l'unica domanda che il piano
+lasciava aperta, e la risposta è **sì**.
+
+La ragione non è di prodotto ed è una sola: la `USING` di `settlements_update` nomina
+anche `from_user_id`, mentre `payments_update` è **staff soltanto**. Sui pagamenti «chi
+dichiara non può ritirare» non era una scelta, era una conseguenza della policy,
+documentata come controintuitiva. Qui la policy dice l'opposto, e importare il vincolo
+dei pagamenti significherebbe copiarne la forma senza copiarne la ragione — che è
+esattamente il genere di conclusione che la decisione 6 avverte di non ereditare.
+
+Il fatto sostanziale è che **fra pari il ritiro è lecito, verso il proprietario no**:
+chi ha sbagliato destinatario o importo non deve dover chiedere al creditore di
+rifiutare una dichiarazione che sa già sbagliata. `pending` ha quindi **tre** uscite, e
+tutte e quattro le varianti dell'enum si scrivono.
+
+Verificato sul binario vero, non solo nel dominio: il test
+`whoever_declared_a_settlement_can_withdraw_it_and_the_creditor_can_refuse_it` esegue le
+tre transizioni contro PostgreSQL.
+
+**2. Otto eventi invece dei tre del piano.** Il passo 8 elencava `ExpenseRecorded`,
+`SettlementDeclared` e `SettlementConfirmed`. Ne sono stati scritti otto, e le aggiunte
+hanno due ragioni diverse:
+
+- **`SettlementRejected` e `SettlementCancelled`** chiudono un difetto: senza, chi
+  consuma l'outbox vedrebbe la dichiarazione e mai un esito, restando convinto che il
+  regolamento sia ancora pendente. È lo stesso argomento per cui l'uscita negativa nasce
+  insieme allo stato da cui esce;
+- **`ExpenseGroupCreated`, `ExpenseGroupMemberJoined` e `ExpenseGroupMemberLeft`** per
+  coerenza: ogni altro use case che scrive in questo progetto accoda un evento, e
+  `CreateExpenseGroup` sarebbe stato il primo a non farlo. La membership **non** è un
+  aggregato a sé — gli eventi portano `aggregate_type = "ExpenseGroup"` — come già per
+  `LeasePartyAdded` e `TicketMessagePosted`.
+
+Nessuno degli otto porta importi, e nemmeno testo libero: la descrizione di una spesa
+dice che cosa una persona ha comprato. Viaggiano categoria, metodo, numero di quote e
+identificatori.
+
+**3. `ArchiveExpenseGroup` e `ListSettlements` esistono, e il piano non li elencava.**
+Non sono allargamenti di comodo, sono due buchi:
+
+- senza una via per archiviare, `ExpenseGroup::ensure_open` non può mai fallire e la
+  guardia è codice morto. Il passo 5 chiedeva `archive` nel dominio: senza lo use case
+  quel metodo non sarebbe stato raggiungibile da nessuna parte;
+- senza un elenco dei regolamenti, il creditore non ha **alcun modo** di trovare la
+  dichiarazione da confermare — l'unico accesso sarebbe conoscerne l'identificatore,
+  cioè averlo ricevuto per un canale che non esiste. `?status=pending` è servito
+  dall'indice parziale `settlements_pending_ix`, che esiste dalla `0009` proprio per
+  questa domanda.
+
+**4. Si esce da un gruppo per sé stessi, e la restrizione è applicativa.** Il piano
+elencava `LeaveGroup` senza dire chi può eseguirlo. La `USING` di
+`expense_group_members_update` ammette **qualunque membro attivo del gruppo**, quindi
+la RLS lascerebbe passare una query scritta a mano che toglie un altro.
+
+Si è scelto di restringere nel service layer: un coinquilino non deve poter togliere
+unilateralmente un altro da un conto condiviso, tanto meno uno con un saldo aperto. Lo
+staff può, perché è chi amministra.
+
+**Va detto ad alta voce che non è un confine di sicurezza**, ed è il genere di regola
+che si legge come una garanzia quando non lo è. Il test
+`a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them` fissa **entrambe**
+le metà: il rifiuto applicativo, e il fatto che la stessa scrittura fatta a mano con il
+contesto del coinquilino aggiorna una riga. Renderlo vero richiederebbe di stringere la
+`USING` con `user_id = app.current_user_id() OR app.is_org_staff(org_id)`, cioè una
+migration; è registrato fra i debiti.
+
+**5. Il destinatario di un regolamento non si verifica contro i membri, e la spesa sì.**
+Sembra un'incoerenza e non lo è: si salda con chi è **uscito** dal gruppo, ed è
+precisamente ciò che la `0027` esiste per rendere possibile — il debitore uscito resta
+nei saldi finché non paga. Un controllo sui membri attivi renderebbe irraggiungibile la
+chiusura di quel conto. Su `paid_by_user_id` il controllo invece serve, perché un
+credito intestato a un estraneo non comparirebbe in nessun saldo.
+
+**6. La correzione di una spesa non ha un endpoint.** La `0028` concede l'`UPDATE` su
+cinque colonne, e nessuno use case le scrive: una spesa sbagliata si annulla e si
+riscrive. Le concessioni restano perché la migration nasce per **negare** `amount`, e
+l'elenco delle concesse è ciò che rende la revoca applicabile senza rompere le
+correzioni legittime del giorno in cui arriveranno.
+
+#### Come si è verificato
+
+`./ops/ci/test-integration.sh` verde: **342** test in tutto, 49 dei quali nuovi. **57**
+di persistenza (11 nuovi), **64** di contratto HTTP (4 nuovi) e **181** unitari di
+dominio (34 nuovi).
+
+Il controllo delle invarianti dello schema verde con le otto colonne di `app.expenses`
+nell'elenco, **verificato al contrario**: con `GRANT UPDATE (amount, group_id)` aggiunta
+a mano, il controllo 12 riporta
+
+```
+ colonna-strutturale-scrivibile | expenses.amount
+ colonna-strutturale-scrivibile | expenses.group_id
+```
+
+e la pipeline si ferma.
+
+**L'aritmetica verificata sui casi che rompono**, non solo su quelli che tornano: 100,00
+fra tre dà 33,34 / 33,33 / 33,33; 0,01 fra tre dà 0,01 / 0,00 / 0,00; 10,00 fra tre con
+pesi 1/1/2 dà 2,50 / 2,50 / 5,00. E un test esaustivo su **1 750 combinazioni** — ogni
+importo da 0,01 a 2,50 per ogni numero di partecipanti da uno a sette, con pesi uniformi
+e misti — verifica l'unico criterio che conta: **la somma delle quote è l'importo**.
+
+**Il difetto della vista verificato al contrario**, come per la `0024`. Sullo stesso
+gruppo, con un debitore da 33,33 uscito e uno in pari uscito:
+
+| | vista `0015` | vista `0027` |
+|---|---|---|
+| righe | 1 | 2 |
+| somma dei saldi | **33,33** | **0,00** |
+
+Con la definizione vecchia il debito spariva e restava un credito senza contropartita.
+
+**Il giro a mano, contro il router vero** (`a_coliving_group_splits_a_hundred_euros_and_closes_the_account`):
+un inquilino crea un gruppo e si ritrova dentro; aggiunge due coinquilini; registra
+100,00 divisi in tre e le quote sommano a 100,00; uno dichiara di aver saldato e **il
+saldo non si muove**; chi paga prova a confermare a sé stesso e riceve `403
+settlement.not_addressed_to_you`; il creditore trova la dichiarazione con
+`?status=pending` e conferma; i due escono, il debitore resta nei saldi e chi era in
+pari sparisce; il gruppo si archivia con un conto ancora aperto e rifiuta le spese
+successive con `409 expense_group.archived`, mentre i saldi restano leggibili.
+
+#### Cosa resta fuori, e resta fuori davvero
+
+Tutto ciò che il perimetro del piano elencava, senza aggiunte: la **semplificazione dei
+debiti**; i tre metodi di ripartizione oltre `equal` e `weighted`;
+`expense_shares.is_settled` e `settled_at`, che restano ai loro default e che la vista
+non guarda; il legame fra regolamento e pagamento, per cui `settlements.payment_id`
+resta nullo e `payments.payable_type = 'settlement'` non si scrive; la ripartizione
+automatica di una bolletta; gli allegati alle spese.
+
+**`Payable` resta a una variante**, e vale la pena ripeterlo: il piano dei pagamenti
+prevedeva che questo modulo la portasse a tre, e la previsione era sbagliata. Un
+regolamento fra coinquilini non è denaro che l'organizzazione incassa.
+
+Due cose **non** previste dal piano restano fuori e vanno segnate, perché si sono viste
+eseguendo:
+
+- **non esiste un endpoint che elenchi le persone di un'organizzazione**, e i corpi di
+  questo modulo nominano le persone. Oggi un client trova i `user_id` dalle parti del
+  contratto (`GET /leases/{id}`) o dalla composizione del gruppo. Per un co-living, dove
+  i coinquilini stanno sullo stesso immobile, funziona — ma è un vincolo da sapere prima
+  di costruirci sopra;
+- **`app.expense_group_members` non ha privilegi di colonna**, quindi un membro attivo
+  può riscrivere `user_id` o `weight` di chiunque nel gruppo. È lo stesso criterio di
+  ADR-026 applicabile a una quarta tabella, e non è stato fatto perché fuori dal
+  perimetro dichiarato del passo 3, che nominava `app.expenses`.
+
+Entrambe sono registrate fra i debiti noti.
