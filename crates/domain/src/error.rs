@@ -28,6 +28,12 @@ pub enum Entity {
     Charge,
     #[error("Payment not found")]
     Payment,
+    #[error("Expense group not found")]
+    ExpenseGroup,
+    #[error("Expense not found")]
+    Expense,
+    #[error("Settlement not found")]
+    Settlement,
     /// Rotta sconosciuta. Sta qui e non nel bordo HTTP perché un `404` di rotta e
     /// un `404` di risorsa devono avere la stessa forma per il client.
     #[error("Endpoint not found")]
@@ -47,6 +53,9 @@ impl Entity {
             Self::UtilityBill => "utility_bill.not_found",
             Self::Charge => "charge.not_found",
             Self::Payment => "payment.not_found",
+            Self::ExpenseGroup => "expense_group.not_found",
+            Self::Expense => "expense.not_found",
+            Self::Settlement => "settlement.not_found",
             Self::Endpoint => "endpoint.not_found",
         }
     }
@@ -80,6 +89,30 @@ pub enum Denial {
     /// mentre gli manca l'essere stato lui a segnalare — due rimedi diversi.
     #[error("This ticket was reported by someone else")]
     TicketNotYours,
+    /// Confermare o rifiutare un regolamento spetta a chi **riceve**.
+    ///
+    /// Non è `org.staff_role_required`: dire a un coinquilino che gli manca un
+    /// ruolo lo manderebbe a cercare un permesso, mentre gli manca l'essere il
+    /// destinatario del bonifico. È la stessa distinzione di
+    /// [`Self::TicketNotYours`], e il rimedio è chiedere all'altro di confermare.
+    #[error("This settlement is addressed to someone else")]
+    SettlementNotAddressedToYou,
+    /// Ritirare un regolamento spetta a chi lo ha **dichiarato**.
+    ///
+    /// Codice distinto dal precedente perché i due rimedi sono opposti: là si
+    /// aspetta che il creditore confermi, qui si chiede al creditore di rifiutare.
+    #[error("This settlement was declared by someone else")]
+    SettlementNotDeclaredByYou,
+    /// Uscire da un gruppo di spesa si fa per sé stessi.
+    ///
+    /// **Non è un confine di sicurezza, ed è importante saperlo**: la `USING` di
+    /// `expense_group_members_update` ammette qualunque membro attivo del gruppo,
+    /// quindi la Row Level Security lascerebbe passare una query scritta a mano.
+    /// La restrizione è del contratto dell'API, e la ragione è che un coinquilino
+    /// non deve poter togliere unilateralmente un altro da un conto condiviso —
+    /// tanto meno uno con un saldo aperto. Lo staff può, perché è chi amministra.
+    #[error("Only staff can remove someone else from an expense group")]
+    GroupMembershipNotYours,
 
     // Da qui in giù: mai in risposta, solo nei log.
     #[error("The account is not active")]
@@ -107,6 +140,9 @@ impl Denial {
             Self::NotAMember => "org.not_a_member",
             Self::StaffRoleRequired => "org.staff_role_required",
             Self::TicketNotYours => "ticket.not_yours",
+            Self::SettlementNotAddressedToYou => "settlement.not_addressed_to_you",
+            Self::SettlementNotDeclaredByYou => "settlement.not_declared_by_you",
+            Self::GroupMembershipNotYours => "expense_group.membership_not_yours",
             Self::AccountInactive => "account.inactive",
             Self::AccountLocked => "account.locked",
             Self::NoLocalCredentials => "account.no_local_credentials",
@@ -197,6 +233,28 @@ pub enum Invariant {
     #[error("Only a pending payment can be rejected")]
     PaymentNotRejectable,
 
+    #[error("An archived expense group cannot be modified")]
+    ExpenseGroupArchived,
+    #[error("This person has already left the group")]
+    GroupMemberAlreadyLeft,
+    #[error("This person is already an active member of the group")]
+    GroupMemberAlreadyIn,
+    /// La spesa dichiara che ha anticipato qualcuno che nel gruppo non c'è.
+    ///
+    /// Ha una variante propria e non è una `Validation` perché non c'è nulla di
+    /// malformato: l'identificatore è un utente vero, e a mancare è la relazione.
+    /// Il danno che evita è silenzioso — `app.v_expense_group_balances` parte dai
+    /// **membri**, quindi quel credito non comparirebbe a nessuno e la somma dei
+    /// saldi del gruppo smetterebbe di fare zero.
+    #[error("The person who paid is not a member of this group")]
+    ExpensePayerNotInGroup,
+    #[error("Only a pending settlement can be confirmed")]
+    SettlementNotConfirmable,
+    #[error("Only a pending settlement can be rejected")]
+    SettlementNotRejectable,
+    #[error("Only a pending settlement can be withdrawn")]
+    SettlementNotCancellable,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -251,6 +309,22 @@ impl Invariant {
             Self::PaymentNotConfirmable | Self::PaymentNotRejectable => {
                 "payment.invalid_transition"
             }
+            Self::ExpenseGroupArchived => "expense_group.archived",
+            // Le due membership condividono un codice: il rimedio è lo stesso,
+            // rileggere la composizione del gruppo. Sono varianti distinte perché
+            // il messaggio non lo è — «è già uscito» e «c'è già» mandano la
+            // persona a guardare due cose diverse.
+            Self::GroupMemberAlreadyLeft | Self::GroupMemberAlreadyIn => {
+                "expense_group.membership_unchanged"
+            }
+            Self::ExpensePayerNotInGroup => "expense.payer_not_in_group",
+            // Stesso trattamento degli altri aggregati, e un codice **distinto**
+            // da `payment.invalid_transition`: un regolamento fra coinquilini e un
+            // pagamento verso il proprietario si rimediano in due posti diversi, e
+            // per giunta qui le uscite di `pending` sono tre invece di due.
+            Self::SettlementNotConfirmable
+            | Self::SettlementNotRejectable
+            | Self::SettlementNotCancellable => "settlement.invalid_transition",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }
@@ -331,12 +405,18 @@ mod tests {
             Entity::UtilityBill.code(),
             Entity::Charge.code(),
             Entity::Payment.code(),
+            Entity::ExpenseGroup.code(),
+            Entity::Expense.code(),
+            Entity::Settlement.code(),
             Entity::Endpoint.code(),
             Denial::AuthenticationRequired.code(),
             Denial::OrgNotSelected.code(),
             Denial::NotAMember.code(),
             Denial::StaffRoleRequired.code(),
             Denial::TicketNotYours.code(),
+            Denial::SettlementNotAddressedToYou.code(),
+            Denial::SettlementNotDeclaredByYou.code(),
+            Denial::GroupMembershipNotYours.code(),
             Denial::AccountInactive.code(),
             Denial::AccountLocked.code(),
             Denial::NoLocalCredentials.code(),
@@ -373,6 +453,13 @@ mod tests {
             Invariant::ChargeNotPayable.code(),
             Invariant::PaymentNotConfirmable.code(),
             Invariant::PaymentNotRejectable.code(),
+            Invariant::ExpenseGroupArchived.code(),
+            Invariant::GroupMemberAlreadyLeft.code(),
+            Invariant::GroupMemberAlreadyIn.code(),
+            Invariant::ExpensePayerNotInGroup.code(),
+            Invariant::SettlementNotConfirmable.code(),
+            Invariant::SettlementNotRejectable.code(),
+            Invariant::SettlementNotCancellable.code(),
             Invariant::RefreshTokenReused.code(),
             DomainError::validation("field", "message").code(),
         ]
@@ -459,6 +546,27 @@ mod tests {
         assert_ne!(
             Invariant::UtilityBillNotVoidable.code(),
             Invariant::ChargeNotVoidable.code()
+        );
+    }
+
+    /// Le tre transizioni del regolamento condividono un codice fra loro e **non**
+    /// con il pagamento, per quanto le due macchine si assomiglino: un regolamento
+    /// fra coinquilini e un pagamento verso il proprietario si rimediano in due
+    /// posti diversi, e qui le uscite di `pending` sono **tre** invece di due —
+    /// perché `settlements_update` ammette anche `from_user_id`, mentre
+    /// `payments_update` è staff soltanto.
+    #[test]
+    fn settlement_transitions_have_their_own_code() {
+        for invariant in [
+            Invariant::SettlementNotConfirmable,
+            Invariant::SettlementNotRejectable,
+            Invariant::SettlementNotCancellable,
+        ] {
+            assert_eq!(invariant.code(), "settlement.invalid_transition");
+        }
+        assert_ne!(
+            Invariant::SettlementNotConfirmable.code(),
+            Invariant::PaymentNotConfirmable.code()
         );
     }
 
