@@ -24,6 +24,12 @@ use propflow_application::use_cases::document::{
     ArchiveDocument, ArchiveDocumentCommand, ListDocuments, ListDocumentsCommand, UploadDocument,
     UploadDocumentCommand,
 };
+use propflow_application::use_cases::expense::{
+    AddGroupMember, AddGroupMemberCommand, CancelSettlement, ConfirmSettlement, CreateExpenseGroup,
+    CreateExpenseGroupCommand, DeclareSettlement, DeclareSettlementCommand, GetExpense,
+    GetExpenseGroup, GetGroupBalances, LeaveGroup, RecordExpense, RecordExpenseCommand,
+    RejectSettlement,
+};
 use propflow_application::use_cases::invitation::{
     AcceptInvitation, AcceptInvitationCommand, InviteTenant, InviteTenantCommand,
 };
@@ -52,6 +58,9 @@ use propflow_domain::billing::{
     UtilityType,
 };
 use propflow_domain::document::{AttachmentOwner, DocumentKind};
+use propflow_domain::expense::{
+    ExpenseCategory, ExpenseGroupKind, SettlementStatus, SplitMethod, Weight,
+};
 use propflow_domain::identity::OrgRole;
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::payment::{IdempotencyKey, PaymentMethod, PaymentStatus};
@@ -3233,4 +3242,906 @@ async fn the_application_role_cannot_rewrite_what_a_payment_records() {
             allowed.err()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Spese co-living
+// ---------------------------------------------------------------------------
+
+/// Un inquilino dell'organizzazione, senza contratto.
+///
+/// Diverso da [`tenant_on_lease`]: là serviva un contratto perché la visibilità
+/// passava da `can_access_lease`. Qui no — un gruppo di spesa esiste anche senza
+/// immobile, e `can_access_expense_group` guarda la membership del **gruppo**.
+/// Basta quindi l'appartenenza all'organizzazione, che si ottiene con un invito
+/// su un contratto qualunque.
+async fn coliving_tenant(
+    env: &common::TestEnv,
+    owner: &RequestContext,
+    lease_id: propflow_domain::shared::LeaseId,
+    label: &str,
+) -> RequestContext {
+    tenant_on_lease(env, owner, lease_id, label).await
+}
+
+/// Il palcoscenico del modulo: un proprietario, un immobile, un contratto, e
+/// tre coinquilini che sono membri dell'organizzazione.
+async fn coliving_stage(
+    env: &common::TestEnv,
+    label: &str,
+) -> (RequestContext, PropertyId, Vec<RequestContext>) {
+    let owner = register_owner(env, label).await;
+    let property_id = create_property(env, &owner, "Casa condivisa", "Bologna").await;
+    let lease = draft_lease(
+        env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-30),
+        Some(days_from_today(335)),
+    )
+    .await;
+    activate(env, &owner, lease.id()).await.expect("attivato");
+
+    let mut tenants = Vec::with_capacity(3);
+    for nth in 1..=3 {
+        tenants.push(coliving_tenant(env, &owner, lease.id(), &format!("{label}-{nth}")).await);
+    }
+    (owner, property_id, tenants)
+}
+
+fn user_of(context: &RequestContext) -> propflow_domain::shared::UserId {
+    context.user_id().expect("utente autenticato")
+}
+
+async fn create_group(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    name: &str,
+    property_id: Option<PropertyId>,
+    method: SplitMethod,
+) -> propflow_domain::expense::ExpenseGroup {
+    CreateExpenseGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            CreateExpenseGroupCommand {
+                property_id,
+                kind: ExpenseGroupKind::Coliving,
+                name: name.to_owned(),
+                default_split_method: method,
+                weight: Weight::one(),
+                display_name: None,
+            },
+        )
+        .await
+        .expect("gruppo creato")
+        .0
+}
+
+async fn add_member(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    group_id: propflow_domain::shared::ExpenseGroupId,
+    user: &RequestContext,
+    weight: &str,
+) {
+    AddGroupMember::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            AddGroupMemberCommand {
+                group_id,
+                user_id: user_of(user),
+                room_id: None,
+                display_name: None,
+                weight: Weight::parse(weight.parse().expect("decimale")).expect("peso valido"),
+            },
+        )
+        .await
+        .expect("membro aggiunto");
+}
+
+async fn balances_of(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    group_id: propflow_domain::shared::ExpenseGroupId,
+) -> Vec<propflow_domain::expense::GroupBalance> {
+    GetGroupBalances::new(Arc::clone(&env.factory))
+        .execute(context, group_id)
+        .await
+        .expect("saldi letti")
+}
+
+fn balance_of(
+    balances: &[propflow_domain::expense::GroupBalance],
+    user: &RequestContext,
+) -> rust_decimal::Decimal {
+    balances
+        .iter()
+        .find(|balance| balance.user_id == user_of(user))
+        .map(|balance| balance.net_balance.amount())
+        .unwrap_or_else(|| panic!("nessun saldo per l'utente atteso"))
+}
+
+/// **La trappola più cara del piano, verificata sul binario vero.**
+///
+/// Lo schema, letto come usciva dalla `0014`, produceva un gruppo inutilizzabile
+/// da chi lo aveva creato: `expense_groups_insert` chiede `is_org_member`, che un
+/// inquilino soddisfa, ma `expense_group_members_insert` chiedeva
+/// `can_access_expense_group`, che appena creato il gruppo è falsa proprio per lui.
+///
+/// La migration `0026` aggiunge il secondo ramo, e la funzione
+/// `app.created_expense_group` è `SECURITY DEFINER` perché **una sottoquery dentro
+/// una policy subisce la RLS della tabella che legge**: un `EXISTS` su
+/// `app.expense_groups` scritto nella policy passerebbe da `expense_groups_select`,
+/// che chiede l'accesso che a quel punto manca. Il test qui sotto lo dimostra
+/// eseguendo entrambe le versioni.
+#[tokio::test]
+async fn whoever_creates_a_group_is_already_in_it() {
+    let env = require_db!();
+    let (owner, property_id, tenants) = coliving_stage(&env, "gruppo-creatore").await;
+    let creator = &tenants[0];
+
+    let group = create_group(
+        &env,
+        creator,
+        "Casa di via Test",
+        Some(property_id),
+        SplitMethod::Equal,
+    )
+    .await;
+
+    let (_, members) = GetExpenseGroup::new(Arc::clone(&env.factory))
+        .execute(creator, group.id())
+        .await
+        .expect("il creatore vede il proprio gruppo");
+    assert_eq!(members.len(), 1, "il gruppo non deve nascere vuoto");
+    assert_eq!(members[0].user_id(), user_of(creator));
+
+    // **La trappola, riprodotta.** Serve un gruppo di cui il creatore non è
+    // ancora membro, cioè esattamente lo stato in cui si trova la policy mentre
+    // valuta l'`INSERT` della prima membership. Si scrive con il pool
+    // privilegiato, perché `CreateExpenseGroup` quello stato non lo lascia mai
+    // esistere — ed è il suo scopo.
+    let orphan = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO app.expense_groups (id, org_id, name, created_by)
+         VALUES ($1, $2, 'Gruppo senza membri', $3)",
+    )
+    .bind(orphan)
+    .bind(creator.org_id().expect("org").as_uuid())
+    .bind(user_of(creator).as_uuid())
+    .execute(env.pools.privileged())
+    .await
+    .expect("gruppo orfano scritto");
+
+    let (subquery, definer, can_access): (bool, bool, bool) = {
+        let mut tx = env
+            .pools
+            .application()
+            .begin()
+            .await
+            .expect("transazione applicativa");
+        sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+            .bind(user_of(creator).as_uuid())
+            .bind(creator.org_id().expect("org").as_uuid())
+            .execute(&mut *tx)
+            .await
+            .expect("contesto installato");
+        sqlx::query_as(
+            // La prima è la sottoquery che si sarebbe scritta dentro la policy;
+            // la seconda è la funzione `SECURITY DEFINER` della `0026`; la terza
+            // è la ragione per cui la prima fallisce.
+            "SELECT EXISTS (SELECT 1 FROM app.expense_groups g
+                             WHERE g.id = $1 AND g.created_by = app.current_user_id()),
+                    app.created_expense_group($1),
+                    app.can_access_expense_group($1)",
+        )
+        .bind(orphan)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("query eseguita")
+    };
+
+    assert!(
+        !can_access,
+        "chi non è ancora membro non ha accesso al gruppo: è il punto di partenza"
+    );
+    assert!(
+        !subquery,
+        "una sottoquery dentro una policy subisce la RLS della tabella che legge: \
+         passa da `expense_groups_select`, che chiede proprio l'accesso che manca. \
+         Scritta così, il ramo nuovo della policy non scatterebbe mai"
+    );
+    assert!(
+        definer,
+        "la funzione `SECURITY DEFINER` legge il fatto vero, ed è la ragione per cui \
+         la `0026` non si è potuta scrivere con un `EXISTS` in linea"
+    );
+
+    // E lo staff vede il gruppo dei propri inquilini: `can_access_expense_group`
+    // risponde vero per `is_org_staff`. Guarda, e non ne è parte.
+    let (_, seen_by_owner) = GetExpenseGroup::new(Arc::clone(&env.factory))
+        .execute(&owner, group.id())
+        .await
+        .expect("lo staff vede il gruppo");
+    assert_eq!(seen_by_owner.len(), 1);
+}
+
+/// **Il difetto della vista, verificato al contrario**, come per la `0024`.
+///
+/// Prima della `0027` chi lasciava il gruppo spariva dai saldi **portandosi via il
+/// debito**: il coinquilino che deve 33,33 esce, e quei 33,33 non risultano più a
+/// nessuno. La somma dei saldi netti del gruppo, che deve fare zero, smetteva di
+/// farlo.
+///
+/// Il test verifica entrambe le direzioni: il debitore uscito **resta**, e chi
+/// esce in pari **sparisce**.
+#[tokio::test]
+async fn whoever_leaves_with_an_open_account_stays_in_the_balances() {
+    let env = require_db!();
+    let (_, _, tenants) = coliving_stage(&env, "saldi-uscita").await;
+    let (creator, second, third) = (&tenants[0], &tenants[1], &tenants[2]);
+
+    let group = create_group(&env, creator, "Uscite", None, SplitMethod::Equal).await;
+    add_member(&env, creator, group.id(), second, "1").await;
+    add_member(&env, creator, group.id(), third, "1").await;
+
+    // 100,00 anticipati dal creatore, divisi in tre: 33,34 / 33,33 / 33,33 con il
+    // centesimo al primo in ordine di `user_id`.
+    RecordExpense::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            creator,
+            RecordExpenseCommand {
+                group_id: group.id(),
+                paid_by_user_id: None,
+                category: ExpenseCategory::Groceries,
+                description: "Spesa della settimana".to_owned(),
+                amount: "100.00".parse().expect("decimale"),
+                expense_date: None,
+                split_method: None,
+                notes: None,
+            },
+        )
+        .await
+        .expect("spesa registrata");
+
+    // Il terzo salda il proprio debito e il creditore conferma: torna in pari.
+    let settlement = DeclareSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            third,
+            DeclareSettlementCommand {
+                group_id: group.id(),
+                to_user_id: user_of(creator),
+                amount: balance_of(&balances_of(&env, third, group.id()).await, third).abs(),
+                method: PaymentMethod::BankTransfer,
+                settled_at: None,
+                note: None,
+            },
+        )
+        .await
+        .expect("dichiarato");
+
+    ConfirmSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(creator, settlement.id())
+        .await
+        .expect("confermato");
+
+    let before = balances_of(&env, creator, group.id()).await;
+    assert_eq!(before.len(), 3);
+    assert_eq!(
+        balance_of(&before, third),
+        rust_decimal::Decimal::ZERO,
+        "il terzo ha saldato"
+    );
+
+    // Escono entrambi: il secondo in debito, il terzo in pari.
+    for leaving in [second, third] {
+        LeaveGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+            .execute(leaving, group.id(), user_of(leaving))
+            .await
+            .expect("uscito");
+    }
+
+    let after = balances_of(&env, creator, group.id()).await;
+    assert_eq!(
+        after.len(),
+        2,
+        "il debitore uscito resta, quello in pari sparisce"
+    );
+    assert!(
+        balance_of(&after, second) < rust_decimal::Decimal::ZERO,
+        "prima della 0027 questa riga spariva, e il debito con lei"
+    );
+    assert!(
+        !after
+            .iter()
+            .any(|balance| balance.user_id == user_of(third)),
+        "chi esce in pari non ha niente da dire e non compare"
+    );
+
+    // **L'invariante che la 0027 rimette in piedi**: la somma dei saldi fa zero.
+    // Con la vista della 0015 questo assert falliva.
+    let total: rust_decimal::Decimal = after
+        .iter()
+        .map(|balance| balance.net_balance.amount())
+        .sum();
+    assert_eq!(
+        total,
+        rust_decimal::Decimal::ZERO,
+        "la somma dei saldi di un gruppo deve fare zero: un credito senza contropartita è un numero che mente"
+    );
+}
+
+/// Il giro a mano del modulo, contro il binario vero.
+///
+/// La dichiarazione **non** muove i saldi — è ciò che il flusso in due tempi
+/// compra — e la conferma li muove. A confermare è **chi riceve**, non lo staff.
+#[tokio::test]
+async fn a_declaration_does_not_move_the_balances_and_the_creditor_confirms() {
+    let env = require_db!();
+    let (owner, _, tenants) = coliving_stage(&env, "regolamento-giro").await;
+    let (creator, second, third) = (&tenants[0], &tenants[1], &tenants[2]);
+
+    let group = create_group(&env, creator, "Il giro", None, SplitMethod::Equal).await;
+    add_member(&env, creator, group.id(), second, "1").await;
+    add_member(&env, creator, group.id(), third, "1").await;
+
+    let recorded = RecordExpense::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            creator,
+            RecordExpenseCommand {
+                group_id: group.id(),
+                paid_by_user_id: None,
+                category: ExpenseCategory::Groceries,
+                description: "Cento euro tondi".to_owned(),
+                amount: "100.00".parse().expect("decimale"),
+                expense_date: None,
+                split_method: None,
+                notes: None,
+            },
+        )
+        .await
+        .expect("spesa registrata");
+
+    // Le quote sommano esattamente all'importo: il trigger non ammette altro, e
+    // l'avrebbe rifiutato al commit.
+    let share_total: rust_decimal::Decimal = recorded
+        .shares
+        .iter()
+        .map(|share| share.share_amount().amount())
+        .sum();
+    assert_eq!(share_total, recorded.expense.amount().amount());
+    assert_eq!(recorded.shares.len(), 3);
+
+    let start = balances_of(&env, creator, group.id()).await;
+    let creditor_before = balance_of(&start, creator);
+    assert!(creditor_before > rust_decimal::Decimal::ZERO);
+
+    let debt = balance_of(&start, second).abs();
+    let settlement = DeclareSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            second,
+            DeclareSettlementCommand {
+                group_id: group.id(),
+                to_user_id: user_of(creator),
+                amount: debt,
+                method: PaymentMethod::BankTransfer,
+                settled_at: None,
+                note: Some("Bonifico di ieri".to_owned()),
+            },
+        )
+        .await
+        .expect("dichiarato");
+    assert_eq!(settlement.status(), SettlementStatus::Pending);
+
+    let pending = balances_of(&env, creator, group.id()).await;
+    assert_eq!(
+        balance_of(&pending, creator),
+        creditor_before,
+        "una dichiarazione pendente non muove i saldi: la vista somma i soli `confirmed`"
+    );
+
+    // **Chi ha dichiarato non può confermare a sé stesso.** La `USING` di
+    // `settlements_update` lo lascerebbe scrivere — nomina anche `from_user_id` —
+    // quindi a fermarlo è il service layer, con un codice che dice il rimedio
+    // giusto: chiedere all'altro.
+    let refused = ConfirmSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(second, settlement.id())
+        .await
+        .expect_err("chi paga non conferma");
+    assert_eq!(refused.code(), "settlement.not_addressed_to_you");
+
+    let confirmed = ConfirmSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(creator, settlement.id())
+        .await
+        .expect("il creditore conferma");
+    assert_eq!(confirmed.status(), SettlementStatus::Confirmed);
+    assert_eq!(confirmed.confirmed_by(), Some(user_of(creator)));
+
+    let after = balances_of(&env, creator, group.id()).await;
+    assert_eq!(
+        balance_of(&after, second),
+        rust_decimal::Decimal::ZERO,
+        "chi ha saldato è in pari"
+    );
+    assert_eq!(balance_of(&after, creator), creditor_before - debt);
+
+    // E il proprietario guarda senza esserne parte: vede i saldi, e non compare
+    // fra loro.
+    let seen_by_owner = balances_of(&env, &owner, group.id()).await;
+    assert_eq!(seen_by_owner.len(), 3);
+    assert!(
+        !seen_by_owner
+            .iter()
+            .any(|balance| balance.user_id == user_of(&owner)),
+        "lo staff guarda il conto dei coinquilini, non ne è parte"
+    );
+}
+
+/// **Il trigger differito, riprodotto.**
+///
+/// `expense_shares_balanced` è `DEFERRABLE INITIALLY DEFERRED`: quote che non
+/// sommano all'importo non fanno fallire l'`INSERT`, fanno fallire il **`COMMIT`**.
+/// Il dominio non permette di costruire quello stato, quindi il test scrive le
+/// righe a mano per dimostrare che la rete sotto c'è.
+#[tokio::test]
+async fn shares_that_do_not_add_up_are_refused_at_commit_and_not_before() {
+    let env = require_db!();
+    let (_, _, tenants) = coliving_stage(&env, "trigger-differito").await;
+    let creator = &tenants[0];
+
+    let group = create_group(&env, creator, "Quote sbilanciate", None, SplitMethod::Equal).await;
+
+    let mut tx = env
+        .pools
+        .privileged()
+        .begin()
+        .await
+        .expect("transazione privilegiata");
+    let expense_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO app.expenses (id, org_id, group_id, paid_by_user_id, description, amount)
+         VALUES ($1, $2, $3, $4, 'Spesa sbilanciata', 100.00)",
+    )
+    .bind(expense_id)
+    .bind(creator.org_id().expect("org").as_uuid())
+    .bind(group.id().as_uuid())
+    .bind(user_of(creator).as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("la spesa entra");
+
+    // 50,00 su 100,00: l'invariante è già violata, e **l'insert riesce lo stesso**.
+    sqlx::query(
+        "INSERT INTO app.expense_shares (org_id, expense_id, user_id, share_amount)
+         VALUES ($1, $2, $3, 50.00)",
+    )
+    .bind(creator.org_id().expect("org").as_uuid())
+    .bind(expense_id)
+    .bind(user_of(creator).as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("l'insert delle quote riesce: il trigger è differito");
+
+    let error = tx
+        .commit()
+        .await
+        .expect_err("il commit doveva essere rifiutato");
+    assert!(
+        error.to_string().contains("does not match expense amount"),
+        "atteso il rifiuto del trigger al commit, ottenuto: {error}"
+    );
+}
+
+/// I privilegi di colonna della `0028`, verificati **al contrario**.
+///
+/// Il buco che chiudono non è teorico: `expense_shares_balanced` è un trigger su
+/// `app.expense_shares`, quindi riscrivere `app.expenses.amount` **non lo fa
+/// scattare** e sbilancia l'invariante contabile in silenzio.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_what_an_expense_records() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    // `amount` è la prima dell'elenco, ed è la ragione della migration.
+    for attempt in [
+        sqlx::query("UPDATE app.expenses SET amount = 1.00 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET group_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET paid_by_user_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET split_method = 'weighted' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET currency = 'USD' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET org_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET utility_bill_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+    ] {
+        let error = attempt.expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi, ottenuto: {error}"
+        );
+    }
+
+    // Le cinque concesse: una correzione legittima passa. `deleted_at` è fra esse
+    // al contrario degli addebiti, perché `app.expenses` non ha una colonna di
+    // stato e il soft delete *è* l'annullamento di una spesa.
+    for allowed in [
+        sqlx::query("UPDATE app.expenses SET description = 'corretta' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET category = 'cleaning' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET expense_date = CURRENT_DATE WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET notes = 'nota' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expenses SET deleted_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+    ] {
+        assert!(
+            allowed.is_ok(),
+            "l'aggiornamento non doveva essere negato: {:?}",
+            allowed.err()
+        );
+    }
+}
+
+/// Un gruppo di un'altra organizzazione è **invisibile**, e la spesa che lo cita
+/// riceve `404`.
+///
+/// Non è ridondante con l'isolamento generale: `app.expense_groups` **non ha** il
+/// trigger `tg_assert_org_matches_property` che hanno `rooms`, `leases`, `tickets`
+/// e `utility_bills`, quindi qui l'unico controllo è la rilettura del gruppo sotto
+/// la RLS del chiamante.
+#[tokio::test]
+async fn a_group_of_another_organization_is_out_of_reach() {
+    let env = require_db!();
+    let (_, _, mine) = coliving_stage(&env, "isolamento-mio").await;
+    let (_, _, theirs) = coliving_stage(&env, "isolamento-altrui").await;
+
+    let group = create_group(&env, &theirs[0], "Casa altrui", None, SplitMethod::Equal).await;
+
+    let seen = GetExpenseGroup::new(Arc::clone(&env.factory))
+        .execute(&mine[0], group.id())
+        .await
+        .expect_err("il gruppo di un'altra organizzazione non si vede");
+    assert_eq!(seen.code(), "expense_group.not_found");
+
+    let recorded = RecordExpense::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &mine[0],
+            RecordExpenseCommand {
+                group_id: group.id(),
+                paid_by_user_id: None,
+                category: ExpenseCategory::Other,
+                description: "Spesa in casa d'altri".to_owned(),
+                amount: "10.00".parse().expect("decimale"),
+                expense_date: None,
+                split_method: None,
+                notes: None,
+            },
+        )
+        .await
+        .expect_err("la spesa su un gruppo invisibile non si scrive");
+    assert_eq!(recorded.code(), "expense_group.not_found");
+}
+
+/// Chi ha anticipato **deve essere un membro attivo**, e a imporlo è il service
+/// layer perché lo schema non lo fa.
+///
+/// Il danno che evita è silenzioso: `app.v_expense_group_balances` parte dai
+/// membri, quindi un credito intestato a un estraneo non comparirebbe a nessuno e
+/// la somma dei saldi del gruppo smetterebbe di fare zero.
+#[tokio::test]
+async fn an_expense_cannot_be_advanced_by_someone_outside_the_group() {
+    let env = require_db!();
+    let (_, _, tenants) = coliving_stage(&env, "anticipo-estraneo").await;
+    let (creator, outsider) = (&tenants[0], &tenants[1]);
+
+    let group = create_group(&env, creator, "Solo io", None, SplitMethod::Equal).await;
+
+    let refused = RecordExpense::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            creator,
+            RecordExpenseCommand {
+                group_id: group.id(),
+                paid_by_user_id: Some(user_of(outsider)),
+                category: ExpenseCategory::Other,
+                description: "Ha pagato un estraneo".to_owned(),
+                amount: "10.00".parse().expect("decimale"),
+                expense_date: None,
+                split_method: None,
+                notes: None,
+            },
+        )
+        .await
+        .expect_err("chi non è del gruppo non può aver anticipato");
+    assert_eq!(refused.code(), "expense.payer_not_in_group");
+}
+
+/// Il rientro è un `UPDATE` e non un `INSERT`.
+///
+/// `expense_group_members_group_user_uk` è unico su `(group_id, user_id)` e **non
+/// è parziale**: chi scrive `join` come un inserimento incondizionato prende un
+/// conflitto sul vincolo. `joined_at` segue il rientro, ed è la ragione per cui
+/// l'ordine del resto nella ripartizione **non** è per quella colonna.
+#[tokio::test]
+async fn rejoining_a_group_is_an_update_and_moves_the_joining_date() {
+    let env = require_db!();
+    let (_, _, tenants) = coliving_stage(&env, "rientro").await;
+    let (creator, second) = (&tenants[0], &tenants[1]);
+
+    let group = create_group(&env, creator, "Va e viene", None, SplitMethod::Equal).await;
+    add_member(&env, creator, group.id(), second, "1").await;
+
+    let first_join = {
+        let (_, members) = GetExpenseGroup::new(Arc::clone(&env.factory))
+            .execute(creator, group.id())
+            .await
+            .expect("composizione letta");
+        members
+            .iter()
+            .find(|member| member.user_id() == user_of(second))
+            .expect("il secondo è dentro")
+            .joined_at()
+    };
+
+    LeaveGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(second, group.id(), user_of(second))
+        .await
+        .expect("uscito");
+
+    add_member(&env, creator, group.id(), second, "2").await;
+
+    let (_, members) = GetExpenseGroup::new(Arc::clone(&env.factory))
+        .execute(creator, group.id())
+        .await
+        .expect("composizione letta");
+    let rejoined: Vec<_> = members
+        .iter()
+        .filter(|member| member.user_id() == user_of(second))
+        .collect();
+
+    assert_eq!(
+        rejoined.len(),
+        1,
+        "il vincolo unico non è parziale: una seconda riga non può esistere"
+    );
+    assert!(rejoined[0].is_active());
+    assert!(
+        rejoined[0].joined_at() > first_join,
+        "`joined_at` segue il rientro, ed è per questo che il resto della ripartizione non si ordina per quella colonna"
+    );
+    assert_eq!(
+        rejoined[0].weight().value(),
+        rust_decimal::Decimal::TWO,
+        "il rientro aggiorna anche il peso: la doppia adesso è sua"
+    );
+}
+
+/// Si esce per sé stessi, e la restrizione **non** è un confine di sicurezza.
+///
+/// La `USING` di `expense_group_members_update` ammette qualunque membro attivo
+/// del gruppo, quindi la Row Level Security lascerebbe passare la scrittura: a
+/// fermarla è il contratto dell'API. Il test fissa entrambe le metà — il rifiuto
+/// applicativo, e il fatto che la policy da sola **non** lo darebbe.
+#[tokio::test]
+async fn a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them() {
+    let env = require_db!();
+    let (owner, _, tenants) = coliving_stage(&env, "uscita-altrui").await;
+    let (creator, second) = (&tenants[0], &tenants[1]);
+
+    let group = create_group(&env, creator, "Chi esce", None, SplitMethod::Equal).await;
+    add_member(&env, creator, group.id(), second, "1").await;
+
+    let refused = LeaveGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(creator, group.id(), user_of(second))
+        .await
+        .expect_err("un coinquilino non toglie un altro");
+    assert_eq!(refused.code(), "expense_group.membership_not_yours");
+
+    // La stessa scrittura, fatta a mano con il contesto del creatore, **passa**:
+    // è la prova che il confine è applicativo e non della RLS. Va saputo, perché
+    // è esattamente il genere di regola che si legge come una garanzia.
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+        .bind(user_of(creator).as_uuid())
+        .bind(creator.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    let affected = sqlx::query(
+        "UPDATE app.expense_group_members SET left_at = now()
+          WHERE group_id = $1 AND user_id = $2",
+    )
+    .bind(group.id().as_uuid())
+    .bind(user_of(second).as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("la policy non si oppone")
+    .rows_affected();
+    assert_eq!(
+        affected, 1,
+        "la RLS lascia passare: il confine è nel service layer, non nella policy"
+    );
+    tx.rollback().await.expect("annullata");
+
+    // Lo staff invece può, ed è chi amministra.
+    LeaveGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&owner, group.id(), user_of(second))
+        .await
+        .expect("lo staff toglie chi se n'è andato davvero");
+}
+
+/// Le tre uscite di `pending`, e la sola che i pagamenti non hanno.
+///
+/// `settlements_update` nomina anche `from_user_id`, mentre `payments_update` è
+/// staff soltanto: **fra pari il ritiro è lecito, verso il proprietario no**. Il
+/// test verifica che la scrittura passi davvero sul database, non solo nel
+/// dominio.
+#[tokio::test]
+async fn whoever_declared_a_settlement_can_withdraw_it_and_the_creditor_can_refuse_it() {
+    let env = require_db!();
+    let (_, _, tenants) = coliving_stage(&env, "uscite-regolamento").await;
+    let (creator, second) = (&tenants[0], &tenants[1]);
+
+    let group = create_group(&env, creator, "Tre uscite", None, SplitMethod::Equal).await;
+    add_member(&env, creator, group.id(), second, "1").await;
+
+    // Lo use case vive fuori dalla chiusura: costruirlo dentro produrrebbe un
+    // temporaneo che il future restituito continuerebbe a prendere in prestito.
+    let declaring = DeclareSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let declare = || {
+        declaring.execute(
+            second,
+            DeclareSettlementCommand {
+                group_id: group.id(),
+                to_user_id: user_of(creator),
+                amount: "10.00".parse().expect("decimale"),
+                method: PaymentMethod::Cash,
+                settled_at: Some(chrono::Utc::now() - chrono::Duration::days(1)),
+                note: None,
+            },
+        )
+    };
+
+    // Il ritiro di chi ha dichiarato.
+    let to_cancel = declare().await.expect("dichiarato");
+    let cancelled = CancelSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(second, to_cancel.id())
+        .await
+        .expect("chi ha dichiarato ritira");
+    assert_eq!(cancelled.status(), SettlementStatus::Cancelled);
+    assert_eq!(
+        cancelled.settled_at(),
+        None,
+        "un trasferimento che non è avvenuto non ha una data in cui è avvenuto"
+    );
+
+    // Il rifiuto di chi riceve.
+    let to_reject = declare().await.expect("dichiarato");
+    let rejected = RejectSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(creator, to_reject.id())
+        .await
+        .expect("il creditore rifiuta");
+    assert_eq!(rejected.status(), SettlementStatus::Rejected);
+    assert_eq!(rejected.settled_at(), None);
+
+    // E chi riceve **non** ritira: quello è il rifiuto, ed è un fatto diverso.
+    let to_refuse = declare().await.expect("dichiarato");
+    let refused = CancelSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(creator, to_refuse.id())
+        .await
+        .expect_err("chi riceve non ritira");
+    assert_eq!(refused.code(), "settlement.not_declared_by_you");
+
+    // I due terminali non si muovono più, e nessuno dei tre ha mosso i saldi.
+    let stuck = ConfirmSettlement::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(creator, cancelled.id())
+        .await
+        .expect_err("da `cancelled` non si esce");
+    assert_eq!(stuck.code(), "settlement.invalid_transition");
+}
+
+/// La ripartizione pesata, contro il database vero.
+///
+/// Chi occupa la doppia paga il doppio, e le quote sommano esattamente
+/// all'importo — che è l'unico criterio, perché il resto lo impone il trigger.
+#[tokio::test]
+async fn a_weighted_split_makes_the_double_room_pay_more() {
+    let env = require_db!();
+    let (_, _, tenants) = coliving_stage(&env, "pesata").await;
+    let (creator, second, third) = (&tenants[0], &tenants[1], &tenants[2]);
+
+    let group = create_group(&env, creator, "Con la doppia", None, SplitMethod::Weighted).await;
+    add_member(&env, creator, group.id(), second, "1").await;
+    add_member(&env, creator, group.id(), third, "2").await;
+
+    let recorded = RecordExpense::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            creator,
+            RecordExpenseCommand {
+                group_id: group.id(),
+                paid_by_user_id: None,
+                category: ExpenseCategory::Utilities,
+                description: "Bolletta della luce".to_owned(),
+                amount: "10.00".parse().expect("decimale"),
+                expense_date: None,
+                split_method: None,
+                notes: None,
+            },
+        )
+        .await
+        .expect("spesa registrata");
+
+    let share_of = |user: &RequestContext| {
+        recorded
+            .shares
+            .iter()
+            .find(|share| share.user_id() == user_of(user))
+            .map(|share| share.share_amount().amount())
+            .expect("quota presente")
+    };
+    assert_eq!(share_of(creator), "2.50".parse().expect("decimale"));
+    assert_eq!(share_of(second), "2.50".parse().expect("decimale"));
+    assert_eq!(share_of(third), "5.00".parse().expect("decimale"));
+
+    let total: rust_decimal::Decimal = recorded
+        .shares
+        .iter()
+        .map(|share| share.share_amount().amount())
+        .sum();
+    assert_eq!(total, "10.00".parse().expect("decimale"));
+
+    // Il peso viaggia sulle quote **solo** perché la ripartizione è pesata.
+    assert!(
+        recorded
+            .shares
+            .iter()
+            .all(|share| share.share_weight().is_some())
+    );
+
+    // E si rilegge dal database identico a come è stato scritto.
+    let (_, from_db) = GetExpense::new(Arc::clone(&env.factory))
+        .execute(creator, recorded.expense.id())
+        .await
+        .expect("spesa riletta");
+    let reread: rust_decimal::Decimal = from_db
+        .iter()
+        .map(|share| share.share_amount().amount())
+        .sum();
+    assert_eq!(reread, total);
 }

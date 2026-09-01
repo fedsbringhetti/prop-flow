@@ -3406,3 +3406,544 @@ async fn a_voided_charge_shows_no_outstanding_amount_and_takes_no_payment() {
         "corpo: {problem}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Spese co-living
+// ---------------------------------------------------------------------------
+
+/// Registra un inquilino, lo invita sul contratto e restituisce
+/// `(access_token, user_id)`.
+///
+/// Serve l'identificatore dell'utente e non solo il token: i corpi di questo
+/// modulo nominano le persone — chi ha anticipato, a chi si è pagato — e senza
+/// `user_id` non si scriverebbero.
+async fn coliving_tenant(app: &TestApp, owner: &str, lease: &str, label: &str) -> (String, String) {
+    let email = common::unique_email(label);
+    let (_, accept_token) = invite_tenant(app, owner, lease, &email).await;
+    let (token, _, _) = common::register_and_login_with_email(app, &email).await;
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &token,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    // **Il `user_id` si legge dalle parti del contratto**, ed è l'unica via che un
+    // client ha oggi: `POST /auth/accept-invitation` restituisce l'organizzazione
+    // e il ruolo, non l'utente, e non esiste un endpoint che elenchi le persone di
+    // un'organizzazione. Chi sta sullo stesso contratto si vede quindi attraverso
+    // il contratto — che per un co-living è il caso reale, ma è un vincolo da
+    // sapere prima di costruirci sopra un client.
+    let (status, detail) = app
+        .send("GET", &format!("/api/v1/leases/{lease}"), Some(owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    let user_id = detail["parties"]
+        .as_array()
+        .expect("parti del contratto")
+        .iter()
+        .find(|party| party["email"] == email)
+        .and_then(|party| party["user_id"].as_str())
+        .expect("la parte è collegata all'utente dopo l'accettazione")
+        .to_owned();
+
+    (token, user_id)
+}
+
+/// Il giro a mano del modulo, contro il router vero.
+///
+/// Un inquilino crea un gruppo e **si ritrova dentro**; aggiunge due coinquilini;
+/// registra una spesa da 100,00 divisa in tre e i saldi dicono +66,67 / −33,33 /
+/// −33,34; uno dichiara di aver saldato e **il saldo non si muove** finché il
+/// creditore non conferma.
+#[tokio::test]
+async fn a_coliving_group_splits_a_hundred_euros_and_closes_the_account() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-coliving").await;
+    let property = create_property(&app, &owner, "Casa condivisa").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (first, first_id) = coliving_tenant(&app, &owner, &lease, "coinquilino-uno").await;
+    let (second, second_id) = coliving_tenant(&app, &owner, &lease, "coinquilino-due").await;
+    let (third, third_id) = coliving_tenant(&app, &owner, &lease, "coinquilino-tre").await;
+
+    // **Chi crea si ritrova dentro**: senza la migration `0026` il gruppo
+    // nascerebbe vuoto e resterebbe vuoto.
+    let (status, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "name": "Casa di via Test",
+                "property_id": property,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {group}");
+    assert_eq!(group["kind"], "coliving");
+    assert_eq!(group["default_split_method"], "equal");
+    assert_eq!(group["currency"], "EUR");
+    assert_eq!(group["is_archived"], false);
+    let members = group["members"].as_array().expect("composizione presente");
+    assert_eq!(members.len(), 1, "il gruppo non nasce vuoto");
+    assert_eq!(members[0]["user_id"], first_id);
+    assert_eq!(members[0]["weight"], "1.000");
+    let group_id = group["id"].as_str().expect("id").to_owned();
+
+    // I due coinquilini.
+    for user in [&second_id, &third_id] {
+        let (status, added) = app
+            .send_in_org(
+                "POST",
+                &format!("/api/v1/expense-groups/{group_id}/members"),
+                Some(&first),
+                Some(&owner_org),
+                Some(serde_json::json!({ "user_id": user })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "corpo: {added}");
+        assert_eq!(added["left_at"], serde_json::Value::Null);
+    }
+
+    // Cento euro tondi divisi in tre: il centesimo di resto va al primo in ordine
+    // di `user_id`, e **la somma delle quote è esattamente l'importo**.
+    let (status, expense) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "description": "Spesa della settimana",
+                "amount": "100.00",
+                "category": "groceries",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {expense}");
+    assert_eq!(expense["amount"], "100.00");
+    assert_eq!(expense["paid_by_user_id"], first_id);
+    let shares = expense["shares"].as_array().expect("quote presenti");
+    assert_eq!(shares.len(), 3);
+    let total: rust_decimal::Decimal = shares
+        .iter()
+        .map(|share| {
+            share["share_amount"]
+                .as_str()
+                .expect("importo")
+                .parse::<rust_decimal::Decimal>()
+                .expect("decimale")
+        })
+        .sum();
+    assert_eq!(
+        total,
+        "100.00".parse::<rust_decimal::Decimal>().expect("decimale"),
+        "le quote devono sommare all'importo: il trigger non ammette altro"
+    );
+    // Su una divisione in parti uguali il peso **non** viaggia con le quote.
+    assert!(
+        shares.iter().all(|share| share["share_weight"].is_null()),
+        "il peso non ha partecipato al calcolo: scriverlo direbbe il contrario"
+    );
+
+    // I saldi: chi ha anticipato è in credito, gli altri due in debito, e la
+    // somma fa zero.
+    let balance_of = |body: &serde_json::Value, user: &str| -> rust_decimal::Decimal {
+        body["items"]
+            .as_array()
+            .expect("saldi")
+            .iter()
+            .find(|item| item["user_id"] == user)
+            .map(|item| {
+                item["net_balance"]
+                    .as_str()
+                    .expect("saldo")
+                    .parse::<rust_decimal::Decimal>()
+                    .expect("decimale")
+            })
+            .unwrap_or_else(|| panic!("nessun saldo per {user}"))
+    };
+
+    let (status, balances) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/balances"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {balances}");
+    let creditor = balance_of(&balances, &first_id);
+    assert!(creditor > rust_decimal::Decimal::ZERO);
+    let sum: rust_decimal::Decimal = balances["items"]
+        .as_array()
+        .expect("saldi")
+        .iter()
+        .map(|item| {
+            item["net_balance"]
+                .as_str()
+                .expect("saldo")
+                .parse::<rust_decimal::Decimal>()
+                .expect("decimale")
+        })
+        .sum();
+    assert_eq!(
+        sum,
+        rust_decimal::Decimal::ZERO,
+        "la somma dei saldi di un gruppo fa zero"
+    );
+
+    // Il secondo dichiara di aver saldato. **Il saldo non si muove.**
+    let debt = balance_of(&balances, &second_id).abs().to_string();
+    let (status, settlement) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/settlements"),
+            Some(&second),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "to_user_id": first_id,
+                "amount": debt,
+                "method": "bank_transfer",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {settlement}");
+    assert_eq!(settlement["status"], "pending");
+    assert_eq!(settlement["from_user_id"], second_id);
+    assert_eq!(settlement["confirmed_at"], serde_json::Value::Null);
+    let settlement_id = settlement["id"].as_str().expect("id").to_owned();
+
+    let (_, pending) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/balances"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(
+        balance_of(&pending, &first_id),
+        creditor,
+        "una dichiarazione pendente non muove i saldi: la vista somma i soli `confirmed`"
+    );
+
+    // **Chi paga non conferma a sé stesso**: conferma chi riceve.
+    let (status, refused) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/settlements/{settlement_id}/confirm"),
+            Some(&second),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {refused}");
+    assert_eq!(refused["code"], "settlement.not_addressed_to_you");
+
+    // Il creditore trova la dichiarazione da confermare filtrando per stato.
+    let (status, queue) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/settlements?status=pending"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {queue}");
+    assert_eq!(queue["items"].as_array().expect("elenco").len(), 1);
+
+    let (status, confirmed) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/settlements/{settlement_id}/confirm"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {confirmed}");
+    assert_eq!(confirmed["status"], "confirmed");
+    assert_eq!(confirmed["confirmed_by"], first_id);
+
+    let (_, after) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/balances"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(
+        balance_of(&after, &second_id),
+        rust_decimal::Decimal::ZERO,
+        "chi ha saldato è in pari"
+    );
+
+    // **Il difetto della vista, dal bordo HTTP**: chi esce con un conto aperto
+    // resta nei saldi, chi esce in pari sparisce.
+    for (token, user) in [(&third, &third_id), (&second, &second_id)] {
+        let (status, left) = app
+            .send_in_org(
+                "DELETE",
+                &format!("/api/v1/expense-groups/{group_id}/members/{user}"),
+                Some(token),
+                Some(&owner_org),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "corpo: {left}");
+        assert!(
+            !left["left_at"].is_null(),
+            "uscire valorizza `left_at` e non cancella la riga"
+        );
+    }
+
+    let (_, departed) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/balances"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    let items = departed["items"].as_array().expect("saldi");
+    assert_eq!(
+        items.len(),
+        2,
+        "il debitore uscito resta, quello in pari sparisce: prima della 0027 sparivano entrambi"
+    );
+    assert!(balance_of(&departed, &third_id) < rust_decimal::Decimal::ZERO);
+    assert!(
+        !items.iter().any(|item| item["user_id"] == second_id),
+        "chi esce in pari non ha niente da dire e non compare"
+    );
+
+    // Il conto si chiude anche con dei conti aperti: chi se n'è andato senza
+    // pagare non tiene il gruppo in ostaggio.
+    let (status, archived) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/archive"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {archived}");
+    assert_eq!(archived["is_archived"], true);
+
+    // E un gruppo archiviato non accetta più spese, ma i saldi restano leggibili.
+    let (status, refused) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "description": "Tardi", "amount": "1.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {refused}");
+    assert_eq!(refused["code"], "expense_group.archived");
+
+    let (status, _) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/balances"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "un conto chiuso si consulta");
+}
+
+/// La ripartizione pesata dal bordo HTTP, e il peso che viaggia con le quote.
+#[tokio::test]
+async fn a_weighted_split_carries_the_weight_onto_the_wire() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-pesata").await;
+    let property = create_property(&app, &owner, "Casa con la doppia").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (first, _) = coliving_tenant(&app, &owner, &lease, "pesata-uno").await;
+    let (_, second_id) = coliving_tenant(&app, &owner, &lease, "pesata-due").await;
+
+    let (status, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "name": "Con la doppia",
+                "default_split_method": "weighted",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {group}");
+    let group_id = group["id"].as_str().expect("id").to_owned();
+
+    // Il secondo occupa la doppia: peso 2, e paga il doppio.
+    let (status, added) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/members"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "user_id": second_id, "weight": "2" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {added}");
+    assert_eq!(
+        added["weight"], "2.000",
+        "il peso esce con tre decimali, come `NUMERIC(6,3)`"
+    );
+
+    let (status, expense) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "description": "Bolletta della luce",
+                "amount": "30.00",
+                "category": "utilities",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {expense}");
+    assert_eq!(expense["split_method"], "weighted");
+
+    let shares = expense["shares"].as_array().expect("quote");
+    let of = |user: &str| -> &str {
+        shares
+            .iter()
+            .find(|share| share["user_id"] == user)
+            .map(|share| share["share_amount"].as_str().expect("importo"))
+            .expect("quota presente")
+    };
+    assert_eq!(of(&second_id), "20.00", "la doppia paga il doppio");
+    assert!(
+        shares.iter().all(|share| !share["share_weight"].is_null()),
+        "su una ripartizione pesata il peso ha partecipato al calcolo e viaggia"
+    );
+}
+
+/// I tre metodi fuori perimetro danno `422` invece di una ripartizione
+/// approssimata, e un peso malformato pure.
+#[tokio::test]
+async fn the_unsupported_split_methods_are_refused_with_a_field_error() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-metodi").await;
+    let property = create_property(&app, &owner, "Casa dei metodi").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let (tenant, _) = coliving_tenant(&app, &owner, &lease, "metodi-uno").await;
+
+    let (status, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "name": "Metodi" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {group}");
+    let group_id = group["id"].as_str().expect("id").to_owned();
+
+    for method in ["percentage", "exact", "by_usage"] {
+        let (status, refused) = app
+            .send_in_org(
+                "POST",
+                &format!("/api/v1/expense-groups/{group_id}/expenses"),
+                Some(&tenant),
+                Some(&owner_org),
+                Some(serde_json::json!({
+                    "description": "Spesa",
+                    "amount": "10.00",
+                    "split_method": method,
+                })),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "`{method}` doveva essere rifiutato, corpo: {refused}"
+        );
+        assert_eq!(refused["code"], "validation.failed");
+        assert_eq!(refused["errors"][0]["field"], "split_method");
+    }
+
+    // Un peso con quattro decimali non entra in `NUMERIC(6,3)`, e il rifiuto
+    // arriva dal bordo invece che dal database.
+    let (status, refused) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/members"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "user_id": uuid::Uuid::now_v7().to_string(),
+                "weight": "1.2345",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {refused}");
+    assert_eq!(refused["errors"][0]["field"], "weight");
+}
+
+/// Un gruppo di un'altra organizzazione dà `404` da ogni porta.
+#[tokio::test]
+async fn an_expense_group_of_another_organization_is_invisible() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-iso-a").await;
+    let property = create_property(&app, &owner, "Casa mia").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let (tenant, _) = coliving_tenant(&app, &owner, &lease, "iso-uno").await;
+
+    let (_, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "name": "Casa mia" })),
+        )
+        .await;
+    let group_id = group["id"].as_str().expect("id").to_owned();
+
+    // Un estraneo, con la propria organizzazione.
+    let (stranger, _) = common::register_and_login(&app, "estraneo-coliving").await;
+
+    for (method, path) in [
+        ("GET", format!("/api/v1/expense-groups/{group_id}")),
+        ("GET", format!("/api/v1/expense-groups/{group_id}/balances")),
+        ("GET", format!("/api/v1/expense-groups/{group_id}/expenses")),
+    ] {
+        let (status, body) = app.send(method, &path, Some(&stranger), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}, corpo: {body}");
+        assert_eq!(body["code"], "expense_group.not_found");
+    }
+
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            &stranger,
+            serde_json::json!({ "description": "Spesa in casa d'altri", "amount": "10.00" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
+    assert_eq!(body["code"], "expense_group.not_found");
+}
