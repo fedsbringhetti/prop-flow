@@ -49,6 +49,15 @@ pub enum Conflict {
     /// nasconde. Vedi ADR-033.
     #[error("This idempotency key was already used for a different payment")]
     PaymentIdempotencyKeyReused,
+    /// `expense_group_members_group_user_uk`
+    ///
+    /// L'indice è unico su `(group_id, user_id)` e **non è parziale**: chi è
+    /// uscito dal gruppo non può avere una seconda riga, e il rientro è un
+    /// `UPDATE`. Lo use case rilegge la membership prima di scrivere, quindi
+    /// questo conflitto resta per la corsa fra due richieste concorrenti — dove il
+    /// vincolo è l'unica difesa.
+    #[error("This person is already a member of this expense group")]
+    GroupMembershipAlreadyExists,
 }
 
 impl Conflict {
@@ -62,6 +71,7 @@ impl Conflict {
             Self::MembershipAlreadyExists => "membership.already_exists",
             Self::DuplicateUtilityBill => "utility_bill.duplicate",
             Self::PaymentIdempotencyKeyReused => "payment.idempotency_key_reused",
+            Self::GroupMembershipAlreadyExists => "expense_group.membership_exists",
         }
     }
 }
@@ -244,6 +254,7 @@ mod tests {
             Conflict::MembershipAlreadyExists.code(),
             Conflict::DuplicateUtilityBill.code(),
             Conflict::PaymentIdempotencyKeyReused.code(),
+            Conflict::GroupMembershipAlreadyExists.code(),
         ];
         let mut unique = codes.to_vec();
         unique.sort_unstable();
