@@ -981,6 +981,13 @@ gruppo non può aggiungere nessuno finché il proprietario non gli passa gli ide
 Le due vie qui sopra bastano solo con un **contratto unico condiviso**, cioè con il
 co-living sull'immobile intero.
 
+**L'immobile non è il confine, né in un senso né nell'altro.** Sui contratti la
+visibilità è più stretta — è il singolo contratto — mentre sull'anagrafica è più larga:
+`users_select` ammette `shares_org_with`, quindi a livello di database un inquilino può
+leggere la riga di **ogni** persona dell'organizzazione, inquilini di altri immobili
+compresi. Nessun endpoint lo espone, ed è la ragione per cui l'elenco delle persone non
+si può scrivere sulla RLS così com'è senza prima decidere quale perimetro debba avere.
+
 Il vincolo è registrato fra i debiti noti in
 [09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti), ed è da chiudere prima
 del primo client che usi il modulo.
