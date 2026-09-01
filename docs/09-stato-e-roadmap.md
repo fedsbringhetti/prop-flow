@@ -20,7 +20,7 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 28 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 29 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
 170 indici, 65 policy RLS, 50 trigger, 4 viste, 30 funzioni.
 
@@ -57,8 +57,8 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-342 test: 181 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
-del bordo HTTP, 57 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+343 test: 181 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
+del bordo HTTP, 58 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
 MinIO, 64 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
@@ -124,11 +124,13 @@ fondo: [Piano — Pagamenti, fetta 1](#piano-pagamenti-fetta-1).
 **Spese co-living** è implementato nella fetta 1: gruppi con chi li crea già dentro,
 composizione con uscita e rientro, spese ripartite `equal` e `weighted` con la somma
 delle quote garantita dal database, saldi letti dalla vista, e regolamenti a due tempi
-confermati da **chi riceve**. Ha richiesto **tre migration** — la `0026` per la policy
-che lascia iscriversi chi crea il gruppo, la `0027` per la vista che perdeva chi usciva
-con un conto aperto, la `0028` per i privilegi di colonna che chiudono un buco vero del
-trigger contabile — e due ADR, [034](08-decisioni.md#adr-034) e
-[035](08-decisioni.md#adr-035). Restano fuori, e non per dimenticanza, la
+confermati da **chi riceve**. Ha richiesto **quattro migration** — la `0026` per la
+policy che lascia iscriversi chi crea il gruppo, la `0027` per la vista che perdeva chi
+usciva con un conto aperto, la `0028` per i privilegi di colonna che chiudono un buco
+vero del trigger contabile, la `0029` per l'identità di una membership e per rendere
+l'uscita un confine vero — e due ADR, [034](08-decisioni.md#adr-034) e
+[035](08-decisioni.md#adr-035), il secondo con il corollario sulla direzione che la
+`0029` ha aggiunto. Restano fuori, e non per dimenticanza, la
 semplificazione dei debiti, i tre metodi di ripartizione oltre `equal` e `weighted`,
 `is_settled`, il legame fra regolamento e pagamento, la ripartizione automatica di una
 bolletta e gli allegati alle spese. Il resoconto è in fondo:
@@ -181,9 +183,7 @@ cambia il contesto.
 | L'incasso non attribuito è invisibile a chi ha pagato | `payments_select` mostra la riga a staff, pagante e incassante. Uno staff che registri un incasso senza valorizzare `payer_user_id` produce un pagamento che l'inquilino **non vede nel proprio elenco**, pur vedendone l'effetto in `paid_amount` sul saldo. È lecito — un bonifico da un conto che non si sa a chi ricondurre esiste — ma oggi è anche il comportamento di chi semplicemente omette il campo, cioè il caso più facile | Con il primo client: è lì che si vede se l'attribuzione debba diventare obbligatoria, o se convenga dedurla dalle parti del contratto |
 | Nessuna via per ritirare una dichiarazione | `payments_update` è staff soltanto, quindi chi dichiara di aver pagato può creare qualcosa che poi non può disfare. L'uscita esiste ed è il rifiuto dello staff, ma l'inquilino che si accorge subito di aver sbagliato importo non ha rimedio proprio. Darglielo non è una rotta in più: richiede una policy che ammetta l'`UPDATE` del pagante sulla **propria** riga in `pending`, cioè una migration e un secondo `WITH CHECK` da scrivere con attenzione | Se il caso si presenta davvero. Documentato nell'API perché è controintuitivo |
 | `refunded_amount` è sottratto e non è mai valorizzato | Il repository somma `amount - refunded_amount` come fa la vista, e la colonna vale sempre zero. È deliberato — è ciò che rende la formula *la stessa* il giorno in cui non varrà più zero — e va saputo, perché letto oggi sembra codice per un caso che non esiste | Con i rimborsi, che sono anche il momento in cui la `GRANT` della `0025` va allargata |
-| Nessun endpoint elenca le persone di un'organizzazione | I corpi delle spese co-living nominano le persone (`paid_by_user_id`, `to_user_id`, `user_id` di un membro) e non c'è un modo diretto di scoprire quegli identificatori. Oggi un client li trova dalle parti del contratto (`GET /leases/{id}`) o dalla composizione di un gruppo che già lo comprende: per un co-living, dove i coinquilini stanno sullo stesso immobile, funziona. Non funziona per un gruppo che non sia legato a un contratto, e `expense_groups.property_id` è opzionale | Con il primo client: è lì che si vede se serva `GET /organizations/{id}/members` e con quale visibilità — elencare le persone di un'organizzazione è una superficie con implicazioni di privacy, non un elenco qualsiasi |
-| `app.expense_group_members` non ha privilegi di colonna | La `WITH CHECK` di `expense_group_members_update` nomina il solo `org_id`, quindi un membro attivo può riscrivere `user_id` o `weight` di chiunque nel gruppo — e il peso cambia le quote di tutti nella prossima spesa. È il criterio di [ADR-026](08-decisioni.md#adr-026) applicabile a una quarta tabella; non è stato fatto perché fuori dal perimetro dichiarato della fetta, che nominava `app.expenses`. La stessa migration potrebbe stringere la `USING` con `user_id = app.current_user_id() OR app.is_org_staff(org_id)`, rendendo un confine di sicurezza vero ciò che oggi è una regola del service layer (vedi la voce sotto) | Insieme, in una migration sola: sono due difetti della stessa policy, e affrontarli separatamente vorrebbe dire toccare `expense_group_members` due volte |
-| «Si esce da un gruppo per sé stessi» non è un confine di sicurezza | `LeaveGroup` rifiuta con `expense_group.membership_not_yours` chi prova a togliere un altro senza essere staff, ma la `USING` di `expense_group_members_update` ammette qualunque membro attivo: una query scritta a mano passerebbe. La restrizione vive nel contratto dell'API, ed è il genere di regola che si legge come una garanzia quando non lo è. Il test `a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them` fissa entrambe le metà | **Insieme al debito qui sopra**, di cui è la stessa migration |
+| Nessun endpoint elenca le persone di un'organizzazione | I corpi delle spese co-living nominano le persone (`paid_by_user_id`, `to_user_id`, `user_id` di un membro) e non c'è un modo diretto di scoprire quegli identificatori. Oggi un client li trova dalle parti del contratto (`GET /leases/{id}`) o dalla composizione di un gruppo che già lo comprende: per un co-living, dove i coinquilini stanno sullo stesso immobile, funziona. Non funziona per un gruppo che non sia legato a un contratto, e `expense_groups.property_id` è opzionale. Tecnicamente non servirebbe una migration — `users_select` ammette già `shares_org_with` — quindi il costo è uno use case, un DTO e una rotta | Con il primo client: è lì che si vede se serva `GET /organizations/{id}/members` e **con quale visibilità** — tutti i membri, o solo chi condivide un contratto o un gruppo. È una superficie con implicazioni di privacy, e restringere chi vede un elenco dopo averlo pubblicato è una rottura |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
@@ -544,6 +544,31 @@ non torna.
   a un ticket dà **errore** in lettura invece di sparire dall'elenco: è la regola degli
   enum di `docs/06`, e qui vale a maggior ragione — un documento che l'API non sa
   mostrare non deve svanire in silenzio.
+
+#### Una verifica che non verificava niente
+
+Vale la pena registrarla perché il sintomo era un verde, non un rosso.
+
+Il primo controllo della `0029` su database vero rispondeva `UPDATE 0` a ogni scrittura
+— quella che doveva essere rifiutata e quella che doveva passare — e letto in fretta
+sembrava che la policy funzionasse. Non c'erano righe: il setup aveva inserito i due
+membri con **una `INSERT` multi-riga**, e quella fallisce.
+
+La ragione è la stessa che vieta l'`INSERT … RETURNING` sui gruppi.
+`expense_group_members_insert` chiede `can_access_expense_group(group_id)` per chi non è
+il creatore, e quella funzione è `STABLE`: dentro lo stesso statement vede lo snapshot
+iniziale, in cui la membership del creatore **non c'è ancora**. Il creatore entra per il
+ramo della `0026`, il secondo membro no, e l'intero statement cade.
+
+Due statement separati funzionano, perché in `READ COMMITTED` ognuno prende uno snapshot
+nuovo. Nessun codice dell'applicazione fa una `INSERT` multi-riga di membership, quindi
+non è un difetto — ma è una proprietà dello schema che va saputa prima di scrivere un
+setup di prova, e il modo in cui si manifesta è un test che non prova niente invece di
+un errore.
+
+La regola generale: **una verifica che risponde «zero righe» va guardata due volte**,
+perché zero righe è anche ciò che risponde una verifica che non ha trovato niente da
+verificare.
 
 #### Come si è verificato
 
@@ -1084,6 +1109,31 @@ l'applicazione decide.
 - **`AttachmentOwnerType` nel dominio passa da tre valori a quattro.** Il test degli
   enum che verificava «un `ticket` in lettura dà errore» ora verifica lo stesso su
   `utility_bill`: la regola non è cambiata, si è spostato il confine del perimetro.
+
+#### Una verifica che non verificava niente
+
+Vale la pena registrarla perché il sintomo era un verde, non un rosso.
+
+Il primo controllo della `0029` su database vero rispondeva `UPDATE 0` a ogni scrittura
+— quella che doveva essere rifiutata e quella che doveva passare — e letto in fretta
+sembrava che la policy funzionasse. Non c'erano righe: il setup aveva inserito i due
+membri con **una `INSERT` multi-riga**, e quella fallisce.
+
+La ragione è la stessa che vieta l'`INSERT … RETURNING` sui gruppi.
+`expense_group_members_insert` chiede `can_access_expense_group(group_id)` per chi non è
+il creatore, e quella funzione è `STABLE`: dentro lo stesso statement vede lo snapshot
+iniziale, in cui la membership del creatore **non c'è ancora**. Il creatore entra per il
+ramo della `0026`, il secondo membro no, e l'intero statement cade.
+
+Due statement separati funzionano, perché in `READ COMMITTED` ognuno prende uno snapshot
+nuovo. Nessun codice dell'applicazione fa una `INSERT` multi-riga di membership, quindi
+non è un difetto — ma è una proprietà dello schema che va saputa prima di scrivere un
+setup di prova, e il modo in cui si manifesta è un test che non prova niente invece di
+un errore.
+
+La regola generale: **una verifica che risponde «zero righe» va guardata due volte**,
+perché zero righe è anche ciò che risponde una verifica che non ha trovato niente da
+verificare.
 
 #### Come si è verificato
 
@@ -2390,6 +2440,31 @@ che trasportasse un testo libero scritto da una persona su un pagamento di un'al
 persona sarebbe il posto peggiore dove metterlo. Se servirà, è una colonna e una
 migration.
 
+#### Una verifica che non verificava niente
+
+Vale la pena registrarla perché il sintomo era un verde, non un rosso.
+
+Il primo controllo della `0029` su database vero rispondeva `UPDATE 0` a ogni scrittura
+— quella che doveva essere rifiutata e quella che doveva passare — e letto in fretta
+sembrava che la policy funzionasse. Non c'erano righe: il setup aveva inserito i due
+membri con **una `INSERT` multi-riga**, e quella fallisce.
+
+La ragione è la stessa che vieta l'`INSERT … RETURNING` sui gruppi.
+`expense_group_members_insert` chiede `can_access_expense_group(group_id)` per chi non è
+il creatore, e quella funzione è `STABLE`: dentro lo stesso statement vede lo snapshot
+iniziale, in cui la membership del creatore **non c'è ancora**. Il creatore entra per il
+ramo della `0026`, il secondo membro no, e l'intero statement cade.
+
+Due statement separati funzionano, perché in `READ COMMITTED` ognuno prende uno snapshot
+nuovo. Nessun codice dell'applicazione fa una `INSERT` multi-riga di membership, quindi
+non è un difetto — ma è una proprietà dello schema che va saputa prima di scrivere un
+setup di prova, e il modo in cui si manifesta è un test che non prova niente invece di
+un errore.
+
+La regola generale: **una verifica che risponde «zero righe» va guardata due volte**,
+perché zero righe è anche ciò che risponde una verifica che non ha trovato niente da
+verificare.
+
 #### Come si è verificato
 
 Il giro a mano che il piano chiedeva, tutto sotto test e non a mano:
@@ -2984,22 +3059,36 @@ Non sono allargamenti di comodo, sono due buchi:
   dall'indice parziale `settlements_pending_ix`, che esiste dalla `0009` proprio per
   questa domanda.
 
-**4. Si esce da un gruppo per sé stessi, e la restrizione è applicativa.** Il piano
-elencava `LeaveGroup` senza dire chi può eseguirlo. La `USING` di
-`expense_group_members_update` ammette **qualunque membro attivo del gruppo**, quindi
-la RLS lascerebbe passare una query scritta a mano che toglie un altro.
+**4. Si esce da un gruppo per sé stessi, e la restrizione è diventata un confine vero
+con la `0029`.** Il piano elencava `LeaveGroup` senza dire chi può eseguirlo. La `USING`
+di `expense_group_members_update` ammette **qualunque membro attivo del gruppo**, quindi
+la RLS lasciava passare una query scritta a mano che toglie un altro.
 
-Si è scelto di restringere nel service layer: un coinquilino non deve poter togliere
-unilateralmente un altro da un conto condiviso, tanto meno uno con un saldo aperto. Lo
-staff può, perché è chi amministra.
+La prima risposta è stata restringere nel service layer e **registrare il resto come
+debito**, perché il passo 3 del piano nominava `app.expenses` e non le membership. Il
+debito è stato poi chiuso dentro la stessa fetta, insieme ai privilegi di colonna, ed è
+la `0029`.
 
-**Va detto ad alta voce che non è un confine di sicurezza**, ed è il genere di regola
-che si legge come una garanzia quando non lo è. Il test
-`a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them` fissa **entrambe**
-le metà: il rifiuto applicativo, e il fatto che la stessa scrittura fatta a mano con il
-contesto del coinquilino aggiorna una riga. Renderlo vero richiederebbe di stringere la
-`USING` con `user_id = app.current_user_id() OR app.is_org_staff(org_id)`, cioè una
-migration; è registrato fra i debiti.
+**La restrizione ovvia avrebbe rotto il rientro**, ed è la trappola di quella migration.
+Viene naturale stringere la `USING` con
+`user_id = app.current_user_id() OR app.is_org_staff(org_id)`. Non si può: reintegrare
+un coinquilino è un `UPDATE` sulla riga di **un altro** — il vincolo unico non è
+parziale, quindi chi è uscito non può avere una seconda riga — e con quella `USING` un
+membro non staff non potrebbe più far rientrare nessuno.
+
+A stringere è la **`WITH CHECK`**, che vede la riga nuova: un membro non staff può
+scriverla solo se il risultato ha `left_at IS NULL`, cioè può **reintegrare e non
+togliere**. È il corollario aggiunto ad [ADR-035](08-decisioni.md#adr-035): un privilegio
+di colonna dice quali colonne, una `WITH CHECK` dice in che verso.
+
+Il test omonimo ha cambiato di segno: la seconda metà asseriva che la policy lasciasse
+passare, e ora assicura che rifiuti.
+
+**Resta ammesso, di proposito, che un membro cambi il peso di un altro membro attivo**:
+il gruppo deve poter registrare che qualcuno si è spostato nella doppia, e farlo passare
+dal proprietario renderebbe il co-living dipendente da lui per un fatto interno alla
+casa. Oggi nessuna rotta lo espone — `AddGroupMember` su un membro attivo è rifiutato dal
+dominio — e il giorno in cui una lo esponesse va deciso allora.
 
 **5. Il destinatario di un regolamento non si verifica contro i membri, e la spesa sì.**
 Sembra un'incoerenza e non lo è: si salda con chi è **uscito** dal gruppo, ed è
@@ -3014,15 +3103,40 @@ riscrive. Le concessioni restano perché la migration nasce per **negare** `amou
 l'elenco delle concesse è ciò che rende la revoca applicabile senza rompere le
 correzioni legittime del giorno in cui arriveranno.
 
+#### Una verifica che non verificava niente
+
+Vale la pena registrarla perché il sintomo era un verde, non un rosso.
+
+Il primo controllo della `0029` su database vero rispondeva `UPDATE 0` a ogni scrittura
+— quella che doveva essere rifiutata e quella che doveva passare — e letto in fretta
+sembrava che la policy funzionasse. Non c'erano righe: il setup aveva inserito i due
+membri con **una `INSERT` multi-riga**, e quella fallisce.
+
+La ragione è la stessa che vieta l'`INSERT … RETURNING` sui gruppi.
+`expense_group_members_insert` chiede `can_access_expense_group(group_id)` per chi non è
+il creatore, e quella funzione è `STABLE`: dentro lo stesso statement vede lo snapshot
+iniziale, in cui la membership del creatore **non c'è ancora**. Il creatore entra per il
+ramo della `0026`, il secondo membro no, e l'intero statement cade.
+
+Due statement separati funzionano, perché in `READ COMMITTED` ognuno prende uno snapshot
+nuovo. Nessun codice dell'applicazione fa una `INSERT` multi-riga di membership, quindi
+non è un difetto — ma è una proprietà dello schema che va saputa prima di scrivere un
+setup di prova, e il modo in cui si manifesta è un test che non prova niente invece di
+un errore.
+
+La regola generale: **una verifica che risponde «zero righe» va guardata due volte**,
+perché zero righe è anche ciò che risponde una verifica che non ha trovato niente da
+verificare.
+
 #### Come si è verificato
 
-`./ops/ci/test-integration.sh` verde: **342** test in tutto, 49 dei quali nuovi. **57**
-di persistenza (11 nuovi), **64** di contratto HTTP (4 nuovi) e **181** unitari di
+`./ops/ci/test-integration.sh` verde: **343** test in tutto, 50 dei quali nuovi. **58**
+di persistenza (12 nuovi), **64** di contratto HTTP (4 nuovi) e **181** unitari di
 dominio (34 nuovi).
 
-Il controllo delle invarianti dello schema verde con le otto colonne di `app.expenses`
-nell'elenco, **verificato al contrario**: con `GRANT UPDATE (amount, group_id)` aggiunta
-a mano, il controllo 12 riporta
+Il controllo delle invarianti dello schema verde con le otto colonne di `app.expenses` e
+le tre di `app.expense_group_members` nell'elenco, **verificato al contrario**: con
+`GRANT UPDATE (amount, group_id)` aggiunta a mano, il controllo 12 riporta
 
 ```
  colonna-strutturale-scrivibile | expenses.amount

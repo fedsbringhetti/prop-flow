@@ -92,7 +92,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `ticket.not_yours` | 403 | riaprire o annullare una segnalazione spetta a chi l'ha aperta, e nessun ruolo lo sostituisce |
 | `settlement.not_addressed_to_you` | 403 | confermare o rifiutare un regolamento spetta a **chi riceve**: è l'unico che sa se il bonifico è arrivato |
 | `settlement.not_declared_by_you` | 403 | ritirare un regolamento spetta a **chi lo ha dichiarato**. A chi riceve tocca il rifiuto, che è un fatto diverso |
-| `expense_group.membership_not_yours` | 403 | si esce da un gruppo di spesa per sé stessi; togliere qualcun altro richiede lo staff. **Non è un confine di sicurezza**: la RLS è più larga |
+| `expense_group.membership_not_yours` | 403 | si esce da un gruppo di spesa per sé stessi; togliere qualcun altro richiede lo staff. Dalla `0029` lo dice anche la RLS: il codice qui è la versione parlante di un rifiuto che la policy darebbe comunque |
 
 **Risorse non trovate**
 
@@ -1048,11 +1048,15 @@ al primo caso limite.
 persona restano e perché i saldi partono da lì.
 
 **Si esce per sé stessi.** Togliere qualcun altro richiede il ruolo di staff, e dà
-altrimenti `403 expense_group.membership_not_yours`. **Non è un confine di sicurezza**:
-la `USING` di `expense_group_members_update` ammette qualunque membro attivo del gruppo,
-quindi la Row Level Security lascerebbe passare una query scritta a mano. La restrizione
-è del contratto dell'API, e la ragione è che un coinquilino non deve poter togliere
-unilateralmente un altro da un conto condiviso — tanto meno uno con un saldo aperto.
+altrimenti `403 expense_group.membership_not_yours`. **È un confine vero, non solo una
+regola dell'API**: dalla migration `0029` la `WITH CHECK` di
+`expense_group_members_update` ammette la riga di un altro solo se il risultato lo
+lascia dentro il gruppo, quindi anche una query scritta a mano è rifiutata. La ragione è
+che un coinquilino non deve poter togliere unilateralmente un altro da un conto
+condiviso, tanto meno uno con un saldo aperto.
+
+**Reintegrare invece resta di chiunque nel gruppo**, ed è la distinzione che la policy
+esprime: si può riportare dentro, non si può mandare fuori.
 
 **Rientrare è la stessa rotta dell'iscrizione**: `expense_group_members_group_user_uk` è
 unico su `(group_id, user_id)` e **non è parziale**, quindi una seconda riga non può

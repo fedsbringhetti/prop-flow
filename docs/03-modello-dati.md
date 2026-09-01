@@ -189,13 +189,14 @@ Nessuno dei tre può scrivere su `audit_log`: la traccia la scrive il trigger, c
 
 ### Privilegi di colonna
 
-Su sei tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle colonne
+Su sette tabelle `propflow_app` non ha `UPDATE` sull'intera riga ma solo sulle colonne
 che i repository scrivono: `org_invitations` e `lease_parties`
 ([ADR-021](08-decisioni.md#adr-021), migration `0019`), `tickets`
 ([ADR-026](08-decisioni.md#adr-026), migration `0020`, estesa dalla `0021` con
 `resolution_notes`), `charges` ([ADR-029](08-decisioni.md#adr-029), migration `0023`),
-`payments` ([ADR-033](08-decisioni.md#adr-033), migration `0025`) ed `expenses`
-([ADR-035](08-decisioni.md#adr-035), migration `0028`).
+`payments` ([ADR-033](08-decisioni.md#adr-033), migration `0025`), `expenses`
+([ADR-035](08-decisioni.md#adr-035), migration `0028`) ed `expense_group_members`
+(migration `0029`).
 
 Su `charges` la concessione è di **una colonna sola**, `status`: un addebito emesso è
 una pretesa verso una persona, e tutto ciò che la descrive — a chi, quanto, per cosa,
@@ -215,6 +216,19 @@ posto del progetto dove un privilegio di colonna difende ciò che un trigger dov
 difendere e non copre. `deleted_at` è qui fra le **concesse**, al contrario degli
 addebiti: `app.expenses` non ha una colonna di stato, quindi il soft delete *è*
 l'annullamento di una spesa.
+
+Su `expense_group_members` le tre negate difendono **l'identità della riga** —
+`org_id`, `group_id`, `user_id` — e la più cara è l'ultima: intestare a un'altra persona
+una membership lascerebbe `app.expense_shares` a puntare a quella vecchia, e i saldi del
+gruppo smetterebbero di sommare a zero senza che nulla protesti. `weight` resta concessa
+di proposito, perché il gruppo deve poter registrare che qualcuno si è spostato nella
+doppia.
+
+La stessa migration è anche l'unico caso in cui una `WITH CHECK` difende la **direzione**
+di un'operazione invece delle sue colonne: ammette la riga di un altro membro solo se il
+risultato ha `left_at IS NULL`, cioè si può reintegrare qualcuno e non lo si può
+togliere. La `USING` resta larga, e deve restarlo — stringerla romperebbe il rientro, che
+è un `UPDATE` sulla riga di un altro.
 
 **Su `utility_bills` lo strumento non si usa**, ed è la prima volta che il criterio di
 ADR-026 dà «no»: una bolletta si digita, dodici campi alla volta, e la `GRANT` dovrebbe
@@ -407,7 +421,7 @@ un'eccezione** se ne viola uno, così la pipeline si ferma:
 9. policy di SELECT che filtrano il soft delete
 10. `_sqlx_migrations` duplicata fuori da `public`
 11. colonne di **confine** aggiornabili dal ruolo applicativo ([ADR-021](08-decisioni.md#adr-021))
-12. colonne **strutturali** di una segnalazione, di un addebito, di un pagamento o di una spesa aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026), [ADR-029](08-decisioni.md#adr-029), [ADR-033](08-decisioni.md#adr-033), [ADR-035](08-decisioni.md#adr-035))
+12. colonne **strutturali** di una segnalazione, di un addebito, di un pagamento, di una spesa o di una membership aggiornabili dal ruolo applicativo ([ADR-026](08-decisioni.md#adr-026), [ADR-029](08-decisioni.md#adr-029), [ADR-033](08-decisioni.md#adr-033), [ADR-035](08-decisioni.md#adr-035))
 
 Il controllo 4 ha trovato cinque foreign key senza indice durante la prima
 scrittura dello schema; i controlli 9 e 10 sono i guardiani di due bug reali, e gli

@@ -1616,5 +1616,23 @@ Fra le negate, due meritano di essere nominate:
   silenzio è il promemoria giusto per il giorno in cui il legame entrerà.
 
 Il controllo 12 delle invarianti dello schema verifica l'elenco **al contrario**, e
-copre ormai quattro tabelle sotto un nome solo: il criterio è quello di ADR-026 in tutti
+copre ormai cinque tabelle sotto un nome solo: il criterio è quello di ADR-026 in tutti
 i casi, e inventargli un nome nuovo renderebbe illeggibile la ragione comune.
+
+### Il corollario sulla direzione, che la `0029` ha aggiunto
+
+Un privilegio di colonna dice **quali colonne** si possono scrivere e non **in che
+verso**. Su `app.expense_group_members` servono entrambe le cose: le tre colonne di
+identità non si riscrivono, e un membro non staff non deve poter portare `left_at` da
+`NULL` a una data sulla riga di un altro — cioè toglierlo dal gruppo — mentre deve poter
+fare l'opposto, perché reintegrare qualcuno è un `UPDATE` sulla riga di un altro.
+
+La direzione la esprime la `WITH CHECK`, che vede la riga **nuova**:
+`user_id = app.current_user_id() OR app.is_org_staff(org_id) OR left_at IS NULL`. La
+`USING` resta larga, e stringerla sarebbe l'errore: governa quali righe si possono
+toccare, e toccare la riga di un altro serve.
+
+È il complemento del criterio, non un'eccezione: quando una policy non può confrontare
+la riga nuova con quella vecchia, può però **vincolare la riga nuova da sola** — e
+quando ciò che si vuole impedire è una transizione e non una riscrittura, è lì che va
+scritto.
