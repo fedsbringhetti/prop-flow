@@ -3434,9 +3434,14 @@ async fn coliving_tenant(app: &TestApp, owner: &str, lease: &str, label: &str) -
     // **Il `user_id` si legge dalle parti del contratto**, ed è l'unica via che un
     // client ha oggi: `POST /auth/accept-invitation` restituisce l'organizzazione
     // e il ruolo, non l'utente, e non esiste un endpoint che elenchi le persone di
-    // un'organizzazione. Chi sta sullo stesso contratto si vede quindi attraverso
-    // il contratto — che per un co-living è il caso reale, ma è un vincolo da
-    // sapere prima di costruirci sopra un client.
+    // un'organizzazione.
+    //
+    // **Questi test usano un contratto unico condiviso dai tre, e va detto perché
+    // nasconde un limite**: `can_access_lease` ammette lo staff oppure chi è parte
+    // di *quel* contratto, quindi in un co-living **per stanza** — dove ognuno ha
+    // il proprio — un coinquilino non vedrebbe gli altri e non potrebbe popolare
+    // il gruppo. Qui la lettura passa dal proprietario apposta, che è ciò che un
+    // client dovrebbe fare oggi. È registrato fra i debiti noti.
     let (status, detail) = app
         .send("GET", &format!("/api/v1/leases/{lease}"), Some(owner), None)
         .await;

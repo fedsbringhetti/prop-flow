@@ -968,13 +968,22 @@ I corpi di questo modulo nominano le persone — chi ha anticipato, a chi si è 
 disponibili oggi sono due, e vanno sapute prima di costruire un client:
 
 - `GET /api/v1/leases/{id}` restituisce le parti contrattuali con il loro `user_id`,
-  valorizzato dopo l'accettazione dell'invito. Chi sta sullo stesso contratto si vede
-  quindi attraverso il contratto, che per un co-living è il caso normale;
+  valorizzato dopo l'accettazione dell'invito. **Solo di quel contratto**:
+  `can_access_lease` ammette lo staff, oppure chi è parte di quel contratto — non
+  dell'immobile;
 - `GET /api/v1/expense-groups/{id}` restituisce la composizione, quindi dal secondo
   membro in poi il gruppo si legge da sé.
 
+**Ne segue un limite che va saputo prima di costruire un client.** In un co-living **per
+stanza** (`lease_type = 'room'`) ogni coinquilino ha il proprio contratto, quindi non è
+parte di quello degli altri e **non ne vede l'`user_id` da nessuna parte**: chi crea il
+gruppo non può aggiungere nessuno finché il proprietario non gli passa gli identificatori.
+Le due vie qui sopra bastano solo con un **contratto unico condiviso**, cioè con il
+co-living sull'immobile intero.
+
 Il vincolo è registrato fra i debiti noti in
-[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti), ed è da chiudere prima
+del primo client che usi il modulo.
 
 #### La ripartizione: `equal` e `weighted`, e le altre tre che danno `422`
 
