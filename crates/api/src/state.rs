@@ -12,6 +12,11 @@ use propflow_application::use_cases::billing::{
 use propflow_application::use_cases::document::{
     ArchiveDocument, DownloadDocument, ListDocuments, UploadDocument,
 };
+use propflow_application::use_cases::expense::{
+    AddGroupMember, ArchiveExpenseGroup, CancelSettlement, ConfirmSettlement, CreateExpenseGroup,
+    DeclareSettlement, GetExpense, GetExpenseGroup, GetGroupBalances, LeaveGroup,
+    ListExpenseGroups, ListExpenses, ListSettlements, RecordExpense, RejectSettlement,
+};
 use propflow_application::use_cases::invitation::{
     AcceptInvitation, InviteTenant, RevokeInvitation,
 };
@@ -115,6 +120,33 @@ pub struct AppState {
     pub reject_payment: Arc<RejectPayment>,
     pub get_payment: Arc<GetPayment>,
     pub list_payments: Arc<ListPayments>,
+
+    /// Creare un gruppo e **iscriverci chi lo crea** è una transazione sola: lo
+    /// schema, senza la migration `0026`, produceva un gruppo inutilizzabile da
+    /// chi lo aveva creato.
+    pub create_expense_group: Arc<CreateExpenseGroup>,
+    pub get_expense_group: Arc<GetExpenseGroup>,
+    pub list_expense_groups: Arc<ListExpenseGroups>,
+    pub archive_expense_group: Arc<ArchiveExpenseGroup>,
+    pub add_group_member: Arc<AddGroupMember>,
+    /// Uscire valorizza `left_at` e **non cancella la riga**: dalla migration
+    /// `0027` chi esce con un conto aperto resta nei saldi.
+    pub leave_group: Arc<LeaveGroup>,
+    pub record_expense: Arc<RecordExpense>,
+    pub get_expense: Arc<GetExpense>,
+    pub list_expenses: Arc<ListExpenses>,
+    /// I saldi si **leggono** dalla vista e non si ricalcolano: due definizioni
+    /// dello stesso numero si contraddicono al primo caso limite.
+    pub get_group_balances: Arc<GetGroupBalances>,
+    /// **A confermare è chi riceve**, non lo staff: è l'unico che sa se il
+    /// bonifico è arrivato.
+    pub declare_settlement: Arc<DeclareSettlement>,
+    pub confirm_settlement: Arc<ConfirmSettlement>,
+    pub reject_settlement: Arc<RejectSettlement>,
+    /// Il ritiro di chi ha dichiarato, che **fra i pagamenti non esiste**:
+    /// `settlements_update` ammette `from_user_id`, `payments_update` no.
+    pub cancel_settlement: Arc<CancelSettlement>,
+    pub list_settlements: Arc<ListSettlements>,
 
     pub invite_tenant: Arc<InviteTenant>,
     pub revoke_invitation: Arc<RevokeInvitation>,
@@ -349,6 +381,48 @@ impl AppState {
             )),
             get_payment: Arc::new(GetPayment::new(Arc::clone(&unit_of_work))),
             list_payments: Arc::new(ListPayments::new(Arc::clone(&unit_of_work))),
+            create_expense_group: Arc::new(CreateExpenseGroup::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_expense_group: Arc::new(GetExpenseGroup::new(Arc::clone(&unit_of_work))),
+            list_expense_groups: Arc::new(ListExpenseGroups::new(Arc::clone(&unit_of_work))),
+            archive_expense_group: Arc::new(ArchiveExpenseGroup::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            add_group_member: Arc::new(AddGroupMember::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            leave_group: Arc::new(LeaveGroup::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            record_expense: Arc::new(RecordExpense::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            get_expense: Arc::new(GetExpense::new(Arc::clone(&unit_of_work))),
+            list_expenses: Arc::new(ListExpenses::new(Arc::clone(&unit_of_work))),
+            get_group_balances: Arc::new(GetGroupBalances::new(Arc::clone(&unit_of_work))),
+            declare_settlement: Arc::new(DeclareSettlement::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            confirm_settlement: Arc::new(ConfirmSettlement::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            reject_settlement: Arc::new(RejectSettlement::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            cancel_settlement: Arc::new(CancelSettlement::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            list_settlements: Arc::new(ListSettlements::new(Arc::clone(&unit_of_work))),
             invite_tenant: Arc::new(InviteTenant::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),
