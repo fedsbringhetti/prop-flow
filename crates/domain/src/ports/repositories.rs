@@ -5,13 +5,17 @@ use crate::billing::{
 };
 use crate::document::{AttachmentOwner, Document};
 use crate::events::DomainEvent;
+use crate::expense::{
+    Expense, ExpenseGroup, ExpenseGroupMember, ExpenseShare, GroupBalance, Settlement,
+    SettlementStatus,
+};
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment};
 use crate::property::{Property, PropertyStatus, Room};
 use crate::shared::{
-    ChargeId, DocumentId, Email, InvitationId, LeaseId, OrgId, PaymentId, PropertyId, RoomId,
-    TicketId, TicketMessageId, UserId, UtilityBillId,
+    ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, OrgId,
+    PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId, UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketReference, TicketStatus, TicketStatusChange};
 
@@ -678,6 +682,212 @@ pub trait PaymentRepository: Send {
     /// hanno motivo di cambiare** dopo l'inserimento, e una `UPDATE` che li
     /// nominasse fallirebbe a runtime con `permission denied`.
     async fn update_status(&mut self, payment: &Payment) -> RepositoryResult<()>;
+}
+
+// ---------------------------------------------------------------------------
+// Spese co-living
+//
+// **Nessun `soft_delete` sui gruppi, e nessun filtro `deleted_at` su tre tabelle
+// su quattro.** `app.expense_group_members`, `app.expense_shares` e
+// `app.settlements` non hanno quella colonna — verificato, non dedotto — mentre
+// `app.expense_groups` e `app.expenses` sì. Copiare il pattern
+// `AND deleted_at IS NULL` da un altro repository sulle tre che non ce l'hanno dà
+// un errore di colonna inesistente: fastidioso e innocuo, perché fallisce subito.
+// ---------------------------------------------------------------------------
+
+/// Filtro di elenco dei gruppi di spesa con paginazione keyset.
+///
+/// **Non c'è un filtro sul membro**, e non è una dimenticanza: a restringere i
+/// gruppi a quelli di chi chiede è già `expense_groups_select`, che passa da
+/// `can_access_expense_group`. Un filtro applicativo ripeterebbe la policy e
+/// darebbe l'impressione che la query sia sicura per conto proprio.
+#[derive(Debug, Clone)]
+pub struct ExpenseGroupQuery {
+    pub property_id: Option<PropertyId>,
+    /// `Some(false)` = solo i gruppi ancora aperti. Serve l'indice
+    /// `expense_groups_org_ix`, che è su `(org_id, is_archived)`.
+    pub is_archived: Option<bool>,
+    pub after: Option<ExpenseGroupId>,
+    pub limit: u16,
+}
+
+impl ExpenseGroupQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+impl Default for ExpenseGroupQuery {
+    fn default() -> Self {
+        Self {
+            property_id: None,
+            is_archived: None,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ExpenseGroupPage {
+    pub items: Vec<ExpenseGroup>,
+    pub next_cursor: Option<ExpenseGroupId>,
+}
+
+/// Gruppi di spesa e loro composizione.
+///
+/// Le due cose stanno in un repository solo perché una membership non ha vita
+/// propria: si legge sempre attraverso il gruppo che la contiene, dove il numero
+/// di righe è per costruzione piccolo. È la stessa scelta di
+/// [`RoomRepository`].
+#[async_trait]
+pub trait ExpenseGroupRepository: Send {
+    async fn find_by_id(&mut self, id: ExpenseGroupId) -> RepositoryResult<Option<ExpenseGroup>>;
+
+    async fn list(&mut self, query: &ExpenseGroupQuery) -> RepositoryResult<ExpenseGroupPage>;
+
+    /// Inserisce il gruppo.
+    ///
+    /// **Senza `RETURNING`, e stavolta il muro c'è davvero.**
+    /// `expense_groups_select` chiama `can_access_expense_group(id)`, cioè
+    /// interroga la riga che si sta inserendo, e la funzione è `STABLE`: vede lo
+    /// snapshot di inizio statement, in cui la riga non c'è. È il muro già
+    /// incontrato sulle segnalazioni, e la regola generale vale ancora — il muro
+    /// c'è solo quando la policy di `SELECT` dipende dalla riga stessa. Sugli
+    /// addebiti non c'era, perché `charges_select` interroga `app.leases`.
+    async fn insert(&mut self, group: &ExpenseGroup) -> RepositoryResult<()>;
+
+    /// Aggiorna le sole colonne che il dominio muove sul gruppo: `is_archived`.
+    async fn update(&mut self, group: &ExpenseGroup) -> RepositoryResult<()>;
+
+    /// I membri del gruppo.
+    ///
+    /// `active_only` distingue le due domande, che sono diverse: la ripartizione
+    /// vuole i **membri attivi**, mentre la lettura della composizione vuole anche
+    /// chi è uscito — altrimenti un client non saprebbe spiegare le quote di una
+    /// spesa vecchia.
+    async fn list_members(
+        &mut self,
+        group_id: ExpenseGroupId,
+        active_only: bool,
+    ) -> RepositoryResult<Vec<ExpenseGroupMember>>;
+
+    /// La membership di una persona, **attiva o no**.
+    ///
+    /// Restituisce anche la riga di chi è uscito, ed è ciò che permette a `join`
+    /// di distinguere un ingresso da un rientro:
+    /// `expense_group_members_group_user_uk` è unico su `(group_id, user_id)` e
+    /// **non è parziale**, quindi chi rientra non può avere una seconda riga.
+    async fn find_member(
+        &mut self,
+        group_id: ExpenseGroupId,
+        user_id: UserId,
+    ) -> RepositoryResult<Option<ExpenseGroupMember>>;
+
+    async fn insert_member(&mut self, member: &ExpenseGroupMember) -> RepositoryResult<()>;
+
+    /// Aggiorna una membership: uscita, rientro, peso.
+    async fn update_member(&mut self, member: &ExpenseGroupMember) -> RepositoryResult<()>;
+
+    /// I saldi del gruppo, letti da `app.v_expense_group_balances`.
+    ///
+    /// **Si leggono e non si ricalcolano**, per la ragione di ADR-032: due
+    /// definizioni dello stesso numero si contraddicono al primo caso limite.
+    /// Dalla migration `0027` l'elenco comprende chi è uscito con un conto aperto.
+    async fn list_balances(
+        &mut self,
+        group_id: ExpenseGroupId,
+    ) -> RepositoryResult<Vec<GroupBalance>>;
+}
+
+/// Filtro di elenco delle spese di un gruppo, con paginazione keyset.
+#[derive(Debug, Clone)]
+pub struct ExpenseQuery {
+    pub group_id: ExpenseGroupId,
+    pub category: Option<crate::expense::ExpenseCategory>,
+    pub after: Option<ExpenseId>,
+    pub limit: u16,
+}
+
+impl ExpenseQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+#[derive(Debug)]
+pub struct ExpensePage {
+    pub items: Vec<Expense>,
+    pub next_cursor: Option<ExpenseId>,
+}
+
+/// Spese e loro quote.
+#[async_trait]
+pub trait ExpenseRepository: Send {
+    async fn find_by_id(&mut self, id: ExpenseId) -> RepositoryResult<Option<Expense>>;
+
+    async fn list_for_group(&mut self, query: &ExpenseQuery) -> RepositoryResult<ExpensePage>;
+
+    /// Inserisce la spesa **e le sue quote**, nella stessa transazione.
+    ///
+    /// Un metodo solo e non due, e non è una comodità: il trigger
+    /// `expense_shares_balanced` è `DEFERRABLE INITIALLY DEFERRED` e verifica al
+    /// `COMMIT` che la somma delle quote sia esattamente l'importo. Due metodi
+    /// separati renderebbero rappresentabile una spesa senza quote, che è uno
+    /// stato che il database rifiuta — e lo rifiuterebbe alla fine della
+    /// transazione, dove l'errore non ha più niente a che vedere con la query che
+    /// lo ha causato.
+    ///
+    /// **L'errore del trigger esce da `commit()`, non da qui.** Chi chiama deve
+    /// mapparlo là.
+    async fn insert(&mut self, expense: &Expense, shares: &[ExpenseShare]) -> RepositoryResult<()>;
+
+    /// Le quote di una spesa.
+    async fn list_shares(&mut self, expense_id: ExpenseId) -> RepositoryResult<Vec<ExpenseShare>>;
+}
+
+/// Filtro di elenco dei regolamenti di un gruppo, con paginazione keyset.
+#[derive(Debug, Clone)]
+pub struct SettlementQuery {
+    pub group_id: ExpenseGroupId,
+    /// Serve l'indice parziale `settlements_pending_ix`, che è su
+    /// `(to_user_id, created_at DESC) WHERE status = 'pending'`.
+    pub status: Option<SettlementStatus>,
+    pub after: Option<SettlementId>,
+    pub limit: u16,
+}
+
+impl SettlementQuery {
+    pub const DEFAULT_LIMIT: u16 = 25;
+    pub const MAX_LIMIT: u16 = 100;
+}
+
+#[derive(Debug)]
+pub struct SettlementPage {
+    pub items: Vec<Settlement>,
+    pub next_cursor: Option<SettlementId>,
+}
+
+/// Regolamenti fra coinquilini.
+///
+/// **Nessun `soft_delete` e nessun filtro `deleted_at`**: `app.settlements` non ha
+/// quella colonna, e il ruolo applicativo non ha `DELETE`. Un regolamento
+/// sbagliato si ritira muovendone lo stato.
+#[async_trait]
+pub trait SettlementRepository: Send {
+    async fn find_by_id(&mut self, id: SettlementId) -> RepositoryResult<Option<Settlement>>;
+
+    async fn list_for_group(&mut self, query: &SettlementQuery)
+    -> RepositoryResult<SettlementPage>;
+
+    async fn insert(&mut self, settlement: &Settlement) -> RepositoryResult<()>;
+
+    /// Aggiorna le sole colonne che le tre transizioni scrivono: `status`,
+    /// `settled_at`, `confirmed_at` e `confirmed_by`.
+    ///
+    /// **Su `app.settlements` non ci sono privilegi di colonna**, a differenza di
+    /// `app.payments`: l'elenco qui è una scelta del repository e non un vincolo
+    /// del database. Nominare `amount` non fallirebbe — passerebbe, ed è la
+    /// ragione per cui l'elenco va scritto corto e lasciato corto.
+    async fn update_status(&mut self, settlement: &Settlement) -> RepositoryResult<()>;
 }
 
 /// Destinazione degli eventi di dominio: l'outbox, scritta nella stessa
