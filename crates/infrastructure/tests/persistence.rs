@@ -3947,14 +3947,19 @@ async fn rejoining_a_group_is_an_update_and_moves_the_joining_date() {
     );
 }
 
-/// Si esce per sé stessi, e la restrizione **non** è un confine di sicurezza.
+/// Si esce per sé stessi, e dalla migration `0029` lo dice **la policy**.
 ///
-/// La `USING` di `expense_group_members_update` ammette qualunque membro attivo
-/// del gruppo, quindi la Row Level Security lascerebbe passare la scrittura: a
-/// fermarla è il contratto dell'API. Il test fissa entrambe le metà — il rifiuto
-/// applicativo, e il fatto che la policy da sola **non** lo darebbe.
+/// Il test fissa le due metà che contano, e la seconda è quella che rende la
+/// prima una garanzia invece di una convenzione: il rifiuto applicativo con il
+/// suo codice, e il fatto che la stessa scrittura fatta **a mano** con il
+/// contesto del coinquilino sia rifiutata dalla Row Level Security.
+///
+/// Prima della `0029` la seconda metà asseriva l'opposto — la policy lasciava
+/// passare — perché la `USING` ammette qualunque membro attivo del gruppo. A
+/// stringere è la `WITH CHECK`, che vede la riga **nuova**: un membro non staff
+/// può scriverla solo se il risultato lascia la persona dentro il gruppo.
 #[tokio::test]
-async fn a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them() {
+async fn a_cotenant_cannot_remove_another_and_the_policy_says_so_too() {
     let env = require_db!();
     let (owner, _, tenants) = coliving_stage(&env, "uscita-altrui").await;
     let (creator, second) = (&tenants[0], &tenants[1]);
@@ -3968,9 +3973,8 @@ async fn a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them() 
         .expect_err("un coinquilino non toglie un altro");
     assert_eq!(refused.code(), "expense_group.membership_not_yours");
 
-    // La stessa scrittura, fatta a mano con il contesto del creatore, **passa**:
-    // è la prova che il confine è applicativo e non della RLS. Va saputo, perché
-    // è esattamente il genere di regola che si legge come una garanzia.
+    // **La stessa scrittura fatta a mano è rifiutata dalla policy**, ed è la metà
+    // che rende la prima una garanzia. Prima della `0029` qui passava.
     let mut tx = env
         .pools
         .application()
@@ -3983,7 +3987,7 @@ async fn a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them() 
         .execute(&mut *tx)
         .await
         .expect("contesto installato");
-    let affected = sqlx::query(
+    let error = sqlx::query(
         "UPDATE app.expense_group_members SET left_at = now()
           WHERE group_id = $1 AND user_id = $2",
     )
@@ -3991,19 +3995,92 @@ async fn a_cotenant_cannot_remove_another_but_the_policy_alone_would_let_them() 
     .bind(user_of(second).as_uuid())
     .execute(&mut *tx)
     .await
-    .expect("la policy non si oppone")
-    .rows_affected();
-    assert_eq!(
-        affected, 1,
-        "la RLS lascia passare: il confine è nel service layer, non nella policy"
+    .expect_err("la policy doveva rifiutare");
+    assert!(
+        error.to_string().contains("row-level security"),
+        "atteso il rifiuto della policy, ottenuto: {error}"
     );
     tx.rollback().await.expect("annullata");
 
-    // Lo staff invece può, ed è chi amministra.
+    // **Il rientro fatto da un altro deve continuare a funzionare.** È la trappola
+    // della `0029`: stringere la `USING` invece della `WITH CHECK` avrebbe rotto
+    // proprio questo, perché reintegrare qualcuno è un `UPDATE` sulla riga di un
+    // altro.
+    LeaveGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(second, group.id(), user_of(second))
+        .await
+        .expect("il secondo esce da sé");
+    add_member(&env, creator, group.id(), second, "2").await;
+
+    // E lo staff toglie chiunque, perché è chi amministra.
     LeaveGroup::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
         .execute(&owner, group.id(), user_of(second))
         .await
         .expect("lo staff toglie chi se n'è andato davvero");
+}
+
+/// I privilegi di colonna della `0029`, verificati **al contrario**.
+///
+/// `user_id` è la più cara delle tre negate: intestare a un'altra persona una
+/// membership lascerebbe `app.expense_shares` a puntare a quella vecchia, e i
+/// saldi del gruppo smetterebbero di sommare a zero senza che nulla protesti.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_who_a_membership_belongs_to() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    for attempt in [
+        sqlx::query("UPDATE app.expense_group_members SET user_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expense_group_members SET group_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expense_group_members SET org_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+    ] {
+        let error = attempt.expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi, ottenuto: {error}"
+        );
+    }
+
+    // Le cinque che il dominio muove restano concesse. `joined_at` è fra esse
+    // perché il rientro la riscrive, e `weight` perché il gruppo deve poter
+    // registrare che qualcuno si è spostato nella doppia.
+    for allowed in [
+        sqlx::query("UPDATE app.expense_group_members SET left_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expense_group_members SET joined_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expense_group_members SET weight = 2 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expense_group_members SET display_name = 'x' WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+        sqlx::query("UPDATE app.expense_group_members SET room_id = $1 WHERE id = $1")
+            .bind(id)
+            .execute(env.pools.application())
+            .await,
+    ] {
+        assert!(
+            allowed.is_ok(),
+            "l'aggiornamento non doveva essere negato: {:?}",
+            allowed.err()
+        );
+    }
 }
 
 /// Le tre uscite di `pending`, e la sola che i pagamenti non hanno.
