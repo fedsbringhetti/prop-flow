@@ -11,6 +11,8 @@
 
 mod billing;
 mod document;
+mod expense;
+mod expense_group;
 mod invitation;
 mod lease;
 mod lease_party;
@@ -20,5 +22,6 @@ mod payment;
 mod property;
 mod room;
 mod session;
+mod settlement;
 mod ticket;
 mod user;
