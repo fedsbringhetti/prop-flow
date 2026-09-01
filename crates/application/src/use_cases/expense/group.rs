@@ -361,19 +361,24 @@ impl AddGroupMember {
 /// per sempre e il gruppo non potrebbe chiudersi. **Il debito è del gruppo, non
 /// della membership.**
 ///
-/// # Si esce per sé stessi, e la restrizione **non** è un confine di sicurezza
+/// # Si esce per sé stessi, e dalla `0029` è un confine vero
 ///
-/// La `USING` di `expense_group_members_update` ammette qualunque membro attivo
-/// del gruppo, quindi la Row Level Security lascerebbe passare una query scritta a
-/// mano che toglie qualcun altro. La restrizione vive qui, nel contratto dell'API,
-/// e la ragione è che un coinquilino non deve poter togliere unilateralmente un
-/// altro da un conto condiviso — tanto meno uno con un saldo aperto. Lo staff può,
-/// perché è chi amministra l'organizzazione.
+/// Il controllo qui sotto **duplica** la policy invece di sostituirla, come fa
+/// ogni controllo di questo service layer: la `WITH CHECK` di
+/// `expense_group_members_update` ammette la riga di un altro solo se il risultato
+/// lo lascia dentro il gruppo, quindi togliere qualcun altro è rifiutato anche da
+/// una query scritta a mano. Il controllo applicativo serve a dare un codice che
+/// dice il rimedio, invece di `auth.denied_by_policy` — che significa «difetto
+/// nostro».
 ///
-/// Renderlo un confine vero richiederebbe di stringere la `USING` con
-/// `user_id = app.current_user_id() OR app.is_org_staff(org_id)`, cioè una
-/// migration. Va saputo, e sta scritto qui perché è esattamente il genere di cosa
-/// che si legge come una garanzia quando non lo è.
+/// La ragione del confine è che un coinquilino non deve poter togliere
+/// unilateralmente un altro da un conto condiviso, tanto meno uno con un saldo
+/// aperto. Lo staff può, perché è chi amministra l'organizzazione.
+///
+/// **La restrizione sta nella `WITH CHECK` e non nella `USING`**, e non è un
+/// dettaglio: stringere la `USING` avrebbe rotto il rientro, perché reintegrare un
+/// coinquilino è un `UPDATE` sulla riga di **un altro** — vedi
+/// [`AddGroupMember`].
 pub struct LeaveGroup {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
     clock: Arc<dyn Clock>,

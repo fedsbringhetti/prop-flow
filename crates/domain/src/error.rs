@@ -105,12 +105,16 @@ pub enum Denial {
     SettlementNotDeclaredByYou,
     /// Uscire da un gruppo di spesa si fa per sé stessi.
     ///
-    /// **Non è un confine di sicurezza, ed è importante saperlo**: la `USING` di
-    /// `expense_group_members_update` ammette qualunque membro attivo del gruppo,
-    /// quindi la Row Level Security lascerebbe passare una query scritta a mano.
-    /// La restrizione è del contratto dell'API, e la ragione è che un coinquilino
-    /// non deve poter togliere unilateralmente un altro da un conto condiviso —
-    /// tanto meno uno con un saldo aperto. Lo staff può, perché è chi amministra.
+    /// **La Row Level Security dice la stessa cosa**, dalla migration `0029`: la
+    /// `WITH CHECK` di `expense_group_members_update` ammette la riga di un altro
+    /// solo se il risultato lo lascia **dentro** il gruppo. Questo codice è quindi
+    /// la versione parlante di un rifiuto che la policy darebbe comunque — e serve
+    /// perché la policy da sola risponderebbe `auth.denied_by_policy`, che
+    /// significa «difetto nostro».
+    ///
+    /// La ragione del confine è che un coinquilino non deve poter togliere
+    /// unilateralmente un altro da un conto condiviso, tanto meno uno con un saldo
+    /// aperto. Lo staff può, perché è chi amministra.
     #[error("Only staff can remove someone else from an expense group")]
     GroupMembershipNotYours,
 
