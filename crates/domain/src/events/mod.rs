@@ -2,11 +2,13 @@ use chrono::{DateTime, Utc};
 
 use crate::billing::{BillStatus, Charge, ChargeStatus, UtilityBill};
 use crate::document::{AttachmentOwner, DocumentKind};
+use crate::expense::{Expense, ExpenseGroup, ExpenseGroupMember, Settlement};
 use crate::identity::OrgRole;
 use crate::payment::Payment;
 use crate::shared::{
-    ChargeId, DocumentId, EventId, InvitationId, LeaseId, LeasePartyId, OrgId, PaymentId,
-    PropertyId, RoomId, TicketId, TicketMessageId, UserId, UtilityBillId,
+    ChargeId, DocumentId, EventId, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, LeasePartyId,
+    OrgId, PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId,
+    UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketStatus};
 
@@ -135,6 +137,14 @@ pub enum DomainEventPayload {
     PaymentDeclared(PaymentDeclared),
     PaymentConfirmed(PaymentConfirmed),
     PaymentRejected(PaymentRejected),
+    ExpenseGroupCreated(ExpenseGroupCreated),
+    ExpenseGroupMemberJoined(ExpenseGroupMemberJoined),
+    ExpenseGroupMemberLeft(ExpenseGroupMemberLeft),
+    ExpenseRecorded(ExpenseRecorded),
+    SettlementDeclared(SettlementDeclared),
+    SettlementConfirmed(SettlementConfirmed),
+    SettlementRejected(SettlementRejected),
+    SettlementCancelled(SettlementCancelled),
 }
 
 impl DomainEventPayload {
@@ -171,6 +181,14 @@ impl DomainEventPayload {
             Self::PaymentDeclared(_) => "payment.declared",
             Self::PaymentConfirmed(_) => "payment.confirmed",
             Self::PaymentRejected(_) => "payment.rejected",
+            Self::ExpenseGroupCreated(_) => "expense.group.created",
+            Self::ExpenseGroupMemberJoined(_) => "expense.group.member.joined",
+            Self::ExpenseGroupMemberLeft(_) => "expense.group.member.left",
+            Self::ExpenseRecorded(_) => "expense.recorded",
+            Self::SettlementDeclared(_) => "expense.settlement.declared",
+            Self::SettlementConfirmed(_) => "expense.settlement.confirmed",
+            Self::SettlementRejected(_) => "expense.settlement.rejected",
+            Self::SettlementCancelled(_) => "expense.settlement.cancelled",
         }
     }
 
@@ -217,6 +235,24 @@ impl DomainEventPayload {
             Self::PaymentDeclared(_) | Self::PaymentConfirmed(_) | Self::PaymentRejected(_) => {
                 "Payment"
             }
+            // La membership **non** è un aggregato a sé: chi consuma reagisce al
+            // gruppo la cui composizione è cambiata, ed è la stessa scelta di
+            // `LeasePartyAdded` e di `TicketMessagePosted`. La composizione
+            // cambia le quote della prossima spesa, che è un fatto del gruppo.
+            Self::ExpenseGroupCreated(_)
+            | Self::ExpenseGroupMemberJoined(_)
+            | Self::ExpenseGroupMemberLeft(_) => "ExpenseGroup",
+            // La spesa sì: ha il proprio identificatore, le proprie quote e la
+            // propria riga di audit. Le quote non producono un evento loro —
+            // sono la spesa vista dall'altro lato, e nascono nella stessa
+            // transazione.
+            Self::ExpenseRecorded(_) => "Expense",
+            // E il regolamento pure, per la stessa ragione del pagamento: ciclo
+            // di vita proprio, autorizzazione propria, audit proprio.
+            Self::SettlementDeclared(_)
+            | Self::SettlementConfirmed(_)
+            | Self::SettlementRejected(_)
+            | Self::SettlementCancelled(_) => "Settlement",
         }
     }
 
@@ -253,6 +289,14 @@ impl DomainEventPayload {
             Self::PaymentDeclared(event) => event.payment_id.as_uuid(),
             Self::PaymentConfirmed(event) => event.payment_id.as_uuid(),
             Self::PaymentRejected(event) => event.payment_id.as_uuid(),
+            Self::ExpenseGroupCreated(event) => event.group_id.as_uuid(),
+            Self::ExpenseGroupMemberJoined(event) => event.group_id.as_uuid(),
+            Self::ExpenseGroupMemberLeft(event) => event.group_id.as_uuid(),
+            Self::ExpenseRecorded(event) => event.expense_id.as_uuid(),
+            Self::SettlementDeclared(event) => event.settlement_id.as_uuid(),
+            Self::SettlementConfirmed(event) => event.settlement_id.as_uuid(),
+            Self::SettlementRejected(event) => event.settlement_id.as_uuid(),
+            Self::SettlementCancelled(event) => event.settlement_id.as_uuid(),
         }
     }
 
@@ -289,6 +333,14 @@ impl DomainEventPayload {
             Self::PaymentDeclared(event) => Some(event.org_id),
             Self::PaymentConfirmed(event) => Some(event.org_id),
             Self::PaymentRejected(event) => Some(event.org_id),
+            Self::ExpenseGroupCreated(event) => Some(event.org_id),
+            Self::ExpenseGroupMemberJoined(event) => Some(event.org_id),
+            Self::ExpenseGroupMemberLeft(event) => Some(event.org_id),
+            Self::ExpenseRecorded(event) => Some(event.org_id),
+            Self::SettlementDeclared(event) => Some(event.org_id),
+            Self::SettlementConfirmed(event) => Some(event.org_id),
+            Self::SettlementRejected(event) => Some(event.org_id),
+            Self::SettlementCancelled(event) => Some(event.org_id),
         }
     }
 }
@@ -917,6 +969,263 @@ impl PaymentRejected {
             org_id: payment.org_id(),
             charge_id: payment.payable().charge_id(),
             rejected_by_role: role.as_str(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spese co-living
+//
+// **Nessun importo viaggia**, in nessuno di questi otto eventi. Vale la regola
+// dei pagamenti e vale più forte: un evento pubblicato su un broker è un dato che
+// si conserva, e qui la coppia «quanto» + «chi» è finanziaria e riferita a persone
+// identificate — per giunta a persone che non sono in un rapporto contrattuale con
+// l'organizzazione, ma fra loro. Chi ha bisogno delle cifre le legge dagli
+// aggregati sotto la propria autorizzazione.
+//
+// **Nessun testo libero**, per la stessa ragione per cui `ticket.opened` non porta
+// la descrizione: la descrizione di una spesa dice che cosa una persona ha comprato.
+// ---------------------------------------------------------------------------
+
+/// Un gruppo di spesa è nato, e chi lo ha creato ne è già membro.
+///
+/// I due fatti sono uno solo: la creazione e l'iscrizione del creatore avvengono
+/// nella stessa transazione — è la ragione per cui esiste la migration `0026` — e
+/// annunciarli separatamente farebbe credere che esista un istante in cui il
+/// gruppo è vuoto. Non esiste, e non deve esistere: un gruppo vuoto è
+/// esattamente il difetto che quella migration corregge.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpenseGroupCreated {
+    pub group_id: ExpenseGroupId,
+    pub org_id: OrgId,
+    pub created_by: UserId,
+    pub kind: &'static str,
+    /// L'immobile, se il gruppo ne ha uno. È opzionale a schema.
+    pub property_id: Option<PropertyId>,
+}
+
+impl ExpenseGroupCreated {
+    #[must_use]
+    pub const fn new(group: &ExpenseGroup, created_by: UserId) -> Self {
+        Self {
+            group_id: group.id(),
+            org_id: group.org_id(),
+            created_by,
+            kind: group.kind().as_str(),
+            property_id: group.property_id(),
+        }
+    }
+}
+
+/// Qualcuno è entrato nel gruppo, o vi è rientrato.
+///
+/// **Un evento solo per l'ingresso e il rientro**, e non due: chi consuma reagisce
+/// al fatto che da adesso quella persona partecipa alle spese, che è identico nei
+/// due casi. A distinguerli basterebbe l'esistenza di un
+/// [`ExpenseGroupMemberLeft`] precedente con lo stesso `user_id`, come per le due
+/// vie del pagamento.
+///
+/// `weight` viaggia perché **cambia le quote di tutti**: chi consuma vede
+/// arrivare una stanza doppia e sa che la prossima ripartizione non somiglierà
+/// alla precedente. Non è un importo, è un rapporto.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpenseGroupMemberJoined {
+    pub group_id: ExpenseGroupId,
+    pub org_id: OrgId,
+    pub user_id: UserId,
+    pub weight: rust_decimal::Decimal,
+    /// `true` se la persona era già stata nel gruppo ed è rientrata.
+    pub rejoined: bool,
+}
+
+impl ExpenseGroupMemberJoined {
+    #[must_use]
+    pub fn new(member: &ExpenseGroupMember, rejoined: bool) -> Self {
+        Self {
+            group_id: member.group_id(),
+            org_id: member.org_id(),
+            user_id: member.user_id(),
+            weight: member.weight().value(),
+            rejoined,
+        }
+    }
+}
+
+/// Qualcuno è uscito dal gruppo.
+///
+/// **Non porta il saldo con cui è uscito**, per la regola dell'importo. Il fatto
+/// che conta — se se ne sia andato con un conto aperto — si legge da
+/// `app.v_expense_group_balances`, dove la migration `0027` lo lascia comparire
+/// finché non è a zero.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpenseGroupMemberLeft {
+    pub group_id: ExpenseGroupId,
+    pub org_id: OrgId,
+    pub user_id: UserId,
+}
+
+impl ExpenseGroupMemberLeft {
+    #[must_use]
+    pub const fn new(member: &ExpenseGroupMember) -> Self {
+        Self {
+            group_id: member.group_id(),
+            org_id: member.org_id(),
+            user_id: member.user_id(),
+        }
+    }
+}
+
+/// Una spesa è stata registrata, e le quote con lei.
+///
+/// **Nessun importo e nessuna descrizione**: che cosa una persona ha comprato e
+/// per quanto sono precisamente ciò che non deve viaggiare. Viaggiano invece la
+/// **categoria**, che dice il genere di spesa senza dire l'acquisto, il **metodo**
+/// di ripartizione e il **numero di quote**: sono ciò che permette a chi consuma di
+/// capire se deve avvisare due persone o cinque, senza leggere la spesa.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpenseRecorded {
+    pub expense_id: ExpenseId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    /// Chi ha anticipato: è il verso del credito, e chi consuma non deve dover
+    /// leggere la spesa per saperlo.
+    pub paid_by_user_id: UserId,
+    pub category: &'static str,
+    pub split_method: &'static str,
+    pub share_count: usize,
+}
+
+impl ExpenseRecorded {
+    #[must_use]
+    pub const fn new(expense: &Expense, share_count: usize) -> Self {
+        Self {
+            expense_id: expense.id(),
+            org_id: expense.org_id(),
+            group_id: expense.group_id(),
+            paid_by_user_id: expense.paid_by_user_id(),
+            category: expense.category().as_str(),
+            split_method: expense.split_method().as_str(),
+            share_count,
+        }
+    }
+}
+
+/// Chi paga dichiara di aver saldato. **Non muove i saldi.**
+///
+/// Le due persone viaggiano come identificatori perché **il destinatario deve
+/// essere avvisato**: è lui che deve confermare, ed è l'unica cosa per cui questo
+/// evento esiste. Il `method` c'è per la stessa ragione dei pagamenti: `card` e
+/// `cash` chiedono seguiti diversi.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettlementDeclared {
+    pub settlement_id: SettlementId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    pub from_user_id: UserId,
+    pub to_user_id: UserId,
+    pub method: &'static str,
+}
+
+impl SettlementDeclared {
+    #[must_use]
+    pub const fn new(settlement: &Settlement) -> Self {
+        Self {
+            settlement_id: settlement.id(),
+            org_id: settlement.org_id(),
+            group_id: settlement.group_id(),
+            from_user_id: settlement.from_user_id(),
+            to_user_id: settlement.to_user_id(),
+            method: settlement.method().as_str(),
+        }
+    }
+}
+
+/// Chi riceve ha confermato: da qui i saldi si muovono.
+///
+/// **Non c'è `confirmed_by_role`**, che è invece nel corrispondente evento dei
+/// pagamenti, e la differenza è il punto: là confermava lo **staff**, e il ruolo
+/// era l'informazione. Qui conferma il **creditore**, cioè `to_user_id`, che
+/// l'evento porta già — un ruolo direbbe `tenant` per ogni regolamento e non
+/// distinguerebbe niente.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettlementConfirmed {
+    pub settlement_id: SettlementId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    pub from_user_id: UserId,
+    pub to_user_id: UserId,
+    pub confirmed_by: Option<UserId>,
+}
+
+impl SettlementConfirmed {
+    #[must_use]
+    pub const fn new(settlement: &Settlement) -> Self {
+        Self {
+            settlement_id: settlement.id(),
+            org_id: settlement.org_id(),
+            group_id: settlement.group_id(),
+            from_user_id: settlement.from_user_id(),
+            to_user_id: settlement.to_user_id(),
+            confirmed_by: settlement.confirmed_by(),
+        }
+    }
+}
+
+/// Chi riceve dice che il denaro non è arrivato.
+///
+/// **Non porta una motivazione**, come il rifiuto di un pagamento: `note` è un
+/// testo scritto da una persona su un movimento di un'altra, e un evento su un
+/// broker è il posto peggiore dove metterlo.
+///
+/// Esiste, e il piano non lo prevedeva: senza, chi consuma vedrebbe la
+/// dichiarazione e mai un esito, restando convinto che il regolamento sia ancora
+/// pendente. È lo stesso argomento per cui l'uscita negativa nasce insieme allo
+/// stato da cui esce.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettlementRejected {
+    pub settlement_id: SettlementId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    pub from_user_id: UserId,
+    pub to_user_id: UserId,
+}
+
+impl SettlementRejected {
+    #[must_use]
+    pub const fn new(settlement: &Settlement) -> Self {
+        Self {
+            settlement_id: settlement.id(),
+            org_id: settlement.org_id(),
+            group_id: settlement.group_id(),
+            from_user_id: settlement.from_user_id(),
+            to_user_id: settlement.to_user_id(),
+        }
+    }
+}
+
+/// Chi ha dichiarato ritira la propria dichiarazione.
+///
+/// **Non esiste un corrispondente fra i pagamenti**, e non è una dimenticanza di
+/// là: `payments_update` è staff soltanto, mentre `settlements_update` ammette
+/// anche `from_user_id`. Fra pari il ritiro è lecito, verso il proprietario no.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettlementCancelled {
+    pub settlement_id: SettlementId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    pub from_user_id: UserId,
+    pub to_user_id: UserId,
+}
+
+impl SettlementCancelled {
+    #[must_use]
+    pub const fn new(settlement: &Settlement) -> Self {
+        Self {
+            settlement_id: settlement.id(),
+            org_id: settlement.org_id(),
+            group_id: settlement.group_id(),
+            from_user_id: settlement.from_user_id(),
+            to_user_id: settlement.to_user_id(),
         }
     }
 }

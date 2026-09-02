@@ -9,6 +9,7 @@
 
 use propflow_domain::billing::{BillStatus, ChargeStatus, ChargeType, UtilityType};
 use propflow_domain::document::{AttachmentOwnerType, DocumentKind};
+use propflow_domain::expense::{ExpenseCategory, ExpenseGroupKind, SettlementStatus, SplitMethod};
 use propflow_domain::identity::{MemberStatus, OrgKind, OrgRole, PlatformRole, UserStatus};
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, LeaseType, RentFrequency};
 use propflow_domain::payment::{Payable, PaymentMethod, PaymentStatus};
@@ -292,6 +293,50 @@ string_enum!("payment_status", PaymentStatus, payment_status_to_db, payment_stat
     Cancelled => "cancelled",
     Refunded => "refunded",
     PartiallyRefunded => "partially_refunded",
+});
+
+string_enum!("expense_group_kind", ExpenseGroupKind, expense_group_kind_to_db, expense_group_kind_from_db, {
+    Coliving => "coliving",
+    Household => "household",
+    Property => "property",
+});
+
+// Tre valori su cinque che l'applicazione non scrive mai, e per ragioni diverse
+// fra loro: `percentage` ed `exact` chiedono un input per membro, cioè una forma
+// di richiesta che nessuno ha chiesto; `by_usage` chiede letture di contatori, che
+// in questo schema non esistono. Restano nella tabella di conversione perché una
+// riga scritta a mano potrebbe contenerli, e un valore sconosciuto in lettura deve
+// dare errore invece di ricadere su `equal` — una spesa ripartita con un metodo
+// diverso da quello che dichiara è una riga che mente.
+string_enum!("expense_split_method", SplitMethod, split_method_to_db, split_method_from_db, {
+    Equal => "equal",
+    Weighted => "weighted",
+    Percentage => "percentage",
+    Exact => "exact",
+    ByUsage => "by_usage",
+});
+
+string_enum!("expense_category", ExpenseCategory, expense_category_to_db, expense_category_from_db, {
+    Utilities => "utilities",
+    Groceries => "groceries",
+    Cleaning => "cleaning",
+    Connectivity => "connectivity",
+    Maintenance => "maintenance",
+    Rent => "rent",
+    Furniture => "furniture",
+    Other => "other",
+});
+
+// **Tutti e quattro si scrivono**, ed è la differenza più netta con
+// `payment_status`, dove tre valori su sette restano fuori. La ragione non è una
+// scelta di prodotto: `settlements_update` ammette anche `from_user_id`, mentre
+// `payments_update` è staff soltanto, quindi qui chi dichiara può ritirare — e
+// `cancelled` è la sua uscita.
+string_enum!("settlement_status", SettlementStatus, settlement_status_to_db, settlement_status_from_db, {
+    Pending => "pending",
+    Confirmed => "confirmed",
+    Rejected => "rejected",
+    Cancelled => "cancelled",
 });
 
 /// `app.payable_type` non passa da `string_enum!` perché il valore da solo non

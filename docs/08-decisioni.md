@@ -1446,3 +1446,193 @@ muovendosi altrove. È la terza volta che questo schema presenta questa forma, d
 `tickets_closed_ck` e `utility_bills_validated_ck`: ormai è un pattern, e la regola è
 cercarla in ogni `CHECK` scritto come `stato ≠ X OR colonna IS NOT NULL` e assumere che
 l'azzeramento tocchi al dominio.
+
+---
+
+<a id="adr-034"></a>
+
+## ADR-034 — I centesimi di resto vanno ai primi in ordine di `user_id`
+
+**Contesto.** Cento euro divisi fra tre coinquilini fanno 33,33 tre volte, e avanza un
+centesimo. Il resto **non si può buttare**: il trigger `expense_shares_balanced` della
+migration `0009` rifiuta la transazione se la somma delle quote non è esattamente
+l'importo della spesa, e lo fa al `COMMIT` perché è `DEFERRABLE INITIALLY DEFERRED`.
+Quel centesimo va assegnato a qualcuno, e la scelta di **a chi** è una regola contabile
+che due esecuzioni della stessa ripartizione devono dare uguale.
+
+**Decisione.** I centesimi di resto si distribuiscono **uno per uno ai primi
+partecipanti**, in ordine di `user_id` crescente. La regola è unica per `equal` e per
+`weighted`, e l'aritmetica lavora in **interi** — centesimi e millesimi — senza mai
+dividere.
+
+### Perché `user_id` e non un ordine più naturale
+
+Il criterio è la **riproducibilità**: la stessa spesa ricalcolata deve dare le stesse
+quote. `joined_at` sembra l'ordine ovvio e non lo è, perché **cambia**: chi esce dal
+gruppo e rientra riprende la data del rientro — vedi `ExpenseGroupMember::rejoin`, dove
+lasciare la data vecchia violerebbe il senso di `expense_group_members_dates_ck`. Un
+ordine che cambia sposta il centesimo di una spesa **già registrata** ogni volta che
+qualcuno va e viene, e nessuna riga registra a chi era toccato.
+
+Il nome non serve nemmeno a dirlo: si corregge, e non è unico.
+
+`user_id` è un UUIDv7, quindi ordinarlo equivale a ordinare per data di **creazione
+dell'account** — un fatto che non cambia mai. Non è un ordine con un significato per
+l'utente, ed è precisamente il punto: deve essere arbitrario e stabile, non equo. La
+distribuzione la fa il **numero** di spese, non l'ordine dentro una.
+
+L'ordinamento avviene dentro `Split` e non è preteso dal chiamante: una
+`list_members` con un `ORDER BY` diverso non deve poter cambiare chi paga il centesimo,
+e il test `the_result_does_not_depend_on_the_order_of_the_input` lo fissa.
+
+### Alternative scartate
+
+**Il resto a chi ha anticipato.** Più semplice da spiegare, e sbagliata sul caso reale:
+concentra su una persona sola tutti i centesimi di tutte le spese che ha pagato lei. Su
+un anno di spesa quotidiana in una casa dove uno fa la spesa più spesso degli altri non
+è più un arrotondamento, è un addebito sistematico.
+
+**A rotazione fra le spese.** La più equa e la peggiore da implementare: richiede uno
+stato che ricordi a chi è toccato l'ultima volta — una colonna e una migration — e rende
+il calcolo di una quota **non riproducibile** guardando la sola spesa. Si perderebbe
+esattamente la proprietà per cui questa decisione esiste.
+
+**Per `weighted`, il resto a chi ha la parte frazionaria più grande.** È la regola
+standard dell'apportionment, ed è più «giusta» del nostro ordine arbitrario. Si è
+scelta la riproducibilità: una regola sola, un test solo, e nessuna sorpresa nel
+passare da un metodo all'altro. Su un centesimo la differenza di equità non esiste; su
+due regole da tenere allineate il costo sì.
+
+### Perché in interi, e perché è la parte che conta
+
+**`rust_decimal` non arrotonda da sé, e la sua divisione non è esatta.** Una divisione
+produce molte cifre e viene troncata alla precisione massima del tipo, quindi un valore
+matematicamente intero può arrivare come `4.999…9`; una `trunc` a due decimali su quel
+valore perde un centesimo in più, e la quota risultante dipende da **come il chiamante
+ha costruito i numeri**. In contabilità «quasi sempre uguale» è il difetto peggiore,
+perché non si manifesta sui casi che si provano — e qui si manifesterebbe come una
+transazione rifiutata al `COMMIT`, cioè lontano dalla query che l'ha causata.
+
+Quindi non si divide mai. Gli importi diventano **centesimi** e i pesi **millesimi**,
+entrambi interi esatti perché le scale di `app.money_amount` (`NUMERIC(14,2)`) e di
+`expense_group_members.weight` (`NUMERIC(6,3)`) lo garantiscono, e tutta l'aritmetica
+sta in `i128` — che regge il prodotto fra il massimo importo (10^14 centesimi) e il
+massimo peso (10^6 millesimi) senza avvicinarsi al limite.
+
+Ne segue che `Weight` è un value object separato da [`Money`], e non una comodità:
+passare un peso come importo accetterebbe due decimali dove ne servono tre. È la stessa
+distinzione che `Consumption` fa nelle bollette.
+
+### La conseguenza da sapere leggendo le quote
+
+Una quota può valere **`0.00`**, e lo schema lo prevede:
+`app.expense_shares.share_amount` è `CHECK (share_amount >= 0)`, non `> 0`. Un centesimo
+diviso fra tre dà `0.01 / 0.00 / 0.00`, e un peso abbastanza piccolo porta a zero la
+quota di chi lo ha. Non è un errore da correggere: è la sola ripartizione la cui somma
+torna.
+
+---
+
+<a id="adr-035"></a>
+
+## ADR-035 — Un privilegio di colonna può difendere un'invariante che un trigger non copre
+
+**Contesto.** [ADR-026](#adr-026) ha stabilito quando usare i privilegi di colonna: una
+`WITH CHECK` che nomina il solo `org_id` lascia libera ogni altra colonna, perché una
+policy non può confrontare la riga nuova con quella vecchia. Il criterio è «una colonna
+non ha un motivo legittimo di cambiare **e lo schema non ha un vincolo che ne difenda la
+coerenza**».
+
+Su `app.expenses` la seconda metà del criterio si legge male, e la lettura sbagliata è
+quella che viene naturale: **un vincolo che difende la coerenza c'è**, ed è il trigger
+`expense_shares_balanced`, che impone che la somma delle quote sia esattamente
+l'importo della spesa. Sembrerebbe quindi il caso in cui il privilegio non serve.
+
+**Decisione.** Il privilegio serve, e la migration `0028` lo introduce. Il criterio di
+ADR-026 va letto più stretto: non basta che un vincolo esista, deve **coprire la
+scrittura che si sta permettendo**.
+
+### Il buco, per esteso
+
+```
+CREATE CONSTRAINT TRIGGER expense_shares_balanced
+    AFTER INSERT OR UPDATE OR DELETE ON app.expense_shares
+```
+
+Il trigger è su **`app.expense_shares`**. Guarda le quote. Una `UPDATE` su
+`app.expenses` che cambia `amount` **non lo invoca**, e lascia la somma delle quote
+diversa dall'importo della spesa — cioè viola in silenzio l'invariante che quel trigger
+esiste per difendere, passando dalla porta accanto.
+
+Non è un caso limite: `app.tg_expense_shares_balanced` legge `app.expenses.amount` come
+**prima cosa** che fa. La spesa è metà dell'invariante, e nessuno la sorveglia.
+
+Riprodotto su database vero prima di scrivere la migration: `UPDATE app.expenses SET
+amount = 500.00` su una spesa con 100,00 di quote passa, il commit riesce, e nessuno
+protesta. Con la `0028` la stessa scrittura come `propflow_app` fallisce con
+`permission denied for table expenses`.
+
+### La regola che se ne ricava
+
+**Un vincolo difende ciò che tocca, non ciò che riguarda.** Prima di concludere che un
+privilegio di colonna è superfluo perché «c'è già un trigger», va verificato su quale
+tabella il trigger è definito e quali operazioni lo invocano. Un `CONSTRAINT TRIGGER` su
+una tabella figlia non protegge la tabella padre, e questo schema ne ha un esempio
+esattamente dove i conti sono conti.
+
+Il complemento vale al contrario: `app.expense_shares` **non** ha privilegi di colonna,
+ed è corretto — là il trigger scatta a ogni scrittura, e l'invariante è difesa da chi di
+dovere.
+
+### La differenza con gli addebiti, che è deliberata
+
+`deleted_at` è fra le colonne **concesse** su `app.expenses` e fra le **negate** su
+`app.charges` (migration `0023`), e le due scelte opposte hanno la stessa ragione: si
+guarda che cosa la tabella usa per annullare.
+
+- un addebito si annulla con `status = 'void'`, e deve **restare visibile** a chi se
+  l'era visto chiedere. Negare `deleted_at` è ciò che gli impedisce di sparire;
+- `app.expenses` **non ha una colonna di stato** — verificato, non dedotto — quindi il
+  soft delete *è* l'annullamento di una spesa. Negarlo lascerebbe una spesa sbagliata
+  senza alcun modo di essere disfatta.
+
+### Perché qui l'elenco è corto, e sulle bollette non lo era
+
+ADR-026 ha dato «no» su `app.utility_bills` perché la `GRANT` avrebbe nominato quasi
+ogni colonna: una bolletta si digita, dodici campi alla volta, e finché non è validata
+correggerne uno è il lavoro previsto — un elenco che contiene quasi tutto non difende
+niente e si paga solo l'onere di manutenzione.
+
+Su `app.expenses` è l'opposto: **cinque colonne concesse** (`description`, `category`,
+`expense_date`, `notes`, `deleted_at`) e otto negate, ognuna con una ragione propria.
+Fra le negate, due meritano di essere nominate:
+
+- **`amount`** è il buco descritto sopra, ed è la ragione della migration;
+- **`utility_bill_id`** è la colonna di `expenses_bill_uk`, indice unico e **parziale**:
+  azzerarlo **libera la bolletta per una seconda ripartizione**, cioè per un secondo
+  addebito ai coinquilini della stessa spesa. È lo stesso danno della `idempotency_key`
+  dei pagamenti ([ADR-033](#adr-033)), su una colonna che oggi nessuno scrive — e il
+  fatto che una scrittura futura fallisca con `permission denied` invece di passare in
+  silenzio è il promemoria giusto per il giorno in cui il legame entrerà.
+
+Il controllo 12 delle invarianti dello schema verifica l'elenco **al contrario**, e
+copre ormai cinque tabelle sotto un nome solo: il criterio è quello di ADR-026 in tutti
+i casi, e inventargli un nome nuovo renderebbe illeggibile la ragione comune.
+
+### Il corollario sulla direzione, che la `0029` ha aggiunto
+
+Un privilegio di colonna dice **quali colonne** si possono scrivere e non **in che
+verso**. Su `app.expense_group_members` servono entrambe le cose: le tre colonne di
+identità non si riscrivono, e un membro non staff non deve poter portare `left_at` da
+`NULL` a una data sulla riga di un altro — cioè toglierlo dal gruppo — mentre deve poter
+fare l'opposto, perché reintegrare qualcuno è un `UPDATE` sulla riga di un altro.
+
+La direzione la esprime la `WITH CHECK`, che vede la riga **nuova**:
+`user_id = app.current_user_id() OR app.is_org_staff(org_id) OR left_at IS NULL`. La
+`USING` resta larga, e stringerla sarebbe l'errore: governa quali righe si possono
+toccare, e toccare la riga di un altro serve.
+
+È il complemento del criterio, non un'eccezione: quando una policy non può confrontare
+la riga nuova con quella vecchia, può però **vincolare la riga nuova da sola** — e
+quando ciò che si vuole impedire è una transizione e non una riscrittura, è lì che va
+scritto.

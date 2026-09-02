@@ -146,6 +146,22 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     policy può esprimere, perché una policy non può confrontare la riga nuova
 --     con quella vecchia. Vedi migrations/0020, migrations/0023 e ADR-026.
 --
+--     Per le **spese co-living** il criterio è soddisfatto due volte, e la seconda
+--     è la ragione per cui la migration esiste: `expense_shares_balanced` è un
+--     trigger su `app.expense_shares`, quindi riscrivere `app.expenses.amount`
+--     **non lo fa scattare** e sbilancia l'invariante contabile in silenzio. Un
+--     privilegio è l'unica difesa che copre quella porta. `deleted_at` è qui fra
+--     le **concesse**, al contrario degli addebiti: `app.expenses` non ha una
+--     colonna di stato, quindi il soft delete *è* l'annullamento di una spesa.
+--     Vedi migrations/0028.
+--
+--     Per la **membership di un gruppo** le tre negate difendono l'identità della
+--     riga: `user_id` è la più cara, perché intestare a un altro una membership
+--     lascia `app.expense_shares` a puntare alla persona vecchia e i saldi
+--     smettono di sommare a zero senza che nulla protesti. `weight` resta
+--     concessa di proposito — il gruppo deve poter registrare che qualcuno si è
+--     spostato nella doppia. Vedi migrations/0029.
+--
 --     Per le **segnalazioni**: lo schema non ha alcun vincolo fra `room_id`,
 --     `lease_id` e `property_id`, e la `WITH CHECK` di `tickets_update` nomina il
 --     solo `org_id`. Una segnalazione aperta sull'immobile sbagliato si annulla e
@@ -169,9 +185,9 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     `payments_idempotency_uk`, e liberarla apre a un secondo inserimento, cioè
 --     a un saldo che scende due volte. Vedi migrations/0025 e ADR-033.
 --
---     Un nome solo per tre tabelle, e non un controllo per ciascuna: il criterio è
---     quello di ADR-026 in tutti i casi, e inventargli un nome nuovo renderebbe
---     illeggibile la ragione comune.
+--     Un nome solo per quattro tabelle, e non un controllo per ciascuna: il
+--     criterio è quello di ADR-026 in tutti i casi, e inventargli un nome nuovo
+--     renderebbe illeggibile la ragione comune.
 INSERT INTO invariant_violations
 SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
   FROM (
@@ -193,7 +209,14 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
            ('payments', 'currency'),        ('payments', 'method'),
            ('payments', 'idempotency_key'), ('payments', 'reference'),
            ('payments', 'refunded_amount'), ('payments', 'provider'),
-           ('payments', 'provider_payment_id')
+           ('payments', 'provider_payment_id'),
+           ('expenses', 'org_id'),          ('expenses', 'group_id'),
+           ('expenses', 'paid_by_user_id'), ('expenses', 'amount'),
+           ('expenses', 'currency'),        ('expenses', 'split_method'),
+           ('expenses', 'utility_bill_id'), ('expenses', 'document_id'),
+           ('expense_group_members', 'org_id'),
+           ('expense_group_members', 'group_id'),
+           ('expense_group_members', 'user_id')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');

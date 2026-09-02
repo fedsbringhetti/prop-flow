@@ -3,11 +3,11 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use propflow_domain::RequestContext;
 use propflow_domain::ports::{
-    ChargeRepository, DocumentRepository, EventSink, InvitationRepository, LeasePartyRepository,
-    LeaseRepository, OrgMemberRepository, OrganizationRepository, PaymentRepository,
-    PropertyRepository, RepositoryResult, RoomRepository, SessionRepository,
-    TicketMessageRepository, TicketRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
-    UtilityBillRepository,
+    ChargeRepository, DocumentRepository, EventSink, ExpenseGroupRepository, ExpenseRepository,
+    InvitationRepository, LeasePartyRepository, LeaseRepository, OrgMemberRepository,
+    OrganizationRepository, PaymentRepository, PropertyRepository, RepositoryResult,
+    RoomRepository, SessionRepository, SettlementRepository, TicketMessageRepository,
+    TicketRepository, UnitOfWork, UnitOfWorkFactory, UserRepository, UtilityBillRepository,
 };
 
 use super::db_enums;
@@ -71,6 +71,15 @@ impl UnitOfWork for PgUnitOfWork {
         self
     }
     fn payments(&mut self) -> &mut dyn PaymentRepository {
+        self
+    }
+    fn expense_groups(&mut self) -> &mut dyn ExpenseGroupRepository {
+        self
+    }
+    fn expenses(&mut self) -> &mut dyn ExpenseRepository {
+        self
+    }
+    fn settlements(&mut self) -> &mut dyn SettlementRepository {
         self
     }
     fn events(&mut self) -> &mut dyn EventSink {

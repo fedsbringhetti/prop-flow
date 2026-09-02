@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod billing;
 pub mod document;
+pub mod expense;
 pub mod invitation;
 pub mod lease;
 pub mod payment;

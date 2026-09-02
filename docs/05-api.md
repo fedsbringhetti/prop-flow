@@ -90,12 +90,15 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `org.not_a_member` | 403 | non appartieni a questa organizzazione |
 | `org.staff_role_required` | 403 | serve il ruolo `owner` o `manager` |
 | `ticket.not_yours` | 403 | riaprire o annullare una segnalazione spetta a chi l'ha aperta, e nessun ruolo lo sostituisce |
+| `settlement.not_addressed_to_you` | 403 | confermare o rifiutare un regolamento spetta a **chi riceve**: è l'unico che sa se il bonifico è arrivato |
+| `settlement.not_declared_by_you` | 403 | ritirare un regolamento spetta a **chi lo ha dichiarato**. A chi riceve tocca il rifiuto, che è un fatto diverso |
+| `expense_group.membership_not_yours` | 403 | si esce da un gruppo di spesa per sé stessi; togliere qualcun altro richiede lo staff. Dalla `0029` lo dice anche la RLS: il codice qui è la versione parlante di un rifiuto che la policy darebbe comunque |
 
 **Risorse non trovate**
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` · `expense_group.not_found` · `expense.not_found` · `settlement.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -110,6 +113,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `lease.period_overlap` | 409 | il periodo si sovrappone a una locazione attiva |
 | `utility_bill.duplicate` | 409 | fattura già registrata per questo fornitore: `utility_bills_dedup_uk` è unico su `(org_id, supplier_vat, invoice_number)` e scatta solo quando **entrambi** sono valorizzati |
 | `payment.idempotency_key_reused` | 409 | la chiave di idempotenza è già stata usata per un **altro** pagamento. Non è il doppio invio, che risponde `200`: è la stessa chiave verso un addebito diverso, oppure una chiave già usata da qualcuno di cui il chiamante non vede i pagamenti |
+| `expense_group.membership_exists` | 409 | la persona è già membro attivo del gruppo. `expense_group_members_group_user_uk` non è parziale: il rientro è un aggiornamento, non un secondo inserimento |
 | `conflict.constraint_violated` | 409 | vincolo violato che l'API non sa ancora nominare |
 
 **Stato non ammesso**
@@ -130,6 +134,10 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `utility_bill.invalid_transition` | 409 | correzione, validazione, riaddebito o annullamento non ammessi nello stato attuale |
 | `charge.invalid_transition` | 409 | annullamento o rinuncia all'incasso non ammessi nello stato attuale, **oppure** un pagamento verso un addebito `void` o `written_off` |
 | `payment.invalid_transition` | 409 | conferma o rifiuto non ammessi nello stato attuale: `pending` è l'unico da cui si esce |
+| `expense_group.archived` | 409 | il conto è chiuso: non accetta più spese né regolamenti. I saldi restano leggibili |
+| `expense_group.membership_unchanged` | 409 | è già uscito, oppure c'è già: l'operazione non avrebbe niente da fare |
+| `expense.payer_not_in_group` | 409 | chi ha anticipato non è un membro attivo. Lo schema non lo impone, e senza il controllo quel credito non comparirebbe in nessun saldo |
+| `settlement.invalid_transition` | 409 | conferma, rifiuto o ritiro non ammessi nello stato attuale: `pending` è l'unico da cui si esce, e ne ha **tre** uscite |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -907,6 +915,256 @@ curl -X POST http://localhost:8080/api/v1/payments/$PAYMENT/confirm   -H "author
 
 # Lo stesso invio ripetuto: 200, e il saldo scende una volta sola.
 curl -sX POST http://localhost:8080/api/v1/charges/$CHARGE/payment-declarations   -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG"   -H "idempotency-key: $KEY" -H 'content-type: application/json'   -d '{ "amount": "800.00", "method": "bank_transfer" }' -o /dev/null -w '%{http_code}\n'
+```
+
+### Spese co-living
+
+Il denaro che i coinquilini si devono **fra loro**. È una cosa diversa dagli addebiti:
+non è una pretesa del proprietario verso l'inquilino, è un conto fra pari. Il
+proprietario può guardarlo — è staff dell'organizzazione — ma non ne è parte, e nessuna
+riga di questo modulo entra nella sua contabilità.
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| POST | `/api/v1/expense-groups` | membro | `201`, **con chi lo crea già dentro** |
+| GET | `/api/v1/expense-groups` | membro | `200`, pagina keyset |
+| GET | `/api/v1/expense-groups/{id}` | membro | `200` con la composizione, chi è uscito compreso |
+| POST | `/api/v1/expense-groups/{id}/archive` | membro | `200`. Chiude il conto; **non** cancella niente |
+| POST | `/api/v1/expense-groups/{id}/members` | membro | `201`. Iscrive **o fa rientrare** |
+| DELETE | `/api/v1/expense-groups/{id}/members/{user_id}` | membro (per sé), staff (per altri) | `200`. Valorizza `left_at`, **la riga resta** |
+| GET | `/api/v1/expense-groups/{id}/balances` | membro | `200`. Chi è in credito e chi in debito |
+| POST | `/api/v1/expense-groups/{id}/expenses` | membro | `201` con le **quote** |
+| GET | `/api/v1/expense-groups/{id}/expenses` | membro | `200`, pagina keyset |
+| GET | `/api/v1/expenses/{id}` | membro | `200` con le quote |
+| POST | `/api/v1/expense-groups/{id}/settlements` | membro | `201`, stato **`pending`**: non muove i saldi |
+| GET | `/api/v1/expense-groups/{id}/settlements` | membro | `200`. `?status=pending` è la coda di chi deve confermare |
+| POST | `/api/v1/settlements/{id}/confirm` | **chi riceve**, o staff | `200`. Da qui i saldi si muovono |
+| POST | `/api/v1/settlements/{id}/reject` | **chi riceve**, o staff | `200`. Il denaro non è arrivato |
+| POST | `/api/v1/settlements/{id}/cancel` | **chi ha dichiarato**, o staff | `200`. Ritira la propria dichiarazione |
+
+**Quasi tutto è `membro` e non `staff`**, che è l'opposto della contabilità. Non è una
+concessione: le policy della migration `0014` erano già scritte così —
+`expense_groups_insert` chiede `is_org_member`, tutto il resto chiede
+`can_access_expense_group`. Un co-living che non può organizzarsi da sé non è il
+prodotto descritto in [01 — Prodotto](01-prodotto.md).
+
+#### Chi crea un gruppo ne è già membro
+
+`POST /expense-groups` restituisce il gruppo **con `members` di un elemento**: chi ha
+chiamato. Le due scritture sono nella stessa transazione, e se la seconda fallisce cade
+anche la prima.
+
+Non è una comodità dell'API, è una correzione: lo schema, letto come usciva dalla
+`0014`, produceva un gruppo **inutilizzabile da chi lo aveva creato**. Un inquilino
+soddisfa `expense_groups_insert` ma non `expense_group_members_insert`, perché appena
+creato il gruppo non ne è membro e quindi non può aggiungere nessuno — nemmeno sé
+stesso. La migration `0026` estende la policy con un ramo stretto: **il creatore può
+iscrivere sé stesso, e nessun altro**.
+
+#### `user_id`: come un client li trova
+
+I corpi di questo modulo nominano le persone — chi ha anticipato, a chi si è pagato — e
+**non esiste un endpoint che elenchi le persone di un'organizzazione**. Le vie
+disponibili oggi sono due, e vanno sapute prima di costruire un client:
+
+- `GET /api/v1/leases/{id}` restituisce le parti contrattuali con il loro `user_id`,
+  valorizzato dopo l'accettazione dell'invito. **Solo di quel contratto**:
+  `can_access_lease` ammette lo staff, oppure chi è parte di quel contratto — non
+  dell'immobile;
+- `GET /api/v1/expense-groups/{id}` restituisce la composizione, quindi dal secondo
+  membro in poi il gruppo si legge da sé.
+
+**Ne segue un limite che va saputo prima di costruire un client.** In un co-living **per
+stanza** (`lease_type = 'room'`) ogni coinquilino ha il proprio contratto, quindi non è
+parte di quello degli altri e **non ne vede l'`user_id` da nessuna parte**: chi crea il
+gruppo non può aggiungere nessuno finché il proprietario non gli passa gli identificatori.
+Le due vie qui sopra bastano solo con un **contratto unico condiviso**, cioè con il
+co-living sull'immobile intero.
+
+**L'immobile non è il confine, né in un senso né nell'altro.** Sui contratti la
+visibilità è più stretta — è il singolo contratto — mentre sull'anagrafica è più larga:
+`users_select` ammette `shares_org_with`, quindi a livello di database un inquilino può
+leggere la riga di **ogni** persona dell'organizzazione, inquilini di altri immobili
+compresi. Nessun endpoint lo espone, ed è la ragione per cui l'elenco delle persone non
+si può scrivere sulla RLS così com'è senza prima decidere quale perimetro debba avere.
+
+Il vincolo è registrato fra i debiti noti in
+[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti), ed è da chiudere prima
+del primo client che usi il modulo.
+
+#### La ripartizione: `equal` e `weighted`, e le altre tre che danno `422`
+
+`split_method` accetta **`equal`** e **`weighted`**. Gli altri tre valori dell'enum
+compaiono nella specifica e l'API **li rifiuta con `422`** invece di approssimare:
+`percentage` ed `exact` chiedono un input per membro che questa fetta non ha, `by_usage`
+chiede letture di contatori che non esistono. Una spesa ripartita con un metodo diverso
+da quello che dichiara sarebbe una riga che mente.
+
+Il metodo del gruppo (`default_split_method`) è la **consuetudine**, non una regola:
+ogni spesa può dichiararne una diversa — la bombola del gas di chi ha la stufa esiste.
+
+**Il peso è una stringa decimale con tre decimali**, non due: `weight` sta in
+`NUMERIC(6,3)` mentre gli importi stanno in `NUMERIC(14,2)`, e la doppia si esprime con
+`"2"`. Un quarto decimale dà `422` con `errors[].field = "weight"`.
+
+**La somma delle quote è sempre esattamente l'importo.** Il centesimo di resto va ai
+primi partecipanti in ordine di `user_id` — vedi [ADR-034](08-decisioni.md#adr-034) — e
+ne segue che una quota può valere `"0.00"`: un centesimo diviso fra tre dà
+`0.01 / 0.00 / 0.00`, e lo schema lo prevede (`CHECK (share_amount >= 0)`).
+
+`share_weight` è **nullo** sulle ripartizioni `equal`, dove il peso non ha partecipato
+al calcolo.
+
+#### Chi ha anticipato deve essere del gruppo
+
+`paid_by_user_id` è opzionale e assente significa «io». Deve però essere un **membro
+attivo**, e un estraneo dà `409 expense.payer_not_in_group`.
+
+Lo schema **non** lo impone — su quella colonna non c'è alcun vincolo verso la
+membership — e il danno che il controllo evita è silenzioso: la vista dei saldi parte
+dai membri, quindi un credito intestato a un estraneo non comparirebbe a nessuno e la
+somma dei saldi del gruppo smetterebbe di fare zero.
+
+#### I saldi, e la somma che fa zero
+
+`GET /expense-groups/{id}/balances` restituisce per ogni persona quanto ha anticipato,
+quanto le è stato imputato, quanto ha versato e ricevuto in regolamenti **confermati**,
+e il netto:
+
+```
+net_balance = total_paid − total_owed + total_settled_out − total_settled_in
+```
+
+Positivo = **in credito**, negativo = in debito. `net_balance` **può essere negativo**,
+ed è metà dell'informazione per cui il campo esiste.
+
+**La somma dei `net_balance` di un gruppo fa zero**, ed è l'invariante che rende questi
+numeri leggibili. Fino alla migration `0027` non la faceva: la vista partiva dai membri
+con `left_at IS NULL`, quindi chi lasciava il gruppo **spariva portandosi via il
+debito** — il coinquilino che deve 200 euro esce, e quei 200 euro non risultano più a
+nessuno, mentre il credito di chi aveva anticipato resta lì senza contropartita. Dalla
+`0027` chi è uscito resta finché il suo netto è diverso da zero; chi esce in pari
+sparisce, che è il comportamento voluto.
+
+**Una conseguenza da sapere**: il debitore uscito compare nei saldi che leggono gli
+**altri** e non nei propri. La vista è `security_invoker` e passa da
+`expense_group_members_select`, che chiede una membership **attiva**: per chi è uscito
+il gruppo è invisibile. È corretto rispetto all'isolamento, ed è deliberatamente fuori
+perimetro — farglielo vedere è un allargamento della visibilità, cioè una decisione di
+prodotto con la sua policy.
+
+I saldi **si leggono e non si ricalcolano**, per la ragione di
+[ADR-032](08-decisioni.md#adr-032): due definizioni dello stesso numero si contraddicono
+al primo caso limite.
+
+#### Uscire, rientrare, archiviare
+
+`DELETE .../members/{user_id}` **non cancella la riga**: valorizza `left_at` e risponde
+`200` con la membership aggiornata. Deve restare, perché le quote intestate a quella
+persona restano e perché i saldi partono da lì.
+
+**Si esce per sé stessi.** Togliere qualcun altro richiede il ruolo di staff, e dà
+altrimenti `403 expense_group.membership_not_yours`. **È un confine vero, non solo una
+regola dell'API**: dalla migration `0029` la `WITH CHECK` di
+`expense_group_members_update` ammette la riga di un altro solo se il risultato lo
+lascia dentro il gruppo, quindi anche una query scritta a mano è rifiutata. La ragione è
+che un coinquilino non deve poter togliere unilateralmente un altro da un conto
+condiviso, tanto meno uno con un saldo aperto.
+
+**Reintegrare invece resta di chiunque nel gruppo**, ed è la distinzione che la policy
+esprime: si può riportare dentro, non si può mandare fuori.
+
+**Rientrare è la stessa rotta dell'iscrizione**: `expense_group_members_group_user_uk` è
+unico su `(group_id, user_id)` e **non è parziale**, quindi una seconda riga non può
+esistere e il rientro è un aggiornamento. Chi rientra **ridichiara il proprio peso**: la
+stanza può essere cambiata, e conservare quello vecchio farebbe pagare la doppia a chi è
+tornato nella singola.
+
+**Archiviare chiude il conto e non cancella niente**: spese e saldi restano leggibili, e
+un gruppo archiviato rifiuta spese e regolamenti con `409 expense_group.archived`. Si
+chiude **anche con dei conti aperti**, ed è deliberato: chi se n'è andato senza pagare
+non deve poter tenere il gruppo in ostaggio.
+
+#### Il regolamento è a due tempi, e conferma chi riceve
+
+Chi paga dichiara — la riga nasce `pending` e **non muove i saldi** — e chi riceve
+conferma. È la forma dei pagamenti con la differenza che conta: là confermava lo
+**staff**, qui conferma il **creditore**, perché è l'unico che sa se il bonifico è
+arrivato. Confermare o rifiutare senza esserne il destinatario dà
+`403 settlement.not_addressed_to_you`.
+
+**Chi dichiara può ritirare**, ed è l'opposto dei pagamenti. Non è una scelta di
+prodotto rivedibile nel codice: la `USING` di `settlements_update` nomina anche
+`from_user_id`, mentre `payments_update` è staff soltanto. **Fra pari il ritiro è
+lecito, verso il proprietario no.** Ritirare senza aver dichiarato dà
+`403 settlement.not_declared_by_you`: il ritiro è di chi ha mandato, il rifiuto di chi
+doveva ricevere, e i due fatti sono diversi — «non l'ho mandato» contro «non è
+arrivato».
+
+`settled_at` è la data in cui il denaro si è mosso. Assente significa «adesso», la
+conferma **non la riscrive** — è il fatto dichiarato, non il momento in cui qualcuno
+l'ha guardato — e le due uscite negative la **azzerano**, perché un trasferimento che
+non è avvenuto non ha una data in cui è avvenuto.
+
+**Solo `confirmed` muove i saldi.** Lo decide la vista, non l'applicazione:
+`app.v_expense_group_balances` somma `WHERE st.status = 'confirmed'`.
+
+#### Fuori dall'API in questa fetta
+
+- **la semplificazione dei debiti**, cioè il «chi paga chi» a numero minimo di bonifici.
+  I saldi netti dicono già chi è in credito e chi in debito, e l'algoritmo che minimizza
+  i trasferimenti è una comodità di presentazione, non un fatto contabile;
+- **`percentage`, `exact` e `by_usage`**, che danno `422`;
+- **`expense_shares.is_settled`**, che resta `false` e che la vista **non guarda**:
+  sarebbe una seconda definizione di «saldato» che nessuno riconcilia;
+- **il legame fra regolamento e pagamento**: `settlements.payment_id` resta nullo e
+  `payments.payable_type = 'settlement'` non si scrive. Sono due modi diversi di legare
+  la stessa coppia di righe, e un regolamento fra coinquilini non è denaro che
+  l'organizzazione incassa — farne una riga in `app.payments` metterebbe nel registro
+  degli incassi del proprietario un movimento che non lo riguarda;
+- **la ripartizione automatica di una bolletta** (`expenses.utility_bill_id`): il legame
+  esiste a schema ed è additivo, ma richiede di decidere *quale* bolletta di un immobile
+  riguarda *quale* gruppo — domanda a cui oggi non c'è modo di rispondere, perché
+  `property_id` sul gruppo è opzionale;
+- **gli allegati alle spese**: `attachment_owner_type` comprende `expense`, il dominio
+  no. È la stessa migration additiva già fatta per bollette e addebiti;
+- **la correzione di una spesa**: una spesa sbagliata si annulla e si riscrive, come un
+  addebito. La migration `0028` concede l'`UPDATE` sulle sole colonne che una correzione
+  legittima tocca, e nega `amount` — vedi [ADR-035](08-decisioni.md#adr-035).
+
+```bash
+# Un inquilino crea il gruppo, e si ritrova dentro.
+GROUP=$(curl -sX POST http://localhost:8080/api/v1/expense-groups \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG" \
+  -H 'content-type: application/json' \
+  -d '{ "name": "Casa di via Roma", "property_id": "'$PROPERTY'" }' | jq -r .id)
+
+# Aggiunge il coinquilino della doppia.
+curl -X POST http://localhost:8080/api/v1/expense-groups/$GROUP/members \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG" \
+  -H 'content-type: application/json' \
+  -d '{ "user_id": "'$OTHER'", "weight": "2" }'
+
+# Cento euro di spesa: le quote sommano a 100.00 esatti.
+curl -sX POST http://localhost:8080/api/v1/expense-groups/$GROUP/expenses \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG" \
+  -H 'content-type: application/json' \
+  -d '{ "description": "Spesa della settimana", "amount": "100.00", "category": "groceries" }' \
+  | jq '.shares'
+
+# Chi deve dichiara, e il saldo non si muove finché il creditore non conferma.
+SETTLEMENT=$(curl -sX POST http://localhost:8080/api/v1/expense-groups/$GROUP/settlements \
+  -H "authorization: Bearer $OTHER_TOKEN" -H "x-org-id: $ORG" \
+  -H 'content-type: application/json' \
+  -d '{ "to_user_id": "'$TENANT'", "amount": "66.67" }' | jq -r .id)
+
+curl -X POST http://localhost:8080/api/v1/settlements/$SETTLEMENT/confirm \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG"
+
+# La somma dei saldi fa zero.
+curl -s http://localhost:8080/api/v1/expense-groups/$GROUP/balances \
+  -H "authorization: Bearer $TENANT_TOKEN" -H "x-org-id: $ORG" \
+  | jq '[.items[].net_balance | tonumber] | add'
 ```
 
 ### Inviti

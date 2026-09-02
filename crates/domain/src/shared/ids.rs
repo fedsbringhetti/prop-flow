@@ -70,6 +70,11 @@ typed_id!(TicketMessageId, "un messaggio di una segnalazione");
 typed_id!(UtilityBillId, "una bolletta");
 typed_id!(ChargeId, "un addebito");
 typed_id!(PaymentId, "un pagamento");
+typed_id!(ExpenseGroupId, "un gruppo di spesa co-living");
+typed_id!(ExpenseGroupMemberId, "la membership di un gruppo di spesa");
+typed_id!(ExpenseId, "una spesa condivisa");
+typed_id!(ExpenseShareId, "la quota di una spesa condivisa");
+typed_id!(SettlementId, "un regolamento fra coinquilini");
 typed_id!(SessionId, "una sessione di refresh");
 typed_id!(EventId, "un evento di dominio");
 
