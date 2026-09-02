@@ -6,7 +6,7 @@ use propflow_application::use_cases::property::{
     ArchivePropertyCommand, CreatePropertyCommand, ListPropertiesQuery, UpdatePropertyCommand,
 };
 use propflow_domain::property::{
-    EnergyClass, Patch, Property, PropertyChanges, PropertyStatus, PropertyType,
+    EnergyClass, Patch, Property, PropertyChanges, PropertyResident, PropertyStatus, PropertyType,
 };
 use propflow_domain::shared::{Address, CountryCode, PropertyId};
 use rust_decimal::Decimal;
@@ -25,6 +25,11 @@ pub fn router() -> Router<AppState> {
             "/api/v1/properties/{id}",
             get(detail).patch(update).delete(archive),
         )
+        // Annidato sotto l'immobile e non una rotta a sé: «residenti» non ha
+        // significato senza la casa di cui lo sono, ed è il perimetro che questa
+        // fetta decide. Un elenco delle persone dell'organizzazione resta
+        // deliberatamente fuori.
+        .route("/api/v1/properties/{id}/residents", get(residents))
 }
 
 // ---------------------------------------------------------------------------
@@ -517,4 +522,72 @@ async fn archive(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Chi abita un immobile.
+///
+/// **Non porta l'email**, ed è gratis: la risposta viene da
+/// `app.property_residents`, che proietta tre colonne scelte invece di rendere
+/// leggibile la riga da cui vengono. Con una policy allargata la riga sarebbe
+/// uscita intera — canone compreso — e non mostrarla sarebbe stata una scelta da
+/// difendere; qui non c'è nulla da cui ometterla.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct PropertyResidentResponse {
+    /// Assente finché l'invitato non ha accettato l'invito: la persona ha un nome
+    /// e **nessun identificatore**, quindi non è ancora aggiungibile a un gruppo
+    /// di spesa. Compare comunque, altrimenti chi guarda non capirebbe perché un
+    /// coinquilino che sa di avere in casa non risulta da nessuna parte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<Uuid>,
+    /// Il nome sulla parte contrattuale, non quello dell'anagrafica.
+    pub full_name: String,
+    /// Assente sui contratti sull'immobile intero, che non hanno una stanza.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
+}
+
+impl PropertyResidentResponse {
+    fn from_domain(resident: &PropertyResident) -> Self {
+        Self {
+            user_id: resident
+                .user_id
+                .map(propflow_domain::shared::UserId::as_uuid),
+            full_name: resident.full_name.clone(),
+            room_name: resident.room_name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct PropertyResidentListResponse {
+    pub items: Vec<PropertyResidentResponse>,
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/properties/{id}/residents", tag = "immobili",
+    params(("id" = Uuid, Path, description = "Identificatore dell'immobile")),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Chi abita l'immobile", body = PropertyResidentListResponse),
+        (status = 404, description = "Immobile non trovato o non visibile", body = crate::error::ProblemDetails),
+    )
+)]
+async fn residents(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<PropertyResidentListResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let residents = state
+        .list_property_residents
+        .execute(&context, PropertyId::from_uuid(id))
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(PropertyResidentListResponse {
+        items: residents
+            .iter()
+            .map(PropertyResidentResponse::from_domain)
+            .collect(),
+    }))
 }
