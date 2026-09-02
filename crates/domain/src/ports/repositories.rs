@@ -12,7 +12,7 @@ use crate::expense::{
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment};
-use crate::property::{Property, PropertyStatus, Room};
+use crate::property::{Property, PropertyResident, PropertyStatus, Room};
 use crate::shared::{
     ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, OrgId,
     PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId, UtilityBillId,
@@ -158,6 +158,22 @@ pub trait PropertyRepository: Send {
     /// portato ad archiviato in un solo statement. Il ruolo applicativo non ha
     /// nemmeno il privilegio `DELETE`.
     async fn soft_delete(&mut self, property: &Property) -> RepositoryResult<()>;
+
+    /// Chi abita l'immobile, **letto da `app.property_residents`**.
+    ///
+    /// Non è una query con i join, ed è la decisione centrale della fetta: unire
+    /// `app.lease_parties` ad `app.leases` — e unirle è obbligatorio, perché
+    /// l'immobile e «in essere» stanno sul contratto — passa da `leases_select`,
+    /// che è per contratto, e l'elenco si riduce al solo chiamante **senza alcun
+    /// errore**. Vedi [`PropertyResident`] e la migration `0030`.
+    ///
+    /// Restituisce un elenco vuoto anche quando l'immobile non è visibile: il
+    /// confine è dentro la funzione. Chi chiama rilegge l'immobile prima, per
+    /// distinguere «non esiste» da «non ci abita nessuno».
+    async fn list_residents(
+        &mut self,
+        property_id: PropertyId,
+    ) -> RepositoryResult<Vec<PropertyResident>>;
 }
 
 /// Stanze di un immobile.
