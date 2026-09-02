@@ -3497,20 +3497,70 @@ fuori da qui conosce.
 `ai_jobs` ha invece la propria riga di `audit_log`, come ogni tabella di business, ed è
 lì che si guarda per ricostruire cosa ha fatto la macchina.
 
+### Decisioni prese prima di eseguire, che il piano lasciava aperte
+
+Decise il **2 settembre 2026**, chiudendo la fetta precedente. Stanno qui e non nella
+sezione sopra perché quella è il piano com'era: queste sono le tre risposte alle domande
+che il piano marcava «da decidere eseguendo», e vanno lette prima di aprire il codice.
+
+#### A. `cancelled` resta nell'enum e il dominio non lo scrive
+
+`app.ai_job_status` ha cinque valori; `AiJobStatus` ne muove **quattro**. È la stessa
+scelta di `percentage` fra i metodi di ripartizione: il valore esiste nello schema,
+l'applicazione non lo scrive mai, e lo si dichiara invece di lasciarlo scoprire.
+
+Il precedente dei regolamenti — dove `cancelled` fu costruito insieme al resto — non si
+applica: là annullare è un'azione che una persona compie su una dichiarazione che ha
+fatto lei, qui un job si chiude in millisecondi e **non c'è nulla da annullare** finché
+non esiste un fornitore vero che impieghi secondi. Una rotta di annullamento sarebbe
+codice per un caso che non si può nemmeno provare.
+
+C'è anche una domanda che scriverlo aprirebbe e che non conviene aprire adesso:
+`ai_jobs_finished_ck` esige `finished_at` sui soli `succeeded` e `failed`, quindi un job
+annullato non avrebbe una data di fine — e cosa significhi un terminale senza data di
+fine è una decisione a sé. Il giorno in cui `cancelled` servirà, si deciderà anche
+quella, e probabilmente insieme al ritentativo, che è l'altra cosa fuori perimetro.
+
+#### B. Il passo 8 sta dentro: la fetta è intera
+
+Tutti gli **11 passi**. Il punto di taglio esisteva ed è stato guardato: senza il passo 8
+il percorso funziona e si osserva solo da database e log, quindi il giro a mano del
+criterio di completamento andrebbe fatto con `psql`. È una rotta di **sola lettura** su
+una risorsa che esiste già — costa poco — e senza di essa la fetta non è ispezionabile
+da fuori, che per un modulo il cui valore è *il percorso* è precisamente la parte da
+poter mostrare.
+
+#### C. Un processo con due task, non due binari
+
+Il piano propendeva per due binari e la ragione era buona: un job OCR lungo affamerebbe
+il dispatcher dell'outbox. **Quel carico però non esiste in questa fetta**, perché
+l'adattatore è deterministico e la decisione 1 rimanda il fornitore vero — e tararsi su
+un'ipotesi costa un'immagine Docker, un servizio nello stack compose, una voce in
+`docs/07-operazioni.md` e una modifica a `release.yml`.
+
+Due `tokio::spawn` in `propflow-worker`, quindi: il dispatcher dell'outbox e il ciclo
+dell'OCR, stesso binario, secondo compito.
+
+**Separare dopo è un refactor e non un ridisegno**, ed è ciò che rende la scelta
+reversibile: il ciclo sta dietro `AiJobRepository`, quindi spostarlo in un binario suo
+non tocca né il dominio né gli use case. **Il momento di rifarsi la domanda è il primo
+adattatore vero**, che è anche il momento in cui il piano dice di rileggere la porta —
+sono la stessa conversazione, e vale la pena affrontarle insieme.
+
 ### Decomposizione
 
-**Il punto di taglio** è il passo 8, la lettura dello stato del job dall'API: senza,
-resta un percorso completo che si osserva dai log e dal database, che è una fetta
-coerente e dichiarabile. Il passo 3 invece **non** si taglia: senza lo sblocco di
+**Il punto di taglio** era il passo 8, la lettura dello stato del job dall'API, e la
+decisione B lo tiene **dentro**: senza, resterebbe un percorso completo osservabile solo
+dai log e dal database. Il passo 3 non si taglia in nessun caso: senza lo sblocco di
 `pending_review` la fetta produce bollette congelate, cioè peggio di niente.
 
-1. **Migration `0029`: la policy di accodamento.** `ai_jobs_enqueue` per l'`INSERT`,
+1. **Migration `0031`: la policy di accodamento.** `ai_jobs_enqueue` per l'`INSERT`,
    staff dell'organizzazione, con `status = 'queued'` nella `WITH CHECK`. Verificare **al
    contrario**: senza la policy l'inserimento dall'API è negato, e con la policy un
    `INSERT` che dichiara `succeeded` è comunque rifiutato.
-2. **Dominio: `AiJob`.** `AiCapability`, `AiJobStatus` (cinque valori, `cancelled` da
-   decidere eseguendo come lo fu `cancelled` dei regolamenti), `AiTask` — e la macchina
-   `queued → running → succeeded | failed`. `ai_jobs_finished_ck` esige `finished_at`
+2. **Dominio: `AiJob`.** `AiCapability`, `AiJobStatus` — l'enum del database ha cinque
+   valori e il dominio ne scrive **quattro**, vedi la decisione A — `AiTask`, e la
+   macchina `queued → running → succeeded | failed`. `ai_jobs_finished_ck` esige `finished_at`
    sui due terminali: è la **quinta** occorrenza del `CHECK` a una direzione sola, e
    ormai è una convenzione dello schema.
 3. **Dominio: `pending_review` smette di essere un vicolo cieco.** `is_editable` e
@@ -3536,10 +3586,9 @@ coerente e dichiarabile. Il passo 3 invece **non** si taglia: senza lo sblocco d
 8. **Bordo HTTP:** lo stato del job sulla bolletta. Una rotta di lettura, e `null`
    finché nessuno ha caricato niente.
 9. **Ciclo nel worker**, accanto al dispatcher dell'outbox: stesso binario, secondo
-   compito. Da decidere eseguendo se siano due `tokio::spawn` nello stesso processo o
-   due binari — la seconda è più pulita e costa un'immagine Docker in più.
+   compito, due `tokio::spawn` nello stesso processo. Vedi la decisione C.
 10. **Test.** Unitari sulla macchina del job e sulle due invarianti sbloccate; di
-    persistenza con database reale — la policy della `0029` al contrario, `SKIP LOCKED`
+    persistenza con database reale — la policy della `0031` al contrario, `SKIP LOCKED`
     con due worker simulati che non prendono lo stesso job, il fallimento che lascia la
     bolletta in `draft`; di contratto HTTP sul giro completo con l'adattatore
     deterministico.
@@ -3556,7 +3605,7 @@ riprodurre** vanno verificate su database reale in esecuzione.
 la `GRANT` della `0015` e **non** secondo la RLS, perché la `0014` crea per quella
 tabella la sola `ai_jobs_select`. Con RLS attiva e nessuna policy per un comando, quel
 comando è negato. È la trappola che farebbe perdere più tempo, perché guardando i
-privilegi si conclude che si può. **Da riprodurre**: l'inserimento senza la `0029` deve
+privilegi si conclude che si può. **Da riprodurre**: l'inserimento senza la `0031` deve
 fallire.
 
 **`pending_review` è un vicolo cieco nel dominio di oggi.** `is_editable` non lo
@@ -3624,7 +3673,7 @@ altrimenti la macchina legge ciò che una persona ha deciso di togliere.
 verde.
 
 **Le due trappole di partenza verificate al contrario**, che è l'unica prova che conta:
-l'inserimento in `ai_jobs` dall'API deve fallire **senza** la `0029`, e la validazione
+l'inserimento in `ai_jobs` dall'API deve fallire **senza** la `0031`, e la validazione
 di una bolletta in `pending_review` deve fallire **prima** della modifica del passo 3.
 Una suite verde dopo non prova nulla da sola.
 
