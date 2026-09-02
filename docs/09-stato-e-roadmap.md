@@ -68,13 +68,24 @@ MinIO, 64 di contratto HTTP, 3 di guardia sulla documentazione della configurazi
 In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
 porta → use case → repository → endpoint → test.
 
-1. **AI: OCR e triage** (`ai_jobs`) — i trait dei provider vanno definiti allora,
-   verificando la reference del fornitore scelto in quel momento. È il modulo che
-   riempirà `ocr_extracted`, `ocr_confidence` e lo stato `pending_review`, che la
-   fetta contabile ha deliberatamente lasciato ai loro default: lo schema tiene
-   separato ciò che ha letto la macchina da ciò che ha confermato una persona
-   (`validated_by`, `validated_at`) proprio perché l'accuratezza si possa misurare, e
-   riempire le prime con valori umani distruggerebbe quel dato prima di raccoglierlo.
+1. **AI: OCR e triage** (`ai_jobs`) — è il **prossimo passo suggerito**, ed è
+   **pianificato** per la sola parte OCR, non ancora implementato: il piano è in fondo,
+   [Piano — OCR delle bollette, fetta 1](#piano-ocr-bollette-fetta-1). Riempirà
+   `ocr_extracted`, `ocr_confidence` e lo stato `pending_review` che la fetta contabile
+   ha deliberatamente lasciato ai loro default: lo schema tiene separato ciò che ha
+   letto la macchina da ciò che ha confermato una persona (`validated_by`,
+   `validated_at`) proprio perché l'accuratezza si possa misurare, e riempire le prime
+   con valori umani distruggerebbe quel dato prima di raccoglierlo.
+
+   **Il fornitore resta da scegliere, e il piano lo lascia fuori di proposito**: è una
+   decisione di trattamento dei dati — l'immagine di una bolletta che esce dal perimetro
+   porta con sé fornitore, indirizzo, importi e codice cliente — non una scelta tecnica
+   da dedurre mentre si scrive un adattatore. La fetta definisce la porta e ne scrive
+   uno deterministico, come `LoggingEventBus` fa per l'`EventBus`.
+
+   **Il triage delle segnalazioni resta fuori dalla fetta 1**: decidere se una macchina
+   possa scrivere categoria e priorità, e con quale soglia di confidenza, è una domanda
+   di prodotto sua e non una seconda chiamata allo stesso adattatore.
 2. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
    **ultima**, ed è una scelta da rileggere insieme alla sua alternativa, perché la
    fetta dei pagamenti ha reso facile confondersi.
@@ -189,8 +200,26 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**L'OCR** (`ai_jobs`), che riempirà `ocr_extracted`, `ocr_confidence` e lo stato
-`pending_review` lasciati ai loro default dalla fetta contabile. Poi la **dashboard**.
+**L'OCR delle bollette** (`ai_jobs`), che riempirà `ocr_extracted`, `ocr_confidence` e
+lo stato `pending_review` lasciati ai loro default dalla fetta contabile. Poi la
+**dashboard**.
+
+Il piano è scritto in fondo — [Piano — OCR delle bollette, fetta 1](#piano-ocr-bollette-fetta-1)
+— ed è il primo modulo in cui **una macchina scrive nel database**: quasi tutte le sue
+decisioni discendono da lì. Comprende **una migration**, e nasce da una scoperta che dai
+privilegi non si vede: `app.ai_jobs` ha la `GRANT` di `INSERT` per il ruolo applicativo
+e **nessuna policy** che lo ammetta, quindi accodare un job dall'API oggi è negato dalla
+RLS. Si estende la RLS invece di aggirarla, come stabilito da
+[ADR-020](08-decisioni.md#adr-020).
+
+La seconda scoperta è nel dominio e non nello schema: `pending_review` è oggi uno
+**stato senza uscite** — `is_editable` non lo comprende e `validate` accetta il solo
+`draft` — quindi una bolletta portata lì non si potrebbe né correggere né validare. È il
+passo che il piano dichiara non tagliabile.
+
+Le tre scelte di prodotto sono state date: il fornitore non si sceglie in questa fetta,
+il perimetro è il solo `bill_ocr`, e il job si innesca dall'allegato di una bolletta già
+registrata invece che da una fotografia che la crea.
 
 **Il perimetro funzionale dell'MVP è chiuso.** Con le spese co-living non resta alcun
 modulo che abbia lo schema e non il codice: i due punti che restano sono un modulo
@@ -3206,3 +3235,385 @@ eseguendo:
   perimetro dichiarato del passo 3, che nominava `app.expenses`.
 
 Entrambe sono registrate fra i debiti noti.
+
+---
+
+<a id="piano-ocr-bollette-fetta-1"></a>
+
+## Piano — OCR delle bollette, fetta 1
+
+Pianificato il **1 settembre 2026**. Il piano resta sotto come è stato scritto: serve a
+eseguirlo, e servirà a capire perché il codice è com'è. L'esito va in fondo a esecuzione
+conclusa, come per documenti, segnalazioni, bollette, pagamenti e spese co-living.
+
+### Obiettivo
+
+La lettura automatica di una bolletta. Lo staff registra la bolletta in bozza, ci allega
+la scansione, e da lì una macchina legge il documento e propone i campi — che **nessuno
+scrive al posto della persona**: la proposta finisce in `ocr_extracted`, la bolletta
+passa a `pending_review`, e una persona corregge e valida.
+
+È il primo modulo del progetto in cui **una macchina scrive nel database**, e quasi
+tutte le decisioni qui sotto discendono da quella frase.
+
+**Dentro:** la porta `OcrProvider` in `application::ports`; un adattatore deterministico
+per i test; la tabella `app.ai_jobs` scritta per la prima volta; il ciclo di lavoro nel
+worker con `FOR UPDATE SKIP LOCKED`; una migration per la policy di accodamento; lo
+sblocco di `pending_review` nella macchina a stati della bolletta; la lettura dello
+stato di un job dall'API.
+
+**Fuori, e non per dimenticanza:**
+
+- **il fornitore vero.** È la decisione 1, ed è la più discussa: si definisce la porta e
+  si rimanda la scelta. Ne segue che questa fetta **non produce valore per un utente
+  finale**, e va detto invece che lasciarlo scoprire;
+- **il triage delle segnalazioni** (`ticket_triage`, `ticket_reply_draft`).
+  `tickets.ai_job_id` e `ticket_messages.ai_job_id` restano nulli. Non è una seconda
+  chiamata allo stesso adattatore: è decidere se una macchina possa scrivere categoria e
+  priorità di una segnalazione e con quale soglia, che è una domanda di prodotto sua;
+- **le capability `vision`, `llm` ed `embedding`**: restano nell'enum non scritte, come
+  `percentage` fra i metodi di ripartizione;
+- **la fotografia che crea la bolletta.** È la promessa del `README`, e richiede di
+  caricare un documento prima di avere una bolletta a cui allegarlo, più una decisione
+  su cosa fare quando l'estrazione non basta a costruire una riga valida — e
+  `app.utility_bills` ha colonne `NOT NULL` che l'OCR può non trovare. Vedi la
+  decisione 4: l'innesco scelto riusa tutto ciò che esiste;
+- **un tetto di spesa per organizzazione.** `ai_jobs.cost_amount` e `ai_jobs_cost_ix`
+  esistono perché quel controllo sia possibile, e questa fetta li **valorizza senza
+  farne niente**: senza un fornitore vero il costo è zero, e un limite tarato su zero
+  non si può provare;
+- **il ritentativo automatico.** `attempts` esiste e questa fetta la incrementa; a
+  decidere se e quando riprovare serve sapere quali errori un fornitore vero produce.
+
+### Decisioni prese, con il perché
+
+#### 1. Si definisce la porta e **non** si sceglie il fornitore
+
+La roadmap diceva il contrario — «i trait dei provider vanno definiti allora,
+verificando la reference del fornitore scelto in quel momento» — e la ragione per
+scostarsene è che la scelta del fornitore **non è tecnica**.
+
+Un LLM con visione leggerebbe la bolletta e ne estrarrebbe i campi strutturati in un
+colpo solo, e servirebbe poi anche al triage da immagine. Ma l'immagine della bolletta
+**esce dal perimetro**: fornitore, indirizzo, importi e spesso il codice cliente
+finiscono presso terzi. Il commento della `0010` è esplicito nel tenere prompt e
+immagine fuori da `ai_jobs`, e questa fetta lo rispetta — ma il dato al fornitore ci va
+comunque, ed è una decisione di trattamento che va presa da chi risponde del
+trattamento, non dedotta mentre si scrive un adattatore.
+
+Tesseract in locale non ha quel problema e ne ha un altro: fa OCR e non estrazione
+strutturata, quindi i campi andrebbero ricavati con euristiche nostre sul testo grezzo,
+e sulle bollette italiane — impaginazione diversa per ogni fornitore — l'accuratezza
+sarebbe bassa abbastanza da rendere il modulo un fastidio invece di un aiuto.
+
+**Il rischio di questa scelta va nominato**, perché è reale: una porta disegnata senza
+un fornitore davanti rischia di essere inventata, cioè di descrivere ciò che è comodo a
+noi invece di ciò che i fornitori danno. Si mitiga in due modi, e nessuno dei due lo
+elimina:
+
+- **la porta chiede il minimo comune.** Un `Vec<u8>` con il suo MIME in ingresso; in
+  uscita i campi trovati, ciascuno con la propria confidenza, più i contatori che
+  `ai_jobs` ha già (token, costo, latenza, modello). Tutto ciò che un fornitore
+  specifico offre in più — bounding box, pagine, alternative — resta fuori: aggiungerlo
+  dopo è additivo, toglierlo no;
+- **il primo adattatore vero è il momento di rileggerla**, ed è scritto qui perché chi
+  lo scriverà lo trovi. Se la porta si rivelasse sbagliata, cambiarla allora costa un
+  adattatore finto e nessun client.
+
+**Alternativa scartata: aspettare la decisione sul fornitore e non fare la fetta.** È la
+scelta onesta se il modulo servisse a un utente domani. Non serve: quello che questa
+fetta compra è il **percorso** — coda, worker, job, stato, revisione — che è
+indipendente dal fornitore e che è dove stanno le trappole.
+
+#### 2. `app.ai_jobs` **non è scrivibile** dal ruolo applicativo, e serve una migration
+
+È la scoperta che cambia la forma della fetta, e non si legge dai privilegi: si legge
+dalle policy.
+
+La `0015` concede a `propflow_app` `SELECT, INSERT, UPDATE` su **tutte** le tabelle
+dello schema, `ai_jobs` compresa. Ma la `0014` crea per quella tabella **una sola
+policy**, `ai_jobs_select`, con il commento «INSERT/UPDATE su ai_jobs: solo
+propflow_worker (BYPASSRLS)». Con RLS attiva e nessuna policy per un comando, quel
+comando è **negato**: il privilegio c'è e la policy no.
+
+Ne segue che accodare un job dall'API fallisce, e fallisce con
+`auth.denied_by_policy` — il codice riservato ai nostri difetti.
+
+**Si estende la RLS, non si aggira.** È [ADR-020](08-decisioni.md#adr-020) alla lettera:
+il pool privilegiato è per i flussi in cui un contesto di sicurezza **non può**
+esistere, e qui esiste — chi carica la scansione è autenticato e staff. La migration
+aggiunge `ai_jobs_enqueue`, una policy di `INSERT` per lo staff dell'organizzazione, con
+`status = 'queued'` **dentro la `WITH CHECK`**.
+
+`status = 'queued'` nella policy e non solo nel codice è la stessa forma di
+`role = 'tenant'` in `org_members_accept_invitation` della `0018`: una richiesta HTTP non
+deve poter inserire un job che si dichiara già `succeeded` con un `output` scritto a
+mano, nemmeno con una query scritta a mano. L'aggiornamento resta del solo worker, che
+ha `BYPASSRLS` e non passa da alcuna policy.
+
+**Alternativa scartata: far accodare il worker, che sonda le bollette da leggere.**
+Nessuna migration, e in cambio la coda diventa **derivata** — «le bollette in bozza con
+un allegato e senza `ai_job_id`» — cioè un secondo stato da tenere allineato con
+`ai_jobs`, che è la coda vera. È la stessa ragione per cui `is_settled` non si scrive.
+
+**Alternativa scartata: passare dall'outbox.** Il caricamento emette un evento, il
+worker lo consuma e crea il job. Architetturalmente è la più elegante — l'outbox esiste,
+il worker gira già con `BYPASSRLS` — e costa molto di più di quanto sembri: oggi
+`EventBus` ha una sola implementazione che **scrive nei log**, non un instradamento verso
+consumatori. Costruirlo qui significherebbe fare il dispatcher degli eventi dentro la
+fetta dell'OCR, e allora sarebbe quello il piano.
+
+#### 3. `pending_review` sblocca due invarianti che oggi congelerebbero la bolletta
+
+Il dominio, come è scritto, rende `pending_review` uno **stato senza uscite**:
+
+| | |
+|---|---|
+| `BillStatus::is_editable` | `matches!(self, Draft \| Validated)` — `pending_review` **no** |
+| `UtilityBill::validate` | `if !matches!(self.status, Draft)` — rifiuta |
+
+Una bolletta portata a `pending_review` non si potrebbe quindi né correggere né
+validare: `UpdateUtilityBill` e `ValidateUtilityBill` risponderebbero entrambi
+`utility_bill.invalid_transition`, e l'unica uscita resterebbe l'annullamento. Sarebbe
+il difetto che questo progetto rifiuta per principio — uno stato in cui si entra e da
+cui non si esce — e lo introdurremmo noi, in un modulo il cui scopo è **proporre
+qualcosa da correggere**.
+
+Due modifiche di dominio, nessuna migration:
+
+- `is_editable` comprende `PendingReview`. Correggere ciò che la macchina ha proposto è
+  l'operazione per cui lo stato esiste;
+- `validate` accetta `Draft` **o** `PendingReview`. La revisione umana è la stessa in
+  entrambi i casi: una persona dice che i numeri sono quelli.
+
+`utility_bills_validated_ck` non tocca `pending_review` — vincola `validated`,
+`allocated` e `paid` — quindi non c'è niente da fare a schema.
+
+**Nota di attenzione per chi esegue**: `apply` riporta indietro da `validated` a `draft`
+(la correzione disfa la validazione, ADR-029). Va deciso e scritto **esplicitamente**
+cosa fa `apply` da `pending_review`: resta `pending_review` finché non si valida, oppure
+scende a `draft`? La risposta proposta è **resta**, perché `draft` significherebbe che
+la proposta della macchina non c'è più mentre `ocr_extracted` è ancora piena; ma è una
+riga di codice che va scritta guardandola, non ereditata dal ramo esistente.
+
+#### 4. L'OCR **non scrive i campi della bolletta**
+
+Scrive `ocr_extracted`, `ocr_confidence` e `ai_job_id`, e porta lo stato da `draft` a
+`pending_review`. `supplier_name`, `total_amount`, `invoice_number` e gli altri restano
+quelli che ha digitato la persona, finché una persona non li cambia.
+
+È già la posizione della roadmap e va ripetuta qui perché eseguendo verrà la tentazione
+opposta — riempire i campi è «più utile». Lo schema tiene separato ciò che ha letto la
+macchina (`ocr_extracted`, `ocr_confidence`) da ciò che ha confermato una persona
+(`validated_by`, `validated_at`) **proprio perché l'accuratezza si possa misurare**:
+riempire le prime colonne con valori umani, o le seconde con valori macchina, distrugge
+quel dato prima di raccoglierlo. Senza quella misura non c'è modo di rispondere alla
+sola domanda che conta su un modulo di OCR — funziona abbastanza?
+
+Ne segue anche che `utility_bills_dedup_uk` non è in gioco: l'OCR non scrive
+`invoice_number`, quindi non può produrre il conflitto di deduplica.
+
+#### 5. `ai_jobs.output` non duplica `ocr_extracted`
+
+Sono due JSONB e la tentazione di scriverci la stessa cosa è forte. Il confine:
+
+- **`utility_bills.ocr_extracted`** porta i **valori** proposti. È il dato della
+  bolletta, sta sulla bolletta, ed eredita la RLS della bolletta — che è più stretta di
+  quella di `ai_jobs`, perché comprende l'inquilino imputato;
+- **`ai_jobs.output`** porta la **forma** dell'esito: quali campi sono stati trovati e
+  con quale confidenza ciascuno, senza i valori. Serve a misurare l'accuratezza per
+  campo senza rileggere le bollette, ed è ciò che l'indice `ai_jobs_output_ix` — `gin
+  (output jsonb_path_ops)` — permette di interrogare.
+
+Il commento della `0010` chiede che in `ai_jobs` vadano «SOLO parametri e riferimenti»,
+mai il prompt con PII e mai l'immagine. I valori estratti sono il contenuto della
+bolletta, quindi stanno dalla parte della bolletta.
+
+#### 6. Il job gira nel **worker**, non nell'API
+
+`ai_jobs_queue_ix` è parziale su `('queued','running')` e il commento della `0010` dice
+per cosa esiste: `SELECT … FOR UPDATE SKIP LOCKED`. Lo schema è disegnato per un
+consumatore che compete con altri, e non lo si sta forzando.
+
+Una chiamata sincrona dall'handler terrebbe aperta una richiesta HTTP per i secondi di
+un fornitore esterno, legherebbe l'esito del **caricamento** alla disponibilità del
+fornitore, e moltiplicherebbe il costo per ogni ritentativo dell'utente. Il caricamento
+deve riuscire anche quando l'OCR non è disponibile: la bolletta resta in bozza con il
+suo allegato, che è esattamente ciò che si ha oggi.
+
+`SKIP LOCKED` è ciò che rende il worker replicabile senza coordinamento, e va usato
+anche con una replica sola: aggiungerlo dopo significa scoprire il difetto quando le
+repliche diventano due, cioè sotto carico.
+
+#### 7. La confidenza bassa **non è un fallimento**
+
+`app.confidence` è `NUMERIC(5,4)` fra 0 e 1. Una lettura con confidenza bassa produce
+comunque un job `succeeded` e una bolletta in `pending_review`: è un segnale per chi
+rivede, non un errore. Il fallimento è il fornitore che non risponde o rifiuta il
+documento, e allora il job va a `failed` con `error_code`/`error_message`, e **la
+bolletta resta in `draft`** — dove era, con il suo allegato, correggibile a mano come se
+l'OCR non esistesse.
+
+**Nessuna soglia di rifiuto automatico in questa fetta.** Sceglierla richiede di aver
+visto le confidenze di un fornitore vero su bollette vere; inventarla adesso significa
+scartare letture buone o accettarne di cattive, e in entrambi i casi non lo si saprebbe.
+
+#### 8. Nessun evento di dominio per il ciclo del job
+
+È l'unica scrittura di questo progetto che **non** accoda in outbox, e va motivato
+perché rompe una regolarità.
+
+Un job dell'OCR non è un fatto di dominio: è un dettaglio di come una bolletta arriva a
+`pending_review`. Il fatto che chi consuma vuole conoscere è **la bolletta che ha
+cambiato stato**, e quello lo annuncia già `billing.utility_bill.status_changed`, che
+esiste dalla fetta contabile. Accodare `ai.job.queued` e `ai.job.succeeded` darebbe a
+un consumatore tre eventi per un fatto solo, due dei quali su un aggregato che nessuno
+fuori da qui conosce.
+
+`ai_jobs` ha invece la propria riga di `audit_log`, come ogni tabella di business, ed è
+lì che si guarda per ricostruire cosa ha fatto la macchina.
+
+### Decomposizione
+
+**Il punto di taglio** è il passo 8, la lettura dello stato del job dall'API: senza,
+resta un percorso completo che si osserva dai log e dal database, che è una fetta
+coerente e dichiarabile. Il passo 3 invece **non** si taglia: senza lo sblocco di
+`pending_review` la fetta produce bollette congelate, cioè peggio di niente.
+
+1. **Migration `0029`: la policy di accodamento.** `ai_jobs_enqueue` per l'`INSERT`,
+   staff dell'organizzazione, con `status = 'queued'` nella `WITH CHECK`. Verificare **al
+   contrario**: senza la policy l'inserimento dall'API è negato, e con la policy un
+   `INSERT` che dichiara `succeeded` è comunque rifiutato.
+2. **Dominio: `AiJob`.** `AiCapability`, `AiJobStatus` (cinque valori, `cancelled` da
+   decidere eseguendo come lo fu `cancelled` dei regolamenti), `AiTask` — e la macchina
+   `queued → running → succeeded | failed`. `ai_jobs_finished_ck` esige `finished_at`
+   sui due terminali: è la **quinta** occorrenza del `CHECK` a una direzione sola, e
+   ormai è una convenzione dello schema.
+3. **Dominio: `pending_review` smette di essere un vicolo cieco.** `is_editable` e
+   `validate` come dice la decisione 3, più la scelta esplicita su cosa fa `apply` da
+   `pending_review`. Test sulle transizioni **rifiutate**, non solo su quelle ammesse.
+4. **Porta `OcrProvider`** in `application::ports`, accanto a `ObjectStorage` e
+   `Notifier`. Un metodo, `read`, con i byte e il MIME in ingresso e i campi trovati con
+   la loro confidenza in uscita, più i contatori che `ai_jobs` registra. `StorageError`
+   è il modello da seguire per l'errore.
+5. **Adattatore deterministico** in `propflow-infrastructure`, accanto a
+   `LoggingEventBus`. Non è un segnaposto: rende osservabile e testabile il percorso
+   prima che esista un fornitore, che è la stessa ragione per cui `LoggingEventBus`
+   esiste. Deve poter simulare le tre uscite — lettura buona, lettura a confidenza
+   bassa, fallimento — perché i test le coprano tutte.
+6. **Porta `AiJobRepository` e repository.** `enqueue`, `claim_next` con `FOR UPDATE
+   SKIP LOCKED`, `mark_running`, `finish`. Attenzione: `claim_next` gira come worker e
+   **non** passa da `UnitOfWorkFactory::begin`, che installa un contesto RLS che il
+   worker non ha — va guardato come lo fa oggi il dispatcher dell'outbox.
+7. **Use case e innesco.** `EnqueueBillOcr`, chiamato dal caricamento di un allegato a
+   una bolletta; `ProcessAiJob`, che è il corpo del ciclo del worker e che al successo
+   scrive `ocr_extracted`, `ocr_confidence`, `ai_job_id` e porta la bolletta a
+   `pending_review`.
+8. **Bordo HTTP:** lo stato del job sulla bolletta. Una rotta di lettura, e `null`
+   finché nessuno ha caricato niente.
+9. **Ciclo nel worker**, accanto al dispatcher dell'outbox: stesso binario, secondo
+   compito. Da decidere eseguendo se siano due `tokio::spawn` nello stesso processo o
+   due binari — la seconda è più pulita e costa un'immagine Docker in più.
+10. **Test.** Unitari sulla macchina del job e sulle due invarianti sbloccate; di
+    persistenza con database reale — la policy della `0029` al contrario, `SKIP LOCKED`
+    con due worker simulati che non prendono lo stesso job, il fallimento che lascia la
+    bolletta in `draft`; di contratto HTTP sul giro completo con l'adattatore
+    deterministico.
+11. **Documentazione.** `docs/05-api.md`, `docs/03-modello-dati.md`, l'esito, e **un
+    ADR**: perché una porta si definisce prima di avere un fornitore, e a quali
+    condizioni è onesto farlo.
+
+### Trappole
+
+Tutte lette nello schema e nel codice prima di scriverle qui; quelle marcate **da
+riprodurre** vanno verificate su database reale in esecuzione.
+
+**`ai_jobs` ha il privilegio e non la policy.** `propflow_app` può fare `INSERT` secondo
+la `GRANT` della `0015` e **non** secondo la RLS, perché la `0014` crea per quella
+tabella la sola `ai_jobs_select`. Con RLS attiva e nessuna policy per un comando, quel
+comando è negato. È la trappola che farebbe perdere più tempo, perché guardando i
+privilegi si conclude che si può. **Da riprodurre**: l'inserimento senza la `0029` deve
+fallire.
+
+**`pending_review` è un vicolo cieco nel dominio di oggi.** `is_editable` non lo
+comprende e `validate` accetta il solo `draft`: una bolletta portata lì non si corregge
+e non si valida. **Da riprodurre**: prima della modifica del passo 3, entrambe le
+operazioni devono rispondere `utility_bill.invalid_transition`.
+
+**Il worker non ha un contesto RLS, e `UnitOfWorkFactory::begin` ne pretende uno.**
+`begin_privileged` esiste ed è riservata ai flussi pre-autenticazione dalla regola 20 di
+`CLAUDE.md`. Il ciclo dell'OCR non è uno di quelli, e non deve diventarlo per comodità:
+il worker gira già come `propflow_worker` con `BYPASSRLS` e con il proprio pool, e va
+guardato come il dispatcher dell'outbox risolve la stessa cosa oggi. **Questa è la
+trappola che rischia di allargare la superficie di `begin_privileged`**, che è la cosa
+che la regola 20 esiste per impedire.
+
+**`FOR UPDATE SKIP LOCKED` va nella transazione che poi aggiorna il job.** Prendere il
+job in una transazione, chiuderla e lavorare fuori significa che due worker possono
+prendere lo stesso job. Lavorare **dentro** la transazione significa tenerla aperta per
+i secondi della chiamata al fornitore, che su un pool di connessioni è caro. La via è la
+terza: transazione breve che porta il job a `running` — che lo toglie dall'indice
+parziale, perché `ai_jobs_queue_ix` copre `queued` e `running` — e una seconda
+transazione che lo chiude. **Da riprodurre**: due worker simulati non devono prendere lo
+stesso job.
+
+**Un job `running` che il processo abbandona resta `running` per sempre.** Non c'è
+scadenza, e `attempts` da sola non lo rimette in coda. È fuori perimetro — il
+ritentativo lo è — ma va **saputo**, perché il sintomo è una bolletta che non arriva mai
+a `pending_review` senza che nulla sia in errore.
+
+**`ai_jobs_finished_ck` vincola una sola direzione**: `status <> ANY('succeeded','failed')
+OR finished_at IS NOT NULL`. **Quinta occorrenza** dopo `tickets_closed_ck`,
+`utility_bills_validated_ck`, `payments_succeeded_ck` e `settlements_confirmed_ck`. Non
+è più una trappola, è una convenzione: l'azzeramento tocca sempre al dominio.
+
+**`cost_amount` è `NUMERIC(12,6)` e non `app.money_amount`.** È una delle due eccezioni
+volute del controllo 8 delle invarianti — l'altra è la frequenza del canone — perché il
+costo di una chiamata AI ha sei decimali. Passarlo come `Money` lo troncherebbe a due, e
+un costo di 0,000012 diventerebbe zero. Merita un value object separato, per la stessa
+ragione per cui `Weight` e `Consumption` esistono.
+
+**`subject_type` è `app.attachment_owner_type`, non un enum suo.** Comprende undici
+valori mentre `AttachmentOwner` nel dominio ne ha sei: leggere un job con un
+`subject_type` fuori perimetro deve dare **errore**, come già fa
+`attachment_owner_type_from_db`.
+
+**`ai_jobs` non ha `deleted_at`.** Terza tabella dopo quelle del co-living e i
+pagamenti; il ruolo applicativo non ha `DELETE`. Filtrare `deleted_at` per abitudine dà
+un errore di colonna inesistente.
+
+**Il caricamento apre già due transazioni** — è un debito noto — e accodare il job ne
+aggiungerebbe una terza se lo si facesse fuori. Va accodato **nella stessa transazione
+che registra il documento**: un job che punta a un documento la cui riga è stata
+annullata è un job che fallirà leggendo, e l'avrebbe fatto dopo, nel worker, dove
+l'errore non ha più niente a che vedere con la causa.
+
+**`input_document_id` è `ON DELETE SET NULL` e i documenti hanno il soft delete.** Un
+documento archiviato lascia il job a puntare a una riga che c'è e che l'API non mostra
+più. Il worker lo leggerà comunque, perché gira con `BYPASSRLS`: va deciso se un job su
+un documento archiviato debba fallire, e la risposta proposta è **sì**, perché
+altrimenti la macchina legge ciò che una persona ha deciso di togliere.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde con i test nuovi, e il controllo delle invarianti
+verde.
+
+**Le due trappole di partenza verificate al contrario**, che è l'unica prova che conta:
+l'inserimento in `ai_jobs` dall'API deve fallire **senza** la `0029`, e la validazione
+di una bolletta in `pending_review` deve fallire **prima** della modifica del passo 3.
+Una suite verde dopo non prova nulla da sola.
+
+**`SKIP LOCKED` verificato con due worker**, non con uno: due transazioni concorrenti
+che chiamano `claim_next` devono ottenere due job diversi, e la seconda deve ottenere
+`None` quando ce n'è uno solo.
+
+**Il fallimento verificato quanto il successo**: un fornitore che rifiuta il documento
+lascia il job `failed` con il suo `error_code` e la bolletta **in `draft`**, correggibile
+a mano come se l'OCR non esistesse.
+
+Un giro a mano contro il binario vero: lo staff registra una bolletta in bozza, ci
+allega una scansione, il worker prende il job e lo porta a `succeeded`, la bolletta
+compare in `pending_review` con `ocr_extracted` piena e `ocr_confidence` valorizzata,
+una persona corregge un campo — e la bolletta **resta** in `pending_review` — poi valida,
+e da lì il riaddebito funziona come nella fetta contabile.
