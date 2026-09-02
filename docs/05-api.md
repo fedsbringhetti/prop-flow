@@ -242,12 +242,56 @@ lo hash.
 | GET | `/api/v1/properties/{id}` | membro | `200` o `404` |
 | PATCH | `/api/v1/properties/{id}` | staff | `200`. `409` se archiviato |
 | DELETE | `/api/v1/properties/{id}` | staff | `204`. Archiviazione, non cancellazione |
+| GET | `/api/v1/properties/{id}/residents` | membro | `200` con `items`, `404` se l'immobile non è visibile |
 
 L'inquilino vede gli immobili in cui abita, non gli altri della stessa
 organizzazione. Non può crearli né modificarli: `403`.
 
 Lo stato non si porta ad `archived` con un PATCH — l'archiviazione ha effetti propri
 (soft delete, evento dedicato) e ha il suo verbo. Il tentativo dà `409`.
+
+#### Chi abita la casa
+
+`GET /properties/{id}/residents` risponde `{ "items": [ … ] }`, senza paginazione: i
+residenti di un immobile sono pochi per costruzione, come le stanze.
+
+```json
+{ "items": [
+  { "user_id": "0192...", "full_name": "Giulia Neri",  "room_name": "Camera doppia" },
+  {                       "full_name": "Marco Bianchi", "room_name": "Camera singola" }
+] }
+```
+
+**È l'elenco da cui un client prende gli `user_id`** del modulo delle spese co-living,
+ed è la ragione per cui esiste: vedi [`user_id`: come un client li trova](#user_id-come-un-client-li-trova).
+
+Chi ci **abita**, non chi ha firmato:
+
+- il **proprietario non compare**. Vede l'elenco perché è staff dell'organizzazione, e
+  non ne fa parte: chi si aspetta di trovarlo sta cercando un elenco diverso;
+- il **garante non compare**: non abita lì;
+- chi aveva un contratto **scaduto** non compare. Il filtro è `app.lease_in_force`, la
+  stessa definizione di "in essere" del resto del progetto ([ADR-019](08-decisioni.md#adr-019)):
+  lo stato memorizzato resta `active` anche dopo la scadenza, perché nessuno scheduler
+  lo aggiorna.
+
+**`user_id` è assente per chi è stato invitato e non ha ancora accettato.** La persona
+ha un nome e nessun identificatore, quindi non è ancora aggiungibile a un gruppo di
+spesa. Compare comunque, ed è deliberato: ometterla lascerebbe chi guarda senza una
+spiegazione per un coinquilino che sa di avere in casa e non trova nell'elenco.
+
+`room_name` è assente sui contratti sull'immobile intero, che non hanno una stanza. Chi
+affitta due stanze dello stesso immobile compare **due volte**, con la stanza a
+distinguerle.
+
+**Non c'è l'email, e non è un compromesso.** La risposta viene da una funzione che
+proietta tre colonne, non da una riga resa leggibile: non c'è nulla da cui ometterla.
+Con una policy allargata la riga sarebbe uscita intera — e da `app.leases` sarebbe
+uscito il **canone dei coinquilini**. Perché la differenza conta:
+[ADR-036](08-decisioni.md#adr-036).
+
+Un `id` non visibile dà `404` e non un elenco vuoto: un elenco vuoto è uno stato
+legittimo (un immobile sfitto), e restituirlo confermerebbe che l'immobile esiste.
 
 ### Stanze
 
@@ -964,33 +1008,39 @@ iscrivere sé stesso, e nessun altro**.
 #### `user_id`: come un client li trova
 
 I corpi di questo modulo nominano le persone — chi ha anticipato, a chi si è pagato — e
-**non esiste un endpoint che elenchi le persone di un'organizzazione**. Le vie
-disponibili oggi sono due, e vanno sapute prima di costruire un client:
+la via principale è **l'elenco dei residenti dell'immobile**:
 
-- `GET /api/v1/leases/{id}` restituisce le parti contrattuali con il loro `user_id`,
-  valorizzato dopo l'accettazione dell'invito. **Solo di quel contratto**:
-  `can_access_lease` ammette lo staff, oppure chi è parte di quel contratto — non
-  dell'immobile;
+- `GET /api/v1/properties/{id}/residents` restituisce chi abita la casa, con il loro
+  `user_id`. È il **perimetro della casa**, quindi un coinquilino ci trova gli altri
+  coinquilini anche quando ognuno ha il proprio contratto. Vedi
+  [Chi abita la casa](#chi-abita-la-casa);
+- `GET /api/v1/leases/{id}` restituisce le parti contrattuali con il loro `user_id`.
+  **Solo di quel contratto**: `can_access_lease` ammette lo staff, oppure chi è parte di
+  quel contratto — non dell'immobile;
 - `GET /api/v1/expense-groups/{id}` restituisce la composizione, quindi dal secondo
   membro in poi il gruppo si legge da sé.
 
-**Ne segue un limite che va saputo prima di costruire un client.** In un co-living **per
-stanza** (`lease_type = 'room'`) ogni coinquilino ha il proprio contratto, quindi non è
-parte di quello degli altri e **non ne vede l'`user_id` da nessuna parte**: chi crea il
-gruppo non può aggiungere nessuno finché il proprietario non gli passa gli identificatori.
-Le due vie qui sopra bastano solo con un **contratto unico condiviso**, cioè con il
-co-living sull'immobile intero.
+**Il giro completo, senza passare dal proprietario:** un coinquilino elenca i residenti
+di casa propria, ci trova gli altri con il loro identificatore, crea il gruppo e ce li
+aggiunge. Fino alla migration `0030` questo giro **non si poteva fare** in un co-living
+**per stanza** (`lease_type = 'room'`): ognuno ha il proprio contratto, quindi non è
+parte di quello degli altri, e l'`user_id` dei coinquilini non compariva da nessuna
+parte. Il modulo era usabile solo con un contratto unico condiviso.
 
-**L'immobile non è il confine, né in un senso né nell'altro.** Sui contratti la
-visibilità è più stretta — è il singolo contratto — mentre sull'anagrafica è più larga:
-`users_select` ammette `shares_org_with`, quindi a livello di database un inquilino può
-leggere la riga di **ogni** persona dell'organizzazione, inquilini di altri immobili
-compresi. Nessun endpoint lo espone, ed è la ragione per cui l'elenco delle persone non
-si può scrivere sulla RLS così com'è senza prima decidere quale perimetro debba avere.
+**Non esiste — e resta deliberatamente fuori — un endpoint che elenchi le persone di
+un'organizzazione.** Il perimetro è la casa, ed è precisamente la decisione presa:
+[ADR-036](08-decisioni.md#adr-036).
 
-Il vincolo è registrato fra i debiti noti in
-[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti), ed è da chiudere prima
-del primo client che usi il modulo.
+**Aggiungere a un gruppo qualcuno che non abita lì è possibile, ed è voluto.**
+`POST /expense-groups/{id}/members` **non verifica** che la persona sia residente
+dell'immobile del gruppo, e la ragione non è la fretta: `property_id` sul gruppo è
+**opzionale**, quindi una verifica del genere avrebbe un'uscita per costruzione — un
+gruppo creato senza immobile non avrebbe nulla contro cui verificare, e una regola che
+si aggira omettendo un campo facoltativo si legge come una garanzia senza esserlo. Il
+controllo che conta è su **chi aggiunge**, non su chi è aggiunto:
+`can_access_expense_group` ammette solo un membro attivo del gruppo o lo staff. E i casi
+legittimi esistono — chi ha lasciato la casa il mese scorso e sta ancora saldando il suo
+conto è precisamente la persona che la migration `0027` esiste per non perdere di vista.
 
 #### La ripartizione: `equal` e `weighted`, e le altre tre che danno `422`
 

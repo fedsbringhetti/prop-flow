@@ -1636,3 +1636,149 @@ toccare, e toccare la riga di un altro serve.
 la riga nuova con quella vecchia, può però **vincolare la riga nuova da sola** — e
 quando ciò che si vuole impedire è una transizione e non una riscrittura, è lì che va
 scritto.
+
+---
+
+<a id="adr-036"></a>
+
+## ADR-036 — Il perimetro della casa: una funzione che proietta, non una policy allargata
+
+**Contesto.** Due domande che sembrano una sola, e che lo schema uscito dalla `0014`
+sbagliava in direzioni opposte.
+
+Un coinquilino **non aveva modo di sapere chi altro abita casa sua**: in un co-living
+per stanza ognuno ha il proprio contratto, `app.can_access_lease` è per contratto, e
+l'`user_id` dei coinquilini non compariva da nessuna parte. Il modulo delle spese
+co-living era quindi usabile solo con un contratto unico condiviso — chi creava un
+gruppo non poteva aggiungerci nessuno finché il proprietario non gli passava gli
+identificatori a mano.
+
+Lo stesso coinquilino, allo stesso tempo, **leggeva la riga `app.users` di ogni persona
+dell'organizzazione**: `users_select` ammetteva `app.shares_org_with`, e quella riga
+porta nome, **email** e **telefono**. Inquilini di immobili diversi, con cui non esiste
+alcun rapporto, compresi.
+
+**L'immobile non era il confine, né in un senso né nell'altro.** Sui contratti la
+visibilità era più stretta — il singolo contratto — sull'anagrafica più larga.
+
+**Decisione.** Il confine è la **casa**, e in tutte e due le direzioni.
+
+1. I residenti si leggono da `app.property_residents(property_id)` →
+   `(user_id, full_name, room_name)`, una funzione `SECURITY DEFINER` che restituisce
+   **righe** e ha il controllo di accesso nel proprio corpo. **Nessuna policy di lettura
+   si allarga.**
+2. `users_select` si restringe da `app.shares_org_with` ad `app.shares_home_with`, con
+   due rami sullo staff — `app.is_staff_of_user` e `app.is_my_staff` — che tengono in
+   piedi il rapporto proprietario ↔ inquilino.
+
+### Perché non si è allargata una policy, che era la prima idea
+
+Estendere `lease_parties_select` al perimetro dell'immobile riusando
+`app.can_access_property` **è stato provato su database vero e non funziona**, per due
+ragioni a due profondità diverse. Vanno sapute entrambe, perché la prima nasconde la
+seconda e chi risolve solo quella crede di avere finito.
+
+*Prima profondità.* Scritta in linea nella policy, la condizione è un `EXISTS` su
+`app.leases`, e **non fa comparire nemmeno una riga in più**: una sottoquery dentro una
+policy subisce la Row Level Security della tabella che legge, quindi quel `SELECT` passa
+da `leases_select`, falsa proprio per i contratti che si vogliono raggiungere. È la
+trappola registrata in testa alla migration `0026`, qui alla **terza** occorrenza — le
+prime due sono le `can_access_*` originali della `0014` e `app.created_expense_group`.
+
+*Seconda profondità.* Superata la prima con una funzione `SECURITY DEFINER` che risolve
+il contratto nel suo immobile, le righe compaiono — **finché la query non tocca
+`app.leases`**:
+
+| | X vede |
+|---|---|
+| `app.lease_parties` da sola | X, Y, Z ✓ |
+| unita ad `app.leases` | **solo X** ✗ |
+
+e unirle è obbligatorio, perché l'immobile e «in essere» stanno sul contratto.
+`leases_select` è rimasta `can_access_lease(id)` e rifiltra tutto. **Il sintomo è un
+elenco corto senza alcun errore.**
+
+### Il prezzo che non si è pagato, misurato
+
+Far funzionare quella via avrebbe richiesto di allargare **anche** `leases_select`.
+Misurato sullo scenario a due immobili: da quel momento X legge `rent_amount` dei
+contratti di Y e Z, cioè **il canone dei coinquilini**. Una policy è per riga e non per
+colonna, e `leases.rent_amount` sta sulla riga.
+
+Una funzione **proietta**: restituisce tre colonne scelte e nessuna riga in più diventa
+leggibile. Ne segue che non c'è alcuna decisione da prendere sull'email — non c'è nulla
+da cui ometterla. È il segno che il disegno è migliore e non solo diverso: la prima
+stesura del piano trattava l'email come un compromesso da accettare e dichiarare, e non
+aveva nemmeno visto il canone.
+
+### La regola generale
+
+**Quando ciò che serve è una proiezione, una funzione che restituisce righe è preferibile
+a una policy allargata.** Una policy governa la riga intera e non sa distinguere le
+colonne; allargarla per esporre tre campi ne espone venti, e il costo si scopre leggendo
+la tabella, non la policy.
+
+Il confine resta comunque **nel database**: la funzione è l'unica via all'elenco e il
+controllo è nel suo corpo, non in una regola del service layer che una query scritta a
+mano potrebbe aggirare.
+
+### Restringere `users_select` non fa fallire nessun test, e va letto bene
+
+Riducendo `users_select` al solo `id = app.current_user_id()` la suite resta interamente
+verde. **Non prova che restringere sia sicuro: prova che la capacità per cui
+`shares_org_with` esisteva — «mostrare i nomi delle controparti», dice il commento della
+`0014` — non è mai stata costruita.** `app.users` compare in tre query, tutte in
+`user.rs`, tutte nei flussi di autenticazione, tutte sul chiamante stesso.
+
+È lo stesso equivoco già registrato nella fetta contabile: un test che passa da uno
+strato non prova nulla sullo strato sotto. La verifica vera è la matrice dello scenario a
+due immobili, e la finestra per restringere la chiude il primo client che legga un nome
+da lì.
+
+Lo schema **denormalizza i nomi dove si mostrano** — `lease_parties.full_name` ed
+`email`, `expense_group_members.display_name` — ed è precisamente il motivo per cui
+nessuno legge `app.users`. `app.property_residents` proietta da `lease_parties`: le due
+metà di questa decisione sono indipendenti, e nessuna ha bisogno dell'altra.
+
+### `shares_home_with` non filtra «in essere», e la differenza è voluta
+
+`app.property_residents` filtra `app.lease_in_force` — l'elenco dice chi ci abita
+**adesso** — mentre `app.shares_home_with` no: dice con chi si è **abitato**. Non è
+un'incoerenza. Un conto condiviso sopravvive alla scadenza di un contratto, e la
+migration `0027` esiste apposta per non perdere di vista chi è uscito con un debito
+aperto: restringere anche qui renderebbe illeggibile il nome di una persona che si sta
+ancora pagando. `users_select` è un **pavimento**, non un elenco.
+
+### Le due funzioni sullo staff non sono l'una l'inversa dell'altra
+
+`is_staff_of_user(u)` dice «io sono staff di un'organizzazione a cui `u` appartiene»;
+`is_my_staff(u)` dice «`u` è staff di un'organizzazione a cui io appartengo». Senza la
+prima il proprietario perderebbe di vista i propri inquilini, che non abitano con lui;
+senza la seconda un inquilino non potrebbe **mai** sapere il nome del proprio
+proprietario, e `properties.owner_id` punterebbe a una riga illeggibile. Scambiarle
+produce una policy che sembra funzionare finché il chiamante non è un inquilino.
+
+### Alternative scartate
+
+**Un elenco delle persone dell'organizzazione.** È il perimetro che questa decisione
+rifiuta, in entrambe le direzioni: sarebbe la stessa larghezza di `shares_org_with`, con
+un endpoint a esporla.
+
+**L'invito diretto a un gruppo di spesa**, che avrebbe evitato del tutto il problema
+dell'`user_id`. Aprirebbe una via di ingresso al co-living parallela a quella dei
+contratti, e le due divergerebbero.
+
+**Verificare in `AddGroupMember` che la persona sia residente dell'immobile del gruppo.**
+Sembra il complemento naturale e non lo è: `expense_groups.property_id` è **opzionale**,
+e per giunta `ON DELETE SET NULL`, quindi la verifica avrebbe un'uscita per costruzione
+— un gruppo senza immobile non ha nulla contro cui verificare. Una regola che si aggira
+omettendo un campo facoltativo non è un confine; è un dosso che si legge come un confine,
+ed è esattamente l'errore che la `0029` è servita a smettere di fare. Il gate che conta è
+già in `can_access_expense_group`: si aggiunge qualcuno solo a un gruppo di cui si è già
+membri. Vedi anche [09 — Stato e roadmap](09-stato-e-roadmap.md#piano-coinquilini-visibili-fetta-1).
+
+**Conseguenze.** `app.shares_org_with` resta definita e non è più usata da alcuna policy;
+rimuoverla è un cambiamento a sé. `app.property_residents` è la prima funzione
+`SECURITY DEFINER` del progetto a restituire un insieme, e come le altre verifica
+**anche** l'organizzazione attiva: bypassare la RLS significa bypassare l'isolamento, non
+solo la visibilità per ruolo — il criterio della `0026`, qui alla sua quarta occorrenza.

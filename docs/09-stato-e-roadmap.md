@@ -20,9 +20,9 @@ La regola sta anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 29 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 30 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
-170 indici, 65 policy RLS, 50 trigger, 4 viste, 30 funzioni.
+170 indici, 65 policy RLS, 50 trigger, 4 viste, 34 funzioni.
 
 Coperti a schema: utenti e organizzazioni, immobili e stanze, contratti e parti
 contrattuali, documenti con allegato polimorfico, segnalazioni con thread e storico,
@@ -52,14 +52,15 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Addebiti: emissione, elenco e dettaglio con il saldo dalla vista, annullamento, rinuncia all'incasso, allegati | completo per la fetta 1 |
 | Pagamenti: incasso registrato dallo staff, dichiarazione dell'inquilino, conferma e rifiuto, elenco e dettaglio, idempotenza fornita dal client, stato dell'addebito ricalcolato dai pagamenti | completo per la fetta 1 |
 | Spese co-living: gruppi con il creatore già dentro, composizione con uscita e rientro, spese con ripartizione `equal` e `weighted`, saldi letti dalla vista, regolamenti a due tempi confermati da chi riceve | completo per la fetta 1 |
+| Coinquilini visibili: elenco dei residenti di un immobile letto da una funzione che proietta, anagrafica ristretta al perimetro della casa | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox | completi |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-343 test: 181 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
-del bordo HTTP, 58 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 64 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+352 test: 181 unitari di dominio, 16 applicativi, 12 di infrastruttura, 6 unitari
+del bordo HTTP, 65 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 66 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ## Non implementato
 
@@ -195,14 +196,15 @@ cambia il contesto.
 | L'incasso non attribuito è invisibile a chi ha pagato | `payments_select` mostra la riga a staff, pagante e incassante. Uno staff che registri un incasso senza valorizzare `payer_user_id` produce un pagamento che l'inquilino **non vede nel proprio elenco**, pur vedendone l'effetto in `paid_amount` sul saldo. È lecito — un bonifico da un conto che non si sa a chi ricondurre esiste — ma oggi è anche il comportamento di chi semplicemente omette il campo, cioè il caso più facile | Con il primo client: è lì che si vede se l'attribuzione debba diventare obbligatoria, o se convenga dedurla dalle parti del contratto |
 | Nessuna via per ritirare una dichiarazione | `payments_update` è staff soltanto, quindi chi dichiara di aver pagato può creare qualcosa che poi non può disfare. L'uscita esiste ed è il rifiuto dello staff, ma l'inquilino che si accorge subito di aver sbagliato importo non ha rimedio proprio. Darglielo non è una rotta in più: richiede una policy che ammetta l'`UPDATE` del pagante sulla **propria** riga in `pending`, cioè una migration e un secondo `WITH CHECK` da scrivere con attenzione | Se il caso si presenta davvero. Documentato nell'API perché è controintuitivo |
 | `refunded_amount` è sottratto e non è mai valorizzato | Il repository somma `amount - refunded_amount` come fa la vista, e la colonna vale sempre zero. È deliberato — è ciò che rende la formula *la stessa* il giorno in cui non varrà più zero — e va saputo, perché letto oggi sembra codice per un caso che non esiste | Con i rimborsi, che sono anche il momento in cui la `GRANT` della `0025` va allargata |
-| **Un coinquilino non può scoprire l'`user_id` di un altro**, e nel co-living per stanza è bloccante — **pianificato**, vedi [il piano](#piano-coinquilini-visibili-fetta-1) | I corpi delle spese co-living nominano le persone (`paid_by_user_id`, `to_user_id`, `user_id` di un membro) e nessun endpoint elenca le persone di un'organizzazione. Le due sole vie sono `GET /leases/{id}`, che mostra le parti di **quel** contratto, e `GET /expense-groups/{id}`, che mostra i membri di un gruppo di cui si fa **già** parte. Riprodotto su database vero, con un proprietario, due immobili e cinque inquilini su contratti per stanza: X vede **un solo contratto** (il proprio) e **una sola parte contrattuale** (sé stesso), quindi non trova gli identificatori dei coinquilini del proprio appartamento. Con `lease_type = 'room'` — il co-living per stanza, che è il modello di `is_coliving` — chi crea il gruppo non può quindi aggiungere nessuno senza che il proprietario gli passi gli identificatori a mano. Funziona solo con un contratto unico condiviso, cioè con il co-living sull'immobile intero | **Prima del primo client che usi il modulo**, non dopo: senza questo, un gruppo in un co-living per stanza non si popola |
-| L'anagrafica è visibile per **organizzazione**, non per immobile — **pianificato**, vedi [il piano](#piano-coinquilini-visibili-fetta-1) | `users_select` è `id = app.current_user_id() OR app.shares_org_with(id)`, e `shares_org_with` chiede solo che due persone siano membri attivi della stessa organizzazione. Nello scenario qui sopra X **vede la riga `app.users` di tutti e cinque gli inquilini**, compresi quelli dell'altro immobile, con cui non ha alcun rapporto — verificato, `shares_org_with` risponde vero per loro esattamente come per i coinquilini di casa. Oggi non lo espone nessun endpoint, quindi non è una fuga: è il perimetro che un elenco delle persone erediterebbe se lo si scrivesse sulla RLS così com'è | **Insieme al debito qui sopra**, perché è la stessa decisione vista dall'altro lato: un `GET /organizations/{id}/members` scritto sulla RLS esistente mostrerebbe a un inquilino anche gli inquilini di immobili che non abita. Restringerlo a chi condivide un immobile sarebbe un filtro **applicativo** e non un confine del database — cioè esattamente la forma che la migration `0029` ha appena tolto di mezzo sulle membership, e che non conviene reintrodurre altrove senza dirlo. `can_access_property` ammette già l'inquilino dell'immobile ed è il candidato naturale per una funzione analoga |
+| ~~Un coinquilino non può scoprire l'`user_id` di un altro~~ — **chiuso** dalla migration `0030`, vedi [l'esito](#esito-coinquilini-visibili-fetta-1) | Era bloccante nel co-living per stanza: con `lease_type = 'room'` ognuno ha il proprio contratto, `can_access_lease` è per contratto, e l'`user_id` dei coinquilini non compariva da nessuna parte. `GET /properties/{id}/residents` lo restituisce, e il perimetro è la **casa** | Chiuso |
+| ~~L'anagrafica è visibile per **organizzazione**, non per immobile~~ — **chiuso** dalla migration `0030` | `users_select` passava da `app.shares_org_with`, quindi un inquilino leggeva nome, email e telefono di ogni persona dell'organizzazione. Ora passa da `app.shares_home_with`, più i due rami sullo staff. Il timore registrato qui — che restringerlo fosse un filtro applicativo e non un confine del database — non si è avverato: è un `ALTER POLICY`, quindi il confine è dove doveva stare. Vedi [ADR-036](08-decisioni.md#adr-036) | Chiuso |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-**Far sì che i coinquilini si vedano**, che è il pezzo senza il quale le spese co-living
-non sono usabili nel caso reale. Poi l'**OCR delle bollette**, poi la **dashboard**.
+L'**OCR delle bollette** — [piano qui](#piano-ocr-bollette-fetta-1) — poi la
+**dashboard**. «Far sì che i coinquilini si vedano» è stato fatto: vedi
+[l'esito](#esito-coinquilini-visibili-fetta-1).
 
 Il piano è in fondo — [Piano — I coinquilini si vedono, fetta 1](#piano-coinquilini-visibili-fetta-1)
 — ed è piccolo: una migration, un endpoint. **Viene prima dell'OCR** per una ragione di
@@ -3929,3 +3931,183 @@ Un giro a mano che chiude il buco della fetta precedente: il proprietario crea d
 e due contratti e invita X e Y; entrambi accettano; X elenca i residenti dell'immobile,
 **trova Y con il suo identificatore**, crea un gruppo di spesa e **ce lo aggiunge** —
 senza che il proprietario gli passi niente a mano. È il giro che oggi non si può fare.
+
+<a id="esito-coinquilini-visibili-fetta-1"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Eseguito il **2 settembre 2026**. Il piano sopra resta com'era: serve a capire perché il
+codice è così. Qui sotto c'è ciò che l'esecuzione ha aggiunto.
+
+**La forma del piano ha tenuto per intero.** Migration `0030` in due parti, funzione che
+proietta, `users_select` ristretta, endpoint, use case, nessuna policy di lettura
+allargata. Non c'è stato nulla da rifare, e la ragione è che il piano era già stato
+riscritto una volta *dopo* aver misurato — che è il motivo per cui misurare prima ha
+pagato.
+
+#### La trappola centrale ha una profondità in più di quella scritta
+
+Il piano descriveva una trappola sola: allargare `lease_parties_select` dà X, Y, Z, e
+l'unione con `app.leases` li rifiltra a X. **È vero, ma solo se si è già risolta una
+trappola precedente**, e il piano non lo diceva perché nella misurazione originale quel
+passo era stato fatto senza accorgersene.
+
+Riprodotte tutte e due su database vero:
+
+| Versione di `lease_parties_select` | `lease_parties` da sola | unita ad `app.leases` |
+|---|---|---|
+| `EXISTS (SELECT … FROM app.leases …)` in linea nella policy | **solo X** | solo X |
+| lo stesso `EXISTS` dentro una funzione `SECURITY DEFINER` | X, Y, Z | **solo X** |
+
+La versione ovvia — l'`EXISTS` scritto direttamente nella policy — **non fa comparire
+nemmeno una riga in più**, perché quella sottoquery legge `app.leases` e subisce
+`leases_select`. Cioè: si incontra prima la trappola della `0026`, e solo dopo averla
+risolta si incontra quella del join.
+
+**Perché conta:** chi riprova questa via parte dalla versione ovvia, vede «solo X», e ha
+due spiegazioni disponibili — la sottoquery, oppure il join — che chiedono correzioni
+diverse. Correggendo la prima si arriva a X, Y, Z e si crede di avere finito, finché il
+join non ricompare. Sapere che sono due, in quest'ordine, è ciò che il piano non
+diceva.
+
+#### Il prezzo, misurato e non solo argomentato
+
+Il terzo passo — allargare **anche** `leases_select` — è stato eseguito, e il risultato
+è quello che il piano temeva, con i numeri:
+
+```
+ full_name   | rent_amount
+-------------+-------------
+ Inquilino X |      400.00
+ Inquilino Y |      450.00     ← il canone del coinquilino
+ Inquilino Z |      500.00     ← e dell'altro
+```
+
+Un test di integrazione tiene ferma la direzione opposta: nello scenario a due immobili
+**ogni inquilino vede un solo contratto**, prima e dopo la migration. È l'assert che dice
+che il prezzo non è stato pagato, e vale più della matrice dei residenti — quella dice
+che la capacità c'è, questa dice che non è costata niente.
+
+#### Quattro cose che il piano non aveva previsto
+
+**1. Il `404` è più forte dell'elenco vuoto, e il piano prevedeva l'elenco vuoto.** La
+matrice del piano dice «residenti Casa 2: nessuno» per X. La **funzione** risponde
+davvero zero righe; lo **use case** risponde `404`, perché rilegge l'immobile prima e la
+Casa 2 non è visibile a X. Sono due confini in fila e a parlare è il più esterno. La
+distinzione è quella giusta e va detta: un elenco vuoto significa «questa casa esiste e
+non ci abita nessuno», che è lo stato legittimo di un immobile sfitto — restituirlo per
+casa altrui confermerebbe che l'identificatore indovinato esiste. Il test ha una
+funzione dedicata, `residents_denied_to`, perché scriverlo come «elenco vuoto» lo faceva
+fallire, ed è stato il primo segnale.
+
+**2. `can_access_property` non basta a garantire l'organizzazione, e il piano diceva di
+sì.** La decisione 3 affermava: «Qui `can_access_property` lo fa già per conto suo».
+Verificato: **verifica un rapporto con l'organizzazione dell'immobile, non che sia
+l'organizzazione attiva**. Chi appartiene a due organizzazioni potrebbe, con il contesto
+della B, leggere i residenti di un immobile della A. Non è una fuga verso un estraneo —
+sono i suoi coinquilini — ma è la stessa forma di buco che la `0026` documenta per esteso
+e che `properties_select` chiude con la sua ancora `org_id = app.current_org_id()`.
+Entrambe le funzioni nuove la portano, e il criterio della `0026` arriva così alla quarta
+occorrenza.
+
+**3. Il garante.** Il piano definiva i residenti come «chi ha una parte contrattuale su
+un contratto in essere», e alla lettera comprende il **garante**, che non abita lì.
+Escluso: è la stessa ragione per cui il proprietario non compare, e la distinzione esiste
+già nel dominio come `LeasePartyRole::shares_rent()`. Ricavarla da un ruolo che lo schema
+ha già evita di inventarne una seconda.
+
+**4. `lease_parties.left_at`.** Il piano non lo nominava. La funzione filtra
+`left_at IS NULL`, che è il filtro già usato da `LeaseParty::ensure_tenancy_complete`, e
+**non** un confronto con `CURRENT_DATE`: `lease_parties_dates_ck` non dice se `left_at`
+sia inclusiva o esclusiva, e oggi **nessun caso d'uso la valorizza**. Scegliere una
+semantica del confine per una colonna che nessuno scrive sarebbe inventare la seconda
+definizione che ADR-019 esiste per impedire, su una domanda che non è ancora stata posta.
+
+#### Scelte prese eseguendo, che il piano lasciava aperte
+
+**`AddGroupMember` non verifica la residenza, e non è una rinuncia.** Sembra il
+complemento ovvio dell'elenco dei residenti, e a guardarlo da vicino è una regola che si
+legge come un confine senza esserlo:
+
+- `expense_groups.property_id` è **opzionale**, e per giunta `ON DELETE SET NULL`: un
+  gruppo creato senza immobile non ha nulla contro cui verificare, e uno che ce l'aveva
+  può perderlo da solo. Una regola che si aggira omettendo un campo facoltativo è un
+  dosso, non un confine — ed è precisamente l'errore che la `0029` è servita a smettere
+  di fare, questa volta commesso di proposito;
+- **non sarebbe esprimibile nemmeno nella RLS**, per la stessa ragione: la policy
+  `expense_group_members_insert` incontrerebbe lo stesso `NULL`. Se il confine non si può
+  mettere dove i confini stanno, non va scritto altrove fingendo che sia lì;
+- **romperebbe casi legittimi**. `AddGroupMember` è anche il **rientro**, e chi ha
+  lasciato la casa il mese scorso non è più un residente ma ha ancora un conto aperto: è
+  esattamente la persona che la migration `0027` esiste per non perdere di vista.
+  Rifiutarne il reinserimento lavorerebbe contro la fetta precedente;
+- **il gate che conta c'è già**, e riguarda chi aggiunge: `can_access_expense_group`
+  ammette un membro attivo del gruppo o lo staff. Non ci si intrufola in un gruppo
+  altrui; ci si porta dentro qualcuno di un gruppo di cui si fa parte, e quella è una
+  decisione dei coinquilini.
+
+**L'endpoint non restituisce l'email.** La decisione era già stata neutralizzata dalla
+decisione 1 — con una funzione che proietta non c'è nulla da cui ometterla — e resta da
+dire perché **non aggiungerla**: non serve a nessuno dei due usi dell'elenco (aggiungere
+qualcuno a un gruppo vuole `user_id`, riconoscerlo vuole nome e stanza), ed è un dato
+personale in una fetta che il perimetro dei dati personali lo **restringe**. Aggiungerla
+qui mentre `users_select` si stringe si annullerebbe da sé: X perderebbe l'email di A e
+guadagnerebbe quella di Y. L'asimmetria dei costi chiude: ometterla oggi non costa
+niente, aggiungerla domani è additivo, toglierla domani è una rottura.
+
+#### Una verifica che non verificava niente
+
+`residents_seen_by(&env, x, home_two).await.is_empty()` — scritto così, sarebbe passato
+per il motivo sbagliato il giorno in cui la funzione avesse smesso di filtrare, perché
+`Vec::is_empty` è vero anche per un elenco che nessuno ha popolato. È diventato
+`residents_denied_to`, che pretende un `AppError::NotFound`. È lo stesso genere di errore
+già registrato nella fetta contabile: un'asserzione che non può fallire nella direzione
+che interessa.
+
+Lo stesso vale per la restrizione di `users_select`, e qui il piano avvertiva:
+**restringere non fa fallire alcun test**. La verifica non è la suite verde, è
+`the_anagraphic_perimeter_is_the_home_and_not_the_organization`, che valuta i due
+predicati **fianco a fianco** sulla stessa persona nella stessa transazione:
+`shares_org_with(A)` è ancora **vero** — la funzione della `0014` esiste e A è nella
+stessa organizzazione — e `shares_home_with(A)` è **falso**. Poi legge la policy vera e
+pretende che la riga di A non ci sia. Senza quel confronto, il test direbbe solo che
+qualcosa non è visibile, senza dire che *prima* lo era.
+
+#### Come si è verificato
+
+- **Prima della migration**, su un database vero con lo scenario a due immobili: X vede
+  sei righe di `app.users` — A e B compresi, con le loro email — un contratto, e fra le
+  parti contrattuali **solo sé stesso**. È la fotografia del difetto.
+- **Le tre versioni della via scartata**, eseguite in sequenza sullo stesso database:
+  `EXISTS` in linea (nessuna riga in più), funzione `SECURITY DEFINER` (X, Y, Z che il
+  join rifiltra), `leases_select` allargata (funziona, ed esce il canone). Ripristinato
+  lo stato di partenza e riverificate le invarianti prima di proseguire.
+- **Dopo la migration**, la matrice completa:
+
+| Sono… | Anagrafica | Residenti Casa 1 | Residenti Casa 2 | Contratti |
+|---|---|---|---|---|
+| **X** | Proprietario, X, Y, Z | X, Y, Z | **`404`** | **1** |
+| **A** | Proprietario, A, B | **`404`** | A, B | **1** |
+| Proprietario | tutti e sei | X, Y, Z | A, B | 5 |
+
+- **Sette test di persistenza** e **due di contratto HTTP**, fra cui il giro a mano del
+  piano eseguito contro il router vero: il proprietario crea due stanze e due contratti
+  **per stanza** e invita X e Y; entrambi accettano; X elenca i residenti, ci trova Y con
+  il suo identificatore, crea un gruppo e ce lo aggiunge — **senza che il proprietario
+  gli passi niente a mano**. Era il giro che non si poteva fare.
+- `./ops/ci/test-integration.sh` verde: **352 test**, invarianti dello schema comprese.
+
+#### Cosa resta fuori, e resta fuori davvero
+
+- **Un elenco delle persone dell'organizzazione.** Non è rinviato: è il perimetro che
+  questa fetta rifiuta, in entrambe le direzioni.
+- **`app.shares_org_with` non è stata rimossa.** Non è più usata da alcuna policy.
+  Toglierla è un cambiamento a sé, da fare quando si è certi che nessuna policy futura la
+  voglia, e non c'era ragione di mescolarlo a questa migration.
+- **Nessuna notifica.** La porta `Notifier` resta senza adattatore.
+- **`shares_home_with` non filtra «in essere», e resta così.** Un ex coinquilino continua
+  a leggere il nome di chi gli deve dei soldi, ed è voluto: `users_select` è un pavimento,
+  non un elenco. L'elenco è `app.property_residents`, che «in essere» lo filtra.
+- **Chi affitta due stanze compare due volte.** Una riga per parte contrattuale, con la
+  stanza a distinguerle. Ridurlo a una riga sceglierebbe arbitrariamente quale stanza
+  mostrare; se un client avrà bisogno del contrario, lo farà con l'informazione che ha.

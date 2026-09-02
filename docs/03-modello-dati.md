@@ -119,7 +119,13 @@ un'organizzazione di cui l'utente non è membro e si aspetta zero righe.
 `app.member_role`, `app.is_org_member`, `app.is_org_staff`, `app.shares_org_with`,
 `app.can_access_property`, `app.can_access_lease`, `app.can_access_ticket`,
 `app.can_access_expense_group`, `app.can_access_attachment`,
-`app.has_pending_invitation`, `app.current_user_email`.
+`app.has_pending_invitation`, `app.current_user_email`,
+`app.created_expense_group`, `app.shares_home_with`, `app.is_staff_of_user`,
+`app.is_my_staff`.
+
+`app.shares_org_with` è dichiarata e **non più usata da nessuna policy**: la
+migration `0030` l'ha sostituita in `users_select`. Resta perché rimuoverla è un
+cambiamento a sé.
 
 Sono `SECURITY DEFINER` per una ragione precisa: una policy che interroghi in linea
 una tabella a sua volta protetta da RLS ricorre su se stessa. Leggendo come
@@ -138,6 +144,46 @@ Ne seguono due conseguenze da non violare:
 Sono dichiarate `COST 500`: comunica al planner che sono costose, così i predicati
 indicizzabili vengono valutati prima. Verificato con `EXPLAIN`: il confronto su
 `org_id` diventa un *One-Time Filter* valutato una volta per query, non per riga.
+
+### Il perimetro dell'anagrafica è la casa
+
+`users_select` mostra la riga di `app.users` a cinque condizioni: sé stessi,
+`app.shares_home_with` — chi ha una parte contrattuale su un contratto dello stesso
+immobile — `app.is_staff_of_user`, `app.is_my_staff`, l'amministratore di
+piattaforma.
+
+Fino alla migration `0030` la seconda era `app.shares_org_with`, cioè
+**l'organizzazione intera**: un inquilino leggeva nome, email e telefono di ogni
+altra persona dell'organizzazione, inquilini di immobili diversi compresi. Nessun
+endpoint lo esponeva, e restringere non ha fatto fallire alcun test — il che prova
+che quella visibilità non era mai stata usata, non che fosse innocua. Ragioni in
+[ADR-036](08-decisioni.md#adr-036).
+
+Le due funzioni sullo staff **non sono l'una l'inversa dell'altra**:
+`is_staff_of_user(u)` dice «io sono staff di un'organizzazione a cui `u`
+appartiene» e tiene il proprietario in vista dei propri inquilini; `is_my_staff(u)`
+dice «`u` è staff di un'organizzazione a cui io appartengo» e serve all'inquilino
+per leggere il nome del proprio proprietario, altrimenti `properties.owner_id`
+punterebbe a una riga illeggibile.
+
+### Una funzione che restituisce righe, e non una policy allargata
+
+`app.property_residents(property_id)` → `(user_id, full_name, room_name)` è
+l'unica funzione `SECURITY DEFINER` del progetto a restituire un **insieme** invece
+di un booleano, e la differenza è il motivo per cui esiste.
+
+Il perimetro della casa **non si poteva ottenere allargando una policy**. Con
+`lease_parties_select` estesa all'immobile, la query che l'endpoint deve fare —
+unita ad `app.leases`, perché l'immobile e «in essere» stanno sul contratto — viene
+rifiltrata da `leases_select`, che è per contratto: l'elenco torna con la sola riga
+del chiamante e **nessun errore**. Farlo funzionare avrebbe richiesto di allargare
+anche `leases_select`, e da lì un coinquilino avrebbe letto `rent_amount` degli
+altri: una policy è per riga e non per colonna.
+
+Una funzione **proietta**: restituisce tre colonne scelte senza rendere leggibile
+la riga da cui vengono. Il confine — `can_access_property` e l'organizzazione
+attiva — sta nel suo corpo, quindi resta nel database e non nel service layer.
+Vedi [ADR-036](08-decisioni.md#adr-036) e la migration `0030`.
 
 ### Accettazione di un invito
 

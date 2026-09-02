@@ -27,7 +27,8 @@ use propflow_application::use_cases::payment::{
     ConfirmPayment, DeclarePayment, GetPayment, ListPayments, RecordPayment, RejectPayment,
 };
 use propflow_application::use_cases::property::{
-    ArchiveProperty, CreateProperty, GetProperty, ListProperties, UpdateProperty,
+    ArchiveProperty, CreateProperty, GetProperty, ListProperties, ListPropertyResidents,
+    UpdateProperty,
 };
 use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
 use propflow_application::use_cases::ticket::{
@@ -57,6 +58,7 @@ pub struct AppState {
     pub archive_property: Arc<ArchiveProperty>,
 
     pub create_room: Arc<CreateRoom>,
+    pub list_property_residents: Arc<ListPropertyResidents>,
     pub list_rooms: Arc<ListRooms>,
     pub update_room: Arc<UpdateRoom>,
     pub archive_room: Arc<ArchiveRoom>,
@@ -239,6 +241,9 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
+            list_property_residents: Arc::new(ListPropertyResidents::new(Arc::clone(
+                &unit_of_work,
+            ))),
             list_rooms: Arc::new(ListRooms::new(Arc::clone(&unit_of_work))),
             update_room: Arc::new(UpdateRoom::new(
                 Arc::clone(&unit_of_work),

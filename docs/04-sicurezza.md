@@ -178,6 +178,48 @@ compromessa mesi dopo valga ancora come credenziale.
 
 ## Dati personali
 
+### Il perimetro dell'anagrafica è la casa, non l'organizzazione
+
+Chi può leggere la riga `app.users` di un'altra persona — nome, **email**, **telefono**
+— è una garanzia, e dalla migration `0030` è più stretta di prima. `users_select`
+ammette cinque casi:
+
+| Ramo | Chi vede chi |
+|---|---|
+| `id = app.current_user_id()` | sé stessi |
+| `app.shares_home_with(id)` | chi ha una parte contrattuale su un contratto dello stesso immobile |
+| `app.is_staff_of_user(id)` | lo staff vede le persone delle proprie organizzazioni |
+| `app.is_my_staff(id)` | e l'inquilino vede lo staff della propria |
+| `app.is_platform_admin()` | l'amministratore di piattaforma |
+
+**Prima era `app.shares_org_with`, cioè l'organizzazione intera.** Un inquilino leggeva
+la riga di ogni altra persona dell'organizzazione, inquilini di immobili diversi
+compresi — persone con cui non ha alcun rapporto. Nessun endpoint lo esponeva, quindi
+non trapelava nulla: era un **pavimento** mancante, non una fuga in corso.
+
+**Restringere non ha fatto fallire alcun test**, e va letto per quello che è: prova che
+la capacità per cui `shares_org_with` esisteva non era mai stata costruita — `app.users`
+compare in tre query, tutte nei flussi di autenticazione, tutte sul chiamante stesso.
+Non prova che restringere sia sicuro. La verifica è una matrice di visibilità su uno
+scenario a due immobili, ed è un test di integrazione. Ragioni in
+[ADR-036](08-decisioni.md#adr-036).
+
+I due rami sullo staff non sono decorazione e **non sono l'uno l'inverso dell'altro**:
+senza il terzo il proprietario perderebbe di vista i propri inquilini, senza il quarto
+un inquilino non potrebbe mai sapere il nome del proprio proprietario.
+
+### L'elenco dei residenti proietta, e per questo non porta l'email
+
+`GET /properties/{id}/residents` restituisce `user_id`, `full_name` e `room_name` —
+quanto basta ad aggiungere qualcuno a un gruppo di spesa e a riconoscerlo — e **non
+l'email**.
+
+Non è prudenza a costo: la risposta viene da `app.property_residents`, una funzione
+`SECURITY DEFINER` che proietta tre colonne senza rendere leggibile la riga da cui
+vengono. Con la via alternativa — allargare `lease_parties_select` e `leases_select` —
+la riga sarebbe uscita **intera**, e con essa `leases.rent_amount`: il canone dei
+coinquilini. Una policy è per riga e non per colonna.
+
 - **Cifratura applicativa** per i campi sensibili: `fiscal_code_encrypted`,
   `mfa_secret_encrypted`. Il database vede solo il testo cifrato e un riferimento
   logico alla chiave (`encryption_key_ref`, es. `kms:v3`), mai il materiale

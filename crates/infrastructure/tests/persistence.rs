@@ -43,7 +43,7 @@ use propflow_application::use_cases::payment::{
 };
 use propflow_application::use_cases::property::{
     ArchiveProperty, ArchivePropertyCommand, CreateProperty, CreatePropertyCommand, ListProperties,
-    ListPropertiesQuery,
+    ListPropertiesQuery, ListPropertyResidents,
 };
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_application::use_cases::ticket::{
@@ -4221,4 +4221,640 @@ async fn a_weighted_split_makes_the_double_room_pay_more() {
         .map(|share| share.share_amount().amount())
         .sum();
     assert_eq!(reread, total);
+}
+
+// ---------------------------------------------------------------------------
+// I coinquilini si vedono
+// ---------------------------------------------------------------------------
+
+/// Una stanza sull'immobile indicato.
+async fn a_room(
+    env: &common::TestEnv,
+    owner: &RequestContext,
+    property_id: PropertyId,
+    name: &str,
+) -> RoomId {
+    CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            owner,
+            CreateRoomCommand {
+                property_id,
+                name: name.to_owned(),
+                attributes: RoomChanges::default(),
+            },
+        )
+        .await
+        .expect("stanza creata")
+        .id()
+}
+
+/// Un residente **per stanza**: contratto proprio, invito, accettazione,
+/// attivazione.
+///
+/// È il co-living vero, e la ragione per cui questa fetta esiste: con un contratto
+/// per stanza `can_access_lease` ammette solo il diretto interessato, quindi
+/// nessuno dei coinquilini è parte del contratto degli altri.
+///
+/// Il contratto si redige **senza aggiungere una parte**: la crea `InviteTenant`,
+/// con la quota residua — cioè 100 su un contratto vuoto — e `is_primary`. Una
+/// parte aggiunta a mano prima dell'invito ne produrrebbe una seconda a quota
+/// zero, senza utente, che comparirebbe nell'elenco dei residenti e non è ciò che
+/// lo scenario vuole misurare.
+async fn resident_of_room(
+    env: &common::TestEnv,
+    owner: &RequestContext,
+    property_id: PropertyId,
+    room_id: RoomId,
+    label: &str,
+) -> (RequestContext, propflow_domain::shared::LeaseId) {
+    let view = DraftLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            owner,
+            DraftLeaseCommand {
+                property_id,
+                room_id: Some(room_id),
+                start_date: days_from_today(-30),
+                end_date: Some(days_from_today(335)),
+                rent: money("400.00"),
+                deposit: None,
+                rent_frequency: RentFrequency::Monthly,
+                rent_due_day: 1,
+                notice_months: None,
+                auto_renew: false,
+                renewal_months: None,
+                utilities_included: false,
+                istat_indexation: false,
+                notes: None,
+            },
+        )
+        .await
+        .expect("bozza redatta");
+
+    let tenant = tenant_on_lease(env, owner, view.lease.id(), label).await;
+    activate(env, owner, view.lease.id())
+        .await
+        .expect("contratto attivato");
+    (tenant, view.lease.id())
+}
+
+/// Lo scenario del piano: **due immobili**, cinque inquilini con contratti per
+/// stanza. X, Y, Z nella Casa 1; A, B nella Casa 2, tutti nella stessa
+/// organizzazione — che è ciò che l'accettazione di un invito produce.
+struct TwoHomes {
+    owner: RequestContext,
+    home_one: PropertyId,
+    home_two: PropertyId,
+    /// X, Y, Z.
+    first: Vec<RequestContext>,
+    /// A, B.
+    second: Vec<RequestContext>,
+}
+
+async fn two_homes(env: &common::TestEnv, label: &str) -> TwoHomes {
+    let owner = register_owner(env, label).await;
+    let home_one = create_property(env, &owner, "Casa 1", "Bologna").await;
+    let home_two = create_property(env, &owner, "Casa 2", "Bologna").await;
+
+    let mut first = Vec::with_capacity(3);
+    for name in ["x", "y", "z"] {
+        let room = a_room(env, &owner, home_one, &format!("Camera {name}")).await;
+        let (tenant, _) =
+            resident_of_room(env, &owner, home_one, room, &format!("{label}-{name}")).await;
+        first.push(tenant);
+    }
+    let mut second = Vec::with_capacity(2);
+    for name in ["a", "b"] {
+        let room = a_room(env, &owner, home_two, &format!("Camera {name}")).await;
+        let (tenant, _) =
+            resident_of_room(env, &owner, home_two, room, &format!("{label}-{name}")).await;
+        second.push(tenant);
+    }
+
+    TwoHomes {
+        owner,
+        home_one,
+        home_two,
+        first,
+        second,
+    }
+}
+
+async fn residents_seen_by(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+) -> Vec<String> {
+    let mut names: Vec<String> = ListPropertyResidents::new(Arc::clone(&env.factory))
+        .execute(context, property_id)
+        .await
+        .expect("elenco dei residenti")
+        .into_iter()
+        .map(|resident| resident.full_name)
+        .collect();
+    names.sort();
+    names
+}
+
+/// Chi non abita in una casa non ne ottiene un elenco vuoto: ottiene un `404`.
+///
+/// La distinzione conta ed è più forte di quella che il piano prevedeva. La
+/// **funzione** restituisce zero righe — `can_access_property` è falsa — ma lo use
+/// case rilegge l'immobile prima, e un immobile non visibile non esiste per chi
+/// chiede. Un elenco vuoto direbbe «questa casa esiste e non ci abita nessuno»,
+/// che è uno stato legittimo di un immobile sfitto e qui sarebbe una bugia utile a
+/// chi va a tentoni.
+async fn residents_denied_to(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+) {
+    let refused = ListPropertyResidents::new(Arc::clone(&env.factory))
+        .execute(context, property_id)
+        .await
+        .expect_err("l'immobile non è visibile a questo contesto");
+    assert!(
+        matches!(refused, propflow_application::AppError::NotFound { .. }),
+        "atteso 404, ottenuto {refused:?}"
+    );
+}
+
+/// Quanti contratti vede questo contesto. È l'assert che dice che **nessun canone
+/// altrui è diventato leggibile**: se restasse uno solo, nessuna riga di
+/// `app.leases` in più è uscita, e `rent_amount` sta sulla riga.
+async fn leases_seen_by(env: &common::TestEnv, context: &RequestContext) -> usize {
+    ListLeases::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(context, ListLeasesQuery::default())
+        .await
+        .expect("elenco dei contratti")
+        .items
+        .len()
+}
+
+/// **La matrice dello scenario a due immobili, in entrambe le direzioni.**
+///
+/// È il criterio di completamento della fetta, e non la suite verde: X deve vedere
+/// Y e Z e **non** vedere A e B, e in tutti e due i casi deve vedere **un solo
+/// contratto**. Quest'ultimo assert è quello che dice che non si è pagato il
+/// prezzo che la prima stesura del piano aveva accettato — allargare
+/// `leases_select` avrebbe fatto funzionare l'elenco esponendo il canone dei
+/// coinquilini, perché `leases.rent_amount` sta sulla riga e una policy è per riga
+/// e non per colonna.
+#[tokio::test]
+async fn housemates_see_each_other_and_nobody_else() {
+    let env = require_db!();
+    let stage = two_homes(&env, "due-case").await;
+    let (x, y, z) = (&stage.first[0], &stage.first[1], &stage.first[2]);
+    let (a, b) = (&stage.second[0], &stage.second[1]);
+
+    let seen_by_x = residents_seen_by(&env, x, stage.home_one).await;
+    assert_eq!(
+        seen_by_x.len(),
+        3,
+        "X deve vedere sé stesso, Y e Z: {seen_by_x:?}"
+    );
+
+    // L'altra casa **non esiste** per X: `can_access_property` è falsa, quindi la
+    // rilettura dell'immobile dà `404` prima ancora che la funzione risponda zero
+    // righe. Due confini in fila, e il più esterno è quello che parla.
+    residents_denied_to(&env, x, stage.home_two).await;
+    residents_denied_to(&env, a, stage.home_one).await;
+    assert_eq!(
+        residents_seen_by(&env, a, stage.home_two).await.len(),
+        2,
+        "A deve vedere sé stesso e B"
+    );
+
+    // Il proprietario vede entrambe le case, ed è staff: guarda, e non ne è parte.
+    assert_eq!(
+        residents_seen_by(&env, &stage.owner, stage.home_one)
+            .await
+            .len(),
+        3
+    );
+    assert_eq!(
+        residents_seen_by(&env, &stage.owner, stage.home_two)
+            .await
+            .len(),
+        2
+    );
+
+    // **L'assert che dice che nessun canone è uscito.**
+    for tenant in [x, y, z, a, b] {
+        assert_eq!(
+            leases_seen_by(&env, tenant).await,
+            1,
+            "ogni inquilino vede il proprio contratto e nessun altro: se ne vedesse \
+             di più leggerebbe il canone dei coinquilini"
+        );
+    }
+    assert_eq!(
+        leases_seen_by(&env, &stage.owner).await,
+        5,
+        "lo staff vede tutto, come prima"
+    );
+}
+
+/// **La trappola più cara del piano, riprodotta sul binario vero.**
+///
+/// Allargare una policy di lettura non basta se la query fa un join, e il modo in
+/// cui non basta è silenzioso: nessun errore, un elenco che sembra corto.
+///
+/// Il test esegue nella stessa transazione le due versioni della stessa domanda:
+/// la query con i join che si sarebbe scritta, e la funzione della `0030`. La
+/// prima risponde **una** riga — il chiamante — perché `leases_select` è
+/// `can_access_lease(id)` e rifiltra l'unione; la seconda ne risponde tre.
+#[tokio::test]
+async fn the_join_that_looks_right_refilters_itself() {
+    let env = require_db!();
+    let stage = two_homes(&env, "trappola-join").await;
+    let x = &stage.first[0];
+
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+        .bind(user_of(x).as_uuid())
+        .bind(x.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+
+    let (with_join, from_function): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*)
+                   FROM app.lease_parties lp
+                   JOIN app.leases l ON l.id = lp.lease_id
+                  WHERE l.property_id = $1
+                    AND l.deleted_at IS NULL
+                    AND lp.deleted_at IS NULL
+                    AND app.lease_in_force(l.status, l.start_date, l.end_date)),
+                (SELECT count(*) FROM app.property_residents($1))",
+    )
+    .bind(stage.home_one.as_uuid())
+    .fetch_one(&mut *tx)
+    .await
+    .expect("query eseguita");
+
+    assert_eq!(
+        with_join, 1,
+        "la query con i join passa da `leases_select`, che è per contratto: \
+         qualunque allargamento di `lease_parties_select` viene rifiltrato qui, \
+         e il sintomo è un elenco corto senza alcun errore"
+    );
+    assert_eq!(
+        from_function, 3,
+        "la funzione `SECURITY DEFINER` legge il fatto vero e ne proietta tre \
+         colonne: è la ragione per cui la `0030` non è un `ALTER POLICY`"
+    );
+}
+
+/// **La seconda metà, verificata al contrario.**
+///
+/// Restringere `users_select` non fa fallire nessun test, e questo è il pericolo:
+/// il verde prova che nessuno usa quella visibilità, non che restringere sia
+/// sicuro. La verifica vera è questa — il predicato vecchio e quello nuovo,
+/// valutati fianco a fianco sulla stessa persona.
+///
+/// `shares_org_with(A)` resta **vero** per X: la funzione della `0014` esiste
+/// ancora e A è nella stessa organizzazione. `shares_home_with(A)` è **falso**,
+/// perché A abita altrove. Prima della `0030` la policy usava il primo, e X
+/// leggeva la riga di A con nome, **email** e telefono.
+#[tokio::test]
+async fn the_anagraphic_perimeter_is_the_home_and_not_the_organization() {
+    let env = require_db!();
+    let stage = two_homes(&env, "perimetro-casa").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+    let a = &stage.second[0];
+
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+        .bind(user_of(x).as_uuid())
+        .bind(x.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+
+    let (org_with_a, home_with_a, home_with_y, staff_of_owner): (bool, bool, bool, bool) =
+        sqlx::query_as(
+            "SELECT app.shares_org_with($1),
+                    app.shares_home_with($1),
+                    app.shares_home_with($2),
+                    app.is_my_staff($3)",
+        )
+        .bind(user_of(a).as_uuid())
+        .bind(user_of(y).as_uuid())
+        .bind(user_of(&stage.owner).as_uuid())
+        .fetch_one(&mut *tx)
+        .await
+        .expect("query eseguita");
+
+    assert!(
+        org_with_a,
+        "il predicato vecchio è ancora vero: A è nella stessa organizzazione, ed è \
+         esattamente ciò che rendeva la sua riga leggibile a X"
+    );
+    assert!(
+        !home_with_a,
+        "il predicato nuovo è falso: A abita altrove, e la sua riga porta nome, \
+         email e telefono"
+    );
+    assert!(home_with_y, "Y abita con X");
+    assert!(
+        staff_of_owner,
+        "senza questo ramo un inquilino non potrebbe mai sapere il nome del \
+         proprio proprietario, e `properties.owner_id` punterebbe a una riga \
+         illeggibile"
+    );
+
+    // E la policy, non solo le funzioni: chi è leggibile davvero.
+    let readable: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM app.users WHERE deleted_at IS NULL AND id = ANY($1)")
+            .bind(
+                [x, y, a, &stage.owner]
+                    .map(|context| user_of(context).as_uuid())
+                    .to_vec(),
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .expect("query eseguita");
+
+    assert!(readable.contains(&user_of(x).as_uuid()), "sé stesso");
+    assert!(readable.contains(&user_of(y).as_uuid()), "il coinquilino");
+    assert!(
+        readable.contains(&user_of(&stage.owner).as_uuid()),
+        "il proprio proprietario"
+    );
+    assert!(
+        !readable.contains(&user_of(a).as_uuid()),
+        "chi abita in un'altra casa: è la riga che prima usciva, ed è il pavimento \
+         che la `0030` mette"
+    );
+}
+
+/// **`is_my_staff` e `is_staff_of_user` non sono la stessa funzione al contrario.**
+///
+/// Scambiarle produce una policy che sembra funzionare finché il chiamante non è
+/// un inquilino, ed è la trappola che il piano segnalava. Qui le due si valutano
+/// dal contesto di un inquilino, dove danno risposte **opposte** sulla stessa
+/// persona.
+#[tokio::test]
+async fn the_two_staff_predicates_are_not_each_other_backwards() {
+    let env = require_db!();
+    let stage = two_homes(&env, "due-predicati").await;
+    let x = &stage.first[0];
+
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+        .bind(user_of(x).as_uuid())
+        .bind(x.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+
+    let (my_staff, staff_of): (bool, bool) =
+        sqlx::query_as("SELECT app.is_my_staff($1), app.is_staff_of_user($1)")
+            .bind(user_of(&stage.owner).as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .expect("query eseguita");
+
+    assert!(
+        my_staff,
+        "il proprietario è staff di un'organizzazione a cui l'inquilino appartiene"
+    );
+    assert!(
+        !staff_of,
+        "l'inquilino non è staff di nulla: se le due funzioni fossero scambiate, \
+         questa policy negherebbe all'inquilino il nome del proprio proprietario"
+    );
+}
+
+/// **Un contratto scaduto non toglie la parte contrattuale**, ma toglie il
+/// residente.
+///
+/// Senza il filtro su `app.lease_in_force` un inquilino di due anni fa comparirebbe
+/// ancora fra i residenti: lo stato memorizzato resta `active` anche dopo la
+/// scadenza, perché nessuno scheduler lo aggiorna (ADR-019). Il test verifica
+/// **entrambe** le direzioni: la parte contrattuale c'è ancora, e il residente no.
+#[tokio::test]
+async fn an_expired_lease_leaves_the_party_and_takes_the_resident() {
+    let env = require_db!();
+    let owner = register_owner(&env, "residente-scaduto").await;
+    let property_id = create_property(&env, &owner, "Casa con storia", "Bologna").await;
+    let room = a_room(&env, &owner, property_id, "Camera scaduta").await;
+
+    let view = DraftLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            DraftLeaseCommand {
+                property_id,
+                room_id: Some(room),
+                start_date: days_from_today(-800),
+                end_date: Some(days_from_today(-400)),
+                rent: money("400.00"),
+                deposit: None,
+                rent_frequency: RentFrequency::Monthly,
+                rent_due_day: 1,
+                notice_months: None,
+                auto_renew: false,
+                renewal_months: None,
+                utilities_included: false,
+                istat_indexation: false,
+                notes: None,
+            },
+        )
+        .await
+        .expect("bozza redatta");
+    tenant_on_lease(&env, &owner, view.lease.id(), "residente-scaduto-uno").await;
+    activate(&env, &owner, view.lease.id())
+        .await
+        .expect("attivato: l'attivazione non guarda le date");
+
+    // La parte contrattuale c'è, e lo stato memorizzato è ancora `active`.
+    let mut uow = env.factory.begin(&owner).await.expect("transazione aperta");
+    let parties = uow
+        .lease_parties()
+        .list_for_lease(view.lease.id())
+        .await
+        .expect("parti lette");
+    assert_eq!(parties.len(), 1, "la parte contrattuale resta");
+    let stored = uow
+        .leases()
+        .find_by_id(view.lease.id())
+        .await
+        .expect("query riuscita")
+        .expect("contratto visibile");
+    assert_eq!(
+        stored.status(),
+        LeaseStatus::Active,
+        "nessuno scheduler porta lo stato a `expired`: è il difetto per cui \
+         `app.lease_in_force` esiste"
+    );
+    drop(uow);
+
+    assert!(
+        residents_seen_by(&env, &owner, property_id)
+            .await
+            .is_empty(),
+        "un contratto terminato non produce residenti"
+    );
+}
+
+/// **`lease_parties.user_id` è annullabile, e l'elenco lo dice invece di
+/// ometterlo.**
+///
+/// Un residente «invitato e non ancora entrato» ha un nome e nessun
+/// identificatore, quindi non è aggiungibile a un gruppo di spesa. Ometterlo
+/// lascerebbe chi guarda senza una spiegazione per una persona che sa di avere in
+/// casa e non trova nell'elenco.
+///
+/// Nello stesso scenario si verificano le altre due assenze: il **garante** non
+/// abita lì, e il **proprietario** nemmeno — quest'ultimo vede l'elenco perché è
+/// staff, e non ne fa parte.
+#[tokio::test]
+async fn the_invited_appear_without_an_identifier_and_the_guarantor_not_at_all() {
+    let env = require_db!();
+    let owner = register_owner(&env, "invitato-e-garante").await;
+    let property_id = create_property(&env, &owner, "Casa con garante", "Bologna").await;
+    let room = a_room(&env, &owner, property_id, "Camera unica").await;
+
+    let view = DraftLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            DraftLeaseCommand {
+                property_id,
+                room_id: Some(room),
+                start_date: days_from_today(-30),
+                end_date: Some(days_from_today(335)),
+                rent: money("400.00"),
+                deposit: None,
+                rent_frequency: RentFrequency::Monthly,
+                rent_due_day: 1,
+                notice_months: None,
+                auto_renew: false,
+                renewal_months: None,
+                utilities_included: false,
+                istat_indexation: false,
+                notes: None,
+            },
+        )
+        .await
+        .expect("bozza redatta");
+
+    // L'invitato: la parte esiste con nome ed email, `user_id` resta nullo finché
+    // non accetta. L'invito si emette e **non** si accetta.
+    InviteTenant::new(
+        Arc::clone(&env.factory),
+        Arc::new(OpaqueTokenGenerator),
+        Arc::clone(&env.clock) as _,
+    )
+    .execute(
+        &owner,
+        InviteTenantCommand {
+            lease_id: view.lease.id(),
+            email: propflow_domain::shared::Email::parse(common::unique_email("mai-accettato"))
+                .expect("email valida"),
+            full_name: "Invitato Non Registrato".to_owned(),
+        },
+    )
+    .await
+    .expect("invito emesso");
+
+    AddLeaseParty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            AddLeasePartyCommand {
+                lease_id: view.lease.id(),
+                role: LeasePartyRole::Guarantor,
+                full_name: "Garante Che Non Abita".to_owned(),
+                email: None,
+                share_percent: rust_decimal::Decimal::ZERO,
+                is_primary: false,
+            },
+        )
+        .await
+        .expect("garante aggiunto");
+    activate(&env, &owner, view.lease.id())
+        .await
+        .expect("attivato");
+
+    let residents = ListPropertyResidents::new(Arc::clone(&env.factory))
+        .execute(&owner, property_id)
+        .await
+        .expect("elenco dei residenti");
+
+    assert_eq!(
+        residents.len(),
+        1,
+        "un solo residente: l'invitato. Il garante non abita lì e il proprietario \
+         nemmeno — lo vede perché è staff, non perché ne fa parte: {residents:?}"
+    );
+    let invited = &residents[0];
+    assert_eq!(invited.full_name, "Invitato Non Registrato");
+    assert!(
+        invited.user_id.is_none(),
+        "`user_id` resta nullo finché l'invito non è accettato"
+    );
+    assert!(
+        !invited.is_addressable(),
+        "senza identificatore non è aggiungibile a un gruppo di spesa, e l'elenco \
+         deve poterlo dire"
+    );
+    assert_eq!(
+        invited.room_name.as_deref(),
+        Some("Camera unica"),
+        "la stanza viene dal contratto e serve a riconoscere chi si ha in casa"
+    );
+}
+
+/// L'immobile di un'altra organizzazione non ha residenti, e non perché sia vuoto.
+///
+/// La funzione è `SECURITY DEFINER`, quindi legge senza policy: senza l'ancora
+/// `p.org_id = app.current_org_id()` e senza `can_access_property` risponderebbe
+/// con le righe di un immobile altrui. È lo stesso criterio della `0026`.
+#[tokio::test]
+async fn a_property_of_another_organization_has_no_residents() {
+    let env = require_db!();
+    let stage = two_homes(&env, "iso-residenti").await;
+    let stranger = register_owner(&env, "estraneo-residenti").await;
+
+    // `404` e non un elenco vuoto: le due cose sono diverse per il client, e un
+    // elenco vuoto suggerirebbe che l'immobile esiste e non ha residenti.
+    residents_denied_to(&env, &stranger, stage.home_one).await;
+
+    // E la funzione da sola, senza la rilettura dello use case, risponde comunque
+    // zero righe: il confine è dentro, non nel service layer.
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'owner')")
+        .bind(user_of(&stranger).as_uuid())
+        .bind(stranger.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM app.property_residents($1)")
+        .bind(stage.home_one.as_uuid())
+        .fetch_one(&mut *tx)
+        .await
+        .expect("query eseguita");
+    assert_eq!(
+        rows, 0,
+        "la funzione è SECURITY DEFINER e legge senza policy: se il confine non          fosse nel suo corpo, questa query restituirebbe i residenti di casa altrui"
+    );
 }

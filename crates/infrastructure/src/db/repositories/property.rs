@@ -7,7 +7,7 @@ use uuid::Uuid;
 use propflow_domain::ports::{
     PropertyPage, PropertyQuery, PropertyRepository, RepositoryError, RepositoryResult,
 };
-use propflow_domain::property::{Property, PropertyParts};
+use propflow_domain::property::{Property, PropertyParts, PropertyResident};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, OrgId, PropertyId, UserId};
 
 use super::user::try_get;
@@ -220,6 +220,48 @@ impl PropertyRepository for PgUnitOfWork {
         }
         Ok(())
     }
+
+    async fn list_residents(
+        &mut self,
+        property_id: PropertyId,
+    ) -> RepositoryResult<Vec<PropertyResident>> {
+        // **Una `SELECT` dalla funzione, e non i join che sembrerebbero ovvi.**
+        // `app.lease_parties` unita ad `app.leases` — e unirle serve, perché
+        // l'immobile e «in essere» stanno sul contratto — passa da
+        // `leases_select`, che è `can_access_lease(id)`: l'elenco si riduce al
+        // solo chiamante e non c'è alcun errore a dirlo. Vedi la migration `0030`.
+        //
+        // Nessun `deleted_at IS NULL` qui, ed è l'unica query del progetto a non
+        // averlo: i tre filtri di soft delete — immobile, contratto, parte — sono
+        // dentro la funzione, insieme al confine. Ripeterli fuori li duplicherebbe
+        // senza aggiungere nulla, perché da qui le righe scartate non si vedono.
+        //
+        // L'ordinamento è qui e non nella funzione: è una scelta di presentazione,
+        // e il confine nella funzione è una scelta di sicurezza.
+        let rows = sqlx::query(
+            "SELECT user_id, full_name, room_name
+               FROM app.property_residents($1)
+              ORDER BY full_name, room_name NULLS FIRST",
+        )
+        .bind(property_id.as_uuid())
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter().map(map_resident).collect()
+    }
+}
+
+fn map_resident(row: PgRow) -> RepositoryResult<PropertyResident> {
+    let user_id: Option<Uuid> = try_get(&row, "user_id")?;
+    Ok(PropertyResident {
+        // Nullo finché l'invitato non accetta: l'elenco lo mostra invece di
+        // ometterlo, altrimenti chi guarda non capirebbe perché una persona che
+        // sa di avere in casa non si può aggiungere a un gruppo.
+        user_id: user_id.map(UserId::from_uuid),
+        full_name: try_get(&row, "full_name")?,
+        room_name: try_get(&row, "room_name")?,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
