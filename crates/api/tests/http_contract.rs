@@ -3431,17 +3431,17 @@ async fn coliving_tenant(app: &TestApp, owner: &str, lease: &str, label: &str) -
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
 
-    // **Il `user_id` si legge dalle parti del contratto**, ed è l'unica via che un
-    // client ha oggi: `POST /auth/accept-invitation` restituisce l'organizzazione
-    // e il ruolo, non l'utente, e non esiste un endpoint che elenchi le persone di
-    // un'organizzazione.
+    // **Il `user_id` si legge dalle parti del contratto**, e qui la lettura passa
+    // dal proprietario: `POST /auth/accept-invitation` restituisce l'organizzazione
+    // e il ruolo, non l'utente.
     //
-    // **Questi test usano un contratto unico condiviso dai tre, e va detto perché
-    // nasconde un limite**: `can_access_lease` ammette lo staff oppure chi è parte
-    // di *quel* contratto, quindi in un co-living **per stanza** — dove ognuno ha
-    // il proprio — un coinquilino non vedrebbe gli altri e non potrebbe popolare
-    // il gruppo. Qui la lettura passa dal proprietario apposta, che è ciò che un
-    // client dovrebbe fare oggi. È registrato fra i debiti noti.
+    // **Questi test usano un contratto unico condiviso dai tre**, che è il caso in
+    // cui questa via basta: `can_access_lease` ammette lo staff oppure chi è parte
+    // di *quel* contratto. Nel co-living **per stanza** — dove ognuno ha il proprio
+    // — non basterebbe, e la via è
+    // `GET /properties/{id}/residents`: la percorre
+    // `a_housemate_finds_the_other_and_adds_them_to_the_group_alone`, dove il
+    // proprietario non passa niente a mano.
     let (status, detail) = app
         .send("GET", &format!("/api/v1/leases/{lease}"), Some(owner), None)
         .await;
@@ -3951,4 +3951,220 @@ async fn an_expense_group_of_another_organization_is_invisible() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
     assert_eq!(body["code"], "expense_group.not_found");
+}
+
+// ---------------------------------------------------------------------------
+// I coinquilini si vedono
+// ---------------------------------------------------------------------------
+
+/// Un residente **per stanza**: stanza, contratto proprio, invito, accettazione,
+/// attivazione.
+///
+/// Restituisce il solo token, e l'omissione è il punto: `user_id` non lo si
+/// restituisce perché il test deve dimostrare che si trova **dall'elenco dei
+/// residenti**. Il [`coliving_tenant`] di questo stesso file lo legge invece dal
+/// contratto passando dal proprietario, ed è la via che oggi un client dovrebbe
+/// percorrere in un co-living a contratto unico.
+async fn resident_of_room(
+    app: &TestApp,
+    owner: &str,
+    property: &str,
+    room_name: &str,
+    label: &str,
+) -> String {
+    let (status, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            owner,
+            serde_json::json!({ "name": room_name }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {room}");
+    let room_id = room["id"].as_str().expect("id").to_owned();
+
+    // Nessuna parte aggiunta a mano: la crea l'invito, con la quota residua — cioè
+    // 100 su un contratto vuoto — e `is_primary`.
+    let lease = draft_lease(app, owner, property, Some(&room_id), -30, Some(335)).await;
+
+    let email = common::unique_email(label);
+    let (_, accept_token) = invite_tenant(app, owner, &lease, &email).await;
+    let (token, _, _) = common::register_and_login_with_email(app, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &token,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (status, activated) = app
+        .send(
+            "POST",
+            &format!("/api/v1/leases/{lease}/activate"),
+            Some(owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    token
+}
+
+/// **Il giro che ieri non si poteva fare**, contro il router vero.
+///
+/// Il proprietario crea due stanze e due contratti **per stanza** e invita X e Y;
+/// entrambi accettano. Poi X, **da solo**: elenca i residenti dell'immobile, ci
+/// trova Y con il suo identificatore, crea un gruppo di spesa e ce lo aggiunge —
+/// senza che il proprietario gli passi niente a mano.
+///
+/// È il buco che la fetta co-living aveva lasciato: in un co-living per stanza
+/// ognuno ha il proprio contratto, quindi `can_access_lease` non mostra a X la
+/// parte contrattuale di Y, e `user_id` non compariva da nessuna parte.
+#[tokio::test]
+async fn a_housemate_finds_the_other_and_adds_them_to_the_group_alone() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-coinquilini").await;
+    let property = create_property(&app, &owner, "Casa per stanze").await;
+
+    let first = resident_of_room(&app, &owner, &property, "Camera uno", "coinquilino-x").await;
+    let second = resident_of_room(&app, &owner, &property, "Camera due", "coinquilino-y").await;
+
+    // X elenca i residenti di casa propria. Nessun passaggio dal proprietario.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/properties/{property}/residents"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let items = page["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "X vede sé stesso e Y: {page}");
+
+    // **L'email non c'è, e non costa niente non metterla**: la risposta viene da
+    // una funzione che proietta, non da una riga resa leggibile.
+    for item in items {
+        assert!(
+            item.get("email").is_none(),
+            "l'elenco dei residenti non porta l'email: {item}"
+        );
+        assert!(item["room_name"].is_string(), "la stanza c'è: {item}");
+    }
+
+    // X non è il proprietario, e il proprietario non è un residente.
+    let names: Vec<&str> = items
+        .iter()
+        .map(|item| item["full_name"].as_str().expect("nome"))
+        .collect();
+    assert!(
+        !names.iter().any(|name| name.contains("Proprietario")),
+        "chi possiede la casa non ci abita: {names:?}"
+    );
+
+    // Il secondo residente, con il suo identificatore: è ciò che serviva.
+    let (status, mine) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/leases",
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {mine}");
+    assert_eq!(
+        mine["items"].as_array().expect("items").len(),
+        1,
+        "X vede **un solo** contratto, il proprio: è l'assert che dice che nessun \
+         canone altrui è diventato leggibile. Allargare `leases_select` avrebbe \
+         fatto funzionare l'elenco a quel prezzo: {mine}"
+    );
+    let own_lease_party = mine["items"][0]["id"].as_str().expect("id").to_owned();
+
+    let housemate = items
+        .iter()
+        .find(|item| {
+            item["user_id"].is_string() && item["room_name"] == serde_json::json!("Camera due")
+        })
+        .and_then(|item| item["user_id"].as_str())
+        .expect("il coinquilino ha un identificatore: ha accettato l'invito")
+        .to_owned();
+
+    // X crea il gruppo e ci mette Y, da solo.
+    let (status, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "name": "Bollette di casa",
+                "property_id": property,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {group}");
+    let group_id = group["id"].as_str().expect("id").to_owned();
+
+    let (status, added) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/members"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "user_id": housemate })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "il giro si chiude qui, e ieri si fermava un passo prima: {added}"
+    );
+
+    let (status, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}"),
+            Some(&second),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(
+        detail["members"].as_array().expect("membri").len(),
+        2,
+        "e Y si ritrova nel gruppo: {detail}"
+    );
+    assert!(
+        !own_lease_party.is_empty(),
+        "il contratto di X esiste ed è uno solo"
+    );
+}
+
+/// L'immobile di un'altra organizzazione risponde `404`, non un elenco vuoto.
+///
+/// Un elenco vuoto direbbe «questa casa esiste e non ci abita nessuno», che è uno
+/// stato legittimo di un immobile sfitto: qui sarebbe una conferma gratuita che
+/// l'identificatore indovinato esiste.
+#[tokio::test]
+async fn the_residents_of_someone_elses_property_are_not_found() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "residenti-iso").await;
+    let property = create_property(&app, &owner, "Casa altrui").await;
+    let (stranger, _) = common::register_and_login(&app, "estraneo-residenti").await;
+
+    let (status, problem) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}/residents"),
+            Some(&stranger),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.not_found");
 }
