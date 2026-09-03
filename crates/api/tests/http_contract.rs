@@ -4473,3 +4473,168 @@ async fn the_ocr_route_is_staff_only_and_unknown_bills_are_not_found() {
         "corpo: {missing}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+/// Gli otto numeri si muovono insieme a ciò che il proprietario fa.
+///
+/// **È la prima superficie che attraversa tutti i moduli insieme**, quindi il
+/// primo posto dove si vedrebbe un errore di integrazione fra le fette: un
+/// addebito che non entra nell'insoluto, una bolletta che non risulta da
+/// rivedere, un canone che non si somma. Per questo il test verifica il
+/// *movimento* dei numeri e non i loro valori assoluti — che dipenderebbero da
+/// quante altre righe esistono nell'organizzazione.
+#[tokio::test]
+async fn the_dashboard_counts_what_the_owner_has_just_done() {
+    let app = require_app!();
+    let (owner, _org) = common::register_and_login(&app, "dashboard").await;
+
+    // Un'organizzazione appena creata: tutto a zero, e gli importi sono stringhe
+    // con due decimali come ogni altro importo dell'API.
+    let (status, empty) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {empty}");
+    assert_eq!(empty["properties_count"], 0, "corpo: {empty}");
+    assert_eq!(empty["active_leases"], 0);
+    assert_eq!(empty["monthly_rent_expected"], "0.00");
+    assert_eq!(empty["total_outstanding"], "0.00");
+    assert_eq!(empty["overdue_charges"], 0);
+    assert_eq!(empty["open_tickets"], 0);
+    assert_eq!(empty["leases_expiring_90d"], 0);
+    assert_eq!(empty["bills_pending_review"], 0);
+
+    let property = create_property(&app, &owner, "Immobile della dashboard").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(30)).await;
+    add_tenant(&app, &owner, &lease, "Inquilino Contato", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    // Un addebito già scaduto e mai pagato: entra nell'insoluto e in `overdue`.
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "800.00",
+                "due_date": day(-1),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+
+    // Una bolletta in bozza: è una delle due popolazioni di
+    // `bills_pending_review`, e la conta senza che nessuno abbia caricato nulla.
+    let (status, bill) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            &owner,
+            serde_json::json!({
+                "utility_type": "gas",
+                "period_start": day(-40),
+                "period_end": day(-10),
+                "total_amount": "120.00",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {bill}");
+
+    // Una segnalazione aperta.
+    let (status, ticket) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({ "title": "Il boiler perde", "description": "Da ieri sera" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {ticket}");
+
+    let (status, full) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {full}");
+    assert_eq!(full["properties_count"], 1, "corpo: {full}");
+    assert_eq!(full["active_leases"], 1, "corpo: {full}");
+    assert_eq!(full["monthly_rent_expected"], "800.00", "corpo: {full}");
+    assert_eq!(full["total_outstanding"], "800.00", "corpo: {full}");
+    assert_eq!(full["overdue_charges"], 1, "corpo: {full}");
+    assert_eq!(full["open_tickets"], 1, "corpo: {full}");
+    // Il contratto scade fra trenta giorni: rientra nella finestra dei novanta.
+    assert_eq!(full["leases_expiring_90d"], 1, "corpo: {full}");
+    assert_eq!(full["bills_pending_review"], 1, "corpo: {full}");
+
+    // Annullare l'addebito lo toglie **sia** dall'insoluto sia dagli scaduti: la
+    // pretesa è caduta, e non è dovuto niente. È la migration `0024` vista dalla
+    // dashboard.
+    let charge_id = charge["id"].as_str().expect("id");
+    let (status, voided) = app
+        .post_auth(
+            &format!("/api/v1/charges/{charge_id}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {voided}");
+
+    let (status, after) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {after}");
+    assert_eq!(after["total_outstanding"], "0.00", "corpo: {after}");
+    assert_eq!(after["overdue_charges"], 0, "corpo: {after}");
+}
+
+/// La dashboard è dello staff, e a un inquilino risponde `403` e non una riga di
+/// zeri.
+///
+/// La Row Level Security da sola non lo fermerebbe in modo utile: la vista passa
+/// da `organizations_select`, che è `is_org_member` e non `is_org_staff`, quindi
+/// un inquilino otterrebbe i numeri **dell'intera organizzazione**. È uno dei casi
+/// in cui il controllo applicativo non duplica la policy ma la stringe.
+#[tokio::test]
+async fn the_dashboard_is_staff_only() {
+    let app = require_app!();
+    let (owner, owner_org, tenant, _charge) =
+        charge_with_a_real_tenant(&app, "dashboard-inquilino").await;
+
+    let (status, body) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/dashboard",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {body}");
+    assert_eq!(body["code"], "org.staff_role_required", "corpo: {body}");
+
+    // Allo stesso proprietario risponde, così il `403` di sopra è del ruolo e non
+    // della rotta.
+    let (status, body) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+}
+
+/// Senza organizzazione attiva la dashboard non indovina: `403 org.not_selected`.
+///
+/// È il caso dell'inquilino registrato da sé, che ha la propria organizzazione
+/// personale in testa — un debito noto — ma qui vale per chiunque presenti un
+/// token senza organizzazione.
+#[tokio::test]
+async fn the_dashboard_needs_authentication() {
+    let app = require_app!();
+    let (status, body) = app.send("GET", "/api/v1/dashboard", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
+    assert_eq!(body["code"], "auth.token_missing", "corpo: {body}");
+}

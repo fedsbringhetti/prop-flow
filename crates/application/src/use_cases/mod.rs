@@ -7,5 +7,6 @@ pub mod invitation;
 pub mod lease;
 pub mod payment;
 pub mod property;
+pub mod reporting;
 pub mod room;
 pub mod ticket;

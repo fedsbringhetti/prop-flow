@@ -31,6 +31,7 @@ use propflow_application::use_cases::property::{
     ArchiveProperty, CreateProperty, GetProperty, ListProperties, ListPropertyResidents,
     UpdateProperty,
 };
+use propflow_application::use_cases::reporting::GetOwnerDashboard;
 use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
 use propflow_application::use_cases::ticket::{
     AssignTicket, CancelTicket, CloseTicket, GetTicket, ListTicketMessages, ListTickets,
@@ -51,6 +52,10 @@ pub struct AppState {
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
+
+    /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
+    /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
+    pub owner_dashboard: Arc<GetOwnerDashboard>,
 
     pub create_property: Arc<CreateProperty>,
     pub get_property: Arc<GetProperty>,
@@ -241,6 +246,7 @@ impl AppState {
                 refresh_tokens,
                 Arc::clone(&clock),
             )),
+            owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),
             create_property: Arc::new(CreateProperty::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),

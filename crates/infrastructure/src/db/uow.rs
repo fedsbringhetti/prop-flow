@@ -3,12 +3,12 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use propflow_domain::RequestContext;
 use propflow_domain::ports::{
-    AiJobQueue, AiJobRepository, ChargeRepository, DocumentRepository, EventSink,
-    ExpenseGroupRepository, ExpenseRepository, InvitationRepository, LeasePartyRepository,
-    LeaseRepository, OrgMemberRepository, OrganizationRepository, PaymentRepository,
-    PropertyRepository, RepositoryResult, RoomRepository, SessionRepository, SettlementRepository,
-    TicketMessageRepository, TicketRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
-    UtilityBillRepository, WorkerUnitOfWork, WorkerUnitOfWorkFactory,
+    AiJobQueue, AiJobRepository, ChargeRepository, DashboardRepository, DocumentRepository,
+    EventSink, ExpenseGroupRepository, ExpenseRepository, InvitationRepository,
+    LeasePartyRepository, LeaseRepository, OrgMemberRepository, OrganizationRepository,
+    PaymentRepository, PropertyRepository, RepositoryResult, RoomRepository, SessionRepository,
+    SettlementRepository, TicketMessageRepository, TicketRepository, UnitOfWork, UnitOfWorkFactory,
+    UserRepository, UtilityBillRepository, WorkerUnitOfWork, WorkerUnitOfWorkFactory,
 };
 
 use super::db_enums;
@@ -84,6 +84,9 @@ impl UnitOfWork for PgUnitOfWork {
         self
     }
     fn ai_jobs(&mut self) -> &mut dyn AiJobRepository {
+        self
+    }
+    fn dashboard(&mut self) -> &mut dyn DashboardRepository {
         self
     }
     fn events(&mut self) -> &mut dyn EventSink {
