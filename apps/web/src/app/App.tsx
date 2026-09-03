@@ -2,6 +2,10 @@ import { Navigate, Route, Routes, useLocation } from 'react-router'
 
 import { Loading } from '@/components/state'
 import { LoginPage, RegisterPage } from '@/features/auth/AuthPage'
+import { BillDetailPage } from '@/features/bills/BillDetailPage'
+import { BillsPage } from '@/features/bills/BillsPage'
+import { NewBillPage } from '@/features/bills/NewBillPage'
+import { ChargesPage } from '@/features/charges/ChargesPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
 import { LeasesPage } from '@/features/leases/LeasesPage'
@@ -56,6 +60,10 @@ export function App() {
           <Route path="/contratti" element={<LeasesPage />} />
           <Route path="/contratti/nuovo" element={<NewLeasePage />} />
           <Route path="/contratti/:id" element={<LeaseDetailPage />} />
+          <Route path="/bollette" element={<BillsPage />} />
+          <Route path="/bollette/nuova" element={<NewBillPage />} />
+          <Route path="/bollette/:id" element={<BillDetailPage />} />
+          <Route path="/addebiti" element={<ChargesPage />} />
         </Route>
         {/* Chi è già entrato non deve poter tornare al login da un segnalibro:
             vedrebbe un form che non serve a niente. */}
