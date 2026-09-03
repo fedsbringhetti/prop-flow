@@ -1,0 +1,8 @@
+<!-- Un segno neutro e non un logo: il progetto non ne ha uno, e spedire quello
+     dello scaffold di Vite significherebbe dire il falso su chi è questo prodotto.
+     Esiste perché una pagina senza favicon produce un 404 nella console, e un 404
+     che non conta insegna a ignorare i 404 che contano. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#2f5fb4"/>
+  <path d="M9 22V13.5L16 9l7 4.5V22h-4.5v-5.5h-5V22z" fill="#ffffff"/>
+</svg>
