@@ -309,6 +309,27 @@ impl TestApp {
         (status, json, refresh_cookie_of(&response))
     }
 
+    /// Una richiesta con il **solo cookie** e senza `Authorization`.
+    ///
+    /// Serve a una cosa sola, ed è la ragione per cui esiste: verificare che una
+    /// rotta di business non accetti il cookie. Vedi
+    /// `the_session_cookie_is_refused_by_business_routes`.
+    pub async fn send_with_cookie_only(
+        &self,
+        method: &str,
+        path: &str,
+        cookie: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("cookie", format!("propflow_refresh={cookie}"))
+            .body(Body::empty())
+            .expect("richiesta costruita");
+        let (status, json, _) = self.request(request).await;
+        (status, json)
+    }
+
     pub async fn post(
         &self,
         path: &str,

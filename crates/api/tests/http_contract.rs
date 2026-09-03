@@ -283,6 +283,134 @@ async fn refresh_rotates_the_token_and_reuse_revokes_the_chain() {
     );
 }
 
+/// Senza cookie il refresh è `401`, con lo **stesso codice** di un cookie
+/// rifiutato.
+///
+/// Distinguerli direbbe a chi ha rubato un token se è ancora vivo, ed è la stessa
+/// ragione per cui il refresh non separa «scaduto» da «riusato» (ADR-022).
+#[tokio::test]
+async fn refresh_without_the_cookie_is_indistinguishable_from_a_bad_one() {
+    let app = require_app!();
+
+    let (missing_status, missing_body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", None, None)
+        .await;
+    let (bad_status, bad_body, _) = app
+        .post_with_cookie(
+            "/api/v1/auth/refresh",
+            Some("un-token-che-non-esiste"),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        missing_status,
+        StatusCode::UNAUTHORIZED,
+        "corpo: {missing_body}"
+    );
+    assert_eq!(bad_status, StatusCode::UNAUTHORIZED, "corpo: {bad_body}");
+    assert_eq!(
+        missing_body["code"], bad_body["code"],
+        "cookie assente e cookie rifiutato devono essere indistinguibili"
+    );
+}
+
+/// **Il test che tiene in piedi l'argomento CSRF.**
+///
+/// Nessuna difesa CSRF è montata, e la conclusione regge su una condizione
+/// precisa: che *nessuna rotta di business sia autenticata da un cookie*. Ogni
+/// rotta di business chiede `Authorization`, che un sito attaccante non può
+/// impostare cross-origin senza il permesso di CORS — che non concediamo, perché
+/// CORS non è montato affatto — e il cookie del refresh è `SameSite=Strict` su
+/// `Path=/api/v1/auth`.
+///
+/// Il giorno in cui qualcuno aggiungesse una sessione a cookie per comodità,
+/// quell'argomento cadrebbe **in silenzio**: nessun altro test fallirebbe. Questo
+/// sì. Non verifica una funzionalità: verifica che una porta resti chiusa.
+#[tokio::test]
+async fn the_session_cookie_is_refused_by_business_routes() {
+    let app = require_app!();
+    let email = common::unique_email("csrf");
+    let password = "cavallo batteria graffetta";
+    app.post(
+        "/api/v1/auth/register",
+        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+    )
+    .await;
+    let (_, _, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": password }),
+        )
+        .await;
+    let cookie = cookie.expect("il login deve posare il cookie di sessione");
+
+    // Un cookie **valido**, presentato su rotte di business senza `Authorization`.
+    // Sono lettura, scrittura e la proiezione che attraversa tutti i moduli: se
+    // una sola di queste accettasse il cookie, l'argomento sarebbe già caduto.
+    for (method, path) in [
+        ("GET", "/api/v1/dashboard"),
+        ("GET", "/api/v1/properties"),
+        ("GET", "/api/v1/leases"),
+        ("GET", "/api/v1/charges"),
+        (
+            "DELETE",
+            "/api/v1/properties/019fce39-0e43-7011-84bf-1d03f6764daf",
+        ),
+    ] {
+        let (status, body) = app.send_with_cookie_only(method, path, &cookie).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} ha accettato il solo cookie: l'argomento CSRF è caduto. Corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.token_missing",
+            "{method} {path}: il rifiuto deve essere per assenza di Authorization, corpo: {body}"
+        );
+    }
+}
+
+/// L'uscita cancella il cookie, e lo fa anche quando non c'era.
+#[tokio::test]
+async fn logout_clears_the_cookie_and_is_idempotent() {
+    let app = require_app!();
+    let email = common::unique_email("uscita");
+    let password = "cavallo batteria graffetta";
+    app.post(
+        "/api/v1/auth/register",
+        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+    )
+    .await;
+    let (_, session, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": password }),
+        )
+        .await;
+    let token = session["access_token"].as_str().expect("access token");
+    let cookie = cookie.expect("cookie di sessione");
+
+    let (status, _, cleared) = app
+        .post_with_cookie("/api/v1/auth/logout", Some(&cookie), Some(token))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(cleared, None, "il logout deve cancellare il cookie");
+
+    // La sessione è davvero caduta: il token revocato non rinnova più.
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&cookie), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
+
+    // Un secondo logout, ormai senza cookie, resta `204`: non c'è nulla da
+    // revocare, e costringere il client a distinguere i due casi non lo aiuta.
+    let (status, _, _) = app
+        .post_with_cookie("/api/v1/auth/logout", None, Some(token))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
 #[tokio::test]
 async fn unknown_routes_return_problem_details_too() {
     let app = require_app!();
