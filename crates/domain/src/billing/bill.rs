@@ -2,10 +2,11 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 
 use super::value_objects::{Consumption, InvoiceNumber, SupplierName, SupplierVat};
+use crate::ai::{Confidence, OcrReading};
 use crate::error::{DomainError, DomainResult, Invariant};
 use crate::property::Patch;
 use crate::shared::{
-    Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId, UtilityBillId, text,
+    AiJobId, Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId, UtilityBillId, text,
 };
 
 /// Tipo di utenza. Rispecchia `app.utility_type` per intero.
@@ -46,12 +47,15 @@ impl UtilityType {
 /// `void` come uscita e la correzione che **riporta indietro** da `validated` a
 /// `draft` (vedi [`UtilityBill::apply`]).
 ///
-/// **Tre valori esistono nell'enum del database e l'applicazione non li scrive
-/// mai**, ciascuno per una ragione diversa e nessuna delle tre è una
+/// `pending_review` è lo stato in cui una **macchina** ha proposto dei numeri e
+/// una persona deve confermarli: ci si arriva da `draft` con
+/// [`UtilityBill::attach_ocr`], e se ne esce correggendo (si **resta** lì) o
+/// validando. Non lo scrive mai una richiesta HTTP: lo scrive il worker.
+///
+/// **Due valori esistono nell'enum del database e l'applicazione non li scrive
+/// mai**, ciascuno per una ragione diversa e nessuna delle due è una
 /// dimenticanza:
 ///
-/// - `PendingReview` appartiene all'OCR, che è il modulo successivo: qui la
-///   bolletta la digita una persona e non c'è niente da rivedere;
 /// - `Paid` significherebbe «il proprietario ha pagato il fornitore», e non è
 ///   modellato affatto — `app.payable_type` è
 ///   `('charge','expense_share','settlement')` e **non comprende
@@ -68,7 +72,8 @@ impl UtilityType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillStatus {
     Draft,
-    /// Mai scritto dall'applicazione: vedi la nota sul tipo.
+    /// Una macchina ha letto, una persona deve confermare. Lo scrive il worker,
+    /// mai un handler: vedi la nota sul tipo.
     PendingReview,
     Validated,
     Allocated,
@@ -98,9 +103,17 @@ impl BillStatus {
     /// Da `allocated` in poi **no**: quei numeri sono la base di una pretesa già
     /// fatta a qualcuno, e cambiarli sotto la pretesa è precisamente ciò che non
     /// deve succedere.
+    ///
+    /// **`pending_review` è compreso, e senza sarebbe un vicolo cieco.** Una
+    /// bolletta che una macchina ha letto entra lì per essere corretta: se
+    /// `is_editable` la escludesse, `UpdateUtilityBill` e `VoidUtilityBill`
+    /// risponderebbero `utility_bill.invalid_transition` e l'unica uscita
+    /// resterebbe l'annullamento — uno stato in cui si entra e da cui non si esce,
+    /// introdotto da noi, nel modulo il cui scopo è *proporre qualcosa da
+    /// correggere*.
     #[must_use]
     pub const fn is_editable(self) -> bool {
-        matches!(self, Self::Draft | Self::Validated)
+        matches!(self, Self::Draft | Self::PendingReview | Self::Validated)
     }
 }
 
@@ -258,15 +271,21 @@ impl UtilityBillChanges {
 
 /// Bolletta di un'utenza.
 ///
-/// **Fuori perimetro in questa fetta** (`docs/09-stato-e-roadmap.md`): l'OCR
-/// (`ai_job_id`, `ocr_confidence`, `ocr_extracted`, e lo stato `pending_review`)
-/// e la colonna `document_id`. Le colonne esistono nello schema e restano ai loro
-/// default: vederle non è una ragione per riempirle. Su `ocr_extracted` in
-/// particolare **non si scrive**, perché lo schema tiene apposta separato ciò che
-/// ha letto la macchina da ciò che ha confermato una persona (`validated_by`,
-/// `validated_at`), così che l'accuratezza dell'OCR si possa misurare quando
-/// arriverà; riempirla con valori umani distruggerebbe quel dato prima di
-/// raccoglierlo.
+/// **L'OCR scrive tre colonne e nessun campo della bolletta.** `ocr_extracted`,
+/// `ocr_confidence` e `ai_job_id` portano ciò che la macchina ha proposto;
+/// `supplier_name`, `total_amount`, `invoice_number` e gli altri restano quelli
+/// che ha digitato la persona, finché una persona non li cambia. Non è prudenza:
+/// lo schema tiene apposta separato ciò che ha letto la macchina da ciò che ha
+/// confermato una persona (`validated_by`, `validated_at`) **perché l'accuratezza
+/// si possa misurare**, e riempire le prime colonne con valori umani — o le
+/// seconde con valori macchina — distrugge quel dato prima di raccoglierlo.
+/// Senza quella misura non c'è modo di rispondere alla sola domanda che conta su
+/// un modulo di OCR: funziona abbastanza?
+///
+/// Ne segue anche che `utility_bills_dedup_uk` non è in gioco: l'OCR non scrive
+/// `invoice_number`, quindi non può produrre il conflitto di deduplica.
+///
+/// **Fuori perimetro** resta la colonna `document_id`.
 ///
 /// `document_id` resta non popolata anche per una ragione sua: la scansione si
 /// allega con il riferimento polimorfico dei documenti (`owner_type`,
@@ -298,6 +317,16 @@ pub struct UtilityBill {
     validated_by: Option<UserId>,
     validated_at: Option<DateTime<Utc>>,
     notes: Option<String>,
+    /// Il job che ha prodotto la proposta, se una macchina ha letto la bolletta.
+    ai_job_id: Option<AiJobId>,
+    /// Quanto la macchina si fida della lettura **nel suo campo peggiore**: vedi
+    /// [`OcrReading::overall_confidence`].
+    ocr_confidence: Option<Confidence>,
+    /// I valori proposti. Stanno qui e non in `ai_jobs.output` perché il
+    /// contenuto di una bolletta è dato della bolletta, ed eredita la RLS della
+    /// bolletta — che comprende l'inquilino imputato, mentre `ai_jobs_select`
+    /// chiede lo staff.
+    ocr_extracted: Option<OcrReading>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     deleted_at: Option<DateTime<Utc>>,
@@ -371,6 +400,9 @@ impl UtilityBill {
             validated_by: None,
             validated_at: None,
             notes: text::optional("notes", notes, 4000)?,
+            ai_job_id: None,
+            ocr_confidence: None,
+            ocr_extracted: None,
             created_at: now,
             updated_at: now,
             deleted_at: None,
@@ -379,7 +411,28 @@ impl UtilityBill {
 
     /// Applica una modifica parziale. `true` se qualcosa è cambiato.
     ///
-    /// Ammessa da `draft` **e da `validated`**, e su una bolletta validata
+    /// **Da `pending_review` la bolletta ci resta**, e questa riga è stata scritta
+    /// guardandola invece di ereditarla dal ramo esistente — il piano la
+    /// segnalava come decisione da prendere eseguendo. Le due letture erano:
+    /// scendere a `draft` come si fa da `validated`, oppure restare.
+    ///
+    /// Resta, perché le due situazioni non sono la stessa. Da `validated` la
+    /// correzione **smentisce un'affermazione**: qualcuno ha detto «questi numeri
+    /// sono quelli», e cambiarli lo rende falso, quindi la validazione va disfatta
+    /// e rifatta apposta. Da `pending_review` non c'è nessuna affermazione da
+    /// smentire: c'è una proposta di una macchina, e correggerla **è** la
+    /// revisione, non il suo annullamento. Portarla a `draft` direbbe per giunta
+    /// una cosa falsa — che non c'è niente da rivedere — mentre `ocr_extracted` è
+    /// ancora piena e `ai_job_id` punta ancora al job.
+    ///
+    /// Ne segue l'asimmetria che vale la pena nominare: `pending_review →
+    /// validated → apply` finisce in `draft` e **non** torna a `pending_review`.
+    /// È corretto: lì una persona ha già rivisto la proposta, quindi la bolletta
+    /// non è più in attesa di revisione. La proposta non si perde in nessuno dei
+    /// due casi, perché `apply` non tocca le tre colonne dell'OCR.
+    ///
+    /// Ammessa da `draft`, da `pending_review` **e da `validated`**, e su una
+    /// bolletta validata
     /// **disfa la validazione**: lo stato torna a `draft` e `validated_at` e
     /// `validated_by` si azzerano. Non è un effetto collaterale — validare è
     /// l'affermazione «questi numeri sono quelli», e cambiare i numeri la
@@ -483,15 +536,60 @@ impl UtilityBill {
 
     /// Valida la bolletta: una persona ha controllato che i numeri siano quelli.
     ///
+    /// Ammessa da `draft` **e da `pending_review`**, e la revisione umana è la
+    /// stessa nei due casi: una persona dice che i numeri sono quelli. Cambia solo
+    /// da dove arrivano i numeri prima che li guardi — dalle sue dita o dalla
+    /// proposta di una macchina — e quello lo racconta `ocr_extracted`, non lo
+    /// stato.
+    ///
+    /// `utility_bills_validated_ck` vincola `validated`, `allocated` e `paid`, e
+    /// **non tocca `pending_review`**: non c'è niente da fare a schema.
+    ///
     /// `validated_at` è obbligatorio anche a schema quando lo stato è
     /// `validated`, `allocated` o `paid` (`utility_bills_validated_ck`).
     pub fn validate(&mut self, validated_by: UserId, now: DateTime<Utc>) -> DomainResult<()> {
-        if !matches!(self.status, BillStatus::Draft) {
+        if !matches!(self.status, BillStatus::Draft | BillStatus::PendingReview) {
             return Err(DomainError::Invariant(Invariant::UtilityBillNotValidatable));
         }
         self.status = BillStatus::Validated;
         self.validated_by = Some(validated_by);
         self.validated_at = Some(now);
+        self.updated_at = now;
+        Ok(())
+    }
+
+    /// Registra la proposta di una macchina: `draft → pending_review`.
+    ///
+    /// **Solo da `draft`**, e il rifiuto altrove non è teorico: fra l'accodamento
+    /// del job e la sua fine — che passano per la coda del worker — una persona
+    /// può aver validato la bolletta, averla riaddebitata o averla annullata.
+    /// Scriverci sopra la proposta significherebbe riportare a «da rivedere»
+    /// qualcosa che qualcuno ha già deciso, e nel caso di `allocated` sotto un
+    /// addebito già emesso. Chi chiama traduce il rifiuto in un job `failed` con
+    /// `subject_not_processable`: il fallimento è del job, non della richiesta che
+    /// lo ha accodato.
+    ///
+    /// **Non tocca nessun campo della bolletta**, ed è il cuore della decisione 4
+    /// del piano: la proposta si legge accanto ai numeri digitati, non al posto
+    /// loro.
+    ///
+    /// Una lettura **vuota** è ammessa e non è un errore: significa che la
+    /// macchina non ha trovato niente di interpretabile, e chi rivede lo vede da
+    /// `ocr_confidence` assente. Un errore sarebbe stato il fornitore che non
+    /// risponde, e quello non arriva mai qui.
+    pub fn attach_ocr(
+        &mut self,
+        job_id: AiJobId,
+        reading: OcrReading,
+        now: DateTime<Utc>,
+    ) -> DomainResult<()> {
+        if !matches!(self.status, BillStatus::Draft) {
+            return Err(DomainError::Invariant(Invariant::UtilityBillNotReviewable));
+        }
+        self.ocr_confidence = reading.overall_confidence();
+        self.ocr_extracted = Some(reading);
+        self.ai_job_id = Some(job_id);
+        self.status = BillStatus::PendingReview;
         self.updated_at = now;
         Ok(())
     }
@@ -673,6 +771,18 @@ impl UtilityBill {
         self.notes.as_deref()
     }
     #[must_use]
+    pub const fn ai_job_id(&self) -> Option<AiJobId> {
+        self.ai_job_id
+    }
+    #[must_use]
+    pub const fn ocr_confidence(&self) -> Option<Confidence> {
+        self.ocr_confidence
+    }
+    #[must_use]
+    pub const fn ocr_extracted(&self) -> Option<&OcrReading> {
+        self.ocr_extracted.as_ref()
+    }
+    #[must_use]
     pub const fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
@@ -713,6 +823,9 @@ impl UtilityBill {
             validated_by,
             validated_at,
             notes,
+            ai_job_id,
+            ocr_confidence,
+            ocr_extracted,
             created_at,
             updated_at,
             deleted_at,
@@ -740,6 +853,9 @@ impl UtilityBill {
             validated_by,
             validated_at,
             notes,
+            ai_job_id,
+            ocr_confidence,
+            ocr_extracted,
             created_at,
             updated_at,
             deleted_at,
@@ -772,6 +888,9 @@ pub struct UtilityBillParts {
     pub validated_by: Option<UserId>,
     pub validated_at: Option<DateTime<Utc>>,
     pub notes: Option<String>,
+    pub ai_job_id: Option<AiJobId>,
+    pub ocr_confidence: Option<Confidence>,
+    pub ocr_extracted: Option<OcrReading>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -796,6 +915,7 @@ fn apply_patch_cloned<T: Clone>(current: &Option<T>, patch: &Patch<T>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::{BillField, ExtractedField, ExtractedValue};
     use crate::billing::value_objects::ConsumptionUnit;
     use std::str::FromStr;
 
@@ -858,11 +978,32 @@ mod tests {
             BillStatus::Void => {
                 bill.void(now).expect("annullata");
             }
+            BillStatus::PendingReview => {
+                bill.attach_ocr(AiJobId::generate(), reading(), now)
+                    .expect("proposta allegata");
+            }
             // Mai prodotti dall'applicazione: si costruiscono solo da persistenza,
             // e i test che li riguardano lo fanno esplicitamente.
-            BillStatus::PendingReview | BillStatus::Paid | BillStatus::Disputed => {}
+            BillStatus::Paid | BillStatus::Disputed => {}
         }
         bill
+    }
+
+    /// Una lettura plausibile: due campi, uno dei quali letto male. Serve a
+    /// verificare che `ocr_confidence` prenda il peggiore.
+    fn reading() -> OcrReading {
+        OcrReading::new(vec![
+            ExtractedField {
+                field: BillField::SupplierName,
+                value: ExtractedValue::Text("Enel Energia".to_owned()),
+                confidence: Confidence::new(dec("0.99")).expect("confidenza"),
+            },
+            ExtractedField {
+                field: BillField::TotalAmount,
+                value: ExtractedValue::Amount(dec("128.40")),
+                confidence: Confidence::new(dec("0.62")).expect("confidenza"),
+            },
+        ])
     }
 
     #[test]
@@ -876,12 +1017,28 @@ mod tests {
     }
 
     /// La tabella delle transizioni, ammesse e rifiutate, verificata per intero.
+    ///
+    /// `PendingReview` è nell'elenco degli stati di partenza, ed è metà del punto:
+    /// prima del passo 3 dell'OCR quello stato non compariva qui e nessuna riga di
+    /// questa tabella si sarebbe accorta che era un vicolo cieco.
     #[test]
     fn the_transition_table_is_complete() {
-        use BillStatus::{Allocated, Draft, Validated, Void};
+        use BillStatus::{Allocated, Draft, PendingReview, Validated, Void};
 
-        // apply: da `draft` e da `validated`.
-        for from in [Draft, Validated, Allocated, Void] {
+        // attach_ocr: **solo** da `draft`. Una proposta non si scrive sopra una
+        // decisione che qualcuno ha già preso.
+        for from in [Draft, PendingReview, Validated, Allocated, Void] {
+            assert_eq!(
+                at(from)
+                    .attach_ocr(AiJobId::generate(), reading(), Utc::now())
+                    .is_ok(),
+                matches!(from, Draft),
+                "attach_ocr da {from:?}"
+            );
+        }
+
+        // apply: da `draft`, da `pending_review` e da `validated`.
+        for from in [Draft, PendingReview, Validated, Allocated, Void] {
             let changes = UtilityBillChanges {
                 notes: Some(Some("una nota".to_owned())),
                 ..UtilityBillChanges::default()
@@ -893,9 +1050,9 @@ mod tests {
             );
         }
 
-        // validate: solo da `draft`.
-        for from in [Draft, Validated, Allocated, Void] {
-            let allowed = matches!(from, Draft);
+        // validate: da `draft` e da `pending_review`.
+        for from in [Draft, PendingReview, Validated, Allocated, Void] {
+            let allowed = matches!(from, Draft | PendingReview);
             assert_eq!(
                 at(from).validate(UserId::generate(), Utc::now()).is_ok(),
                 allowed,
@@ -904,7 +1061,9 @@ mod tests {
         }
 
         // mark_allocated: da `validated` e da `allocated` (riaddebito ripetuto).
-        for from in [Draft, Validated, Allocated, Void] {
+        // Da `pending_review` **no**: si riaddebita ciò che una persona ha
+        // confermato, non ciò che una macchina ha proposto.
+        for from in [Draft, PendingReview, Validated, Allocated, Void] {
             let allowed = matches!(from, Validated | Allocated);
             assert_eq!(
                 at(from).mark_allocated(Utc::now()).is_ok(),
@@ -913,14 +1072,133 @@ mod tests {
             );
         }
 
-        // void: da `draft` e da `validated`, non da `allocated`.
-        for from in [Draft, Validated, Allocated, Void] {
+        // void: da `draft`, `pending_review` e `validated`, non da `allocated`.
+        for from in [Draft, PendingReview, Validated, Allocated, Void] {
             assert_eq!(
                 at(from).void(Utc::now()).is_ok(),
                 from.is_editable(),
                 "void da {from:?}"
             );
         }
+    }
+
+    /// La decisione che il piano lasciava aperta, pinnata nella direzione scelta.
+    ///
+    /// Scendere a `draft` direbbe «non c'è niente da rivedere» mentre
+    /// `ocr_extracted` è ancora piena: correggere la proposta di una macchina
+    /// **è** la revisione, non il suo annullamento.
+    #[test]
+    fn correcting_a_machine_reading_leaves_the_bill_under_review() {
+        let mut bill = at(BillStatus::PendingReview);
+        let job_id = bill
+            .ai_job_id()
+            .expect("il job che ha prodotto la proposta");
+
+        let changed = bill
+            .apply(
+                &UtilityBillChanges {
+                    total_amount: Some(dec("131.00")),
+                    ..UtilityBillChanges::default()
+                },
+                Utc::now(),
+            )
+            .expect("la correzione è ammessa");
+
+        assert!(changed);
+        assert_eq!(
+            bill.status(),
+            BillStatus::PendingReview,
+            "la bolletta resta in revisione finché una persona non valida"
+        );
+        // La proposta non si perde: è ciò che rende `pending_review` onesto.
+        assert_eq!(bill.ai_job_id(), Some(job_id));
+        assert!(bill.ocr_extracted().is_some());
+        assert_eq!(
+            bill.ocr_confidence(),
+            Confidence::new(dec("0.62")).ok(),
+            "la confidenza complessiva è quella del campo peggiore"
+        );
+        // E il numero corretto a mano è quello della persona, non della macchina.
+        assert_eq!(bill.total_amount().amount(), dec("131.00"));
+    }
+
+    /// L'asimmetria che segue dalla decisione precedente, e che vale la pena
+    /// vedere scritta: rivista e validata, la bolletta **non torna** in revisione.
+    #[test]
+    fn a_reviewed_bill_corrected_later_goes_back_to_draft_and_not_to_review() {
+        let mut bill = at(BillStatus::PendingReview);
+        bill.validate(UserId::generate(), Utc::now())
+            .expect("una persona ha confermato i numeri");
+        assert_eq!(bill.status(), BillStatus::Validated);
+
+        bill.apply(
+            &UtilityBillChanges {
+                notes: Some(Some("ripensamento".to_owned())),
+                ..UtilityBillChanges::default()
+            },
+            Utc::now(),
+        )
+        .expect("la correzione è ammessa");
+
+        assert_eq!(
+            bill.status(),
+            BillStatus::Draft,
+            "una persona ha già rivisto la proposta: non è più in attesa di revisione"
+        );
+        assert!(
+            bill.ocr_extracted().is_some(),
+            "la proposta resta leggibile"
+        );
+    }
+
+    /// Il passo 3 del piano, verificato per quello che è: prima di questa
+    /// modifica entrambe le operazioni rispondevano
+    /// `utility_bill.invalid_transition`, cioè la bolletta era congelata.
+    #[test]
+    fn a_bill_under_review_can_be_both_corrected_and_validated() {
+        assert!(BillStatus::PendingReview.is_editable());
+
+        let mut bill = at(BillStatus::PendingReview);
+        let validator = UserId::generate();
+        bill.validate(validator, Utc::now())
+            .expect("validare da pending_review è il senso dello stato");
+        assert_eq!(bill.status(), BillStatus::Validated);
+        assert_eq!(bill.validated_by(), Some(validator));
+        assert!(
+            bill.validated_at().is_some(),
+            "utility_bills_validated_ck rifiuterebbe la riga senza la data"
+        );
+    }
+
+    /// L'OCR non tocca i numeri della persona: è la decisione 4 del piano, e la
+    /// ragione per cui l'accuratezza si potrà misurare.
+    #[test]
+    fn a_machine_reading_never_overwrites_what_a_person_typed() {
+        let mut bill = bill();
+        let supplier = bill.supplier_name().cloned();
+        let invoice = bill.invoice_number().cloned();
+        let total = bill.total_amount();
+
+        bill.attach_ocr(AiJobId::generate(), reading(), Utc::now())
+            .expect("proposta allegata");
+
+        assert_eq!(bill.status(), BillStatus::PendingReview);
+        assert_eq!(bill.supplier_name().cloned(), supplier);
+        assert_eq!(bill.invoice_number().cloned(), invoice);
+        assert_eq!(bill.total_amount(), total);
+        // …e la proposta è leggibile accanto, non al posto.
+        assert_eq!(bill.ocr_extracted(), Some(&reading()));
+    }
+
+    /// Una lettura vuota è un esito, non un errore: la macchina non ha trovato
+    /// niente di interpretabile e chi rivede lo vede da `ocr_confidence` assente.
+    #[test]
+    fn an_empty_reading_still_asks_for_a_review() {
+        let mut bill = bill();
+        bill.attach_ocr(AiJobId::generate(), OcrReading::default(), Utc::now())
+            .expect("anche una lettura vuota è un esito");
+        assert_eq!(bill.status(), BillStatus::PendingReview);
+        assert_eq!(bill.ocr_confidence(), None);
     }
 
     /// La trappola: `utility_bills_validated_ck` costringe una sola direzione,
@@ -1110,14 +1388,25 @@ mod tests {
         assert_eq!(bill.status(), BillStatus::Allocated);
     }
 
-    /// I tre stati che l'enum ha e l'applicazione non scrive: nessuna transizione
+    /// I due stati che l'enum ha e l'applicazione non scrive: nessuna transizione
     /// deve produrli. Se qualcuno ne aggiungesse una, questo test lo dice prima
     /// che una riga con quello stato compaia in produzione senza un modo di
     /// uscirne.
+    ///
+    /// **Erano tre.** `pending_review` è uscito da questo elenco con l'OCR, e ci è
+    /// uscito da una porta sola: `attach_ocr`, che è la sola scrittura di questo
+    /// aggregato che non nasce da una richiesta HTTP. Le quattro transizioni che
+    /// una persona può chiedere continuano a non poterlo produrre, ed è ciò che
+    /// questo test verifica — `pending_review` resta fra gli stati **di
+    /// partenza**, non fra quelli di arrivo.
     #[test]
     fn no_transition_ever_produces_an_unwritten_status() {
         let now = Utc::now();
-        for from in [BillStatus::Draft, BillStatus::Validated] {
+        for from in [
+            BillStatus::Draft,
+            BillStatus::PendingReview,
+            BillStatus::Validated,
+        ] {
             let mut bill = at(from);
             let _ = bill.apply(
                 &UtilityBillChanges {
@@ -1130,10 +1419,7 @@ mod tests {
             let _ = bill.mark_allocated(now);
             let _ = bill.void(now);
             assert!(
-                !matches!(
-                    bill.status(),
-                    BillStatus::PendingReview | BillStatus::Paid | BillStatus::Disputed
-                ),
+                !matches!(bill.status(), BillStatus::Paid | BillStatus::Disputed),
                 "da {from:?} si è arrivati a {:?}",
                 bill.status()
             );

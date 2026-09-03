@@ -214,6 +214,14 @@ pub enum Invariant {
 
     #[error("Only a draft or a validated bill can be corrected")]
     UtilityBillNotEditable,
+    /// Una lettura automatica si propone solo su una bozza.
+    ///
+    /// Fra l'accodamento e la fine del job una persona può aver validato,
+    /// riaddebitato o annullato la bolletta: scriverci sopra la proposta di una
+    /// macchina significherebbe riportare indietro qualcosa che qualcuno ha già
+    /// deciso.
+    #[error("Only a draft bill can take a machine reading")]
+    UtilityBillNotReviewable,
     #[error("Only a draft bill can be validated")]
     UtilityBillNotValidatable,
     #[error("Only a validated or already allocated bill can be recharged")]
@@ -306,7 +314,8 @@ impl Invariant {
             Self::UtilityBillNotEditable
             | Self::UtilityBillNotValidatable
             | Self::UtilityBillNotAllocatable
-            | Self::UtilityBillNotVoidable => "utility_bill.invalid_transition",
+            | Self::UtilityBillNotVoidable
+            | Self::UtilityBillNotReviewable => "utility_bill.invalid_transition",
             Self::ChargeNotVoidable | Self::ChargeNotWriteOffable | Self::ChargeNotPayable => {
                 "charge.invalid_transition"
             }

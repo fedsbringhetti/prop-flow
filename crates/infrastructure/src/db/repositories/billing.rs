@@ -4,6 +4,7 @@ use rust_decimal::Decimal;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
+use propflow_domain::ai::{BillField, Confidence, ExtractedField, ExtractedValue, OcrReading};
 use propflow_domain::billing::{
     Charge, ChargeBalance, ChargeParts, Consumption, ConsumptionUnit, InvoiceNumber, SupplierName,
     SupplierVat, UtilityBill, UtilityBillParts,
@@ -13,7 +14,7 @@ use propflow_domain::ports::{
     UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
 };
 use propflow_domain::shared::{
-    ChargeId, Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId, UtilityBillId,
+    AiJobId, ChargeId, Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId, UtilityBillId,
 };
 
 use super::user::try_get;
@@ -44,13 +45,14 @@ macro_rules! outstanding_statuses {
 
 /// Colonne lette di una bolletta.
 ///
-/// **Non ci sono `ai_job_id`, `ocr_confidence`, `ocr_extracted`, `document_id` né
-/// `metadata`.** L'OCR è fuori dal perimetro di questa fetta
-/// (`docs/09-stato-e-roadmap.md`), il dominio non lo modella, e leggere una colonna
-/// che nessuno sa interpretare significa doverla mappare su un tipo inventato per
-/// l'occasione. `document_id` resta fuori anche in scrittura: la scansione si
-/// allega con il riferimento polimorfico dei documenti, e popolare entrambi
-/// darebbe due risposte alla domanda «qual è il documento di questa bolletta».
+/// `ai_job_id`, `ocr_confidence` e `ocr_extracted` ci sono dall'OCR: sono le tre
+/// che una macchina scrive, e nessun'altra — i campi della bolletta restano quelli
+/// che ha digitato la persona.
+///
+/// **Non ci sono `document_id` né `metadata`.** `document_id` resta fuori anche in
+/// scrittura: la scansione si allega con il riferimento polimorfico dei documenti,
+/// e popolare entrambi darebbe due risposte alla domanda «qual è il documento di
+/// questa bolletta».
 macro_rules! select_bill {
     () => {
         "
@@ -77,6 +79,9 @@ macro_rules! select_bill {
            validated_by,
            validated_at,
            notes,
+           ai_job_id,
+           ocr_confidence::numeric AS ocr_confidence,
+           ocr_extracted,
            created_at,
            updated_at,
            deleted_at
@@ -322,7 +327,10 @@ impl UtilityBillRepository for PgUnitOfWork {
                     validated_by     = $18,
                     validated_at     = $19,
                     notes            = $20,
-                    deleted_at       = $21
+                    deleted_at       = $21,
+                    ai_job_id        = $22,
+                    ocr_confidence   = $23::app.confidence,
+                    ocr_extracted    = $24
               WHERE id = $1",
         )
         .bind(bill.id().as_uuid())
@@ -349,6 +357,17 @@ impl UtilityBillRepository for PgUnitOfWork {
         .bind(bill.validated_at())
         .bind(bill.notes())
         .bind(bill.deleted_at())
+        // Le tre colonne dell'OCR passano da qui e non da un `UPDATE` a parte:
+        // l'aggregato le porta, quindi la stessa scrittura che salva la bolletta
+        // le salva. Chi corregge a mano da `pending_review` le riscrive identiche,
+        // ed è ciò che le fa **sopravvivere** alla correzione — la proposta della
+        // macchina resta leggibile accanto ai numeri che una persona ha sistemato.
+        .bind(bill.ai_job_id().map(AiJobId::as_uuid))
+        .bind(bill.ocr_confidence().map(Confidence::value))
+        .bind(
+            bill.ocr_extracted()
+                .map_or_else(|| serde_json::json!({}), encode_reading),
+        )
         .execute(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -517,6 +536,134 @@ fn invalid(field: &str, error: propflow_domain::DomainError) -> RepositoryError 
     }
 }
 
+/// I **valori** proposti verso `utility_bills.ocr_extracted`.
+///
+/// ```json
+/// {"fields": [
+///   {"field": "supplier_name", "type": "text",   "value": "Enel Energia", "confidence": "0.9900"},
+///   {"field": "consumption",   "type": "quantity", "value": "123.4567", "unit": "Smc", "confidence": "1.0000"}
+/// ]}
+/// ```
+///
+/// Un oggetto con dentro un array e non un array nudo: aggiungere una chiave a un
+/// oggetto è additivo, cambiare la radice del documento no.
+///
+/// **I numeri sono stringhe**, ed è deliberato: un `Decimal` che passa da un
+/// numero JSON passa da un `f64`, e `123.4567` che torna `123.45670000000001` è
+/// un valore che una persona dovrebbe correggere a mano proprio nel campo che la
+/// macchina aveva letto giusto. Le date sono ISO per la stessa ragione: un
+/// formato solo, non quello del fornitore.
+fn encode_reading(reading: &OcrReading) -> serde_json::Value {
+    let fields: Vec<serde_json::Value> = reading
+        .fields()
+        .iter()
+        .map(|found| {
+            let mut entry = serde_json::Map::new();
+            entry.insert(
+                "field".to_owned(),
+                serde_json::Value::String(found.field.as_str().to_owned()),
+            );
+            match &found.value {
+                ExtractedValue::Text(text) => {
+                    entry.insert("type".to_owned(), "text".into());
+                    entry.insert("value".to_owned(), text.clone().into());
+                }
+                ExtractedValue::Date(date) => {
+                    entry.insert("type".to_owned(), "date".into());
+                    entry.insert("value".to_owned(), date.to_string().into());
+                }
+                ExtractedValue::Amount(amount) => {
+                    entry.insert("type".to_owned(), "amount".into());
+                    entry.insert("value".to_owned(), amount.to_string().into());
+                }
+                ExtractedValue::Quantity { value, unit } => {
+                    entry.insert("type".to_owned(), "quantity".into());
+                    entry.insert("value".to_owned(), value.to_string().into());
+                    entry.insert("unit".to_owned(), unit.clone().into());
+                }
+            }
+            entry.insert("confidence".to_owned(), found.confidence.to_string().into());
+            serde_json::Value::Object(entry)
+        })
+        .collect();
+    serde_json::json!({ "fields": fields })
+}
+
+/// I valori proposti, riletti.
+///
+/// Un tipo o un campo sconosciuto **fa fallire la lettura** della bolletta. È
+/// severo e va detto: significa che una proposta scritta da una versione futura
+/// del codice rende illeggibile la bolletta a una versione vecchia. È la stessa
+/// scelta degli enum — un valore che non si sa interpretare deve essere rumoroso,
+/// non sparire — e qui vale a maggior ragione, perché la cosa che sparirebbe in
+/// silenzio è ciò che una persona deve rivedere.
+fn decode_reading(value: &serde_json::Value) -> RepositoryResult<Option<OcrReading>> {
+    let Some(entries) = value.get("fields").and_then(serde_json::Value::as_array) else {
+        // `{}`: nessuna macchina ha ancora letto questa bolletta.
+        return Ok(None);
+    };
+
+    let bad = |details: String| RepositoryError::Backend { details };
+    let fields = entries
+        .iter()
+        .map(|entry| {
+            let key = entry
+                .get("field")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| bad("voce di `ocr_extracted` senza `field`".to_owned()))?;
+            let field = BillField::from_key(key)
+                .ok_or_else(|| bad(format!("campo `{key}` non riconosciuto in `ocr_extracted`")))?;
+            let raw = entry
+                .get("value")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| bad(format!("campo `{key}` senza `value`")))?;
+            let kind = entry
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| bad(format!("campo `{key}` senza `type`")))?;
+            let value =
+                match kind {
+                    "text" => ExtractedValue::Text(raw.to_owned()),
+                    "date" => ExtractedValue::Date(raw.parse().map_err(|error| {
+                        bad(format!("data `{raw}` non decodificabile: {error}"))
+                    })?),
+                    "amount" => ExtractedValue::Amount(raw.parse().map_err(|error| {
+                        bad(format!("importo `{raw}` non decodificabile: {error}"))
+                    })?),
+                    "quantity" => ExtractedValue::Quantity {
+                        value: raw.parse().map_err(|error| {
+                            bad(format!("quantità `{raw}` non decodificabile: {error}"))
+                        })?,
+                        unit: entry
+                            .get("unit")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| bad(format!("quantità `{key}` senza unità")))?
+                            .to_owned(),
+                    },
+                    other => {
+                        return Err(bad(format!(
+                            "tipo `{other}` sconosciuto in `ocr_extracted`"
+                        )));
+                    }
+                };
+            let confidence = entry
+                .get("confidence")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| bad(format!("campo `{key}` senza confidenza")))?
+                .parse::<Decimal>()
+                .map(Confidence::from_persistence)
+                .map_err(|error| bad(format!("confidenza non decodificabile: {error}")))?;
+            Ok(ExtractedField {
+                field,
+                value,
+                confidence,
+            })
+        })
+        .collect::<RepositoryResult<Vec<ExtractedField>>>()?;
+
+    Ok(Some(OcrReading::new(fields)))
+}
+
 fn map_bill(row: PgRow) -> RepositoryResult<UtilityBill> {
     let id: Uuid = try_get(&row, "id")?;
     let org_id: Uuid = try_get(&row, "org_id")?;
@@ -581,6 +728,10 @@ fn map_bill(row: PgRow) -> RepositoryResult<UtilityBill> {
         validated_by: validated_by.map(UserId::from_uuid),
         validated_at: try_get::<Option<DateTime<Utc>>>(&row, "validated_at")?,
         notes: try_get(&row, "notes")?,
+        ai_job_id: try_get::<Option<Uuid>>(&row, "ai_job_id")?.map(AiJobId::from_uuid),
+        ocr_confidence: try_get::<Option<Decimal>>(&row, "ocr_confidence")?
+            .map(Confidence::from_persistence),
+        ocr_extracted: decode_reading(&try_get::<serde_json::Value>(&row, "ocr_extracted")?)?,
         created_at: try_get(&row, "created_at")?,
         updated_at: try_get(&row, "updated_at")?,
         deleted_at: try_get(&row, "deleted_at")?,
@@ -639,6 +790,89 @@ fn map_charge_balance(row: PgRow) -> RepositoryResult<ChargeBalance> {
 #[cfg(test)]
 mod tests {
     use propflow_domain::billing::ChargeStatus;
+
+    use super::*;
+    use std::str::FromStr as _;
+
+    fn dec(raw: &str) -> Decimal {
+        Decimal::from_str(raw).expect("decimale di test valido")
+    }
+
+    fn confidence(raw: &str) -> Confidence {
+        Confidence::new(dec(raw)).expect("confidenza")
+    }
+
+    fn reading() -> OcrReading {
+        OcrReading::new(vec![
+            ExtractedField {
+                field: BillField::SupplierName,
+                value: ExtractedValue::Text("Enel Energia".to_owned()),
+                confidence: confidence("0.9900"),
+            },
+            ExtractedField {
+                field: BillField::DueDate,
+                value: ExtractedValue::Date(NaiveDate::from_ymd_opt(2026, 8, 31).expect("data")),
+                confidence: confidence("1.0000"),
+            },
+            ExtractedField {
+                field: BillField::TotalAmount,
+                value: ExtractedValue::Amount(dec("184.20")),
+                confidence: confidence("0.6200"),
+            },
+            ExtractedField {
+                field: BillField::Consumption,
+                value: ExtractedValue::Quantity {
+                    value: dec("123.4567"),
+                    unit: "Smc".to_owned(),
+                },
+                confidence: confidence("1.0000"),
+            },
+        ])
+    }
+
+    /// La proposta di una macchina attraversa `ocr_extracted` e torna identica.
+    #[test]
+    fn a_reading_survives_a_round_trip_through_json() {
+        let encoded = encode_reading(&reading());
+        assert_eq!(
+            decode_reading(&encoded).expect("decodifica"),
+            Some(reading())
+        );
+    }
+
+    /// La ragione per cui i numeri sono stringhe: `123.4567` deve tornare
+    /// identico, e attraverso un numero JSON non lo farebbe.
+    #[test]
+    fn decimals_keep_every_digit_across_the_json() {
+        let text = encode_reading(&reading()).to_string();
+        assert!(text.contains("\"123.4567\""), "{text}");
+        assert!(text.contains("\"184.20\""), "{text}");
+    }
+
+    /// Il default della colonna non è un errore: è una bolletta che nessuna
+    /// macchina ha ancora letto.
+    #[test]
+    fn the_column_default_reads_as_no_reading_at_all() {
+        assert_eq!(decode_reading(&serde_json::json!({})).expect("ok"), None);
+    }
+
+    /// La regola degli enum, applicata a una chiave JSON: ciò che non si sa
+    /// interpretare deve essere rumoroso, non sparire — e qui a sparire sarebbe
+    /// proprio ciò che una persona deve rivedere.
+    #[test]
+    fn an_unknown_field_or_type_makes_the_read_fail_instead_of_vanishing() {
+        let unknown_field = serde_json::json!({
+            "fields": [{"field": "qualcosa_di_nuovo", "type": "text",
+                        "value": "x", "confidence": "1"}]
+        });
+        assert!(decode_reading(&unknown_field).is_err());
+
+        let unknown_type = serde_json::json!({
+            "fields": [{"field": "supplier_name", "type": "bounding_box",
+                        "value": "x", "confidence": "1"}]
+        });
+        assert!(decode_reading(&unknown_type).is_err());
+    }
 
     use crate::db::db_enums;
 
