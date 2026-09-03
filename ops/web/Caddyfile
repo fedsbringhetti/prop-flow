@@ -1,0 +1,42 @@
+# Il reverse proxy che realizza il contratto **una sola origine**.
+#
+# `/` serve i file statici del client, `/api/v1` inoltra all'API. Il browser vede
+# un solo host e un solo schema, e ne segue tutto ciò che questa fetta **non** ha
+# dovuto fare: niente CORS da montare, nessun elenco di origini ammesse da tenere
+# allineato fra ambienti, e un cookie di prima parte che può essere
+# `SameSite=Strict` invece di `SameSite=None; Secure`.
+#
+# In sviluppo lo stesso contratto lo realizza il proxy di Vite; in Kubernetes lo
+# realizzerà un Ingress. **Il contratto è questo file**, non lo strumento.
+:8080 {
+	encode zstd gzip
+
+	# L'API per prima: un percorso che comincia con `/api/v1` non deve mai
+	# arrivare al file server, che risponderebbe con `index.html` e un `200`.
+	# Sarebbe il difetto peggiore da diagnosticare — una chiamata che «riesce» e
+	# restituisce HTML dove il client aspetta JSON.
+	handle /api/v1/* {
+		reverse_proxy {$PROPFLOW_API_UPSTREAM:api:8080}
+	}
+
+	handle {
+		root * /srv
+		# Gli asset hanno l'hash nel nome: sono immutabili, e un anno di cache è
+		# corretto. Tutto il resto — `index.html` per primo — va riletto a ogni
+		# caricamento, altrimenti un rilascio non arriva mai a chi ha la pagina in
+		# cache e continua a chiedere asset che non esistono più.
+		#
+		# La seconda direttiva usa `?`, che significa «solo se non già impostato»:
+		# così vale per tutto ciò che la prima non ha coperto, senza doverne
+		# enumerare i percorsi. Un `header /index.html` non basterebbe, perché la
+		# richiesta arriva come `/` e la riscrittura avviene dopo.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		header ?Cache-Control "no-cache"
+
+		# L'applicazione ha percorsi lato client (`/immobili/{id}`): un
+		# ricaricamento su uno di quelli deve servire `index.html`, non un `404`.
+		try_files {path} /index.html
+		file_server
+	}
+}

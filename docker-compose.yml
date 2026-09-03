@@ -122,6 +122,31 @@ services:
       timeout: 3s
       retries: 3
 
+  # Il client, dietro il reverse proxy che realizza il contratto **una sola
+  # origine**: `/` ai file statici, `/api/v1` all'API. È l'unica porta che si apre
+  # verso l'esterno; quella dell'API resta esposta perché in sviluppo serve
+  # Swagger UI, che sta fuori dal prefisso `/api/v1`.
+  web:
+    build:
+      context: .
+      target: web
+    image: propflow-web:dev
+    environment:
+      PROPFLOW_API_UPSTREAM: api:8080
+    ports:
+      - "8081:8080"
+    depends_on:
+      - api
+    read_only: true
+    # Caddy scrive la propria configurazione e i certificati: con il filesystem in
+    # sola lettura gli servono due volumi effimeri, altrimenti non parte.
+    tmpfs:
+      - /tmp
+      - /data
+      - /config
+    security_opt:
+      - no-new-privileges:true
+
   worker:
     build: .
     image: propflow:dev

@@ -5,3 +5,8 @@ target/
 tests/
 docs/
 *.md
+# La build del client gira **dentro** l'immagine con `npm ci`: le dipendenze
+# della macchina di sviluppo — con i binari compilati per il suo sistema — non
+# devono entrarci.
+apps/web/node_modules/
+apps/web/dist/

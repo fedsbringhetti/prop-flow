@@ -268,21 +268,22 @@ interrompendo le richieste in volo. Le connessioni vengono chiuse ordinatamente.
 
 | Job | Cosa fa |
 |---|---|
-| `changes` | Decide se la revisione tocca il codice. Se no, i cinque job che seguono vengono **saltati** |
+| `changes` | Decide se la revisione tocca il **backend**, il **client web**, o nessuno dei due. Chi non è toccato viene **saltato** |
 | `lint` | `cargo fmt --check`, `clippy` con `-D warnings` |
 | `architecture` | `check-domain-purity.sh`: il dominio non dipende dall'infrastruttura, nessun SQL negli handler |
 | `test` | PostgreSQL 16 come service, ruoli, migrazioni dal binario, invarianti dello schema, idempotenza del migratore, suite completa, e un controllo che nessun test si sia dichiarato saltato |
-| `image` | Costruisce l'immagine con cache GHA. Non pubblica: la pubblicazione è una decisione di release, e la fa il workflow di rilascio ([10 — Rilasci](10-rilasci.md#cosa-fa-il-workflow-al-tag)) |
+| `web` | Il client in `apps/web/`: `npm ci`, typecheck, lint, test, build |
+| `image` | Costruisce l'immagine con cache GHA. Gira **anche per una modifica al solo client**, che l'immagine contiene. Non pubblica: la pubblicazione è una decisione di release, e la fa il workflow di rilascio ([10 — Rilasci](10-rilasci.md#cosa-fa-il-workflow-al-tag)) |
 | `dependencies` | `cargo-deny`: vulnerabilità note, crate ritirati, versioni duplicate, provenienza |
 | `ci` | Riepilogo. È l'unico da richiedere nella protezione del branch, così aggiungere un job non richiede di riconfigurare GitHub |
 
 Concorrenza: un push che arriva mentre la pipeline precedente sullo stesso ref è in
 corso la annulla.
 
-### Le modifiche di sola documentazione non eseguono la pipeline
+### Le modifiche di sola documentazione non eseguono la pipeline, e il client si verifica da sé
 
-Una revisione che tocca solo prosa salta `lint`, `architecture`, `test`, `image` e
-`dependencies`. Vale sia sulle pull request sia sui push verso `main` e `dev`: se il
+Una revisione che tocca solo prosa salta `lint`, `architecture`, `test`, `web`,
+`image` e `dependencies`. Vale sia sulle pull request sia sui push verso `main` e `dev`: se il
 merge non porta codice nuovo, dopo il merge non c'è niente di nuovo da verificare.
 
 **Il salto si fa con un `if:` sui job, non con `paths-ignore` sul trigger**, ed è la
@@ -295,6 +296,15 @@ che il riepilogo tratta come successo — la sua condizione guarda `failure` e
 
 Conta come documentazione: tutto sotto `docs/`, ogni file `.md`, e `LICENSE`,
 `.gitignore`, `.gitattributes`, `.editorconfig`.
+
+**Il job `changes` ha due uscite e non una.** `apps/web/*` accende soltanto `web`,
+e i percorsi Rust — `crates/`, `migrations/`, `ops/`, `config/`, `tests/`, i
+manifest — soltanto `code`. Senza la distinzione un cambio di CSS pagherebbe sette
+minuti di test su PostgreSQL, e con il tempo si smette di aspettare la pipeline:
+che è il modo in cui una pipeline diventa inutile. Tutto il resto — un Dockerfile,
+il compose, il workflow stesso — accende **entrambe**, perché l'immagine contiene
+tutti e due e un elenco che sbaglia in difetto manda su `dev` codice che nessuno ha
+verificato.
 
 **`docs/07-operazioni.md` — questo documento — è l'eccezione, e non è pedanteria:**
 `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da `AppConfig` e dal
