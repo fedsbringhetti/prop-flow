@@ -77,6 +77,7 @@ typed_id!(ExpenseShareId, "la quota di una spesa condivisa");
 typed_id!(SettlementId, "un regolamento fra coinquilini");
 typed_id!(SessionId, "una sessione di refresh");
 typed_id!(EventId, "un evento di dominio");
+typed_id!(AiJobId, "un job di elaborazione automatica");
 
 #[cfg(test)]
 mod tests {
