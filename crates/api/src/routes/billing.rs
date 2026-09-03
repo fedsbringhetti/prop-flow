@@ -3,11 +3,13 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::NaiveDate;
+use propflow_application::use_cases::ai::BillOcrStatus;
 use propflow_application::use_cases::billing::{
     IssueChargeCommand, ListChargesQuery, ListUtilityBillsQuery, Recharge,
     RechargeUtilityBillCommand, RegisterUtilityBillCommand, UpdateUtilityBillCommand,
 };
 use propflow_domain::DomainError;
+use propflow_domain::ai::{AiJob, AiJobStatus, ExtractedField, ExtractedValue, OcrReading};
 use propflow_domain::billing::{
     BillStatus, Charge, ChargeBalance, ChargeStatus, ChargeType, Consumption, ConsumptionUnit,
     InvoiceNumber, SupplierName, SupplierVat, UtilityBill, UtilityBillChanges, UtilityType,
@@ -48,6 +50,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/utility-bills/{id}",
             get(bill_detail).patch(update_bill),
         )
+        .route("/api/v1/utility-bills/{id}/ocr", get(bill_ocr_status))
         .route("/api/v1/utility-bills/{id}/validate", post(validate_bill))
         .route("/api/v1/utility-bills/{id}/void", post(void_bill))
         .route("/api/v1/utility-bills/{id}/recharge", post(recharge_bill))
@@ -757,6 +760,179 @@ pub struct RechargeResponse {
     pub utility_bill: UtilityBillResponse,
 }
 
+/// Stato di un job di elaborazione automatica.
+///
+/// **Cinque valori e l'applicazione ne scrive quattro.** `cancelled` esiste
+/// nell'enum del database e nessuno lo produce: un job si chiude in millisecondi e
+/// non c'è nulla da annullare finché non esiste un fornitore vero che impieghi
+/// secondi. Resta nel DTO perché una riga scritta a mano potrebbe contenerlo.
+#[derive(Debug, Clone, Copy, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AiJobStatusDto {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl From<AiJobStatus> for AiJobStatusDto {
+    fn from(value: AiJobStatus) -> Self {
+        match value {
+            AiJobStatus::Queued => Self::Queued,
+            AiJobStatus::Running => Self::Running,
+            AiJobStatus::Succeeded => Self::Succeeded,
+            AiJobStatus::Failed => Self::Failed,
+            AiJobStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+/// Un campo che la macchina ha proposto.
+///
+/// `value` è **sempre una stringa**, qualunque sia il tipo del campo, per la
+/// stessa ragione per cui gli importi lo sono ovunque in questa API: un decimale
+/// che passa da un numero JSON passa da un float binario, e `123.4567` che torna
+/// `123.45670000000001` è un valore che una persona dovrebbe correggere a mano
+/// proprio nel campo che la macchina aveva letto giusto. `type` dice come
+/// interpretarla; `unit` c'è solo per `quantity`.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct ExtractedFieldResponse {
+    /// Il nome della colonna della bolletta a cui la proposta si riferisce.
+    pub field: String,
+    /// `text`, `date`, `amount` o `quantity`.
+    #[serde(rename = "type")]
+    pub value_type: String,
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Fra `"0"` e `"1"`, quattro decimali. **Bassa non vuol dire sbagliata**:
+    /// vuol dire che la macchina non si fida, ed è il campo da guardare per primo.
+    pub confidence: String,
+}
+
+impl ExtractedFieldResponse {
+    fn from_domain(found: &ExtractedField) -> Self {
+        let (value_type, value, unit) = match &found.value {
+            ExtractedValue::Text(text) => ("text", text.clone(), None),
+            ExtractedValue::Date(date) => ("date", date.to_string(), None),
+            ExtractedValue::Amount(amount) => ("amount", amount.to_string(), None),
+            ExtractedValue::Quantity { value, unit } => {
+                ("quantity", value.to_string(), Some(unit.clone()))
+            }
+        };
+        Self {
+            field: found.field.as_str().to_owned(),
+            value_type: value_type.to_owned(),
+            value,
+            unit,
+            confidence: found.confidence.to_string(),
+        }
+    }
+}
+
+/// Il job di lettura automatica di una bolletta.
+///
+/// **Non porta `output`**, cioè la forma salvata sul job: sarebbe la stessa
+/// informazione di `extracted` senza i valori, e due rappresentazioni della stessa
+/// cosa nella stessa risposta si contraddicono al primo caso limite. La forma
+/// serve a interrogare `ai_jobs` per misurare l'accuratezza, non a un client.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct AiJobResponse {
+    pub id: Uuid,
+    pub status: AiJobStatusDto,
+    pub task: String,
+    /// Il fornitore a cui il job è destinato, come **dato**: qui non c'è un ramo
+    /// del codice per fornitore.
+    pub provider_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Quante volte il job è stato preso in carico. Sale alla presa in carico e
+    /// non alla chiusura, così un processo morto a metà lascia traccia di averci
+    /// provato.
+    pub attempts: u16,
+    /// Perché è fallito, se è fallito. **Non è un codice di errore HTTP**: un job
+    /// fallito è un esito riuscito della richiesta che lo ha accodato.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl AiJobResponse {
+    fn from_domain(job: &AiJob) -> Self {
+        Self {
+            id: job.id().as_uuid(),
+            status: job.status().into(),
+            task: job.task().as_str().to_owned(),
+            provider_name: job.provider_name().to_owned(),
+            model: job.model().map(str::to_owned),
+            attempts: job.attempts(),
+            error_code: job
+                .failure()
+                .map(|failure| failure.code.as_str().to_owned()),
+            error_message: job.failure().map(|failure| failure.message.clone()),
+            started_at: job.started_at(),
+            finished_at: job.finished_at(),
+            created_at: job.created_at(),
+        }
+    }
+}
+
+/// A che punto è la lettura automatica di una bolletta, con la proposta.
+///
+/// **Tutti e tre i campi sono `null` finché nessuno ha caricato una scansione**, e
+/// non è un `404`: la bolletta esiste, semplicemente nessuna macchina l'ha ancora
+/// letta.
+///
+/// I valori qui dentro **non sono quelli della bolletta**: sono ciò che la
+/// macchina propone, e la bolletta continua a portare quelli che ha digitato una
+/// persona. È il confine per cui l'accuratezza dell'OCR si potrà misurare, e un
+/// client che li scrivesse sopra i campi della bolletta senza chiedere lo
+/// distruggerebbe.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct BillOcrStatusResponse {
+    pub utility_bill_id: Uuid,
+    /// Lo stato della bolletta, ripetuto qui perché è la domanda successiva di
+    /// chi legge questa risposta: `pending_review` significa «c'è una proposta da
+    /// rivedere».
+    pub status: BillStatusDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<AiJobResponse>,
+    /// La confidenza complessiva: il **minimo** fra quelle dei campi, non la
+    /// media. Dieci campi letti bene non devono nascondere il totale letto male.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    /// I campi proposti. `null` finché nessuna lettura è riuscita; un array
+    /// **vuoto** significa che la macchina ha letto e non ha trovato niente di
+    /// interpretabile, che è un esito diverso.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extracted: Option<Vec<ExtractedFieldResponse>>,
+}
+
+impl BillOcrStatusResponse {
+    fn from_domain(status: &BillOcrStatus) -> Self {
+        Self {
+            utility_bill_id: status.bill.id().as_uuid(),
+            status: status.bill.status().into(),
+            job: status.job.as_ref().map(AiJobResponse::from_domain),
+            confidence: status.bill.ocr_confidence().map(|value| value.to_string()),
+            extracted: status.bill.ocr_extracted().map(|reading: &OcrReading| {
+                reading
+                    .fields()
+                    .iter()
+                    .map(ExtractedFieldResponse::from_domain)
+                    .collect()
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct ListUtilityBillsParams {
     #[serde(default)]
@@ -931,6 +1107,31 @@ async fn update_bill(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(UtilityBillResponse::from_domain(&bill)))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/utility-bills/{id}/ocr", tag = "bollette",
+    params(("id" = Uuid, Path, description = "Identificatore della bolletta")),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Stato della lettura automatica. `job` è `null` finché nessuno ha caricato una scansione", body = BillOcrStatusResponse),
+        (status = 403, description = "Richiede ruolo proprietario o gestore: è la stessa condizione di `ai_jobs_select`", body = crate::error::ProblemDetails),
+        (status = 404, description = "Bolletta non trovata o non visibile", body = crate::error::ProblemDetails),
+    )
+)]
+async fn bill_ocr_status(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<BillOcrStatusResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let status = state
+        .get_bill_ocr_status
+        .execute(&context, UtilityBillId::from_uuid(id))
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(BillOcrStatusResponse::from_domain(&status)))
 }
 
 #[utoipa::path(

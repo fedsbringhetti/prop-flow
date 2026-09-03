@@ -102,6 +102,38 @@ usa.
 Le chiavi sono **percorsi**, non contenuti: una chiave privata in una variabile
 d'ambiente è leggibile da `/proc`, dai dump di crash e da `docker inspect`.
 
+### Impostazioni del worker
+
+Stessa scelta del migratore e stessa ragione: `crates/worker/src/main.rs` le legge con
+`std::env::var`. Il worker non ha un bind né chiavi di firma, e pretendere l'intero
+`AppConfig` gliele chiederebbe.
+
+| Variabile | Default | Note |
+|---|---|---|
+| `PROPFLOW__DATABASE__PRIVILEGED_URL` | — | **obbligatoria**, ruolo `propflow_worker` (`BYPASSRLS`) |
+| `PROPFLOW__STORAGE__ENDPOINT` | — | **obbligatoria** dalla fetta dell'OCR |
+| `PROPFLOW__STORAGE__ACCESS_KEY_ID` | — | **obbligatoria** |
+| `PROPFLOW__STORAGE__SECRET_ACCESS_KEY` | — | **obbligatoria** |
+| `PROPFLOW__STORAGE__REGION` | `us-east-1` | |
+| `PROPFLOW__STORAGE__BUCKET` | `propflow-documents` | |
+| `PROPFLOW__STORAGE__PATH_STYLE` | `true` | |
+| `PROPFLOW__STORAGE__REQUEST_TIMEOUT_SECONDS` | `30` | |
+| `RUST_LOG` | `info` | il worker non ha una sezione `telemetry` |
+
+**Le tre obbligatorie dello storage sono nuove**, e vanno aggiunte al deployment del
+worker *prima* di rilasciare l'OCR: senza, il worker non parte. È deliberato — fallisce
+all'avvio invece di accumulare job `failed` che sembrano colpa del fornitore di lettura.
+
+**Devono puntare allo stesso bucket dell'API.** Il worker legge gli oggetti che l'API ha
+scritto: due configurazioni che divergono danno il sintomo peggiore possibile, cioè job
+che falliscono `document_unavailable` su documenti che l'API mostra benissimo.
+
+Il worker esegue **due cicli in un processo solo** — il dispatcher dell'outbox e la
+lettura automatica delle bollette — e se uno dei due esce, il processo esce: un worker
+vivo che fa metà del lavoro non verrebbe riavviato da nessun orchestratore. Non ci sono
+impostazioni per la frequenza dei cicli: sono costanti nel binario, e diventeranno
+configurazione quando ci sarà una ragione per cambiarle in esercizio.
+
 ## Immagine
 
 Multi-stage: `rust:1.95-slim-bookworm` per la build, `debian:bookworm-slim` per il
@@ -136,7 +168,8 @@ Le tre impostazioni `PROPFLOW__STORAGE__ENDPOINT`, `__ACCESS_KEY_ID` e
 `__SECRET_ACCESS_KEY` non hanno un default e sono **obbligatorie**: senza, l'API
 non parte e dice `configurazione non valida`. È deliberato — un servizio che entra
 in esercizio e fallisce al primo caricamento di un utente è peggio di uno che non
-parte.
+parte. **Dalla fetta dell'OCR valgono anche per il worker**, che legge le scansioni
+dallo stesso bucket: vedi [Impostazioni del worker](#impostazioni-del-worker).
 
 Il fallimento che invece **non** è rumoroso è il bucket che non esiste o non è
 raggiungibile: `S3ObjectStorage::new` valida endpoint e nome, non l'esistenza

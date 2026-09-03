@@ -3,6 +3,7 @@ use std::sync::Arc;
 use propflow_application::ports::{
     ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
+use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
 use propflow_application::use_cases::billing::{
     GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, RechargeUtilityBill,
@@ -102,6 +103,11 @@ pub struct AppState {
     /// Il riaddebito è l'**unica** via per cui una bolletta e un addebito si
     /// legano: `POST /leases/{id}/charges` non accetta `utility_bill_id`.
     pub recharge_utility_bill: Arc<RechargeUtilityBill>,
+    /// **Sola lettura**, e non c'è un gemello che scrive: il job lo accoda il
+    /// caricamento di una scansione e lo esegue il worker. Una rotta che
+    /// lanciasse l'OCR a comando legherebbe l'esito di una richiesta HTTP alla
+    /// disponibilità di un fornitore esterno, che è la decisione 6 del piano.
+    pub get_bill_ocr_status: Arc<GetBillOcrStatus>,
 
     pub issue_charge: Arc<IssueCharge>,
     pub get_charge: Arc<GetCharge>,
@@ -181,6 +187,17 @@ pub struct Dependencies {
     /// perché è una decisione applicativa — quanto a lungo vale un permesso — e non
     /// un dettaglio del fornitore.
     pub presign_ttl_seconds: u32,
+    /// Il nome del fornitore di OCR a cui i job accodati sono destinati.
+    ///
+    /// **Una stringa e non una porta**: l'API non deve poter chiamare l'OCR. Se
+    /// `Arc<dyn OcrProvider>` fosse qui, un handler potrebbe leggere una bolletta
+    /// dentro una richiesta — che è ciò che la decisione 6 del piano esclude,
+    /// perché legherebbe l'esito di un caricamento alla disponibilità di un
+    /// fornitore esterno e ne moltiplicherebbe il costo per ogni ritentativo
+    /// dell'utente. Il valore lo passa `main.rs`, che è anche il posto dove il
+    /// worker costruisce l'adattatore vero: se i due divergessero, `provider_name`
+    /// sui job direbbe una cosa e `model` un'altra.
+    pub ocr_provider_name: String,
     pub pools: DatabasePools,
 }
 
@@ -196,6 +213,7 @@ impl AppState {
             clock,
             object_storage,
             presign_ttl_seconds,
+            ocr_provider_name,
             pools,
         } = dependencies;
 
@@ -278,6 +296,7 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&object_storage),
                 Arc::clone(&clock),
+                ocr_provider_name,
             )),
             list_documents: Arc::new(ListDocuments::new(Arc::clone(&unit_of_work))),
             download_document: Arc::new(DownloadDocument::new(
@@ -354,6 +373,7 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
+            get_bill_ocr_status: Arc::new(GetBillOcrStatus::new(Arc::clone(&unit_of_work))),
             issue_charge: Arc::new(IssueCharge::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),

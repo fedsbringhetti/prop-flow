@@ -13,6 +13,8 @@ mod common;
 
 use std::sync::Arc;
 
+use propflow_application::ports::ObjectStorage as _;
+use propflow_application::use_cases::ai::{ProcessAiJob, Processed};
 use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
 use propflow_application::use_cases::billing::{
     GetCharge, IssueCharge, IssueChargeCommand, ListCharges, ListChargesQuery, ListUtilityBills,
@@ -53,6 +55,7 @@ use propflow_application::use_cases::ticket::{
     TriageTicketCommand,
 };
 use propflow_domain::RequestContext;
+use propflow_domain::ai::{AiJobErrorCode, AiJobStatus, AiTask};
 use propflow_domain::billing::{
     BillStatus, ChargeStatus, ChargeType, InvoiceNumber, SupplierVat, UtilityBillChanges,
     UtilityType,
@@ -64,6 +67,7 @@ use propflow_domain::expense::{
 use propflow_domain::identity::OrgRole;
 use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::payment::{IdempotencyKey, PaymentMethod, PaymentStatus};
+use propflow_domain::ports::WorkerUnitOfWorkFactory as _;
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
@@ -71,6 +75,7 @@ use propflow_domain::ticket::{
     TicketCategory, TicketDescription, TicketPriority, TicketReference, TicketStatus,
     TicketStatusChange, TicketTitle, WaitingOn,
 };
+use propflow_infrastructure::db::PgWorkerUnitOfWorkFactory;
 use propflow_infrastructure::security::OpaqueTokenGenerator;
 
 fn address(city: &str) -> Address {
@@ -990,6 +995,7 @@ async fn upload(
         Arc::clone(&env.factory),
         Arc::clone(storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
         Arc::clone(&env.clock) as _,
+        propflow_infrastructure::DeterministicOcrProvider::NAME,
     )
     .execute(
         context,
@@ -1080,6 +1086,7 @@ async fn documents_are_isolated_between_organizations() {
         Arc::clone(&env.factory),
         Arc::clone(&storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
         Arc::clone(&env.clock) as _,
+        propflow_infrastructure::DeterministicOcrProvider::NAME,
     )
     .execute(
         &beta,
@@ -4856,5 +4863,677 @@ async fn a_property_of_another_organization_has_no_residents() {
     assert_eq!(
         rows, 0,
         "la funzione è SECURITY DEFINER e legge senza policy: se il confine non          fosse nel suo corpo, questa query restituirebbe i residenti di casa altrui"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Lettura automatica delle bollette
+// ---------------------------------------------------------------------------
+
+/// Carica una scansione su una bolletta e restituisce il documento.
+///
+/// Passa da `UploadDocument` e non da una `INSERT` a mano perché **è
+/// l'innesco**: il job nasce dentro quella transazione, e scriverlo a mano
+/// verificherebbe una cosa che il codice non fa.
+async fn attach_scan(
+    env: &common::TestEnv,
+    storage: &Arc<MemoryStorage>,
+    context: &RequestContext,
+    bill_id: propflow_domain::shared::UtilityBillId,
+    content: &str,
+) -> propflow_domain::document::Document {
+    UploadDocument::new(
+        Arc::clone(&env.factory),
+        Arc::clone(storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
+        Arc::clone(&env.clock) as _,
+        propflow_infrastructure::DeterministicOcrProvider::NAME,
+    )
+    .execute(
+        context,
+        UploadDocumentCommand {
+            owner: AttachmentOwner::UtilityBill(bill_id),
+            kind: DocumentKind::UtilityBill,
+            original_filename: "bolletta.txt".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            content: content.as_bytes().to_vec(),
+        },
+    )
+    .await
+    .expect("scansione allegata")
+}
+
+/// Una bolletta pulita, che l'adattatore deterministico legge per intero.
+const CLEAN_SCAN: &str = "\
+Fornitore: Enel Energia
+Data emissione: 01/08/2026
+Scadenza: 31/08/2026
+Totale: 184,20 €
+Consumo: 123,4567 Smc
+";
+
+fn ocr_loop(env: &common::TestEnv, storage: &Arc<MemoryStorage>) -> ProcessAiJob {
+    ProcessAiJob::new(
+        Arc::new(PgWorkerUnitOfWorkFactory::new(
+            env.pools.privileged().clone(),
+        )),
+        Arc::clone(storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
+        Arc::new(propflow_infrastructure::DeterministicOcrProvider),
+        Arc::clone(&env.clock) as _,
+    )
+}
+
+/// Fa girare il ciclo finché il job di **questa** bolletta non è concluso, e lo
+/// restituisce.
+///
+/// Un giro solo non basta, e la ragione vale la pena scriverla perché è la stessa
+/// che rende il worker corretto: `claim_next` **non filtra per organizzazione** —
+/// il worker serve tutte, e deve — quindi in una suite che gira in parallelo sullo
+/// stesso database un giro può benissimo prendere il job di un altro test. Un test
+/// che contasse i giri verificherebbe l'ordine di esecuzione della suite invece
+/// del comportamento del ciclo.
+///
+/// Aspettare il proprio job è anche più fedele a come il worker si comporta
+/// davvero: un ciclo che non si ferma finché la coda non è vuota. Il tetto sui
+/// giri c'è perché un test che non finisce è peggio di un test che fallisce.
+async fn work_until_settled(
+    env: &common::TestEnv,
+    storage: &Arc<MemoryStorage>,
+    context: &RequestContext,
+    bill_id: propflow_domain::shared::UtilityBillId,
+) -> propflow_domain::ai::AiJob {
+    const MAX_TURNS: usize = 64;
+    let ocr = ocr_loop(env, storage);
+    for _ in 0..MAX_TURNS {
+        if let Some(job) = job_of(env, context, bill_id).await
+            && job.status().is_terminal()
+        {
+            return job;
+        }
+        if ocr
+            .execute(AiTask::BillOcr)
+            .await
+            .expect("il ciclo ha girato")
+            == Processed::Nothing
+        {
+            // Coda vuota e il nostro job non è concluso: o non è mai stato
+            // accodato, o qualcuno lo ha lasciato `running`. In entrambi i casi
+            // il test deve dirlo invece di girare a vuoto.
+            break;
+        }
+    }
+    panic!("il job della bolletta {bill_id} non si è concluso in {MAX_TURNS} giri")
+}
+
+async fn job_of(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    bill_id: propflow_domain::shared::UtilityBillId,
+) -> Option<propflow_domain::ai::AiJob> {
+    let mut uow = env.factory.begin(context).await.expect("transazione");
+    uow.ai_jobs()
+        .find_latest_for_subject(AttachmentOwner::UtilityBill(bill_id))
+        .await
+        .expect("job letto")
+}
+
+async fn bill_of(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    bill_id: propflow_domain::shared::UtilityBillId,
+) -> propflow_domain::billing::UtilityBill {
+    let mut uow = env.factory.begin(context).await.expect("transazione");
+    uow.utility_bills()
+        .find_by_id(bill_id)
+        .await
+        .expect("bolletta letta")
+        .expect("la bolletta c'è")
+}
+
+/// **La trappola della `0031`, verificata al contrario.**
+///
+/// Non basta che l'accodamento funzioni: bisogna vedere che ciò che la policy
+/// esclude viene davvero escluso. Il ruolo applicativo ha il privilegio `INSERT`
+/// dalla `0015` e, prima di questa migration, **nessuna policy** — quindi
+/// l'inserimento era negato mentre `has_table_privilege` diceva di sì.
+///
+/// Qui si verificano i tre confini che la policy disegna, scritti in SQL diretto
+/// e non attraverso il repository: il repository può solo produrre job `queued`
+/// nella propria organizzazione, quindi non saprebbe nemmeno tentare gli altri due.
+#[tokio::test]
+async fn the_enqueue_policy_admits_a_queued_job_and_nothing_else() {
+    let env = require_db!();
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-policy").await;
+    let property = a_property(&env, &context, "Bologna").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0001").await;
+    let _ = &storage;
+
+    let org_id = context.org_id().expect("org").as_uuid();
+    let user_id = user_of(&context).as_uuid();
+
+    // (a) un job `queued` dello staff, nella propria organizzazione: ammesso.
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'owner')")
+        .bind(user_id)
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    let accepted = sqlx::query(
+        "INSERT INTO app.ai_jobs (org_id, capability, task, status, provider_name,
+                                  subject_type, subject_id)
+         VALUES ($1, 'ocr', 'bill_ocr', 'queued', 'deterministic',
+                 'utility_bill', $2)",
+    )
+    .bind(org_id)
+    .bind(bill.id().as_uuid())
+    .execute(&mut *tx)
+    .await;
+    assert!(accepted.is_ok(), "l'accodamento dello staff deve riuscire");
+
+    // (b) lo stesso job che si dichiara già concluso: rifiutato. È la ragione per
+    // cui `status = 'queued'` sta nella WITH CHECK e non solo nel codice — senza,
+    // una query scritta a mano potrebbe far dire alla macchina quello che vuole
+    // chi chiama.
+    let declared_done = sqlx::query(
+        "INSERT INTO app.ai_jobs (org_id, capability, task, status, provider_name,
+                                  subject_type, subject_id, finished_at, output)
+         VALUES ($1, 'ocr', 'bill_ocr', 'succeeded', 'deterministic',
+                 'utility_bill', $2, now(), '{\"scritto\":\"a mano\"}'::jsonb)",
+    )
+    .bind(org_id)
+    .bind(bill.id().as_uuid())
+    .execute(&mut *tx)
+    .await;
+    assert!(
+        declared_done.is_err(),
+        "un job che nasce `succeeded` deve essere rifiutato dalla policy"
+    );
+    drop(tx);
+
+    // (c) un job in un'altra organizzazione: rifiutato.
+    let stranger = register_owner(&env, "ocr-policy-altrove").await;
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'owner')")
+        .bind(user_of(&stranger).as_uuid())
+        .bind(stranger.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    let cross_org = sqlx::query(
+        "INSERT INTO app.ai_jobs (org_id, capability, task, status, provider_name,
+                                  subject_type, subject_id)
+         VALUES ($1, 'ocr', 'bill_ocr', 'queued', 'deterministic',
+                 'utility_bill', $2)",
+    )
+    .bind(org_id)
+    .bind(bill.id().as_uuid())
+    .execute(&mut *tx)
+    .await;
+    assert!(
+        cross_org.is_err(),
+        "accodare lavoro nell'organizzazione di un altro deve essere rifiutato"
+    );
+}
+
+/// L'altra metà della policy: **il ruolo applicativo non può aggiornare un job**,
+/// e il rifiuto è silenzioso.
+///
+/// La `0031` aggiunge una policy di `INSERT` e nessuna di `UPDATE`. Con RLS attiva
+/// e nessuna policy per un comando, quel comando non solleva: la riga
+/// semplicemente non è visibile all'aggiornamento, e il risultato è `UPDATE 0`.
+/// Va verificato apposta, perché un `UPDATE` che non fa niente e non protesta è
+/// il modo più facile di credere che una difesa non ci sia.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_what_a_machine_recorded() {
+    let env = require_db!();
+    let context = register_owner(&env, "ocr-update").await;
+    let property = a_property(&env, &context, "Ancona").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0002").await;
+
+    let mut tx = env
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'owner')")
+        .bind(user_of(&context).as_uuid())
+        .bind(context.org_id().expect("org").as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    sqlx::query(
+        "INSERT INTO app.ai_jobs (id, org_id, capability, task, status, provider_name,
+                                  subject_type, subject_id)
+         VALUES ($1, $2, 'ocr', 'bill_ocr', 'queued', 'deterministic',
+                 'utility_bill', $3)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(context.org_id().expect("org").as_uuid())
+    .bind(bill.id().as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("accodato");
+
+    let updated = sqlx::query(
+        "UPDATE app.ai_jobs SET status = 'succeeded', finished_at = now()
+          WHERE subject_id = $1",
+    )
+    .bind(bill.id().as_uuid())
+    .execute(&mut *tx)
+    .await
+    .expect("l'UPDATE non solleva: nega producendo zero righe");
+    assert_eq!(
+        updated.rows_affected(),
+        0,
+        "senza una policy di UPDATE la riga non è aggiornabile, e il rifiuto è muto"
+    );
+}
+
+/// Il giro completo, attraverso i due strati che lo compongono davvero:
+/// l'accodamento dall'API e il ciclo dal worker.
+#[tokio::test]
+async fn a_scan_uploaded_to_a_draft_brings_the_bill_under_review() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-giro").await;
+    let property = a_property(&env, &context, "Padova").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0010").await;
+
+    let document = attach_scan(&env, &storage, &context, bill.id(), CLEAN_SCAN).await;
+
+    // Accodato **nella stessa transazione** del documento: appena il caricamento
+    // è tornato, il job c'è già.
+    let queued = job_of(&env, &context, bill.id())
+        .await
+        .expect("job accodato");
+    assert_eq!(queued.status(), AiJobStatus::Queued);
+    assert_eq!(queued.task(), AiTask::BillOcr);
+    assert_eq!(queued.input_document_id(), Some(document.id()));
+    assert_eq!(queued.attempts(), 0, "nessuno lo ha ancora preso in carico");
+    // La bolletta **non si è mossa**: il caricamento non la tocca.
+    assert_eq!(
+        bill_of(&env, &context, bill.id()).await.status(),
+        BillStatus::Draft
+    );
+
+    let job = work_until_settled(&env, &storage, &context, bill.id()).await;
+    assert_eq!(job.status(), AiJobStatus::Succeeded);
+    assert_eq!(job.attempts(), 1);
+    assert!(job.started_at().is_some());
+    assert!(
+        job.finished_at().is_some(),
+        "ai_jobs_finished_ck rifiuterebbe la riga senza la data"
+    );
+    assert!(job.failure().is_none());
+
+    let reviewed = bill_of(&env, &context, bill.id()).await;
+    assert_eq!(reviewed.status(), BillStatus::PendingReview);
+    assert_eq!(reviewed.ai_job_id(), Some(job.id()));
+    let reading = reviewed
+        .ocr_extracted()
+        .expect("la proposta è sulla bolletta");
+    assert_eq!(reading.fields().len(), 5);
+    assert_eq!(
+        reviewed.ocr_confidence(),
+        reading.overall_confidence(),
+        "la confidenza della bolletta è quella complessiva della lettura"
+    );
+
+    // **Il confine fra le due colonne JSONB**, verificato su righe vere: il job
+    // porta la forma, la bolletta porta i valori.
+    assert_eq!(job.output().len(), 5);
+    let stored_output: serde_json::Value =
+        sqlx::query_scalar("SELECT output FROM app.ai_jobs WHERE id = $1")
+            .bind(job.id().as_uuid())
+            .fetch_one(env.pools.privileged())
+            .await
+            .expect("output letto");
+    let rendered = stored_output.to_string();
+    assert!(
+        !rendered.contains("Enel Energia") && !rendered.contains("184.20"),
+        "un valore della bolletta è finito in ai_jobs.output: {rendered}"
+    );
+    // …e la forma è interrogabile con il contenimento, che è ciò per cui
+    // `ai_jobs_output_ix` è `gin (output jsonb_path_ops)`.
+    let found: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM app.ai_jobs
+          WHERE output @> '{\"fields\":[\"total_amount\"]}'::jsonb AND id = $1",
+    )
+    .bind(job.id().as_uuid())
+    .fetch_one(env.pools.privileged())
+    .await
+    .expect("query di contenimento");
+    assert_eq!(found, 1);
+
+    // **I campi della bolletta non sono stati toccati.** È la decisione 4 del
+    // piano, ed è la ragione per cui l'accuratezza si potrà misurare.
+    assert_eq!(reviewed.supplier_name(), bill.supplier_name());
+    assert_eq!(reviewed.total_amount(), bill.total_amount());
+    assert_eq!(reviewed.invoice_number(), bill.invoice_number());
+
+    // Il job non si riprende: è concluso, e `claim_next` filtra su `queued`.
+    assert!(job.status().is_terminal());
+}
+
+/// **Il fallimento verificato quanto il successo.**
+///
+/// Un documento che il fornitore rifiuta lascia il job `failed` con il suo
+/// `error_code` e la bolletta **in `draft`** — dove era, con il suo allegato,
+/// correggibile a mano come se l'OCR non esistesse.
+#[tokio::test]
+async fn a_refused_document_fails_the_job_and_leaves_the_bill_in_draft() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-fallimento").await;
+    let property = a_property(&env, &context, "Genova").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0020").await;
+
+    attach_scan(
+        &env,
+        &storage,
+        &context,
+        bill.id(),
+        "Questa non è una bolletta, è una lettera.\n",
+    )
+    .await;
+
+    let job = work_until_settled(&env, &storage, &context, bill.id()).await;
+    assert_eq!(job.status(), AiJobStatus::Failed);
+    assert_eq!(
+        job.failure().map(|failure| failure.code),
+        Some(AiJobErrorCode::UnsupportedDocument)
+    );
+    assert!(
+        job.failure().is_some_and(|f| !f.message.is_empty()),
+        "il messaggio del fornitore serve a capire perché"
+    );
+    assert!(job.finished_at().is_some());
+    assert_eq!(job.attempts(), 1, "ci ha provato una volta");
+    assert!(
+        job.confidence().is_none() && job.output().is_empty(),
+        "un fallimento non è una lettura a confidenza zero"
+    );
+
+    let untouched = bill_of(&env, &context, bill.id()).await;
+    assert_eq!(
+        untouched.status(),
+        BillStatus::Draft,
+        "la bolletta resta dov'era"
+    );
+    assert_eq!(untouched.ai_job_id(), None);
+    assert!(untouched.ocr_extracted().is_none());
+    assert!(untouched.ocr_confidence().is_none());
+}
+
+/// **La decisione che il piano lasciava aperta**: un job su un documento
+/// archiviato *fallisce*.
+///
+/// Il worker gira con `BYPASSRLS` e la riga la vedrebbe comunque. Fallire è la
+/// scelta, perché altrimenti la macchina legge ciò che una persona ha deciso di
+/// togliere — e glielo ripropone come se fosse ancora lì.
+#[tokio::test]
+async fn a_job_on_an_archived_document_fails_instead_of_reading_it_anyway() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-archiviato").await;
+    let property = a_property(&env, &context, "Verona").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0030").await;
+
+    let document = attach_scan(&env, &storage, &context, bill.id(), CLEAN_SCAN).await;
+
+    // Archiviato **dopo** l'accodamento, cioè mentre il job era in coda.
+    ArchiveDocument::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&context, ArchiveDocumentCommand { id: document.id() })
+        .await
+        .expect("documento archiviato");
+
+    // I byte sono ancora nel bucket: il soft delete non tocca lo storage. Se il
+    // worker leggesse senza guardare la riga, la lettura riuscirebbe.
+    assert!(
+        storage.get(document.storage().object_key()).await.is_ok(),
+        "l'oggetto c'è ancora: è la riga a essere archiviata"
+    );
+
+    let job = work_until_settled(&env, &storage, &context, bill.id()).await;
+    assert_eq!(job.status(), AiJobStatus::Failed);
+    assert_eq!(
+        job.failure().map(|failure| failure.code),
+        Some(AiJobErrorCode::DocumentArchived)
+    );
+    assert_eq!(
+        bill_of(&env, &context, bill.id()).await.status(),
+        BillStatus::Draft
+    );
+}
+
+/// **`SKIP LOCKED` verificato con DUE worker**, che è l'unico modo di verificarlo.
+///
+/// Due transazioni concorrenti che chiamano `claim_next`:
+/// - con **due** job in coda devono prenderne uno ciascuno, diversi;
+/// - con **uno** solo, il secondo deve ottenere `None` invece di aspettare.
+///
+/// Con un worker solo questo test passerebbe anche senza `SKIP LOCKED`, ed è
+/// precisamente la verifica che non verificherebbe niente.
+#[tokio::test]
+async fn two_workers_never_claim_the_same_job() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-skip-locked").await;
+    let property = a_property(&env, &context, "Livorno").await;
+
+    let first = register_bill(&env, &context, property, None, "2026/OCR/0040").await;
+    let second = register_bill(&env, &context, property, None, "2026/OCR/0041").await;
+    attach_scan(&env, &storage, &context, first.id(), CLEAN_SCAN).await;
+    attach_scan(&env, &storage, &context, second.id(), CLEAN_SCAN).await;
+
+    let factory = PgWorkerUnitOfWorkFactory::new(env.pools.privileged().clone());
+
+    // Due transazioni **aperte insieme**: è la simultaneità a rendere il test
+    // significativo, non due chiamate in sequenza.
+    let mut worker_one = factory.begin().await.expect("primo worker");
+    let mut worker_two = factory.begin().await.expect("secondo worker");
+
+    let claimed_one = worker_one
+        .ai_jobs()
+        .claim_next(AiTask::BillOcr)
+        .await
+        .expect("primo claim")
+        .expect("un job c'è");
+    let claimed_two = worker_two
+        .ai_jobs()
+        .claim_next(AiTask::BillOcr)
+        .await
+        .expect("secondo claim")
+        .expect("il secondo job c'è");
+
+    assert_ne!(
+        claimed_one.id(),
+        claimed_two.id(),
+        "due worker hanno preso lo stesso job: SKIP LOCKED non sta funzionando"
+    );
+
+    // Con entrambi i job bloccati, un terzo worker non trova niente — e **non si
+    // blocca ad aspettare**, che è l'altra metà di ciò che SKIP LOCKED compra.
+    let mut worker_three = factory.begin().await.expect("terzo worker");
+    let nothing = worker_three
+        .ai_jobs()
+        .claim_next(AiTask::BillOcr)
+        .await
+        .expect("terzo claim");
+    assert!(
+        nothing.is_none(),
+        "la coda è tutta bloccata: il terzo worker deve saltare, non aspettare"
+    );
+
+    drop(worker_one);
+    drop(worker_two);
+    drop(worker_three);
+}
+
+/// Il piano diceva «l'OCR non scrive i campi della bolletta»: qui si verifica
+/// l'altra metà, cioè che **correggere a mano non cancella la proposta** — e che
+/// la bolletta **resta** in `pending_review`, che è la decisione presa eseguendo.
+#[tokio::test]
+async fn correcting_a_proposal_keeps_it_and_leaves_the_bill_under_review() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-correzione").await;
+    let property = a_property(&env, &context, "Parma").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0050").await;
+
+    attach_scan(&env, &storage, &context, bill.id(), CLEAN_SCAN).await;
+    work_until_settled(&env, &storage, &context, bill.id()).await;
+
+    let proposal = bill_of(&env, &context, bill.id())
+        .await
+        .ocr_extracted()
+        .cloned()
+        .expect("la proposta c'è");
+
+    // Una persona corregge il totale.
+    let corrected = UpdateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &context,
+            bill.id(),
+            UtilityBillChanges {
+                total_amount: Some("190.00".parse().expect("decimale")),
+                ..UtilityBillChanges::default()
+            },
+        )
+        .await
+        .expect("correzione ammessa");
+
+    assert_eq!(
+        corrected.status(),
+        BillStatus::PendingReview,
+        "correggere una proposta è la revisione, non il suo annullamento"
+    );
+    // La proposta sopravvive alla scrittura, riletta dal database.
+    let reread = bill_of(&env, &context, bill.id()).await;
+    assert_eq!(reread.ocr_extracted(), Some(&proposal));
+    assert_eq!(
+        reread.total_amount().amount(),
+        "190.00".parse().expect("dec")
+    );
+
+    // …e da lì si valida, che prima del passo 3 era impossibile.
+    let validated = ValidateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&context, bill.id())
+        .await
+        .expect("validazione ammessa da pending_review");
+    assert_eq!(validated.status(), BillStatus::Validated);
+    assert!(validated.validated_at().is_some());
+    assert!(
+        bill_of(&env, &context, bill.id())
+            .await
+            .ocr_extracted()
+            .is_some(),
+        "validare non cancella ciò che la macchina aveva proposto"
+    );
+}
+
+/// Una bolletta che **non è più una bozza** quando il job arriva in fondo: il job
+/// si chiude `failed` con `subject_not_processable`, e nessuno riporta indietro
+/// una decisione già presa da una persona.
+#[tokio::test]
+async fn a_bill_validated_while_the_job_was_queued_is_not_dragged_back() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-corsa").await;
+    let property = a_property(&env, &context, "Rimini").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0060").await;
+
+    attach_scan(&env, &storage, &context, bill.id(), CLEAN_SCAN).await;
+
+    // Una persona valida **mentre il job è in coda**.
+    ValidateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&context, bill.id())
+        .await
+        .expect("validata a mano");
+
+    let job = work_until_settled(&env, &storage, &context, bill.id()).await;
+    assert_eq!(job.status(), AiJobStatus::Failed);
+    assert_eq!(
+        job.failure().map(|failure| failure.code),
+        Some(AiJobErrorCode::SubjectNotProcessable)
+    );
+    let untouched = bill_of(&env, &context, bill.id()).await;
+    assert_eq!(untouched.status(), BillStatus::Validated);
+    assert!(untouched.ocr_extracted().is_none());
+}
+
+/// L'accodamento **non scatta** su una bolletta che non è in bozza, né su un
+/// documento allegato ad altro. Sono le due condizioni che evitano il lavoro
+/// inutile e il lavoro dannoso.
+#[tokio::test]
+async fn nothing_is_queued_for_a_photo_or_for_a_bill_that_is_no_longer_a_draft() {
+    let env = require_db!();
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-innesco").await;
+    let property = a_property(&env, &context, "Siena").await;
+
+    // (a) un documento allegato a un **immobile**: nessun job.
+    upload(
+        &env,
+        &storage,
+        &context,
+        AttachmentOwner::Property(property),
+        "planimetria.pdf",
+    )
+    .await;
+
+    // (b) una scansione su una bolletta **già validata**: nessun job.
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0070").await;
+    ValidateUtilityBill::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&context, bill.id())
+        .await
+        .expect("validata");
+    attach_scan(&env, &storage, &context, bill.id(), CLEAN_SCAN).await;
+
+    assert!(
+        job_of(&env, &context, bill.id()).await.is_none(),
+        "una bolletta già validata non ha niente da farsi proporre"
+    );
+}
+
+/// Il job di un'altra organizzazione **non si vede**: `ai_jobs_select` chiede
+/// `org_id = current_org_id() AND is_org_staff(org_id)`.
+#[tokio::test]
+async fn a_job_of_another_organization_is_out_of_reach() {
+    let env = require_db!();
+    // Anche qui, benché non faccia girare il ciclo: accoda un job e lo lascia in
+    // coda, e senza il lock lo troverebbe il worker del test successivo.
+    let _gate = common::lock_ocr_queue(&env.pools).await;
+    let storage = Arc::new(MemoryStorage::default());
+    let context = register_owner(&env, "ocr-isolamento").await;
+    let property = a_property(&env, &context, "Lecce").await;
+    let bill = register_bill(&env, &context, property, None, "2026/OCR/0080").await;
+    attach_scan(&env, &storage, &context, bill.id(), CLEAN_SCAN).await;
+
+    assert!(job_of(&env, &context, bill.id()).await.is_some());
+
+    let stranger = register_owner(&env, "ocr-isolamento-altro").await;
+    assert!(
+        job_of(&env, &stranger, bill.id()).await.is_none(),
+        "il job di un'altra organizzazione non deve essere visibile"
     );
 }

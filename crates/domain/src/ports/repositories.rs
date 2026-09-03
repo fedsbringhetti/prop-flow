@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::ai::{AiJob, AiTask};
 use crate::billing::{
     BillStatus, Charge, ChargeBalance, ChargeStatus, ChargeType, UtilityBill, UtilityType,
 };
@@ -514,6 +515,65 @@ pub trait UtilityBillRepository: Send {
     /// L'immutabilità della bolletta è quindi un'invariante di **dominio**
     /// (`UtilityBill::apply` rifiuta da `allocated` in poi) e non un privilegio.
     async fn update(&mut self, bill: &UtilityBill) -> RepositoryResult<()>;
+}
+
+/// I job AI **visti da una richiesta**: si accodano e si leggono, non si toccano.
+///
+/// La forma non è una scelta di stile: è la migration `0031`, che concede al ruolo
+/// applicativo l'`INSERT` con `status = 'queued'` nella `WITH CHECK` e **nessun
+/// `UPDATE`**. Un metodo di aggiornamento qui sarebbe un metodo che la Row Level
+/// Security rifiuta sempre — e lo farebbe in silenzio, con zero righe aggiornate,
+/// perché la mancanza di una policy nega senza sollevare. Chi scrive l'esito di un
+/// job è il worker, attraverso [`AiJobQueue`].
+#[async_trait]
+pub trait AiJobRepository: Send {
+    /// Accoda un job. Va chiamata **nella stessa transazione** che registra il
+    /// documento da leggere: un job che puntasse a un documento la cui riga non è
+    /// stata committata è un job che fallirebbe più tardi, nel worker, dove
+    /// l'errore non ha più niente a che vedere con la sua causa.
+    async fn enqueue(&mut self, job: &AiJob) -> RepositoryResult<()>;
+
+    /// L'ultimo job accodato su un soggetto, se ce n'è uno.
+    ///
+    /// «L'ultimo» e non «tutti»: la rotta di stato risponde alla domanda «a che
+    /// punto è la lettura di questa bolletta», che ha una risposta sola. Lo
+    /// storico dei tentativi resta in tabella e si guarderà quando il ritentativo
+    /// esisterà. Usa `ai_jobs_subject_ix`, che è ordinato
+    /// `(subject_type, subject_id, created_at DESC)` apposta.
+    async fn find_latest_for_subject(
+        &mut self,
+        subject: AttachmentOwner,
+    ) -> RepositoryResult<Option<AiJob>>;
+}
+
+/// La coda dei job **vista dal worker**, che è l'unico a poterla far avanzare.
+///
+/// Sta in un trait separato da [`AiJobRepository`] e non fra i metodi di
+/// [`UnitOfWork`](super::UnitOfWork) di proposito: si ottiene solo da
+/// [`WorkerUnitOfWork`], cioè da una transazione che gira come `propflow_worker`
+/// con `BYPASSRLS` e **senza** contesto di sicurezza. Il tipo dice quindi da sé
+/// con quale postura si sta parlando al database, che è la proprietà per cui la
+/// regola 4 di `CLAUDE.md` esiste — non «un solo modo di raggiungere il
+/// database», ma «nessun modo di raggiungerlo senza dichiarare chi si è».
+#[async_trait]
+pub trait AiJobQueue: Send {
+    /// Prende in carico il job più vecchio in coda per questo compito, se c'è.
+    ///
+    /// Usa `FOR UPDATE SKIP LOCKED`: chi arriva secondo **salta** le righe già
+    /// bloccate invece di aspettarle, che è ciò che rende il worker replicabile
+    /// senza coordinamento esterno. Va usato anche con una replica sola —
+    /// aggiungerlo dopo significa scoprire il difetto quando le repliche diventano
+    /// due, cioè sotto carico.
+    ///
+    /// La riga torna **bloccata dalla transazione in corso**: chi chiama deve
+    /// portarla a `running` e committare *subito*, senza chiamare il fornitore nel
+    /// frattempo. Tenere la transazione aperta per i secondi di una chiamata di
+    /// rete occuperebbe una connessione del pool per tutto quel tempo; chiuderla
+    /// senza aver marcato la riga la rimetterebbe in coda per un altro worker.
+    async fn claim_next(&mut self, task: AiTask) -> RepositoryResult<Option<AiJob>>;
+
+    /// Scrive lo stato del job: la presa in carico e la chiusura passano da qui.
+    async fn update(&mut self, job: &AiJob) -> RepositoryResult<()>;
 }
 
 /// Filtro di elenco degli addebiti con paginazione keyset.

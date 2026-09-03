@@ -8,6 +8,6 @@ pub(crate) mod enums;
 
 pub use error::map_sqlx_error;
 pub use pool::{DatabasePools, PoolSettings};
-pub use uow::{PgUnitOfWork, PgUnitOfWorkFactory};
+pub use uow::{PgUnitOfWork, PgUnitOfWorkFactory, PgWorkerUnitOfWork, PgWorkerUnitOfWorkFactory};
 
 pub(crate) use enums as db_enums;

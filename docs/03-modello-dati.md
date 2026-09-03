@@ -5,8 +5,8 @@ usano `security_invoker`, introdotto in 15, senza il quale una vista girerebbe c
 i diritti del proprietario e aggirerebbe la Row Level Security del chiamante.
 
 Numeri dello schema attuale: **24 tabelle** più `audit_log` partizionata,
-**35 enum**, **6 domini**, **170 indici**, **65 policy RLS**, **50 trigger**,
-**4 viste**, **29 funzioni**, **23 migration**.
+**35 enum**, **6 domini**, **170 indici**, **66 policy RLS**, **50 trigger**,
+**4 viste**, **34 funzioni**, **31 migration**.
 
 ## Diagramma ER
 
@@ -297,6 +297,28 @@ la stessa lista, e allungare l'una richiede di allungare l'altra. È voluto — 
 punto in cui ci si ferma a chiedersi se quella colonna debba davvero essere scrivibile
 dall'applicazione — ed è verificato dai controlli 11 e 12 delle invarianti.
 
+### Una tabella che scrive solo il worker
+
+`app.ai_jobs` è il rovescio del caso precedente, e la forma vale la pena riconoscerla
+perché **non si legge dai privilegi**. Il ruolo applicativo ha `SELECT, INSERT, UPDATE`
+dalla `0015` come su ogni tabella, e fino alla `0031` aveva **una sola policy**,
+`ai_jobs_select`: con la RLS attiva e nessuna policy per un comando, quel comando è
+negato. L'inserimento falliva quindi con `auth.denied_by_policy` — il codice riservato
+ai nostri difetti — mentre `has_table_privilege` diceva di sì.
+
+La `0031` aggiunge `ai_jobs_enqueue`, di `INSERT`, per lo staff dell'organizzazione e
+con `status = 'queued'` **dentro la `WITH CHECK`**: una richiesta HTTP non deve poter
+inserire un job che si dichiara già `succeeded` con un `output` scritto a mano, nemmeno
+con una query scritta a mano. È la stessa forma di `role = 'tenant'` in
+`org_members_accept_invitation`.
+
+**Nessuna policy di `UPDATE`, e resta così di proposito.** L'esito di un job lo scrive
+`propflow_worker`, che ha `BYPASSRLS` e non passa da alcuna policy: se l'API potesse
+riscrivere un job, la misura dell'accuratezza dell'OCR sarebbe scritta da chi viene
+misurato. Il rifiuto è **muto** — un `UPDATE` senza policy non solleva, aggiorna zero
+righe — ed è la ragione per cui i repository trattano `rows_affected() == 0` come
+`RepositoryError::RowLevelSecurity`.
+
 ### Contatori scritti solo da un trigger
 
 `app.ticket_reference_counters` è l'unica tabella che il ruolo applicativo può
@@ -351,6 +373,13 @@ Conseguenze operative:
 Tabelle senza audit, per volume o scarso valore: `ticket_messages` (contenuto
 utente), `user_sessions`, `ai_jobs`, `domain_events`, `ticket_status_history` (già
 append-only e auto-tracciata).
+
+**`ai_jobs` è senza audit e va saputo**, perché con l'OCR è diventata una tabella che
+una macchina scrive: per ricostruire cosa quella macchina ha fatto **alla bolletta** si
+guarda la riga di `audit_log` di `app.utility_bills`, che c'è — con `ocr_extracted` fra
+le colonne redatte. Il registro dei job resta in `ai_jobs` stessa, che nessuno può
+riscrivere dall'applicazione: la `0031` le dà una policy di `INSERT` e nessuna di
+`UPDATE`.
 
 ## Invarianti applicate dal database
 

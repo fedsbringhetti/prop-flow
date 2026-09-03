@@ -67,3 +67,43 @@ macro_rules! require_db {
         }
     };
 }
+
+/// Chiave dell'advisory lock che serializza i test dell'OCR.
+///
+/// Arbitraria e condivisa fra i due binari di test: deve solo non collidere con
+/// altri lock nello stesso database.
+const OCR_QUEUE_LOCK: i64 = 918_273_645;
+
+/// Prende in esclusiva la coda dei job AI per la durata del test.
+///
+/// **Serve perché la coda è globale, e lo è di proposito.** `claim_next` non
+/// filtra per organizzazione — il worker serve tutte, e deve — mentre ogni test
+/// ha il **proprio** doppio dello storage oggetti. Due test dell'OCR in parallelo
+/// sullo stesso database producono quindi il difetto peggiore possibile: il worker
+/// dell'uno prende il job dell'altro, non trova l'oggetto nel proprio bucket, e lo
+/// chiude `failed` con `document_unavailable`. Non è un difetto del codice — in
+/// produzione c'è un solo storage — ma della suite, che simula una configurazione
+/// che non può esistere.
+///
+/// L'invariante da rispettare è: **accodare e smaltire dentro la stessa sezione
+/// critica**, così quando il lock si libera non restano job in coda per il worker
+/// del test successivo.
+///
+/// `pg_advisory_xact_lock` e non quello di sessione: si rilascia con la
+/// transazione, quindi anche se il test va in panico. Un lock di sessione su una
+/// connessione che torna al pool resterebbe preso, e la suite si bloccherebbe.
+pub struct OcrQueueGate(#[allow(dead_code)] sqlx::Transaction<'static, sqlx::Postgres>);
+
+pub async fn lock_ocr_queue(pools: &DatabasePools) -> OcrQueueGate {
+    let mut tx = pools
+        .privileged()
+        .begin()
+        .await
+        .expect("transazione per il lock");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(OCR_QUEUE_LOCK)
+        .execute(&mut *tx)
+        .await
+        .expect("lock sulla coda dei job");
+    OcrQueueGate(tx)
+}

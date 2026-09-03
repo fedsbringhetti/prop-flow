@@ -214,6 +214,14 @@ pub enum Invariant {
 
     #[error("Only a draft or a validated bill can be corrected")]
     UtilityBillNotEditable,
+    /// Una lettura automatica si propone solo su una bozza.
+    ///
+    /// Fra l'accodamento e la fine del job una persona può aver validato,
+    /// riaddebitato o annullato la bolletta: scriverci sopra la proposta di una
+    /// macchina significherebbe riportare indietro qualcosa che qualcuno ha già
+    /// deciso.
+    #[error("Only a draft bill can take a machine reading")]
+    UtilityBillNotReviewable,
     #[error("Only a draft bill can be validated")]
     UtilityBillNotValidatable,
     #[error("Only a validated or already allocated bill can be recharged")]
@@ -259,6 +267,11 @@ pub enum Invariant {
     #[error("Only a pending settlement can be withdrawn")]
     SettlementNotCancellable,
 
+    #[error("Only a queued job can be started")]
+    AiJobNotStartable,
+    #[error("Only a running job can be finished")]
+    AiJobNotFinishable,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -301,7 +314,8 @@ impl Invariant {
             Self::UtilityBillNotEditable
             | Self::UtilityBillNotValidatable
             | Self::UtilityBillNotAllocatable
-            | Self::UtilityBillNotVoidable => "utility_bill.invalid_transition",
+            | Self::UtilityBillNotVoidable
+            | Self::UtilityBillNotReviewable => "utility_bill.invalid_transition",
             Self::ChargeNotVoidable | Self::ChargeNotWriteOffable | Self::ChargeNotPayable => {
                 "charge.invalid_transition"
             }
@@ -329,6 +343,12 @@ impl Invariant {
             Self::SettlementNotConfirmable
             | Self::SettlementNotRejectable
             | Self::SettlementNotCancellable => "settlement.invalid_transition",
+            // Stesso trattamento degli altri aggregati. **Nessuno di questi due
+            // codici raggiunge un client**: le transizioni del job le compie il
+            // worker, che non risponde a nessuno — un `ai_job.invalid_transition`
+            // che comparisse in una risposta HTTP sarebbe il segnale che qualcuno
+            // ha esposto il ciclo del job come se fosse un comando.
+            Self::AiJobNotStartable | Self::AiJobNotFinishable => "ai_job.invalid_transition",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }

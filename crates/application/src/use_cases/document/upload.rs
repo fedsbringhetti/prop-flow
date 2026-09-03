@@ -13,6 +13,7 @@ use super::owner_access::ensure_owner_is_visible;
 use crate::authorization;
 use crate::error::AppResult;
 use crate::ports::ObjectStorage;
+use crate::use_cases::ai::enqueue_bill_ocr;
 
 /// Comando di caricamento.
 ///
@@ -29,23 +30,43 @@ pub struct UploadDocumentCommand {
 }
 
 /// Carica un documento e ne registra i metadati.
+///
+/// **È anche l'innesco della lettura automatica**: una scansione allegata a una
+/// bolletta in bozza accoda un job di OCR, nella stessa transazione. L'innesco sta
+/// qui e non in una rotta sua perché riusa tutto ciò che esiste già — la rotta di
+/// caricamento, il riferimento polimorfico, la RLS dei documenti — e perché il
+/// fatto che fa nascere il job *è* l'arrivo della scansione. Vedi
+/// [`enqueue_bill_ocr`].
 pub struct UploadDocument {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
     storage: Arc<dyn ObjectStorage>,
     clock: Arc<dyn Clock>,
+    /// Il nome del fornitore a cui il job è destinato, che finisce in
+    /// `ai_jobs.provider_name`.
+    ///
+    /// Una stringa e **non** un `Arc<dyn OcrProvider>`, deliberatamente. La porta
+    /// dell'OCR nell'API non ci deve essere: averla qui significherebbe che un
+    /// handler può chiamarla, cioè leggere una bolletta dentro una richiesta HTTP
+    /// — che è precisamente ciò che la decisione 6 del piano esclude, perché
+    /// legherebbe l'esito di un caricamento alla disponibilità di un fornitore
+    /// esterno. Il valore lo passa `main.rs`, che costruisce l'adattatore vero per
+    /// il worker.
+    ocr_provider_name: String,
 }
 
 impl UploadDocument {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         unit_of_work: Arc<dyn UnitOfWorkFactory>,
         storage: Arc<dyn ObjectStorage>,
         clock: Arc<dyn Clock>,
+        ocr_provider_name: impl Into<String>,
     ) -> Self {
         Self {
             unit_of_work,
             storage,
             clock,
+            ocr_provider_name: ocr_provider_name.into(),
         }
     }
 
@@ -112,6 +133,13 @@ impl UploadDocument {
         // trasforma un `403 auth.denied_by_policy` in un `404` onesto.
         ensure_owner_is_visible(uow.as_mut(), command.owner).await?;
         uow.documents().insert(&document).await?;
+        // **Nella stessa transazione che registra il documento**, e non dopo: un
+        // job che puntasse a una riga non ancora committata fallirebbe più tardi,
+        // nel worker, dove l'errore non ha più niente a che vedere con la causa.
+        // Il caricamento apre già due transazioni — è un debito noto — e accodare
+        // fuori ne aggiungerebbe una terza.
+        let ai_job_id =
+            enqueue_bill_ocr(uow.as_mut(), &document, &self.ocr_provider_name, now).await?;
         uow.events()
             .append(&DomainEvent::new(
                 DomainEventPayload::DocumentUploaded(DocumentUploaded::new(
@@ -125,6 +153,19 @@ impl UploadDocument {
             ))
             .await?;
         uow.commit().await?;
+
+        if let Some(ai_job_id) = ai_job_id {
+            // Nessun evento di dominio per il ciclo del job: un job dell'OCR non
+            // è un fatto di dominio, è un dettaglio di come una bolletta arriva a
+            // `pending_review` — e quel fatto lo annuncia già
+            // `billing.utility_bill.status_changed`. Resta la riga di log, che è
+            // dove si guarda per sapere se l'innesco è scattato.
+            tracing::info!(
+                document_id = %document.id(),
+                ai_job_id = %ai_job_id,
+                "lettura automatica della bolletta accodata"
+            );
+        }
 
         Ok(document)
     }
