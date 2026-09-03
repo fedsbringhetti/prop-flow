@@ -123,9 +123,18 @@ services:
     command: ["propflow-worker"]
     environment:
       PROPFLOW__DATABASE__PRIVILEGED_URL: postgres://propflow_worker:worker@postgres:5432/propflow
+      # Lo **stesso** bucket dell'API: il worker legge le scansioni che l'API ha
+      # scritto, e due configurazioni divergenti darebbero job falliti su documenti
+      # che l'API mostra benissimo.
+      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__BUCKET: propflow-documents
+      PROPFLOW__STORAGE__ACCESS_KEY_ID: propflow
+      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: propflow-dev-secret
       RUST_LOG: info
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      minio-setup:
         condition: service_completed_successfully
     read_only: true
     security_opt:

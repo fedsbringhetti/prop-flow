@@ -990,6 +990,7 @@ async fn upload(
         Arc::clone(&env.factory),
         Arc::clone(storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
         Arc::clone(&env.clock) as _,
+        propflow_infrastructure::DeterministicOcrProvider::NAME,
     )
     .execute(
         context,
@@ -1080,6 +1081,7 @@ async fn documents_are_isolated_between_organizations() {
         Arc::clone(&env.factory),
         Arc::clone(&storage) as Arc<dyn propflow_application::ports::ObjectStorage>,
         Arc::clone(&env.clock) as _,
+        propflow_infrastructure::DeterministicOcrProvider::NAME,
     )
     .execute(
         &beta,

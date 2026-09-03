@@ -162,6 +162,7 @@ impl TestApp {
             clock: Arc::new(SystemClock),
             object_storage: Arc::clone(&storage) as Arc<dyn ObjectStorage>,
             presign_ttl_seconds: PRESIGN_TTL_SECONDS,
+            ocr_provider_name: propflow_infrastructure::DeterministicOcrProvider::NAME.to_owned(),
             pools: pools.clone(),
         };
 

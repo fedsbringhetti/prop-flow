@@ -12,7 +12,9 @@ use propflow_infrastructure::security::{
 };
 use propflow_infrastructure::storage::{S3ObjectStorage, S3Settings};
 use propflow_infrastructure::telemetry::{self, TelemetrySettings};
-use propflow_infrastructure::{DatabasePools, PgUnitOfWorkFactory, SystemClock};
+use propflow_infrastructure::{
+    DatabasePools, DeterministicOcrProvider, PgUnitOfWorkFactory, SystemClock,
+};
 use tokio::signal;
 
 #[tokio::main]
@@ -105,6 +107,11 @@ async fn main() -> Result<()> {
             .context("configurazione dello storage oggetti non valida")?,
         ),
         presign_ttl_seconds: config.storage.presign_ttl_seconds,
+        // Il **nome**, non l'adattatore: l'API accoda job destinati a questo
+        // fornitore e non lo chiama mai. A chiamarlo è `propflow-worker`, che
+        // costruisce lo stesso adattatore. Il giorno in cui il fornitore sarà una
+        // scelta di configurazione, questa riga diventa quella scelta.
+        ocr_provider_name: DeterministicOcrProvider::NAME.to_owned(),
         pools: pools.clone(),
     };
 

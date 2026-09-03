@@ -2147,6 +2147,8 @@ name = "propflow-worker"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "propflow-application",
+ "propflow-domain",
  "propflow-infrastructure",
  "serde_json",
  "sqlx",
