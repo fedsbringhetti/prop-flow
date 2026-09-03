@@ -177,6 +177,13 @@ pub struct AppState {
     pub unit_of_work: Arc<dyn UnitOfWorkFactory>,
     /// Usato solo dall'endpoint di prontezza.
     pub pools: DatabasePools,
+    /// Se il cookie del refresh token debba dichiarare `Secure`.
+    ///
+    /// Vive nello stato e non nella firma di `router()` perché a leggerlo sono gli
+    /// handler dell'autenticazione, non i layer: passarlo come quinto parametro
+    /// posizionale accanto a due limiti e un timeout sarebbe un `bool` anonimo
+    /// fra numeri, cioè un argomento che si scambia senza che nulla protesti.
+    pub secure_cookies: bool,
 }
 
 /// Componenti concrete costruite in `main`, prima di essere composte negli use case.
@@ -204,6 +211,8 @@ pub struct Dependencies {
     /// sui job direbbe una cosa e `model` un'altra.
     pub ocr_provider_name: String,
     pub pools: DatabasePools,
+    /// Vedi [`AppState::secure_cookies`]. `false` solo in sviluppo su HTTP.
+    pub secure_cookies: bool,
 }
 
 impl AppState {
@@ -220,6 +229,7 @@ impl AppState {
             presign_ttl_seconds,
             ocr_provider_name,
             pools,
+            secure_cookies,
         } = dependencies;
 
         Self {
@@ -472,6 +482,7 @@ impl AppState {
             clock,
             unit_of_work,
             pools,
+            secure_cookies,
         }
     }
 }

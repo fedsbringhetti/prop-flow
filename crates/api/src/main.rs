@@ -113,6 +113,7 @@ async fn main() -> Result<()> {
         // scelta di configurazione, questa riga diventa quella scelta.
         ocr_provider_name: DeterministicOcrProvider::NAME.to_owned(),
         pools: pools.clone(),
+        secure_cookies: config.server.secure_cookies,
     };
 
     let state = AppState::new(dependencies);

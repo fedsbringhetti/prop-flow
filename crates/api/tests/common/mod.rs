@@ -171,6 +171,10 @@ impl TestApp {
             presign_ttl_seconds: PRESIGN_TTL_SECONDS,
             ocr_provider_name: propflow_infrastructure::DeterministicOcrProvider::NAME.to_owned(),
             pools: pools.clone(),
+            // `false` come in sviluppo: i test dei bordi non parlano HTTPS, e con
+            // `Secure` un client vero non rimanderebbe il cookie — cioè il test
+            // verificherebbe una configurazione che nessuno usa in quel contesto.
+            secure_cookies: false,
         };
 
         Some(Self {
@@ -280,19 +284,56 @@ impl TestApp {
         (status, json, Response::from_parts(parts, Body::empty()))
     }
 
+    /// `POST` che porta il cookie di sessione e ne restituisce quello nuovo.
+    ///
+    /// Il refresh token **non è più nel corpo**: sta in un cookie `httpOnly`, e i
+    /// test che verificano la rotazione devono comportarsi come un browser — cioè
+    /// rimandare ciò che il `Set-Cookie` precedente ha consegnato. Il terzo
+    /// elemento della tupla è quel valore, così una catena di refresh si scrive
+    /// senza rileggere gli header a mano ogni volta.
+    pub async fn post_with_cookie(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        token: Option<&str>,
+    ) -> (StatusCode, serde_json::Value, Option<String>) {
+        let mut builder = Request::builder().method("POST").uri(path);
+        if let Some(cookie) = cookie {
+            builder = builder.header("cookie", format!("propflow_refresh={cookie}"));
+        }
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        let request = builder.body(Body::empty()).expect("richiesta costruita");
+        let (status, json, response) = self.request(request).await;
+        (status, json, refresh_cookie_of(&response))
+    }
+
     pub async fn post(
         &self,
         path: &str,
         body: serde_json::Value,
     ) -> (StatusCode, serde_json::Value) {
+        let (status, json, _) = self.post_returning_cookie(path, body).await;
+        (status, json)
+    }
+
+    /// Come [`TestApp::post`] ma restituisce anche il cookie di sessione posato
+    /// dalla risposta: è così che un test ottiene un refresh token, che dal
+    /// corpo non esce più.
+    pub async fn post_returning_cookie(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value, Option<String>) {
         let request = Request::builder()
             .method("POST")
             .uri(path)
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
             .expect("richiesta costruita");
-        let (status, json, _) = self.request(request).await;
-        (status, json)
+        let (status, json, response) = self.request(request).await;
+        (status, json, refresh_cookie_of(&response))
     }
 
     pub async fn post_auth(
@@ -390,6 +431,24 @@ pub const BODY_LIMIT_BYTES: usize = 1024 * 1024;
 pub const UPLOAD_BODY_LIMIT_BYTES: usize = 25 * 1024 * 1024;
 pub const PRESIGN_TTL_SECONDS: u32 = 300;
 
+/// Il valore del cookie `propflow_refresh` posato da una risposta.
+///
+/// `None` sia quando il `Set-Cookie` manca sia quando cancella il cookie
+/// (`Max-Age=0`, valore vuoto): per chi chiama sono la stessa cosa — non c'è una
+/// sessione da presentare.
+pub fn refresh_cookie_of(response: &Response<Body>) -> Option<String> {
+    response
+        .headers()
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| name.trim() == "propflow_refresh")
+        .map(|(_, value)| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 /// Email irripetibile fra esecuzioni.
 pub fn unique_email(prefix: &str) -> String {
     format!("{prefix}-{}@example.test", uuid::Uuid::now_v7().simple())
@@ -420,8 +479,8 @@ pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (Strin
         .await;
     assert_eq!(status, StatusCode::CREATED, "registrazione non riuscita");
 
-    let (status, body) = app
-        .post(
+    let (status, body, _) = app
+        .post_returning_cookie(
             "/api/v1/auth/login",
             serde_json::json!({ "email": email, "password": password }),
         )

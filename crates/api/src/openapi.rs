@@ -112,7 +112,6 @@ use utoipa::{Modify, OpenApi};
         crate::routes::auth::RegisterRequest,
         crate::routes::auth::RegisterResponse,
         crate::routes::auth::LoginRequest,
-        crate::routes::auth::RefreshRequest,
         crate::routes::auth::SessionResponse,
         crate::routes::dashboard::DashboardResponse,
         crate::routes::properties::CreatePropertyRequest,

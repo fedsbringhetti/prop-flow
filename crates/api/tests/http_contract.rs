@@ -240,49 +240,41 @@ async fn refresh_rotates_the_token_and_reuse_revokes_the_chain() {
         serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
     )
     .await;
-    let (_, session) = app
-        .post(
+    let (_, session, first_refresh) = app
+        .post_returning_cookie(
             "/api/v1/auth/login",
             serde_json::json!({ "email": email, "password": password }),
         )
         .await;
-    let first_refresh = session["refresh_token"]
-        .as_str()
-        .expect("refresh")
-        .to_owned();
+    // Il refresh token esce **solo** dal cookie: se ricomparisse nel corpo, il
+    // cookie `httpOnly` non proteggerebbe più niente, perché un XSS lo leggerebbe
+    // dalla risposta del login.
+    assert!(
+        session.get("refresh_token").is_none(),
+        "il refresh token non deve comparire nel corpo: {session}"
+    );
+    let first_refresh = first_refresh.expect("il login deve posare il cookie di sessione");
 
-    let (status, rotated) = app
-        .post(
-            "/api/v1/auth/refresh",
-            serde_json::json!({ "refresh_token": first_refresh }),
-        )
+    let (status, rotated, second_refresh) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&first_refresh), None)
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {rotated}");
-    let second_refresh = rotated["refresh_token"]
-        .as_str()
-        .expect("refresh")
-        .to_owned();
+    let second_refresh = second_refresh.expect("il refresh deve posare il cookie nuovo");
     assert_ne!(
         second_refresh, first_refresh,
         "il token non è stato ruotato"
     );
 
     // Riuso del token già consumato: rifiutato, e la catena viene revocata.
-    let (status, body) = app
-        .post(
-            "/api/v1/auth/refresh",
-            serde_json::json!({ "refresh_token": first_refresh }),
-        )
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&first_refresh), None)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
 
     // Anche il successore cade, perché non si sa quale delle due parti sia
     // legittima.
-    let (status, body) = app
-        .post(
-            "/api/v1/auth/refresh",
-            serde_json::json!({ "refresh_token": second_refresh }),
-        )
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&second_refresh), None)
         .await;
     assert_eq!(
         status,

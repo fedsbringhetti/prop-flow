@@ -39,6 +39,7 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 | `PROPFLOW__SERVER__REQUEST_TIMEOUT_SECONDS` | `30` | risposta `503` allo scadere |
 | `PROPFLOW__SERVER__BODY_LIMIT_BYTES` | `1048576` | limite generale, montato sull'intero router |
 | `PROPFLOW__SERVER__UPLOAD_BODY_LIMIT_BYTES` | `26214400` | solo le rotte di caricamento dei documenti |
+| `PROPFLOW__SERVER__SECURE_COOKIES` | `true` | `Secure` sul cookie del refresh token. `false` **solo** in sviluppo su `http://localhost` |
 | `PROPFLOW__DATABASE__APPLICATION_URL` | — | **obbligatoria**, ruolo `propflow_app` |
 | `PROPFLOW__DATABASE__PRIVILEGED_URL` | — | **obbligatoria**, ruolo `propflow_worker` |
 | `PROPFLOW__DATABASE__MAX_CONNECTIONS` | `16` | per pool |

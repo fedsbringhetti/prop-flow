@@ -48,6 +48,16 @@ pub struct ServerConfig {
     /// per servirne uno. Vedi `crates/api/src/lib.rs`.
     #[serde(default = "default_upload_body_limit_bytes")]
     pub upload_body_limit_bytes: usize,
+    /// `Secure` sul cookie del refresh token.
+    ///
+    /// **L'unica impostazione che la fetta del client introduce**, e il default è
+    /// `true` di proposito: un ambiente che dimentica di dichiararla ottiene il
+    /// comportamento sicuro, non quello comodo. Va portata a `false` soltanto per
+    /// lo sviluppo su `http://localhost`, dove il browser non manda un cookie che
+    /// dichiara `Secure` — il refresh fallirebbe sempre e la sessione durerebbe i
+    /// quindici minuti dell'access token, con un sintomo che non nomina la causa.
+    #[serde(default = "default_secure_cookies")]
+    pub secure_cookies: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -167,6 +177,9 @@ const fn default_body_limit_bytes() -> usize {
 }
 const fn default_upload_body_limit_bytes() -> usize {
     25 * 1024 * 1024
+}
+const fn default_secure_cookies() -> bool {
+    true
 }
 fn default_storage_region() -> String {
     "us-east-1".to_owned()
