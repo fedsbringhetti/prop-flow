@@ -1869,3 +1869,209 @@ spesa per organizzazione — per cui `ai_jobs_cost_ix` esiste — non è tarabil
 fuori perimetro. `provider_name` è un **dato** e non un ramo del codice, dichiarato
 dall'adattatore con `OcrProvider::name`: il giorno in cui i fornitori saranno due, i job
 dei due si distinguono con una `WHERE` e non con un deploy separato.
+
+---
+
+<a id="adr-038"></a>
+
+## ADR-038 — Una sola origine, il refresh in un cookie, e nessuna difesa CSRF
+
+**3 settembre 2026.** Il client web ha bisogno di una sessione in un browser. La
+scelta di dove tenere i due token decide tre cose insieme — che cosa un XSS può
+rubare, se serva CORS, e se serva una difesa CSRF — e conviene deciderle una volta
+sola perché sono la stessa decisione vista da tre lati.
+
+### La decisione
+
+**Una sola origine.** `/` serve i file statici del client, `/api/v1` inoltra
+all'API. In sviluppo lo fa il proxy di Vite, in produzione un reverse proxy —
+`ops/web/Caddyfile` nel compose, un Ingress in Kubernetes.
+
+**Il refresh token vive in un cookie** `HttpOnly; Secure; SameSite=Strict;
+Path=/api/v1/auth`, e **solo** lì: `SessionResponse` non lo porta più, e le
+richieste di refresh e di logout non lo accettano nel corpo. **L'access token vive
+in memoria** JavaScript, e il client lo manda come `Authorization: Bearer`.
+
+**Non c'è nessuna difesa CSRF**, e non è una dimenticanza.
+
+### Perché il token non può stare in due posti
+
+`HttpOnly` esiste per impedire a uno script di leggere il cookie. Se lo stesso
+valore comparisse anche nel JSON del login, uno script lo prenderebbe da lì senza
+dover toccare `document.cookie`: sarebbe metà misura a costo pieno. Trenta giorni
+di sessione sono precisamente ciò che non deve essere leggibile da un XSS che
+arrivi dopo il caricamento della pagina.
+
+L'access token in memoria muore al ricaricamento, e non è un problema: si riottiene
+dal cookie. Non sta in `localStorage` né in `sessionStorage`, quindi non è
+leggibile da uno script che arrivi dopo.
+
+**Alternativa scartata: entrambi in `localStorage`.** Nessuna modifica al backend,
+e in cambio un XSS legge un refresh token che vale trenta giorni. Su un prodotto
+che tratta contratti di locazione e importi è un rischio che si può accettare solo
+dicendolo, e non c'è ragione di accettarlo.
+
+**Alternativa scartata: un parametro che scelga fra cookie e corpo.** Un flag
+sull'autenticazione è una superficie in più da sbagliare, e sposta su chi chiama
+una decisione di sicurezza che deve essere del server.
+
+### L'argomento per cui il CSRF non serve, per intero
+
+Il CSRF è possibile quando il browser autentica una richiesta **da solo**, cioè con
+un cookie che manda senza che nessuno glielo chieda. Qui non accade, per due
+ragioni che si sommano:
+
+- **ogni rotta di business è autenticata dall'header `Authorization`**, che un sito
+  attaccante non può impostare su una richiesta cross-origin senza il permesso di
+  CORS — che non concediamo, perché CORS **non è montato affatto**;
+- **le sole rotte autenticate dal cookie sono `/auth/refresh` e `/auth/logout`**, e
+  su quelle il cookie è `SameSite=Strict`: il browser non lo manda su una richiesta
+  che parte da un altro sito. Non c'è niente da falsificare.
+
+`Path=/api/v1/auth` non è cosmetico: limita l'invio del cookie alle sole rotte che
+lo usano, quindi una richiesta a `/api/v1/properties` non se lo porta dietro nemmeno
+per sbaglio. È difesa in profondità — se un giorno l'argomento sopra si incrinasse,
+il cookie comunque non arriverebbe dove non serve.
+
+### La condizione che lo tiene in piedi, e perché è un test
+
+**L'argomento regge finché nessuna rotta di business è autenticata da un cookie.**
+Il giorno in cui qualcuno ne aggiungesse una per comodità — una sessione a cookie
+«per semplificare un endpoint» — tutto questo cadrebbe, e cadrebbe **in silenzio**:
+nessun test fallirebbe, nessun avviso comparirebbe, e la falla si scoprirebbe
+soltanto da fuori.
+
+Per questo esiste `the_session_cookie_is_refused_by_business_routes` in
+`crates/api/tests/http_contract.rs`. Presenta un cookie **valido** a cinque rotte di
+business senza `Authorization` e pretende `401 auth.token_missing` da tutte. Non
+verifica una funzionalità: verifica che una porta resti chiusa, ed è l'unica forma
+in cui una nota di sicurezza sopravvive a chi non l'ha letta.
+
+### Che cosa la singola origine fa risparmiare
+
+Quasi tutte le conseguenze sono cose che **non** si devono fare, e vale la pena
+elencarle perché sembravano lavoro obbligatorio:
+
+- **CORS non va montato.** Non c'è nessuna richiesta cross-origin da autorizzare.
+  Resta il debito registrato in [09](09-stato-e-roadmap.md) per il giorno in cui un
+  client di terze parti esisterà, e quel giorno sarà una decisione sua;
+- **il cookie è di prima parte**, quindi `SameSite=Strict` invece di
+  `SameSite=None; Secure` — la differenza fra un cookie che il browser non manda
+  mai altrove e uno che manda ovunque glielo si chieda;
+- **nessun elenco di origini ammesse** da tenere allineato fra ambienti, che è una
+  configurazione che si sbaglia in silenzio e si scopre in produzione.
+
+**Alternativa scartata: origini separate** (`app.` e `api.`). Più comoda da
+distribuire in modo indipendente, e costa tre pezzi di backend — CORS con
+credenziali, cookie `SameSite=None`, difesa CSRF — ciascuno sbagliabile senza che
+nulla protesti. Si comprerebbe indipendenza di deploy pagandola in superficie di
+sicurezza.
+
+**Alternativa scartata: i file statici serviti dall'API Rust.** Un servizio solo e
+nessun proxy da configurare, ed è tentante. Costa però che la build del frontend
+finisca nell'immagine dell'API, e che un processo HTTP faccia due mestieri con
+profili di carico e di cache opposti — file immutabili con l'hash nel nome da un
+lato, risposte personali non memorizzabili dall'altro. Il proxy va scritto comunque
+per Kubernetes.
+
+### Conseguenze
+
+**È una rottura del contratto dell'API**, ammessa sulla linea 0.x: un client che
+leggeva `refresh_token` dal corpo smette di trovarlo, e chi usa `curl` passa a un
+cookie jar. Gli esempi di [05 — API](05-api.md#autenticazione) sono aggiornati.
+
+`PROPFLOW__SERVER__SECURE_COOKIES` è **l'unica configurazione che questa fetta
+introduce**, e il default è `true`: un ambiente che dimentica di dichiararla ottiene
+il comportamento sicuro. Va portata a `false` solo in sviluppo su
+`http://localhost`, dove il browser non manda un cookie che dichiara `Secure` — il
+refresh fallirebbe sempre, e il sintomo (una sessione che dura quindici minuti) non
+nomina la causa.
+
+**Il logout senza cookie resta `204`.** Non c'è nulla da revocare, il cookie si
+cancella comunque, e costringere un client che l'ha già perso a distinguere due
+esiti che per lui sono lo stesso non lo aiuterebbe.
+
+---
+
+<a id="adr-039"></a>
+
+## ADR-039 — Il client è una web app responsive, e non un'app mobile nativa
+
+**3 settembre 2026.** `docs/09` elencava fra i trasversali mancanti un «client
+mobile (Flutter o React Native), fuori perimetro backend». Questa decisione lo
+rivede, e lo scrive qui perché una revisione che resta in una conversazione non
+esiste per chi legge il documento vecchio.
+
+### Perché l'ipotesi era stata scritta, e perché non regge
+
+Era stata scritta **prima che il perimetro dell'API fosse noto**, quando «PropTech
+bidirezionale» faceva pensare a due app. Rivista guardando che cosa fa davvero un
+proprietario: registra una bolletta con dodici campi, legge tabelle di addebiti,
+confronta la proposta di una macchina con i numeri che ha digitato, riaddebita a un
+contratto. È lavoro da schermo grande e da tastiera, e su un telefono sarebbe
+peggiore in ogni singolo passaggio.
+
+L'inquilino invece è mobile per natura — fotografa un guasto, guarda quanto deve — e
+una web app responsive lo copre bene. Le due cose che richiederebbero davvero
+un'app nativa sono le **notifiche push** e un accesso alla fotocamera più fluido di
+`<input capture>`: la prima non è nemmeno possibile finché `Notifier` non ha un
+adattatore, la seconda non è nella fetta 1.
+
+**Un codice solo copre entrambi i ruoli**, e su un progetto che ha già un backend
+in Rust con undici moduli, un secondo linguaggio e un secondo ciclo di rilascio
+sono un costo che va giustificato da un bisogno, non da un'ipotesi.
+
+### La decisione
+
+**React, TypeScript in `strict`, Vite**, in `apps/web/` dentro questo repository.
+`shadcn/ui` su Radix e Tailwind per i componenti.
+
+**Monorepo e non repository separato.** Il contratto dell'API e il client si
+muovono insieme: una rotta che cambia e un client che non la segue si vedono
+**nella stessa pull request**, che è esattamente il difetto che un repository
+separato lascia scoprire tardi. Il costo è un filtro di percorso in CI, che è
+`.github/workflows/ci.yml` §`changes`.
+
+**Componenti copiati e non una libreria chiusa.** Un gestionale richiede tabelle
+con ordinamento e filtri, form con validazione per campo, date che capiscano il
+formato italiano; con una libreria chiusa ognuna di queste si personalizza
+combattendo. Radix sotto garantisce accessibilità e gestione della tastiera, che è
+la parte che nessuno riscrive bene a mano — e infatti il progetto usa Radix dove il
+browser non offre niente (modali, menù) e i controlli nativi dove li offre
+(`<select>`).
+
+**Alternativa scartata: Tailwind nudo.** Controllo totale, e accessibilità, focus e
+ARIA su modali e menù da scrivere a mano: è il modo più rapido di costruire
+un'interfaccia che *sembra* professionale e non lo è.
+
+**Alternativa scartata: MUI.** Il `DataGrid` risolverebbe da solo metà delle
+schermate del proprietario, e il prodotto somiglierebbe a un'app Google salvo un
+lavoro di tema considerevole; le parti da gestionale più utili sono per giunta a
+pagamento.
+
+### L'interfaccia è in italiano, e le stringhe stanno in un catalogo dal primo giorno
+
+Gli utenti sono proprietari e inquilini italiani. Non contraddice la regola
+sull'inglese di `CLAUDE.md`, che riguarda ciò che un estraneo incontra **dal di
+fuori del repository** — commit, pull request, README — non ciò che un utente legge
+nel prodotto.
+
+**Ne segue un vincolo che vale dal primo giorno, ed è la parte che conta: nessuna
+stringa visibile va scritta dentro un componente.** La traduzione in inglese è già
+decisa e soltanto rimandata, e una fetta costruita con i testi nel JSX la rende una
+riscrittura invece di un'aggiunta. Le stringhe stanno in `src/i18n/it.ts`, i
+componenti ne usano le chiavi, e la lingua è una sola finché non ce ne sono due.
+
+**Non serve una libreria di internazionalizzazione nella fetta 1** — servirà per
+plurali e genere. Serve **il livello di indirezione**, che è la parte impossibile
+da aggiungere dopo. Per la stessa ragione date, importi e numeri passano da
+`Intl.DateTimeFormat` e `Intl.NumberFormat` **con la lingua come parametro**:
+formattarli a mano lascerebbe `31/08/2026` e `184,20 €` anche nella versione
+inglese.
+
+### Quando questa decisione va rifatta
+
+**Quando l'inquilino sarà il fuoco**, cioè nella fetta 2, e con davanti le due cose
+che oggi non ci sono: le notifiche push, che richiedono un adattatore di
+`Notifier`, e la fotocamera. È scritto qui perché chi farà quella fetta lo trovi
+invece di riderivarlo.

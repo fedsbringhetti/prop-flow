@@ -50,6 +50,12 @@ autoconsistente resta valido anche dopo un logout. La fonte di verità è la rig
 - Vita: **30 giorni**.
 - **Rotazione a uso singolo**: ogni refresh consuma il token presentato ed emette
   uno nuovo.
+- **Viaggia solo in un cookie** `HttpOnly; Secure; SameSite=Strict;
+  Path=/api/v1/auth`, e non compare più nel corpo di alcuna risposta. Metterlo
+  anche nel JSON del login vanificherebbe `HttpOnly`: un XSS lo leggerebbe da lì
+  senza toccare `document.cookie`. Ne segue che **questa API non ha una difesa
+  CSRF e non deve averne una** — l'argomento, e la condizione che lo tiene in
+  piedi, sono in [ADR-038](08-decisioni.md#adr-038).
 
 #### Rilevamento del riuso
 
@@ -273,7 +279,12 @@ Elenco onesto, con i dettagli in [09 — Stato e roadmap](09-stato-e-roadmap.md)
 - **Verifica dell'email** bloccante: il campo `email_verified_at` esiste, il flusso
   no.
 - **MFA**: la colonna esiste, la logica no.
-- **CORS** non configurato (il layer è disponibile, non è montato).
+- **CORS** non configurato (il layer è disponibile, non è montato). **Non è un
+  debito da chiudere ma una scelta**: client e API stanno sulla stessa origine
+  dietro un reverse proxy, quindi non c'è nessuna richiesta cross-origin da
+  autorizzare, e non montarlo è metà dell'argomento per cui non serve una difesa
+  CSRF ([ADR-038](08-decisioni.md#adr-038)). Resta aperto per il giorno in cui
+  esistesse un client di terze parti, e quel giorno sarà una decisione sua.
 - **Gate sulle licenze** delle dipendenze: la CI controlla vulnerabilità, crate
   ritirati e provenienza, non le licenze.
 - **Rotazione delle chiavi** di firma: non c'è un `kid` nei token, quindi ruotare

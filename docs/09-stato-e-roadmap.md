@@ -56,12 +56,39 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | OCR delle bollette: porta `OcrProvider` senza fornitore scelto, adattatore deterministico, coda `ai_jobs` con `SKIP LOCKED`, `pending_review` con le sue uscite, stato del job dall'API | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox, lettura automatica delle bollette | completi |
+| Dashboard: `GET /dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto | completo |
+| Sessione in cookie: refresh `HttpOnly` fuori dal corpo, `Secure` condizionale, test che tiene in piedi l'argomento CSRF | completo |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-402 test: 204 unitari di dominio, 16 applicativi, 26 di infrastruttura, 6 unitari
+413 test: 204 unitari di dominio, 16 applicativi, 26 di infrastruttura, 11 unitari
 del bordo HTTP, 75 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 69 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+MinIO, 75 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+
+### Client web — il percorso del proprietario
+
+`apps/web/`, React e TypeScript in `strict`, servito dalla **stessa origine**
+dell'API dietro un reverse proxy.
+
+| Componente | Stato |
+|---|---|
+| Catalogo delle stringhe, formattazione con `Intl` e la lingua come parametro | completo |
+| Aritmetica decimale su interi: `parseFloat` non compare | completo |
+| Client dell'API con il **refresh a singolo volo** e la traduzione di `ProblemDetails` | completo |
+| Guscio: registrazione, accesso, uscita, organizzazione attiva, navigazione | completo |
+| I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
+| Dashboard: otto numeri, ognuno collegato al posto dove si agisce | completo |
+| Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
+| Stanze e residenti | completo per la fetta 1 |
+| Contratti: elenco, bozza, parti, attivazione, disdetta, stati derivati mostrati e non filtrati | completo per la fetta 1 |
+| Inviti: emissione e consegna del token, presentato per quello che è | completo per la fetta 1 |
+| Bollette: registrazione, scansione, **revisione dell'OCR campo per campo**, validazione, riaddebito | completo per la fetta 1 |
+| Addebiti: scadenzario, annullamento, rinuncia all'incasso | completo per la fetta 1 |
+| Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
+
+27 test: 12 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+volo **riprodotto anche al contrario** — 11 sui decimali e sulla formattazione, 4
+sul percorso da sola tastiera.
 
 ## Non implementato
 
@@ -84,38 +111,27 @@ porta → use case → repository → endpoint → test.
    **Prima del triage viene però la scelta del fornitore**, che blocca anche l'OCR dal
    produrre valore: vedi [ADR-037](08-decisioni.md#adr-037) e la sezione
    [La decisione che ora blocca più valore di ogni riga di codice](#la-decisione-che-ora-blocca-più-valore-di-ogni-riga-di-codice).
-2. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
-   **ultima**, ed è una scelta da rileggere insieme alla sua alternativa, perché la
-   fetta dei pagamenti ha reso facile confondersi.
+2. ~~**Dashboard**~~ — **fatta**, come passo 1 della fetta del client: `GET
+   /api/v1/dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto.
+   Nessuna migration: la vista esiste dalla `0015`.
 
-   **È sbloccata**, e ora del tutto: sette degli otto numeri erano già completi — la
-   `0017` ha sistemato quelli sui contratti con `lease_in_force`, la `0024` ha tolto
-   dall'insoluto gli addebiti annullati e stornati, e i pagamenti hanno dato a
-   `paid_amount` righe da contare. L'ottavo, `bills_pending_review`, **conta
-   `('draft','pending_review')` dalla `0015`** e non è mai cambiato: a mancare era una
-   delle due popolazioni, perché `pending_review` non lo scriveva nessuno. Con l'OCR
-   quello stato esiste davvero, quindi il numero ha finalmente il significato che il suo
-   nome promette — senza che la vista sia stata toccata. Costa uno use case di lettura,
-   un DTO e una rotta: nessuna migration, nessun aggregato, nessuna porta.
+   La voce si tiene perché la sua conclusione — «sbloccata non vuol dire
+   prioritaria», e la finestra sulle semantiche la chiude il **primo client** e non
+   l'esistenza dell'endpoint — resta vera e generale, e perché quella finestra
+   adesso **si è chiusa**: le due semantiche non decise (se `written_off` sia una
+   perdita a sé, se il credito da sovrapagamento vada mostrato) sono ancora aperte
+   e cambiarle ora è una rottura. Sono scritte nel tipo di dominio `OwnerDashboard`
+   e nel DTO, così chi le deciderà le trova dove guarderà.
 
-   **Sbloccata non vuol dire prioritaria**, ed è l'errore che la fetta dei pagamenti ha
-   quasi commesso. La finestra in cui cambiare il significato di quei numeri è additivo
-   la chiude il **primo client**, non l'esistenza dell'endpoint: costruirla adesso non
-   la consuma e non la restringe, quindi la fretta non ha un fondamento.
+   L'eccezione che quella conclusione ammetteva — «vale se serve qualcosa da
+   mostrare presto» — è esattamente il caso che si è verificato: la dashboard
+   serviva al client, ed è stata fatta per quello e non prima.
 
-   Contro il farla prima c'è invece una ragione vera: **due delle sue semantiche non
-   sono decise** — sono elencate in
-   [Perché la dashboard resta ultima](#perché-la-dashboard-resta-ultima) — e questo
-   progetto tiene fuori ciò la cui semantica non è decisa, che è esattamente perché
-   `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere un campo
-   dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura, ed è
-   la stessa asimmetria che giustifica la `0024`.
-
-   **L'unico argomento per anticiparla** è che è la prima superficie di lettura che
-   attraversa immobili, contratti, segnalazioni, bollette, addebiti e pagamenti
-   insieme, quindi il primo posto dove si vedrebbe un errore di integrazione fra le
-   fette. Vale se serve qualcosa di mostrabile presto; non vale come ordine di
-   costruzione.
+   **L'argomento che l'ha portata avanti** è quello che era già scritto qui: è la
+   prima superficie di lettura che attraversa immobili, contratti, segnalazioni,
+   bollette, addebiti e pagamenti insieme, quindi il primo posto dove si vedrebbe un
+   errore di integrazione fra le fette. Eseguendola non se n'è visto nessuno, il che
+   è il migliore esito possibile e anche il meno raccontabile.
 
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
 archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
@@ -166,10 +182,10 @@ messaggi e le note di risoluzione. Il resoconto è in fondo:
 
 | Ambito | Cosa manca |
 |---|---|
-| Sicurezza | rate limiting per IP; verifica email bloccante; MFA (colonna presente); CORS non montato; `kid` nei token per la rotazione delle chiavi |
+| Sicurezza | rate limiting per IP; verifica email bloccante; MFA (colonna presente); `kid` nei token per la rotazione delle chiavi. **CORS non è più in questo elenco**: non montarlo è una scelta, non un debito — vedi [ADR-038](08-decisioni.md#adr-038) |
 | Operazioni | manifest Kubernetes; backup e restore; metriche; alerting; cron per le partizioni di audit |
 | Qualità | gate sulle licenze delle dipendenze; test di carico; benchmark |
-| Prodotto | client mobile (Flutter o React Native), fuori perimetro backend |
+| Prodotto | il percorso dell'**inquilino** nel client, che è la fetta 2. Il client esiste e copre il proprietario: [ADR-039](08-decisioni.md#adr-039) rivede l'ipotesi «mobile nativo» che questa riga conteneva |
 
 ## Debiti tecnici noti
 
@@ -199,13 +215,34 @@ cambia il contesto.
 | ~~L'anagrafica è visibile per **organizzazione**, non per immobile~~ — **chiuso** dalla migration `0030` | `users_select` passava da `app.shares_org_with`, quindi un inquilino leggeva nome, email e telefono di ogni persona dell'organizzazione. Ora passa da `app.shares_home_with`, più i due rami sullo staff. Il timore registrato qui — che restringerlo fosse un filtro applicativo e non un confine del database — non si è avverato: è un `ALTER POLICY`, quindi il confine è dove doveva stare. Vedi [ADR-036](08-decisioni.md#adr-036) | Chiuso |
 | Un job dell'OCR abbandonato resta `running` per sempre | Non c'è scadenza e il ritentativo è fuori perimetro: `attempts` sale alla presa in carico ma nessuno riporta a `queued` un job che il processo ha lasciato a metà. **Il sintomo è muto** — una bolletta che non arriva mai a `pending_review` senza che nulla sia in errore — e finché il ritentativo non esiste il rimedio è guardare `app.ai_jobs` per gli `running` vecchi | Insieme al ritentativo, che è la stessa conversazione del primo fornitore vero: quali errori produce, quali si riprovano, e cosa significa un terminale senza `finished_at` — che è anche la domanda che tiene `cancelled` fuori dall'enum scritto |
 | Il worker legge la configurazione dello storage con `std::env::var` | Sei variabili senza una struct che le valida, a differenza dell'API che passa da `AppConfig`. È la stessa scelta del migratore e la stessa ragione — `AppConfig` gli chiederebbe un bind e delle chiavi di firma che non usa — ma vuol dire che il test di guardia `docs_config_reference.rs` **non copre le impostazioni del worker**: la tabella in `docs/07-operazioni.md` può restare indietro senza che nulla fallisca | Se il worker acquisisce altra configurazione. Con sei variabili il rischio è basso; con dodici la guardia va estesa, ed è un parser in più nello stesso test |
+| Il refresh non è coordinato **fra schede** | Il singolo volo è una promessa in memoria, e due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve `BroadcastChannel` o un lock su `localStorage`. Il sintomo è raro e il rimedio è ricaricare | Se qualcuno lo incontra davvero. È la sola parte della decisione 5 del piano del client che resta aperta, ed è deliberatamente accettata |
+| Non esiste un endpoint che elenchi le **organizzazioni** di un utente | Il selettore dell'organizzazione mostra quelle che *questo browser* ha conosciuto — dal login e dall'accettazione di un invito — e le tiene in `localStorage`. Per il proprietario, che ne ha una, è indistinguibile da un elenco vero; per l'inquilino della fetta 2, che ne ha almeno due, non lo sarà: entrando su un browser nuovo non vedrebbe l'organizzazione del proprietario finché non riaccetta un invito. È il gemello del debito «non esiste un endpoint che elenchi le **persone** di un'organizzazione», ed è emerso allo stesso modo — costruendo il client | Con la fetta 2. È un `GET /api/v1/memberships` di poche righe, e la domanda vera è quali colonne esporre: il nome dell'organizzazione è un dato che oggi nessun endpoint restituisce a chi non ne è staff |
+| Il bundle del client è un pezzo solo, 597 kB (181 kB compressi) | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette. Su desktop non si nota, e il proprietario è su desktop; l'inquilino della fetta 2 è su rete mobile e lo noterà. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | Con la fetta 2, insieme al percorso dell'inquilino |
+| Gli allegati si scaricano da un link senza `Authorization` | `GET /documents/{id}/content` risponde `307` verso un URL pre-firmato, e il client ci arriva con un `<a href>` — che è ciò che permette al browser di scaricare invece di tenere i byte in memoria. Il link però non porta il token, quindi funziona solo finché la rotta accetta la richiesta dal contesto della scheda. Oggi funziona; il giorno in cui l'API pretendesse l'header su quella rotta, il download smetterebbe di funzionare **senza che nulla in questo repository cambi** | Se il download smette di funzionare, o quando si decida come firmare i link lato client. L'alternativa è un `fetch` con il token seguito da un `blob:` URL, che tiene il file in memoria — accettabile per un PDF, non per una scansione da 25 MB |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-La **dashboard**, che a questo punto è l'ultima cosa rimasta — e la ragione per cui è
-rimasta ultima è nella sezione qui sotto, che va letta perché è una conclusione
-controintuitiva e non una scaletta.
+Il **percorso dell'inquilino nel client**, che è la fetta 2 e che adesso — per la
+prima volta — è provabile con dati veri: un inquilino non esiste finché un
+proprietario non lo invita, e il percorso del proprietario esiste da questa fetta.
+Comprende segnalazioni, spese co-living e pagamenti dichiarati, che nell'API ci sono
+già. Vedi [l'esito del client](#esito-client-fetta-1).
+
+Prima di cominciarla vale la pena decidere le **due semantiche della dashboard**
+lasciate aperte — se `written_off` sia una perdita a sé, e se il credito da
+sovrapagamento vada mostrato — perché la finestra in cui erano additive si è chiusa
+con il primo client, che adesso c'è.
+
+Resta anche la decisione che continua a bloccare più valore di ogni riga di codice,
+ed è quella qui sotto: **il fornitore di OCR**.
+
+La sezione che segue sulla dashboard è stata scritta quando la dashboard non c'era.
+Si tiene perché la conclusione a cui arriva — «sbloccata non è prioritaria» — è
+generale e vale per la prossima cosa a buon mercato che sembrerà ovvia; e perché la
+sua eccezione, «vale se serve qualcosa da mostrare presto», è precisamente il caso
+che si è verificato: la dashboard è stata fatta come **passo 1 del client**, cioè per
+la ragione che quella sezione ammetteva.
 
 «Far sì che i coinquilini si vedano» è stato fatto: vedi
 [l'esito](#esito-coinquilini-visibili-fetta-1). L'**OCR delle bollette** è stato fatto:
@@ -4779,3 +4816,156 @@ rende obbligatorie:
 - **la schermata stretta**: 375 px di larghezza su dashboard, elenchi e almeno un form,
   perché l'inquilino della fetta 2 arriverà da lì e le scelte di impianto si prendono
   adesso.
+
+<a id="esito-client-fetta-1"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Eseguito il **3 settembre 2026**. Il piano è rimasto sopra com'era scritto; questo è
+il resoconto di ciò che è successo mettendolo in pratica.
+
+**Tutti gli undici passi sono stati fatti.** Il punto di taglio dopo il passo 8 non
+è stato usato: bollette, OCR e inviti sono dentro, e il criterio per non tagliare è
+stato che senza la revisione dell'OCR la fetta precedente sarebbe rimasta invisibile
+— cioè che il taglio avrebbe risparmiato lavoro e cancellato la ragione per cui
+quella fetta era stata fatta.
+
+#### Le tre verifiche che contano, e come sono andate
+
+**1. Il refresh a singolo volo, riprodotto al contrario.** È in
+`apps/web/src/api/session.test.ts`, e la parte che conta è il doppio dell'API:
+`RotatingApi` ruota il token a ogni uso e revoca la catena al riuso, come fa
+`RefreshSession::ensure_usable`. Con `singleFlight: false` tre richieste parallele
+con l'access token scaduto producono **tre** chiamate a `/auth/refresh` e almeno una
+rifiutata; con la promessa condivisa ne producono **una** e la sessione resta viva.
+
+Il test del difetto non è decorazione: senza di lui il test del rimedio passerebbe
+anche con il singolo volo tolto, perché un doppio indulgente restituirebbe `200` a
+tutte e tre. È il test che dimostra che l'altro test verifica qualcosa.
+
+**2. Il cookie rifiutato dalle rotte di business.** È
+`the_session_cookie_is_refused_by_business_routes` in `crates/api/tests/http_contract.rs`:
+presenta un cookie **valido** a cinque rotte — la dashboard, tre elenchi e
+un'archiviazione — senza `Authorization`, e pretende `401 auth.token_missing` da
+tutte. Verificato anche il codice e non solo lo stato, perché un `401` per un'altra
+ragione non proverebbe la stessa cosa.
+
+**3. Il giro a mano dal browser**, con i binari veri: API, worker, PostgreSQL e
+MinIO. Registrazione → accesso → immobile → contratto → parte contrattuale →
+attivazione → invito con il token consegnato → bolletta → caricamento della
+scansione → comparsa della proposta → accettazione di due campi → applicazione →
+validazione → riaddebito. **Il numero della dashboard è cambiato di conseguenza**:
+insoluto da `0,00 €` a `191,40 €`, cioè esattamente la quota riaddebitata, e
+«bollette da rivedere» da `1` a `0` quando la bolletta è passata ad `allocated`.
+
+Un dettaglio che vale la pena registrare perché è il contratto che si vede
+funzionare: il contratto attivato con scadenza fra due mesi ha mostrato **«In
+scadenza (Attivo)»** — `effective_status` divergente da `status`, calcolato dal
+database e non dal client.
+
+#### Le due prove di qualità
+
+**La schermata a 375 px.** Dashboard, elenco degli addebiti e il form della bolletta
+da dodici campi. La tabella degli addebiti scorre **dentro il proprio contenitore** e
+la pagina no, che è la differenza fra un elenco consultabile e uno inutilizzabile;
+il form si impila senza perdere le spiegazioni sotto i campi; il menù di navigazione
+diventa a scomparsa e `aria-expanded` lo segue.
+
+**La navigazione da sola tastiera**, ed è qui che il metodo di verifica è cambiato.
+Il browser di automazione **non riesce a dispatchare `Invio`**: il suo evento arriva
+alla pagina con `key` vuoto, quindi il browser non lo riconosce come `Enter` e non
+esegue l'attivazione predefinita. `Tab` funziona, l'anello di focus si vede, ma
+premere invio su un bottone non fa niente — e la cosa non riguarda l'applicazione.
+
+Verificarlo a mano era quindi **impossibile con lo strumento a disposizione**, e
+dirlo è più utile che dichiararlo fatto. La verifica è diventata un test —
+`apps/web/src/features/auth/AuthPage.test.tsx` — con `@testing-library/user-event`,
+che produce eventi di tastiera veri: tabulazione fra i campi in ordine, `Invio` in un
+campo di testo che invia il form, barra spaziatrice che attiva il bottone. È una
+verifica **migliore** di quella prevista, perché si ripete a ogni esecuzione della
+suite invece di una volta sola; ed è anche il caso in cui un limite dello strumento
+ha prodotto una copertura che non era in piano.
+
+#### Che cosa il piano aveva previsto bene
+
+**Le trappole erano tutte reali, e tre si sono presentate esattamente come scritte.**
+
+Gli **stati derivati che non si filtrano** — `overdue` sugli addebiti, `expiring` sui
+contratti — hanno costretto a scrivere a mano gli elenchi delle opzioni dei filtri
+invece di derivarli dall'enum. La tentazione di derivarli c'era, ed è precisamente il
+modo in cui si arriva a un `422` in produzione.
+
+**Gli importi come stringhe** hanno retto senza eccezioni: `parseFloat` non compare
+in nessun file, e `apps/web/src/lib/decimal.ts` fa la somma su `bigint`. Il test che
+lo giustifica è quello che mostra `0.1 + 0.2 !== 0.3` accanto a `sumAmounts(['0.10',
+'0.20']) === '0.30'`.
+
+**L'organizzazione attiva come stato esplicito** ha evitato il sintomo previsto: si
+manda `X-Org-Id` sempre, anche quando coincide con quella del token, e il selettore
+la mostra anche quando ce n'è una sola — perché è ciò che rende diagnosticabile in
+due secondi un elenco vuoto che altrimenti non direbbe niente.
+
+**Il filtro dei percorsi della CI** è stato esteso con la seconda uscita, e il job di
+riepilogo si chiama ancora `CI`: la protezione dei branch non va toccata.
+
+#### Che cosa il piano non aveva previsto
+
+**I nomi dei campi dell'OCR erano stati inventati.** Il piano nominava
+`consumption_value`, `consumption_unit` ed `energy_amount`; `BillField::as_str` emette
+`consumption` — **una coppia valore-unità in un campo solo** — e non ha mai avuto un
+`energy_amount`. La prima versione della schermata mostrava quindi `CONSUMPTION` non
+tradotto e un «valore attuale» vuoto, e il difetto si è visto **soltanto** eseguendo
+il giro a mano con il worker acceso: nessun tipo lo intercettava, perché il nome di
+un campo è una stringa da entrambe le parti.
+
+Ne segue una cosa da sapere per la fetta 2: **i nomi dei campi dell'OCR sono un
+contratto non tipizzato fra il dominio Rust e il catalogo del client**, e l'unico
+modo di verificarlo è farlo girare. Un campo che il catalogo non conosce compare
+grezzo, che è deliberato — rumoroso invece che assente, come per gli enum letti dal
+database.
+
+**Non esiste un endpoint che elenchi le organizzazioni di un utente.** Il selettore
+è stato costruito su quelle che *questo browser* ha conosciuto, tenute in
+`localStorage`. Per il proprietario è indistinguibile da un elenco vero; per
+l'inquilino della fetta 2 non lo sarà. È il gemello esatto del debito già registrato
+sulle **persone** di un'organizzazione, ed è emerso allo stesso modo: costruendo il
+client. La sezione «cosa un client incontrerà per prime» ne prevedeva tre; erano
+quattro.
+
+**`Intl.NumberFormat` accetta una stringa**, e questo ha risolto un problema che il
+piano lasciava aperto: mostrare un importo senza passare da un `Number`. Un importo
+da dodici cifre intere più due decimali sta al limite della precisione di un double,
+e convertirlo per formattarlo avrebbe reintrodotto proprio l'errore che le stringhe
+decimali esistono per evitare. C'è comunque un ramo di riserva che mostra il valore
+grezzo: un numero senza simbolo di valuta è brutto, uno sbagliato è peggio.
+
+**Le date vanno spezzate a mano.** `new Date('2026-08-31')` è mezzanotte **UTC**, e a
+ovest di Greenwich la data mostrata diventa il 30. È un difetto che nessuno
+attribuisce al fuso orario, ed è coperto da un test che gira con `TZ` spostato.
+
+#### Le due domande sulla dashboard restano aperte, e adesso costano di più
+
+Il piano le aveva lasciate fuori di proposito: se `written_off` vada distinto da
+`void` come **perdita**, e se il credito da sovrapagamento vada mostrato.
+
+Restano aperte, e **la finestra in cui cambiarle era additivo si è chiusa**: adesso
+un client legge quegli otto numeri. Aggiungere un nono campo è ancora additivo;
+cambiare che cosa significa `total_outstanding` non lo è più. Le due domande sono
+scritte nel tipo di dominio (`OwnerDashboard`) e nel DTO, così chi le deciderà le
+trova dove guarderà.
+
+#### Quello che resta fuori, e che va saputo
+
+Il **percorso dell'inquilino** è la fetta 2, e con esso segnalazioni, spese co-living
+e pagamenti dichiarati — che nell'API esistono e nel client no. La ragione è la
+dipendenza dichiarata nel piano: un inquilino non esiste finché un proprietario non
+lo invita, quindi il percorso dell'inquilino non era nemmeno provabile con dati veri
+prima di questa fetta. Adesso lo è.
+
+Il **numero delle segnalazioni aperte** è in dashboard e porta a una schermata che
+non esiste ancora: mostra il vero e rimanda ai contratti. Fingere che il numero non
+esistesse sarebbe stato peggio che mostrarlo senza destinazione.
+
+Il **coordinamento del refresh fra schede**, il **bundle in un pezzo solo** e il
+**download degli allegati senza `Authorization`** sono i tre debiti nuovi, tutti
+registrati sopra con il perché e il quando.
