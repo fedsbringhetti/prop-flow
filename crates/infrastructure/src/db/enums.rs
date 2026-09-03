@@ -7,6 +7,7 @@
 //! testuale ha lo stesso comportamento su qualunque connessione e rende visibile
 //! nel SQL quale tipo si sta usando.
 
+use propflow_domain::ai::{AiCapability, AiJobStatus, AiTask};
 use propflow_domain::billing::{BillStatus, ChargeStatus, ChargeType, UtilityType};
 use propflow_domain::document::{AttachmentOwnerType, DocumentKind};
 use propflow_domain::expense::{ExpenseCategory, ExpenseGroupKind, SettlementStatus, SplitMethod};
@@ -338,6 +339,46 @@ string_enum!("settlement_status", SettlementStatus, settlement_status_to_db, set
     Rejected => "rejected",
     Cancelled => "cancelled",
 });
+
+// `vision`, `llm` ed `embedding` esistono nell'enum del database e
+// l'applicazione non li scrive mai: sono i moduli che verranno. Restano nella
+// tabella di conversione per la regola di sempre — una riga scritta a mano
+// potrebbe contenerli, e un valore sconosciuto in lettura deve dare errore.
+string_enum!("ai_capability", AiCapability, ai_capability_to_db, ai_capability_from_db, {
+    Ocr => "ocr",
+    Vision => "vision",
+    Llm => "llm",
+    Embedding => "embedding",
+});
+
+// `cancelled` è il quinto valore che l'applicazione non scrive: un job si chiude
+// in millisecondi e non c'è nulla da annullare finché non esiste un fornitore vero
+// che impieghi secondi. Vedi la nota su `AiJobStatus` e la decisione A del piano.
+string_enum!("ai_job_status", AiJobStatus, ai_job_status_to_db, ai_job_status_from_db, {
+    Queued => "queued",
+    Running => "running",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+
+/// `ai_jobs.task` è **`TEXT`** e non un enum di PostgreSQL — il commento della
+/// `0010` ne elenca i valori in prosa — quindi la conversione non ha un tipo su
+/// cui fare il cast e vive qui invece che in `string_enum!`, che genera anche il
+/// letterale per il cast.
+///
+/// La regola resta la stessa: un `task` che il codice non conosce dà **errore** in
+/// lettura. Il danno che evita è silenzioso — un job con un compito ignoto è un
+/// job che nessun ciclo prende in carico, e senza errore resterebbe `queued` per
+/// sempre senza che nulla protesti.
+#[must_use]
+pub const fn ai_task_to_db(task: AiTask) -> &'static str {
+    task.as_str()
+}
+
+pub fn ai_task_from_db(value: &str) -> Result<AiTask, RepositoryError> {
+    AiTask::from_db(value).ok_or_else(|| unknown("ai_task", value))
+}
 
 /// `app.payable_type` non passa da `string_enum!` perché il valore da solo non
 /// basta a costruire un [`Payable`]: la variante porta con sé l'identificatore

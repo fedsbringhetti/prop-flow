@@ -3,11 +3,12 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use propflow_domain::RequestContext;
 use propflow_domain::ports::{
-    ChargeRepository, DocumentRepository, EventSink, ExpenseGroupRepository, ExpenseRepository,
-    InvitationRepository, LeasePartyRepository, LeaseRepository, OrgMemberRepository,
-    OrganizationRepository, PaymentRepository, PropertyRepository, RepositoryResult,
-    RoomRepository, SessionRepository, SettlementRepository, TicketMessageRepository,
-    TicketRepository, UnitOfWork, UnitOfWorkFactory, UserRepository, UtilityBillRepository,
+    AiJobQueue, AiJobRepository, ChargeRepository, DocumentRepository, EventSink,
+    ExpenseGroupRepository, ExpenseRepository, InvitationRepository, LeasePartyRepository,
+    LeaseRepository, OrgMemberRepository, OrganizationRepository, PaymentRepository,
+    PropertyRepository, RepositoryResult, RoomRepository, SessionRepository, SettlementRepository,
+    TicketMessageRepository, TicketRepository, UnitOfWork, UnitOfWorkFactory, UserRepository,
+    UtilityBillRepository, WorkerUnitOfWork, WorkerUnitOfWorkFactory,
 };
 
 use super::db_enums;
@@ -82,6 +83,9 @@ impl UnitOfWork for PgUnitOfWork {
     fn settlements(&mut self) -> &mut dyn SettlementRepository {
         self
     }
+    fn ai_jobs(&mut self) -> &mut dyn AiJobRepository {
+        self
+    }
     fn events(&mut self) -> &mut dyn EventSink {
         self
     }
@@ -147,5 +151,68 @@ impl UnitOfWorkFactory for PgUnitOfWorkFactory {
         // Nessun contesto da impostare: il ruolo ha BYPASSRLS e le policy non si
         // applicano. Riservata ai flussi pre-autenticazione.
         Self::begin_with_context(self.pools.privileged(), None).await
+    }
+}
+
+/// Unità di lavoro del worker: la stessa transazione, un'altra postura.
+///
+/// Avvolge [`PgUnitOfWork`] invece di essere un tipo nuovo perché i repository
+/// sono gli stessi — il SQL non cambia con il ruolo che lo esegue — e ciò che
+/// cambia è **come ci si arriva**: da qui si passa dal pool privilegiato, senza
+/// contesto di sicurezza, e si vedono tre repository invece di diciotto.
+///
+/// L'avvolgimento è la parte che conta: `PgUnitOfWork` implementa anche
+/// `AiJobQueue`, ma quel trait non compare fra i metodi di `UnitOfWork`, quindi
+/// una transazione applicativa non ha modo di raggiungerlo. Il confine è nel
+/// sistema di tipi, non in una convenzione.
+pub struct PgWorkerUnitOfWork {
+    inner: PgUnitOfWork,
+}
+
+#[async_trait]
+impl WorkerUnitOfWork for PgWorkerUnitOfWork {
+    fn ai_jobs(&mut self) -> &mut dyn AiJobQueue {
+        &mut self.inner
+    }
+    fn documents(&mut self) -> &mut dyn DocumentRepository {
+        &mut self.inner
+    }
+    fn utility_bills(&mut self) -> &mut dyn UtilityBillRepository {
+        &mut self.inner
+    }
+
+    async fn commit(self: Box<Self>) -> RepositoryResult<()> {
+        self.inner.tx.commit().await.map_err(map_sqlx_error)
+    }
+}
+
+/// Fabbrica di unità di lavoro per il worker.
+///
+/// Tiene **un solo pool**, quello privilegiato, e non `DatabasePools`: il worker
+/// non ha niente da fare con il pool applicativo, e dargli entrambi significherebbe
+/// lasciare aperta la porta di usare quello sbagliato. È la stessa ragione per cui
+/// i due pool sono separati in primo luogo.
+pub struct PgWorkerUnitOfWorkFactory {
+    pool: PgPool,
+}
+
+impl PgWorkerUnitOfWorkFactory {
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl WorkerUnitOfWorkFactory for PgWorkerUnitOfWorkFactory {
+    async fn begin(&self) -> RepositoryResult<Box<dyn WorkerUnitOfWork>> {
+        // Nessun `app.set_request_context`: non c'è un utente di cui installare
+        // il contesto, perché non c'è nessun utente. Il ruolo ha `BYPASSRLS` e
+        // deve vedere i job di tutte le organizzazioni — è la stessa posizione da
+        // cui il dispatcher dell'outbox legge `app.domain_events`.
+        let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        Ok(Box::new(PgWorkerUnitOfWork {
+            inner: PgUnitOfWork { tx },
+        }))
     }
 }

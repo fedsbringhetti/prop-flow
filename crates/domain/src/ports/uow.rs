@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 
 use super::repositories::{
-    ChargeRepository, DocumentRepository, EventSink, ExpenseGroupRepository, ExpenseRepository,
-    InvitationRepository, LeasePartyRepository, LeaseRepository, OrgMemberRepository,
-    OrganizationRepository, PaymentRepository, PropertyRepository, RepositoryResult,
-    RoomRepository, SessionRepository, SettlementRepository, TicketMessageRepository,
-    TicketRepository, UserRepository, UtilityBillRepository,
+    AiJobQueue, AiJobRepository, ChargeRepository, DocumentRepository, EventSink,
+    ExpenseGroupRepository, ExpenseRepository, InvitationRepository, LeasePartyRepository,
+    LeaseRepository, OrgMemberRepository, OrganizationRepository, PaymentRepository,
+    PropertyRepository, RepositoryResult, RoomRepository, SessionRepository, SettlementRepository,
+    TicketMessageRepository, TicketRepository, UserRepository, UtilityBillRepository,
 };
 use crate::context::RequestContext;
 
@@ -38,6 +38,9 @@ pub trait UnitOfWork: Send {
     fn expense_groups(&mut self) -> &mut dyn ExpenseGroupRepository;
     fn expenses(&mut self) -> &mut dyn ExpenseRepository;
     fn settlements(&mut self) -> &mut dyn SettlementRepository;
+    /// Solo accodamento e lettura: l'esito di un job lo scrive il worker. Vedi
+    /// [`AiJobRepository`].
+    fn ai_jobs(&mut self) -> &mut dyn AiJobRepository;
     fn events(&mut self) -> &mut dyn EventSink;
 
     async fn commit(self: Box<Self>) -> RepositoryResult<()>;
@@ -56,4 +59,43 @@ pub trait UnitOfWorkFactory: Send + Sync {
     /// organizzazione e membership quando ancora nessuna delle tre esiste.
     /// Ogni altro uso è un errore di progetto.
     async fn begin_privileged(&self) -> RepositoryResult<Box<dyn UnitOfWork>>;
+}
+
+/// Unità di lavoro del **worker**: una transazione senza contesto di sicurezza.
+///
+/// Esiste come tipo a sé e non come un terzo metodo di [`UnitOfWorkFactory`] per
+/// tenere separate due cose che si somigliano e non sono la stessa:
+///
+/// - `begin_privileged()` è per i flussi in cui un contesto **non può** esistere
+///   perché avvengono prima dell'autenticazione — registrazione, login, rotazione
+///   del refresh token. La regola 20 di `CLAUDE.md` ne tiene piccola la superficie
+///   apposta, e allargarla al ciclo dell'OCR sarebbe precisamente la scorciatoia
+///   che quella regola esiste per impedire;
+/// - questa è per un processo che **non serve una richiesta**. Il worker gira come
+///   `propflow_worker` con `BYPASSRLS`, con il **proprio pool**, e deve vedere i
+///   job di tutte le organizzazioni: non c'è un utente di cui installare il
+///   contesto, perché non c'è nessun utente. È la stessa posizione da cui il
+///   dispatcher dell'outbox legge `app.domain_events` dal primo giorno.
+///
+/// Ne segue la proprietà che conta: da qui **non** si ottengono i repository
+/// dell'applicazione. Ci sono i tre che il ciclo dell'OCR tocca e nient'altro,
+/// quindi la superficie senza RLS resta leggibile in venti righe invece di essere
+/// «tutto, ma con un altro pool».
+#[async_trait]
+pub trait WorkerUnitOfWork: Send {
+    fn ai_jobs(&mut self) -> &mut dyn AiJobQueue;
+    /// Serve a leggere il documento in ingresso — e a **non** leggerlo quando è
+    /// stato archiviato: `find_by_id` filtra `deleted_at IS NULL`, quindi un
+    /// documento tolto da una persona torna `None` anche a chi ha `BYPASSRLS`.
+    fn documents(&mut self) -> &mut dyn DocumentRepository;
+    fn utility_bills(&mut self) -> &mut dyn UtilityBillRepository;
+
+    async fn commit(self: Box<Self>) -> RepositoryResult<()>;
+}
+
+#[async_trait]
+pub trait WorkerUnitOfWorkFactory: Send + Sync {
+    /// Apre una transazione sul pool del worker. Nessun contesto da installare:
+    /// il ruolo ha `BYPASSRLS` e le policy non si applicano.
+    async fn begin(&self) -> RepositoryResult<Box<dyn WorkerUnitOfWork>>;
 }
