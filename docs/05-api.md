@@ -451,9 +451,15 @@ cifratura a riposo **confermata dal fornitore di storage**, non richiesta: su un
 bucket senza cifratura predefinita vale `false`, ed è la verità
 ([ADR-024](08-decisioni.md#adr-024)).
 
-Non compaiono `status` né `version`: OCR e versionamento sono fuori dal perimetro di
-questa fetta. Le colonne esistono nello schema e restano ai loro default — vedere una
-colonna non è una ragione per riempirla.
+Non compaiono `status`, `version` né `extracted_data`: il versionamento è fuori
+perimetro, e l'OCR **non scrive sul documento** — la proposta di una macchina finisce
+sulla bolletta (`ocr_extracted`) e la traccia di chi l'ha prodotta in `app.ai_jobs`.
+Le colonne esistono nello schema e restano ai loro default: vedere una colonna non è
+una ragione per riempirla.
+
+**Un caricamento su una bolletta in bozza fa però una cosa in più**, ed è invisibile
+nella risposta: accoda la lettura automatica. Vedi
+[Lettura automatica](#lettura-automatica-delle-bollette).
 
 **L'archiviazione è soft, e l'oggetto nel bucket sopravvive alla riga.** Il ruolo
 applicativo non ha il privilegio `DELETE`, e rimuovere i byte è un lavoro separato, da
@@ -683,8 +689,9 @@ curl -X POST http://localhost:8080/api/v1/tickets/$TICKET/close \
 | POST | `/api/v1/utility-bills/{id}/validate` | staff | `200`. Valorizza `validated_at` e `validated_by` |
 | POST | `/api/v1/utility-bills/{id}/void` | staff | `200`. La bolletta **sparisce** dagli elenchi. `409` se già riaddebitata |
 | POST | `/api/v1/utility-bills/{id}/recharge` | staff | `201` con **addebito e bolletta**. Ripetibile: la stessa bolletta si riaddebita a più contratti |
-| POST | `/api/v1/utility-bills/{id}/documents` | membro | `201`. La scansione |
+| POST | `/api/v1/utility-bills/{id}/documents` | membro | `201`. La scansione, e su una **bozza** accoda la lettura automatica |
 | GET | `/api/v1/utility-bills/{id}/documents` | membro | `200`, pagina keyset |
+| GET | `/api/v1/utility-bills/{id}/ocr` | **staff** | `200` con lo stato del job e la proposta. `job` è `null` finché nessuno ha caricato una scansione |
 
 **Ruolo minimo `membro` sulle letture, `staff` su tutto ciò che scrive.** Registrare
 una bolletta è contabilità; *quali* bollette un inquilino veda lo decide la policy
@@ -696,7 +703,65 @@ bolletta sia visibile a chi la paga.
 **La correzione disfa la validazione**, e non è un effetto collaterale. Validare è
 l'affermazione «questi numeri sono quelli», e cambiare i numeri la smentisce: chi la
 valida di nuovo deve rifarlo apposta. È la stessa regola per cui riaprire una
-segnalazione cancella `closed_at` e la nota di risoluzione.
+segnalazione cancella `closed_at` e la nota di risoluzione. **Da `pending_review` la
+bolletta invece resta dov'è**: lì non c'è nessuna affermazione da smentire, c'è una
+proposta di una macchina, e correggerla *è* la revisione. Vedi
+[Lettura automatica](#lettura-automatica-delle-bollette).
+
+#### Lettura automatica delle bollette
+
+Allegare una scansione a una bolletta **in bozza** accoda un job di OCR. Il
+caricamento risponde `201` come sempre: **l'esito di un caricamento non dipende dalla
+disponibilità del fornitore**, e la bolletta resta in bozza con il suo allegato se
+l'OCR non è disponibile.
+
+Da lì il percorso è questo, e nessun passo lo compie una richiesta HTTP:
+
+```text
+POST .../documents   →  job `queued`, bolletta `draft`
+        (worker)     →  job `running`
+        (worker)     →  job `succeeded`, bolletta `pending_review`  con la proposta
+                     →  job `failed`,    bolletta `draft`           con `error_code`
+```
+
+**La macchina non scrive i campi della bolletta.** Scrive `ocr_extracted`,
+`ocr_confidence` e `ai_job_id`, e porta lo stato a `pending_review`;
+`supplier_name`, `total_amount`, `invoice_number` e gli altri restano quelli che ha
+digitato una persona finché una persona non li cambia. La separazione non è prudenza:
+è ciò che permetterà di **misurare** quanto l'OCR è accurato, confrontando quello che
+ha proposto con quello che una persona ha confermato. Un client che scrivesse la
+proposta sopra i campi della bolletta senza chiedere distruggerebbe quel dato prima
+di raccoglierlo.
+
+`GET /utility-bills/{id}/ocr` è **dello staff** e non del membro, ed è la stessa
+condizione della policy `ai_jobs_select`. Un inquilino che vede la bolletta imputata
+al proprio contratto riceve `403 org.staff_role_required` sul job: «non ti è
+permesso» e «non c'è» sono due risposte diverse, e un `200` con tutto a `null`
+direbbe la seconda al posto della prima.
+
+I valori proposti sono **stringhe**, con un `type` che dice come leggerle
+(`text`, `date`, `amount`, `quantity`), per la stessa ragione per cui gli importi lo
+sono ovunque in questa API: un decimale che passa da un numero JSON passa da un float
+binario, e `123.4567` che torna `123.45670000000001` è un valore che una persona
+dovrebbe correggere a mano proprio nel campo che la macchina aveva letto giusto.
+
+`confidence` è la **peggiore** fra quelle dei campi, non la media: dieci campi letti a
+`0.99` non devono nascondere il totale letto a `0.40`, che è l'unica cifra che
+qualcuno pagherà. **Una confidenza bassa non è un errore** — il job resta `succeeded`
+— ed è il campo da guardare per primo. Non esiste una soglia di rifiuto automatico:
+sceglierla richiede di aver visto le confidenze di un fornitore vero su bollette vere.
+
+`error_code` (`unsupported_document`, `provider_unavailable`, `document_archived`,
+`document_unavailable`, `subject_not_processable`) **non è un codice di errore
+dell'API**: un job fallito è l'esito riuscito della richiesta che lo ha accodato, e
+non compare mai nel `code` di una risposta di errore.
+
+**Fuori perimetro, e non per dimenticanza:** il fornitore vero
+([ADR-037](08-decisioni.md#adr-037)), il ritentativo automatico di un job fallito, il
+tetto di spesa per organizzazione, e una rotta che *lanci* l'OCR a comando — che
+legherebbe una richiesta HTTP ai secondi di un fornitore esterno. Un job abbandonato
+resta `running` per sempre: non c'è scadenza, e il sintomo è muto — una bolletta che
+non arriva mai a `pending_review` senza che nulla sia in errore.
 
 **Annullare una bolletta la fa sparire, annullare un addebito no.** L'asimmetria è
 deliberata e ha due ragioni che si sommano. Una bolletta inserita male è un documento
@@ -723,10 +788,9 @@ oggi possibile.**
 `NUMERIC(14,4)`. Valore e unità viaggiano insieme in un oggetto `consumption`, perché
 `123.4567` senza unità non dice niente.
 
-**Fuori dall'API in questa fetta:** l'OCR (`ocr_extracted`, `ocr_confidence`,
-`ai_job_id`) e gli stati `pending_review`, `paid` — il pagamento *al fornitore* non è
-modellato affatto, `app.payable_type` non comprende `utility_bill` — e `disputed`, che
-non ha una via di ritorno disegnata. Le colonne esistono e restano ai loro default.
+**Fuori dall'API:** gli stati `paid` — il pagamento *al fornitore* non è modellato
+affatto, `app.payable_type` non comprende `utility_bill` — e `disputed`, che non ha una
+via di ritorno disegnata. Le colonne esistono e restano ai loro default.
 `utility_bills.document_id` **non è popolata**: la scansione si allega con il
 riferimento polimorfico dei documenti, come per ogni altro aggregato.
 

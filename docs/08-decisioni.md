@@ -1782,3 +1782,90 @@ rimuoverla è un cambiamento a sé. `app.property_residents` è la prima funzion
 `SECURITY DEFINER` del progetto a restituire un insieme, e come le altre verifica
 **anche** l'organizzazione attiva: bypassare la RLS significa bypassare l'isolamento, non
 solo la visibilità per ruolo — il criterio della `0026`, qui alla sua quarta occorrenza.
+
+---
+
+<a id="adr-037"></a>
+
+## ADR-037 — Una porta si definisce prima di avere un fornitore, e a quali condizioni è onesto farlo
+
+**Contesto.** L'OCR delle bollette è il primo modulo in cui una macchina scrive nel
+database, e per costruirlo servirebbe sapere quale macchina. La roadmap diceva di
+scegliere il fornitore in quel momento — «i trait dei provider vanno definiti allora,
+verificando la reference del fornitore scelto» — e questa fetta se ne scosta: definisce
+`OcrProvider`, ne scrive un adattatore deterministico, e **non sceglie il fornitore**.
+
+La ragione per cui la scelta non si può fare qui è che **non è una scelta tecnica**.
+L'immagine di una bolletta porta fuori dal perimetro fornitore, indirizzo, importi e
+spesso il codice cliente. Il commento della migration `0010` è esplicito nel tenere
+prompt e immagine fuori da `ai_jobs`, e la fetta lo rispetta — ma il dato al fornitore ci
+va comunque, e quella è una decisione di **trattamento**, che spetta a chi risponde del
+trattamento e non si deduce mentre si scrive un adattatore.
+
+Le due strade concrete che si sarebbero potute prendere hanno ciascuna un difetto che
+non si compensa scrivendo più codice:
+
+| | Cosa dà | Perché non basta decidere adesso |
+|---|---|---|
+| LLM con visione | legge e struttura in un colpo, e servirebbe anche al triage | l'immagine esce dal perimetro: è la decisione di trattamento |
+| Tesseract in locale | niente esce dal perimetro | fa OCR e non estrazione: sulle bollette italiane, con un'impaginazione per fornitore, i campi andrebbero ricavati con euristiche nostre e l'accuratezza sarebbe bassa abbastanza da rendere il modulo un fastidio |
+
+**Decisione.** La porta si definisce ora, il fornitore si sceglie dopo.
+
+Il rischio va nominato perché è reale: **una porta disegnata senza un fornitore davanti
+rischia di essere inventata**, cioè di descrivere ciò che è comodo a noi invece di ciò
+che i fornitori danno. Le due condizioni che rendono la scelta onesta sono queste, e
+nessuna delle due elimina il rischio:
+
+1. **La porta chiede il minimo comune.** Un `&[u8]` con il suo MIME in ingresso; in
+   uscita i campi trovati, ciascuno con la propria confidenza, più i contatori che
+   `ai_jobs` ha già — modello, token, costo, latenza. Tutto ciò che un fornitore
+   specifico offre in più — bounding box, numero di pagina, alternative di lettura —
+   resta **fuori**: aggiungerlo dopo è additivo, toglierlo no.
+2. **Esiste un adattatore che percorre la porta per intero**, e non un `todo!()`. Se la
+   porta fosse impraticabile, si scoprirebbe adesso e non fra sei mesi.
+
+**Il primo adattatore vero è il momento di rileggerla**, ed è scritto nel codice della
+porta perché chi lo scriverà lo trovi. Se si rivelasse sbagliata, cambiarla allora costa
+un adattatore finto e nessun client.
+
+### Cosa compra una fetta che non produce valore per un utente
+
+Va detto invece che lasciarlo scoprire: **questa fetta non produce valore per un utente
+finale**. Nessuno vedrà una bolletta letta da una macchina finché il fornitore non
+esiste.
+
+Quello che compra è il **percorso** — coda, worker, job, revisione — che è indipendente
+dal fornitore ed è dove stanno le trappole: la policy mancante su `ai_jobs`, lo stato
+`pending_review` che era un vicolo cieco, il claim che va marcato prima di lavorare, il
+confine fra ciò che si scrive sul job e ciò che si scrive sulla bolletta. Nessuna di
+queste si sarebbe risparmiata scegliendo prima il fornitore, e tutte sarebbero state
+scoperte con un fornitore vero davanti, cioè nel momento peggiore.
+
+### L'alternativa scartata: aspettare, e non fare la fetta
+
+È la scelta onesta se il modulo servisse a un utente domani. Non serve: le bollette si
+registrano a mano e continuano a funzionare. E rimandare avrebbe avuto un costo suo — la
+decisione sul fornitore sarebbe stata presa con addosso la pressione di far partire il
+modulo, che è la condizione peggiore per una decisione sul trattamento dei dati.
+
+### Il precedente, e la differenza
+
+`ObjectStorage` fu dichiarata il primo giorno e implementata molto dopo, e nessuna riga
+della porta è stata riscritta per accomodare S3: è la prova che il metodo funziona, ed è
+la ragione per cui `docs/06-sviluppo.md` §Aggiungere un provider esterno lo prescrive.
+
+La differenza è che lì il rimando era **tecnico** — non serviva ancora un bucket — e qui
+è **di responsabilità**: la decisione esiste, è matura, e non spetta a chi scrive il
+codice. È una distinzione che vale la pena tenere, perché rende la regola applicabile
+anche quando il rimando non è comodo: si dichiara la porta quando la forma
+dell'astrazione è chiara *e* si sa chi deve decidere il resto. Se non fosse chiara
+nemmeno la forma, dichiararla sarebbe inventarla.
+
+**Conseguenze.** `DeterministicOcrProvider` legge bollette **in chiaro** e rifiuta le
+immagini: è la verità su cosa sa fare, ed è anche il ramo di errore che i test devono
+poter esercitare. `ai_jobs.cost_amount` e `tokens_*` restano nulli, quindi il tetto di
+spesa per organizzazione — per cui `ai_jobs_cost_ix` esiste — non è tarabile e resta
+fuori perimetro. `provider_name` è un **dato** e non un ramo del codice, dichiarato
+dall'adattatore con `OcrProvider::name`: il giorno in cui i fornitori saranno due, i job
+dei due si distinguono con una `WHERE` e non con un deploy separato.
