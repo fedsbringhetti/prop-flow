@@ -37,6 +37,10 @@ uuid.workspace = true
 # checksum inventato.
 async-trait.workspace = true
 sha2.workspace = true
+# Il contratto dell'OCR fa girare anche il **worker**, che non è un bordo HTTP:
+# serve il pool privilegiato, e serve l'advisory lock che serializza i test che
+# consumano la coda dei job — globale per costruzione.
+sqlx.workspace = true
 
 [lints]
 workspace = true

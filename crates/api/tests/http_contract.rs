@@ -4168,3 +4168,308 @@ async fn the_residents_of_someone_elses_property_are_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
     assert_eq!(problem["code"], "property.not_found");
 }
+
+// ---------------------------------------------------------------------------
+// Lettura automatica delle bollette
+// ---------------------------------------------------------------------------
+
+/// Una bolletta in chiaro che l'adattatore deterministico legge per intero.
+const BILL_SCAN: &[u8] = b"Fornitore: Enel Energia\nScadenza: 31/08/2026\nTotale: 184,20\n";
+
+/// Fa girare il ciclo del worker finché il job della bolletta non è concluso.
+///
+/// Il worker **non è montato nel router** — non è un bordo HTTP — quindi il
+/// contratto lo deve costruire da sé. Senza, questi test verificherebbero solo
+/// l'accodamento, cioè metà del percorso: è la lezione della fetta dei pagamenti,
+/// dove un test che passava da uno strato non provava niente sullo strato sotto.
+async fn run_ocr_worker(app: &TestApp) {
+    use propflow_application::use_cases::ai::{ProcessAiJob, Processed};
+    use propflow_domain::ai::AiTask;
+
+    let ocr = ProcessAiJob::new(
+        std::sync::Arc::new(propflow_infrastructure::db::PgWorkerUnitOfWorkFactory::new(
+            app.pools.privileged().clone(),
+        )),
+        std::sync::Arc::clone(&app.storage)
+            as std::sync::Arc<dyn propflow_application::ports::ObjectStorage>,
+        std::sync::Arc::new(propflow_infrastructure::DeterministicOcrProvider),
+        std::sync::Arc::new(propflow_infrastructure::SystemClock),
+    );
+    // Più giri: la coda è condivisa fra i test che girano in parallelo, e il primo
+    // giro può prendere il job di un altro. È il comportamento corretto del worker
+    // — serve tutte le organizzazioni — non un difetto da aggirare.
+    for _ in 0..64 {
+        if ocr.execute(AiTask::BillOcr).await.expect("ciclo") == Processed::Nothing {
+            return;
+        }
+    }
+}
+
+/// Il giro completo visto **da fuori**: si carica una scansione, il worker legge,
+/// e l'API racconta cosa è successo.
+#[tokio::test]
+async fn a_scan_makes_the_bill_reviewable_and_the_api_says_so() {
+    let app = require_app!();
+    let _gate = common::lock_ocr_queue(&app.pools).await;
+    let (owner, _) = common::register_and_login(&app, "ocr-contratto").await;
+    let property = create_property(&app, &owner, "Immobile con OCR").await;
+    let bill = register_bill(&app, &owner, &property, None, "2026/HTTP/0001").await;
+
+    // Prima di caricare qualunque cosa: la rotta risponde, e dice `null`.
+    let (status, before) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/ocr"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {before}");
+    assert_eq!(before["utility_bill_id"], bill, "corpo: {before}");
+    assert_eq!(before["status"], "draft", "corpo: {before}");
+    assert!(before["job"].is_null(), "corpo: {before}");
+    assert!(before["extracted"].is_null(), "corpo: {before}");
+    assert!(before["confidence"].is_null(), "corpo: {before}");
+
+    let (status, uploaded) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/utility-bills/{bill}/documents"),
+            token: &owner,
+            org: None,
+            filename: "bolletta-agosto.txt",
+            content_type: "text/plain",
+            content: BILL_SCAN,
+            kind: Some("utility_bill"),
+        })
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {uploaded}");
+
+    // Il caricamento ha accodato, e **non ha toccato la bolletta**: l'esito di un
+    // caricamento non dipende dalla disponibilità del fornitore.
+    let (status, queued) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/ocr"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {queued}");
+    assert_eq!(queued["job"]["status"], "queued", "corpo: {queued}");
+    assert_eq!(queued["job"]["task"], "bill_ocr", "corpo: {queued}");
+    assert_eq!(queued["job"]["attempts"], 0, "corpo: {queued}");
+    assert_eq!(queued["status"], "draft", "corpo: {queued}");
+
+    run_ocr_worker(&app).await;
+
+    let (status, done) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/ocr"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {done}");
+    assert_eq!(done["job"]["status"], "succeeded", "corpo: {done}");
+    assert_eq!(done["job"]["attempts"], 1, "corpo: {done}");
+    assert_eq!(done["status"], "pending_review", "corpo: {done}");
+    assert!(done["job"]["error_code"].is_null(), "corpo: {done}");
+
+    let extracted = done["extracted"].as_array().expect("i campi proposti");
+    assert_eq!(extracted.len(), 3, "corpo: {done}");
+    let total = extracted
+        .iter()
+        .find(|field| field["field"] == "total_amount")
+        .expect("il totale è fra i campi proposti");
+    assert_eq!(total["type"], "amount", "corpo: {done}");
+    // **Stringa e non numero**: un decimale che passa da un float binario torna
+    // con cifre che nessuno ha scritto.
+    assert_eq!(total["value"], "184.20", "corpo: {done}");
+    assert!(total["confidence"].is_string(), "corpo: {done}");
+
+    // **La bolletta non è cambiata**: la proposta si legge accanto ai numeri
+    // digitati, non al posto loro.
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["status"], "pending_review", "corpo: {detail}");
+    assert_eq!(detail["total_amount"], "184.20", "corpo: {detail}");
+    assert_eq!(
+        detail["invoice_number"], "2026/HTTP/0001",
+        "corpo: {detail}"
+    );
+    assert!(detail["supplier_name"].is_null(), "corpo: {detail}");
+
+    // Da `pending_review` si corregge — e si **resta** lì — e poi si valida.
+    // Prima del passo 3 dell'OCR entrambe rispondevano `409`.
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            Some(serde_json::json!({"supplier_name": "Enel Energia"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["status"], "pending_review", "corpo: {corrected}");
+
+    let (status, validated) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {validated}");
+    assert_eq!(validated["status"], "validated", "corpo: {validated}");
+
+    // …e la proposta è ancora lì, che è ciò che rende misurabile l'accuratezza.
+    let (status, after) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/ocr"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {after}");
+    assert_eq!(after["status"], "validated", "corpo: {after}");
+    assert!(after["extracted"].is_array(), "corpo: {after}");
+}
+
+/// Il fallimento, visto da fuori: il job dice perché, la bolletta resta in bozza,
+/// e **la richiesta che ha caricato era riuscita**.
+#[tokio::test]
+async fn a_failed_reading_is_reported_and_the_bill_stays_a_draft() {
+    let app = require_app!();
+    let _gate = common::lock_ocr_queue(&app.pools).await;
+    let (owner, _) = common::register_and_login(&app, "ocr-contratto-ko").await;
+    let property = create_property(&app, &owner, "Immobile con scansione illeggibile").await;
+    let bill = register_bill(&app, &owner, &property, None, "2026/HTTP/0002").await;
+
+    let (status, uploaded) = app
+        .upload(common::Upload {
+            path: &format!("/api/v1/utility-bills/{bill}/documents"),
+            token: &owner,
+            org: None,
+            filename: "lettera.txt",
+            content_type: "text/plain",
+            content: b"Questa non e' una bolletta.\n",
+            kind: Some("other"),
+        })
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "il caricamento riesce anche se l'OCR poi fallirà: corpo: {uploaded}"
+    );
+
+    run_ocr_worker(&app).await;
+
+    let (status, failed) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/ocr"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {failed}");
+    assert_eq!(failed["job"]["status"], "failed", "corpo: {failed}");
+    assert_eq!(
+        failed["job"]["error_code"], "unsupported_document",
+        "corpo: {failed}"
+    );
+    assert_eq!(failed["status"], "draft", "corpo: {failed}");
+    assert!(failed["extracted"].is_null(), "corpo: {failed}");
+
+    // La bolletta si corregge e si valida a mano, come se l'OCR non esistesse.
+    let (status, validated) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {validated}");
+    assert_eq!(validated["status"], "validated", "corpo: {validated}");
+}
+
+/// La rotta è **dello staff**, come `ai_jobs_select`. Un inquilino che vede la
+/// bolletta non vede il job: sarebbe un `403`, non un `200` con `null`, perché
+/// «non ti è permesso» e «non c'è» sono due risposte diverse.
+#[tokio::test]
+async fn the_ocr_route_is_staff_only_and_unknown_bills_are_not_found() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "ocr-permessi").await;
+    let property = create_property(&app, &owner, "Immobile con inquilino").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email("ocr-inquilino");
+    add_tenant(&app, &owner, &lease, "Inquilino OCR", Some(&email)).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    app.post_auth(
+        "/api/v1/auth/accept-invitation",
+        &tenant,
+        serde_json::json!({ "token": accept_token }),
+    )
+    .await;
+
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/HTTP/0003").await;
+
+    // L'inquilino la bolletta la vede…
+    let (status, visible) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {visible}");
+
+    // …e il job no.
+    let (status, denied) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}/ocr"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {denied}");
+    assert_eq!(denied["code"], "org.staff_role_required", "corpo: {denied}");
+
+    // Una bolletta che non esiste è `404`, non un `200` con tutto a `null`.
+    let (status, missing) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{}/ocr", uuid::Uuid::now_v7()),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {missing}");
+    assert_eq!(
+        missing["code"], "utility_bill.not_found",
+        "corpo: {missing}"
+    );
+}
