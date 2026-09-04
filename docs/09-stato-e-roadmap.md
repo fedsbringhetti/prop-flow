@@ -259,12 +259,10 @@ l'insoluto adesso scende. Il resoconto è in fondo all'archivio:
 [Piano — Completare il prodotto, fetta A](11-piani-conclusi.md#piano-completare-il-prodotto)
 · [esito](11-piani-conclusi.md#esito-completare-il-prodotto-fetta-a).
 
-**La fetta A-bis — le notifiche — resta aperta e viene prima o dopo la B a
-scelta.** Sono i passi 9 e 10 del piano archiviato, dichiarati come punto di taglio
-fin dalla pianificazione. Vengono *prima* se l'onboarding deve funzionare per utenti
-veri, perché oggi il token d'invito lo consegna a mano il proprietario; vengono *dopo*
-se il fuoco è la copertura funzionale. Non c'è una dipendenza tecnica in nessuna delle
-due direzioni.
+**Le notifiche vanno in fondo, e non sono più una fetta A-bis.** Erano i passi 9 e
+10 del piano archiviato, e la scelta era «prima o dopo la B». È stata sciolta: *dopo*,
+insieme a tutto il resto che serve solo a utenti veri. La ragione è nel criterio qui
+sotto.
 
 Il percorso dell'inquilino è **provabile con dati veri per la prima volta**, perché un
 inquilino non esiste finché un proprietario non lo invita — e ora c'è anche un
@@ -277,6 +275,37 @@ sovrapagamento resta fuori dal riepilogo e si evidenzia per addebito. Vedi
 
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
+
+### Il criterio d'ordine, finché a provare è chi costruisce
+
+**Tutto ciò che serve soltanto a utenti veri va in fondo.** Vale finché il collaudo lo
+fa chi sviluppa, ed è la ragione per cui le notifiche hanno smesso di essere una fetta
+a sé e sono confluite in [Prima degli utenti veri](#prima-degli-utenti-veri).
+
+Il criterio si applica a ciò che **compra soltanto** quel valore, non a ciò che è
+scomodo: la fetta A è stata fatta per prima proprio perché il giro del denaro era
+rotto per l'utente che già esiste, e quello non era rinviabile.
+
+Alle notifiche il criterio si applica per intero: oggi il token d'invito **torna nella
+risposta HTTP e il client lo mostra** con il suo bottone per copiarlo, presentato per
+quello che è. Chi prova il prodotto da solo è il proprietario *e* l'inquilino, quindi
+consegnarsi un codice da una scheda all'altra costa un `Ctrl+V`. Una dichiarazione di
+pagamento in attesa non avvisa nessuno, ma dalla fetta A si trova in `/pagamenti`
+senza sapere quale addebito guardare. In entrambi i casi il rimedio esiste e si vede.
+
+**Verificato prima di decidere, perché è la cosa che renderebbe l'ordine impossibile:
+la fetta B non dipende da `Notifier`.** Nessuno la inietta, nessuno la chiama —
+l'unica riga che la nomina fuori dalla sua porta è la riesportazione in
+`application::ports`. Il percorso dell'inquilino si prova quindi per intero senza che
+un'email parta mai.
+
+**Che cosa costa rinviarle, e va saputo**: fino ad allora l'onboarding **non è pronto
+per utenti reali**, perché chiedere a un inquilino di farsi consegnare un codice a
+mano non è un prodotto. Non è un debito nascosto — è questa riga.
+
+Il criterio decade nel momento in cui qualcuno che non sia chi sviluppa apre il
+prodotto. È lì che [Prima degli utenti veri](#prima-degli-utenti-veri) diventa la
+prossima fetta, e non prima.
 
 «Far sì che i coinquilini si vedano» è stato fatto: vedi
 [l'esito](11-piani-conclusi.md#esito-coinquilini-visibili-fetta-1). L'**OCR delle bollette** è stato fatto:
@@ -402,8 +431,9 @@ reali, ed è oggi l'ultima porta senza implementazione.
 **Dalla fetta A ha un secondo consumatore in attesa, e la coda ne attenua il
 sintomo**: una dichiarazione di pagamento in `pending` non avvisa nessuno, ma da
 `/pagamenti` si trova senza sapere quale addebito guardare. Prima non si trovava
-affatto. La notifica resta la cosa che toglie il «guardare», ed è la fetta A-bis qui
-sotto.
+affatto. La notifica resta la cosa che toglie il «guardare», ed è in
+[Prima degli utenti veri](#prima-degli-utenti-veri): finché a provare il prodotto è
+chi lo costruisce, guardare la coda è esattamente ciò che si fa comunque.
 
 ---
 
@@ -417,64 +447,25 @@ esito, e **le sue otto decisioni valgono ancora**: quel documento resta la fonte
 *perché*, e questo del *cosa*.
 
 Le due liste si sovrappongono di proposito. L'archivio non si riscrive mai, quindi
-contiene anche le fette B e C come erano state pensate; questo file si riscrive a ogni
-fetta, e contiene ciò che resta con il dettaglio per eseguirlo. Chi legge solo questo
-può eseguire; chi vuole sapere perché va di là.
+contiene anche le fette B e C **come erano state pensate**, comprese le notifiche
+nella posizione che avevano allora; questo file si riscrive a ogni fetta, e contiene
+ciò che resta con il dettaglio per eseguirlo. Chi legge solo questo può eseguire; chi
+vuole sapere perché va di là.
 
-### Fetta A-bis — le notifiche
+**L'ordine qui è cambiato rispetto al piano archiviato, ed è la sola differenza di
+sostanza.** Là le notifiche erano una «fetta A-bis» da fare prima o dopo la B a
+scelta, e la fetta C si chiamava così. Qui sono confluite in un'unica fase finale —
+[Prima degli utenti veri](#prima-degli-utenti-veri) — per il
+[criterio d'ordine](#il-criterio-dordine-finché-a-provare-è-chi-costruisce) più sopra.
+La scomposizione dei due passi delle notifiche non è cambiata di una riga: è cambiato
+soltanto **quando**.
 
-I passi **9 e 10** del piano archiviato, dichiarati come punto di taglio fin dalla
-pianificazione: dopo A8 il proprietario ha un modulo contabile completo con ciò che
-l'API già sa fare, e le notifiche sono un fronte diverso — tocca una **porta**, non
-una schermata.
+Restano quindi **due fette**:
 
-Va prima della fetta B se l'onboarding deve funzionare per utenti veri: oggi il token
-d'invito lo consegna a mano il proprietario, e l'interfaccia lo dice apertamente
-invece di fingere. Va dopo se il fuoco è la copertura funzionale. **Nessuna dipendenza
-tecnica in nessuna delle due direzioni.**
-
-1. **`Notifier`: la porta e l'adattatore.** La variante `PaymentDeclared` in
-   `NotificationContent` — oggi ce n'è **una sola**, `TenantInvitation` —
-   l'adattatore SMTP in `propflow-infrastructure`, il raccoglitore SMTP locale nel
-   `docker-compose.yml`, la configurazione in `AppConfig` e nelle tabelle di
-   [07 — Operazioni](07-operazioni.md).
-2. **Gli invii.** Iniezione della porta in `InviteTenant` e in `DeclarePayment`:
-   firma degli use case, `AppState`, `Dependencies`, `main.rs` e l'harness dei test.
-   Invio **dopo il commit e best-effort**. Il client mostra «inviato» e tiene il
-   codice sotto un dettaglio richiudibile.
-
-**Le decisioni 5 e 8 del piano archiviato governano questi due passi e vanno lette
-prima di toccarli.** In breve, e senza sostituire l'originale:
-
-- **SMTP e non un fornitore con la sua API**, per la stessa ragione per cui
-  `ObjectStorage` ha un adattatore solo che parla anche con MinIO: il fornitore
-  diventa un **dato di configurazione** invece di un ramo del codice;
-- **l'invito non può passare dall'outbox**, ed è la trappola più cara della fetta. Il
-  token in chiaro esiste **solo** nella risposta HTTP — in database ne resta lo hash,
-  e gli eventi di dominio non trasportano valori né credenziali — quindi un worker che
-  leggesse `TenantInvited` non avrebbe niente da spedire. Metterci il token dentro
-  significherebbe scrivere una credenziale in una tabella che esiste per essere
-  pubblicata su un broker. L'invio è **dopo il commit, best-effort**: se la posta non
-  risponde, l'invito resta valido, il token resta nella risposta, e il fallimento va
-  nei log **senza il destinatario e senza il token**;
-- **la dichiarazione di pagamento non ha quel vincolo** — non c'è una credenziale da
-  recapitare — ma segue la stessa via, per non avere **due** meccanismi di invio
-  appena nato il primo.
-
-**Le altre due trappole di questi passi**, dal piano archiviato:
-
-- **`Notifier` non è iniettata da nessuna parte.** `InviteTenant::new` prende tre
-  argomenti e nessuno è un `Notifier`. Non è «scrivere un adattatore»;
-- **l'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
-  `docs/04` vieta email, token e corpi nei log, e un client SMTP che registri la
-  richiesta li registra tutti e tre insieme. La porta ha già un `Debug` redatto, e
-  l'adattatore non deve annullarlo;
-- **un raccoglitore SMTP locale non è un fornitore vero.** Accetta tutto: non verifica
-  SPF, DKIM né i rimbalzi. Verifica che il messaggio parta e che cosa contiene, **non**
-  che sarebbe recapitato. È lo stesso limite di MinIO rispetto a S3.
-
-**Come si saprà che è finita:** un'email di invito che arriva davvero nel raccoglitore
-locale, con il token nel corpo e in **nessuna** riga di log.
+| | Fetta | Stato |
+|---|---|---|
+| 1 | [L'inquilino](#fetta-b--linquilino) — dieci passi, punto di taglio dopo `B3` | la prossima |
+| 2 | [Prima degli utenti veri](#prima-degli-utenti-veri) — notifiche, poi il resto | quando il prodotto lo apre qualcun altro |
 
 ### Fetta B — l'inquilino
 
@@ -588,15 +579,92 @@ Più le due prove di qualità che il criterio «prodotto reale» rende obbligato
 **navigazione da sola tastiera** su un percorso completo, e **375 px** sulle schermate
 nuove.
 
-### Fetta C — prima degli utenti veri
+<a id="prima-degli-utenti-veri"></a>
 
-**Nominata e non pianificata**, come nella stesura originale: rate limiting per IP,
-verifica dell'email bloccante, manifest Kubernetes, backup e restore, metriche,
-alerting, cron per le partizioni di `audit_log`.
+### Prima degli utenti veri
+
+Tutto ciò che compra **soltanto** il valore che un utente vero richiede, e niente che
+serva a chi costruisce. Per il criterio d'ordine più sopra questa fase viene ultima, e
+**diventa la prossima fetta nel momento in cui qualcuno che non sia chi sviluppa apre
+il prodotto** — non prima.
+
+La fase ha due metà con statuti diversi, e confonderle costerebbe: la prima è
+**pianificata**, la seconda è **nominata e non pianificata**.
+
+#### Le notifiche — l'unica parte già pianificata
+
+I passi **9 e 10** del piano archiviato, dichiarati come punto di taglio fin dalla
+pianificazione: dopo A8 il proprietario ha un modulo contabile completo con ciò che
+l'API già sa fare, e le notifiche sono un fronte diverso — tocca una **porta**, non
+una schermata.
+
+**Stanno qui e non prima della fetta B**, per il criterio d'ordine più sopra: comprano
+soltanto ciò che serve a utenti veri. Oggi il token d'invito torna nella risposta HTTP
+e il client lo mostra con il suo bottone per copiarlo, e chi prova il prodotto da solo
+è il proprietario *e* l'inquilino. **Nessuna dipendenza tecnica in nessuna direzione**:
+`Notifier` non è iniettata da nessuna parte, quindi la fetta B non la incontra mai.
+
+Sono però **l'unica cosa di questa fase che è già pianificata**, ed è la ragione per
+cui i due passi restano scritti per esteso qui sotto invece di essere solo nominati:
+non dipendono da dove il prodotto verrà esercito, a differenza di tutto il resto.
+
+1. **`Notifier`: la porta e l'adattatore.** La variante `PaymentDeclared` in
+   `NotificationContent` — oggi ce n'è **una sola**, `TenantInvitation` —
+   l'adattatore SMTP in `propflow-infrastructure`, il raccoglitore SMTP locale nel
+   `docker-compose.yml`, la configurazione in `AppConfig` e nelle tabelle di
+   [07 — Operazioni](07-operazioni.md).
+2. **Gli invii.** Iniezione della porta in `InviteTenant` e in `DeclarePayment`:
+   firma degli use case, `AppState`, `Dependencies`, `main.rs` e l'harness dei test.
+   Invio **dopo il commit e best-effort**. Il client mostra «inviato» e tiene il
+   codice sotto un dettaglio richiudibile.
+
+**Le decisioni 5 e 8 del piano archiviato governano questi due passi e vanno lette
+prima di toccarli.** In breve, e senza sostituire l'originale:
+
+- **SMTP e non un fornitore con la sua API**, per la stessa ragione per cui
+  `ObjectStorage` ha un adattatore solo che parla anche con MinIO: il fornitore
+  diventa un **dato di configurazione** invece di un ramo del codice;
+- **l'invito non può passare dall'outbox**, ed è la trappola più cara della fetta. Il
+  token in chiaro esiste **solo** nella risposta HTTP — in database ne resta lo hash,
+  e gli eventi di dominio non trasportano valori né credenziali — quindi un worker che
+  leggesse `TenantInvited` non avrebbe niente da spedire. Metterci il token dentro
+  significherebbe scrivere una credenziale in una tabella che esiste per essere
+  pubblicata su un broker. L'invio è **dopo il commit, best-effort**: se la posta non
+  risponde, l'invito resta valido, il token resta nella risposta, e il fallimento va
+  nei log **senza il destinatario e senza il token**;
+- **la dichiarazione di pagamento non ha quel vincolo** — non c'è una credenziale da
+  recapitare — ma segue la stessa via, per non avere **due** meccanismi di invio
+  appena nato il primo.
+
+**Le altre due trappole di questi passi**, dal piano archiviato:
+
+- **`Notifier` non è iniettata da nessuna parte.** `InviteTenant::new` prende tre
+  argomenti e nessuno è un `Notifier`. Non è «scrivere un adattatore»;
+- **l'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
+  `docs/04` vieta email, token e corpi nei log, e un client SMTP che registri la
+  richiesta li registra tutti e tre insieme. La porta ha già un `Debug` redatto, e
+  l'adattatore non deve annullarlo;
+- **un raccoglitore SMTP locale non è un fornitore vero.** Accetta tutto: non verifica
+  SPF, DKIM né i rimbalzi. Verifica che il messaggio parta e che cosa contiene, **non**
+  che sarebbe recapitato. È lo stesso limite di MinIO rispetto a S3.
+
+**Come si saprà che è finita:** un'email di invito che arriva davvero nel raccoglitore
+locale, con il token nel corpo e in **nessuna** riga di log.
+
+#### Il resto — nominato e non pianificato
+
+Rate limiting per IP, verifica dell'email bloccante, manifest Kubernetes, backup e
+restore, metriche, alerting, cron per le partizioni di `audit_log`.
 
 Non è dimenticanza, ed è la ragione per cui ha un nome: dipendono da **dove** il
 prodotto viene esercito, che non è deciso, e pianificarle adesso significherebbe
-scrivere un piano su un'ipotesi.
+scrivere un piano su un'ipotesi. È anche la differenza con le notifiche qui sopra, che
+non dipendono da quella scelta e sono infatti scritte per esteso.
+
+**La verifica dell'email bloccante ha una conseguenza sull'ordine che vale la pena
+dire**: renderla obbligatoria cambia il percorso di registrazione, cioè la prima cosa
+che ogni collaudo attraversa. Farla mentre si prova da soli significherebbe pagarne il
+costo a ogni giro senza comprarne il valore, ed è il caso più netto del criterio.
 
 ### Fuori, e non per dimenticanza
 
@@ -611,7 +679,8 @@ scrivere un piano su un'ipotesi.
   una lingua è un file in più e non una riscrittura: è una decisione di mercato, non
   di completezza, e non blocca nulla;
 - **il mobile nativo**, che [ADR-039](08-decisioni.md#adr-039) rimanda alla
-  conversazione sulle notifiche push — cioè a **dopo la fetta A-bis**, non prima;
+  conversazione sulle notifiche push — cioè a **dopo che `Notifier` esiste**, e quindi
+  a dopo [Prima degli utenti veri](#prima-degli-utenti-veri);
 - **la ricerca full-text**, che è V2 e va alimentata dall'outbox;
 - **il filtro sui crediti da sovrapagamento.** Rinviato con la sua ragione in
   [ADR-040](08-decisioni.md#adr-040): richiederebbe un parametro nuovo e un indice
