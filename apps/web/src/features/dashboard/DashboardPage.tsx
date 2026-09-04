@@ -14,7 +14,7 @@ import { formatAmount, formatCount } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 /**
- * Gli otto numeri, ognuno **collegato al posto dove si agisce**.
+ * I nove numeri, ognuno **collegato al posto dove si agisce**.
  *
  * Un numero che non porta da nessuna parte è una decorazione: dice che c'è un
  * problema e lascia a chi guarda il compito di cercarlo. Qui `overdue_charges`
@@ -74,6 +74,27 @@ function Tiles({ data }: { data: Dashboard }) {
       action: t.dashboard.goToOverdue,
       tone: 'warning',
       alertWhen: data.total_outstanding !== '0.00',
+    },
+    {
+      // Il nono numero. **È il residuo degli addebiti stornati, non il loro
+      // importo**: 800 con 300 incassati e poi stornato vale 500, perché gli altri
+      // trecento sono entrati.
+      //
+      // Sta accanto all'insoluto e **non lo compensa**: quello dice quanto è
+      // ancora dovuto, questo quanto non lo sarà mai. Un addebito *annullato* non
+      // conta — non doveva essere chiesto, quindi non è una perdita — ed è la
+      // distinzione per cui questo riquadro esiste.
+      //
+      // Il tono è `danger` e non `warning`: una perdita non aspetta nessuno, è già
+      // avvenuta. E l'allerta scatta solo se c'è qualcosa: un rosso su uno zero
+      // sarebbe un allarme per niente.
+      label: t.dashboard.writtenOffTotal,
+      value: formatAmount(data.written_off_total),
+      note: t.dashboard.writtenOffTotalNote,
+      to: '/addebiti?stato=written_off',
+      action: t.dashboard.goToWrittenOff,
+      tone: 'danger',
+      alertWhen: data.written_off_total !== '0.00',
     },
     {
       label: t.dashboard.overdueCharges,
