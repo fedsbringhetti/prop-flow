@@ -97,6 +97,11 @@ services:
       PROPFLOW__STORAGE__ACCESS_KEY_ID: propflow
       PROPFLOW__STORAGE__SECRET_ACCESS_KEY: propflow-dev-secret
       PROPFLOW__TELEMETRY__JSON_LOGS: "true"
+      # Lo stack di compose parla HTTP su `localhost`, e un browser non manda un
+      # cookie `Secure` su HTTP: senza questa riga il refresh fallirebbe sempre e
+      # la sessione durerebbe i quindici minuti dell'access token. In produzione
+      # va lasciata al default, che è `true`.
+      PROPFLOW__SERVER__SECURE_COOKIES: "false"
     volumes:
       # Le chiavi arrivano come file in sola lettura, non da variabili d'ambiente:
       # generarle con ./ops/dev/generate-jwt-keys.sh
@@ -116,6 +121,31 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+
+  # Il client, dietro il reverse proxy che realizza il contratto **una sola
+  # origine**: `/` ai file statici, `/api/v1` all'API. È l'unica porta che si apre
+  # verso l'esterno; quella dell'API resta esposta perché in sviluppo serve
+  # Swagger UI, che sta fuori dal prefisso `/api/v1`.
+  web:
+    build:
+      context: .
+      target: web
+    image: propflow-web:dev
+    environment:
+      PROPFLOW_API_UPSTREAM: api:8080
+    ports:
+      - "8081:8080"
+    depends_on:
+      - api
+    read_only: true
+    # Caddy scrive la propria configurazione e i certificati: con il filesystem in
+    # sola lettura gli servono due volumi effimeri, altrimenti non parte.
+    tmpfs:
+      - /tmp
+      - /data
+      - /config
+    security_opt:
+      - no-new-privileges:true
 
   worker:
     build: .

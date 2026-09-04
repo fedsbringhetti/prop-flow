@@ -56,12 +56,39 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | OCR delle bollette: porta `OcrProvider` senza fornitore scelto, adattatore deterministico, coda `ai_jobs` con `SKIP LOCKED`, `pending_review` con le sue uscite, stato del job dall'API | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox, lettura automatica delle bollette | completi |
+| Dashboard: `GET /dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto | completo |
+| Sessione in cookie: refresh `HttpOnly` fuori dal corpo, `Secure` condizionale, test che tiene in piedi l'argomento CSRF | completo |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-402 test: 204 unitari di dominio, 16 applicativi, 26 di infrastruttura, 6 unitari
+413 test: 204 unitari di dominio, 16 applicativi, 26 di infrastruttura, 11 unitari
 del bordo HTTP, 75 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 69 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+MinIO, 75 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+
+### Client web — il percorso del proprietario
+
+`apps/web/`, React e TypeScript in `strict`, servito dalla **stessa origine**
+dell'API dietro un reverse proxy.
+
+| Componente | Stato |
+|---|---|
+| Catalogo delle stringhe, formattazione con `Intl` e la lingua come parametro | completo |
+| Aritmetica decimale su interi: `parseFloat` non compare | completo |
+| Client dell'API con il **refresh a singolo volo** e la traduzione di `ProblemDetails` | completo |
+| Guscio: registrazione, accesso, uscita, organizzazione attiva, navigazione | completo |
+| I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
+| Dashboard: otto numeri, ognuno collegato al posto dove si agisce | completo |
+| Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
+| Stanze e residenti | completo per la fetta 1 |
+| Contratti: elenco, bozza, parti, attivazione, disdetta, stati derivati mostrati e non filtrati | completo per la fetta 1 |
+| Inviti: emissione e consegna del token, presentato per quello che è | completo per la fetta 1 |
+| Bollette: registrazione, scansione, **revisione dell'OCR campo per campo**, validazione, riaddebito | completo per la fetta 1 |
+| Addebiti: scadenzario, annullamento, rinuncia all'incasso | completo per la fetta 1 |
+| Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
+
+27 test: 12 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+volo **riprodotto anche al contrario** — 11 sui decimali e sulla formattazione, 4
+sul percorso da sola tastiera.
 
 ## Non implementato
 
@@ -84,36 +111,27 @@ porta → use case → repository → endpoint → test.
    **Prima del triage viene però la scelta del fornitore**, che blocca anche l'OCR dal
    produrre valore: vedi [ADR-037](08-decisioni.md#adr-037) e la sezione
    [La decisione che ora blocca più valore di ogni riga di codice](#la-decisione-che-ora-blocca-più-valore-di-ogni-riga-di-codice).
-2. **Dashboard** — `v_owner_dashboard` esiste dalla `0015`, l'endpoint no. Resta
-   **ultima**, ed è una scelta da rileggere insieme alla sua alternativa, perché la
-   fetta dei pagamenti ha reso facile confondersi.
+2. ~~**Dashboard**~~ — **fatta**, come passo 1 della fetta del client: `GET
+   /api/v1/dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto.
+   Nessuna migration: la vista esiste dalla `0015`.
 
-   **È sbloccata**, e ora del tutto: sette degli otto numeri erano già completi — la
-   `0017` ha sistemato quelli sui contratti con `lease_in_force`, la `0024` ha tolto
-   dall'insoluto gli addebiti annullati e stornati, e i pagamenti hanno dato a
-   `paid_amount` righe da contare. L'ottavo, `bills_pending_review`, contava solo
-   `draft`: con l'OCR lo stato `pending_review` **esiste davvero**, quindi quel numero
-   ha finalmente il significato che il suo nome promette. Costa uno use case di lettura,
-   un DTO e una rotta: nessuna migration, nessun aggregato, nessuna porta.
+   La voce si tiene perché la sua conclusione — «sbloccata non vuol dire
+   prioritaria», e la finestra sulle semantiche la chiude il **primo client** e non
+   l'esistenza dell'endpoint — resta vera e generale, e perché quella finestra
+   adesso **si è chiusa**: le due semantiche non decise (se `written_off` sia una
+   perdita a sé, se il credito da sovrapagamento vada mostrato) sono ancora aperte
+   e cambiarle ora è una rottura. Sono scritte nel tipo di dominio `OwnerDashboard`
+   e nel DTO, così chi le deciderà le trova dove guarderà.
 
-   **Sbloccata non vuol dire prioritaria**, ed è l'errore che la fetta dei pagamenti ha
-   quasi commesso. La finestra in cui cambiare il significato di quei numeri è additivo
-   la chiude il **primo client**, non l'esistenza dell'endpoint: costruirla adesso non
-   la consuma e non la restringe, quindi la fretta non ha un fondamento.
+   L'eccezione che quella conclusione ammetteva — «vale se serve qualcosa da
+   mostrare presto» — è esattamente il caso che si è verificato: la dashboard
+   serviva al client, ed è stata fatta per quello e non prima.
 
-   Contro il farla prima c'è invece una ragione vera: **due delle sue semantiche non
-   sono decise** — sono elencate in
-   [Perché la dashboard resta ultima](#perché-la-dashboard-resta-ultima) — e questo
-   progetto tiene fuori ciò la cui semantica non è decisa, che è esattamente perché
-   `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere un campo
-   dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura, ed è
-   la stessa asimmetria che giustifica la `0024`.
-
-   **L'unico argomento per anticiparla** è che è la prima superficie di lettura che
-   attraversa immobili, contratti, segnalazioni, bollette, addebiti e pagamenti
-   insieme, quindi il primo posto dove si vedrebbe un errore di integrazione fra le
-   fette. Vale se serve qualcosa di mostrabile presto; non vale come ordine di
-   costruzione.
+   **L'argomento che l'ha portata avanti** è quello che era già scritto qui: è la
+   prima superficie di lettura che attraversa immobili, contratti, segnalazioni,
+   bollette, addebiti e pagamenti insieme, quindi il primo posto dove si vedrebbe un
+   errore di integrazione fra le fette. Eseguendola non se n'è visto nessuno, il che
+   è il migliore esito possibile e anche il meno raccontabile.
 
 **Documenti** è implementato nella fetta 1: caricamento, elenco, download e
 archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
@@ -164,10 +182,10 @@ messaggi e le note di risoluzione. Il resoconto è in fondo:
 
 | Ambito | Cosa manca |
 |---|---|
-| Sicurezza | rate limiting per IP; verifica email bloccante; MFA (colonna presente); CORS non montato; `kid` nei token per la rotazione delle chiavi |
+| Sicurezza | rate limiting per IP; verifica email bloccante; MFA (colonna presente); `kid` nei token per la rotazione delle chiavi. **CORS non è più in questo elenco**: non montarlo è una scelta, non un debito — vedi [ADR-038](08-decisioni.md#adr-038) |
 | Operazioni | manifest Kubernetes; backup e restore; metriche; alerting; cron per le partizioni di audit |
 | Qualità | gate sulle licenze delle dipendenze; test di carico; benchmark |
-| Prodotto | client mobile (Flutter o React Native), fuori perimetro backend |
+| Prodotto | il percorso dell'**inquilino** nel client, che è la fetta 2. Il client esiste e copre il proprietario: [ADR-039](08-decisioni.md#adr-039) rivede l'ipotesi «mobile nativo» che questa riga conteneva |
 
 ## Debiti tecnici noti
 
@@ -197,13 +215,34 @@ cambia il contesto.
 | ~~L'anagrafica è visibile per **organizzazione**, non per immobile~~ — **chiuso** dalla migration `0030` | `users_select` passava da `app.shares_org_with`, quindi un inquilino leggeva nome, email e telefono di ogni persona dell'organizzazione. Ora passa da `app.shares_home_with`, più i due rami sullo staff. Il timore registrato qui — che restringerlo fosse un filtro applicativo e non un confine del database — non si è avverato: è un `ALTER POLICY`, quindi il confine è dove doveva stare. Vedi [ADR-036](08-decisioni.md#adr-036) | Chiuso |
 | Un job dell'OCR abbandonato resta `running` per sempre | Non c'è scadenza e il ritentativo è fuori perimetro: `attempts` sale alla presa in carico ma nessuno riporta a `queued` un job che il processo ha lasciato a metà. **Il sintomo è muto** — una bolletta che non arriva mai a `pending_review` senza che nulla sia in errore — e finché il ritentativo non esiste il rimedio è guardare `app.ai_jobs` per gli `running` vecchi | Insieme al ritentativo, che è la stessa conversazione del primo fornitore vero: quali errori produce, quali si riprovano, e cosa significa un terminale senza `finished_at` — che è anche la domanda che tiene `cancelled` fuori dall'enum scritto |
 | Il worker legge la configurazione dello storage con `std::env::var` | Sei variabili senza una struct che le valida, a differenza dell'API che passa da `AppConfig`. È la stessa scelta del migratore e la stessa ragione — `AppConfig` gli chiederebbe un bind e delle chiavi di firma che non usa — ma vuol dire che il test di guardia `docs_config_reference.rs` **non copre le impostazioni del worker**: la tabella in `docs/07-operazioni.md` può restare indietro senza che nulla fallisca | Se il worker acquisisce altra configurazione. Con sei variabili il rischio è basso; con dodici la guardia va estesa, ed è un parser in più nello stesso test |
+| Il refresh non è coordinato **fra schede** | Il singolo volo è una promessa in memoria, e due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve `BroadcastChannel` o un lock su `localStorage`. Il sintomo è raro e il rimedio è ricaricare | Se qualcuno lo incontra davvero. È la sola parte della decisione 5 del piano del client che resta aperta, ed è deliberatamente accettata |
+| Non esiste un endpoint che elenchi le **organizzazioni** di un utente | Il selettore dell'organizzazione mostra quelle che *questo browser* ha conosciuto — dal login e dall'accettazione di un invito — e le tiene in `localStorage`. Per il proprietario, che ne ha una, è indistinguibile da un elenco vero; per l'inquilino della fetta 2, che ne ha almeno due, non lo sarà: entrando su un browser nuovo non vedrebbe l'organizzazione del proprietario finché non riaccetta un invito. È il gemello del debito «non esiste un endpoint che elenchi le **persone** di un'organizzazione», ed è emerso allo stesso modo — costruendo il client | Con la fetta 2. È un `GET /api/v1/memberships` di poche righe, e la domanda vera è quali colonne esporre: il nome dell'organizzazione è un dato che oggi nessun endpoint restituisce a chi non ne è staff |
+| Il bundle del client è un pezzo solo, 597 kB (181 kB compressi) | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette. Su desktop non si nota, e il proprietario è su desktop; l'inquilino della fetta 2 è su rete mobile e lo noterà. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | Con la fetta 2, insieme al percorso dell'inquilino |
+| Gli allegati si scaricano da un link senza `Authorization` | `GET /documents/{id}/content` risponde `307` verso un URL pre-firmato, e il client ci arriva con un `<a href>` — che è ciò che permette al browser di scaricare invece di tenere i byte in memoria. Il link però non porta il token, quindi funziona solo finché la rotta accetta la richiesta dal contesto della scheda. Oggi funziona; il giorno in cui l'API pretendesse l'header su quella rotta, il download smetterebbe di funzionare **senza che nulla in questo repository cambi** | Se il download smette di funzionare, o quando si decida come firmare i link lato client. L'alternativa è un `fetch` con il token seguito da un `blob:` URL, che tiene il file in memoria — accettabile per un PDF, non per una scansione da 25 MB |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 
 ## Prossimo passo suggerito
 
-La **dashboard**, che a questo punto è l'ultima cosa rimasta — e la ragione per cui è
-rimasta ultima è nella sezione qui sotto, che va letta perché è una conclusione
-controintuitiva e non una scaletta.
+Il **percorso dell'inquilino nel client**, che è la fetta 2 e che adesso — per la
+prima volta — è provabile con dati veri: un inquilino non esiste finché un
+proprietario non lo invita, e il percorso del proprietario esiste da questa fetta.
+Comprende segnalazioni, spese co-living e pagamenti dichiarati, che nell'API ci sono
+già. Vedi [l'esito del client](#esito-client-fetta-1).
+
+Prima di cominciarla vale la pena decidere le **due semantiche della dashboard**
+lasciate aperte — se `written_off` sia una perdita a sé, e se il credito da
+sovrapagamento vada mostrato — perché la finestra in cui erano additive si è chiusa
+con il primo client, che adesso c'è.
+
+Resta anche la decisione che continua a bloccare più valore di ogni riga di codice,
+ed è quella qui sotto: **il fornitore di OCR**.
+
+La sezione che segue sulla dashboard è stata scritta quando la dashboard non c'era.
+Si tiene perché la conclusione a cui arriva — «sbloccata non è prioritaria» — è
+generale e vale per la prossima cosa a buon mercato che sembrerà ovvia; e perché la
+sua eccezione, «vale se serve qualcosa da mostrare presto», è precisamente il caso
+che si è verificato: la dashboard è stata fatta come **passo 1 del client**, cioè per
+la ragione che quella sezione ammetteva.
 
 «Far sì che i coinquilini si vedano» è stato fatto: vedi
 [l'esito](#esito-coinquilini-visibili-fetta-1). L'**OCR delle bollette** è stato fatto:
@@ -4383,3 +4422,550 @@ qualcosa non è visibile, senza dire che *prima* lo era.
 - **Chi affitta due stanze compare due volte.** Una riga per parte contrattuale, con la
   stanza a distinguerle. Ridurlo a una riga sceglierebbe arbitrariamente quale stanza
   mostrare; se un client avrà bisogno del contrario, lo farà con l'informazione che ha.
+
+
+---
+
+<a id="piano-client-fetta-1"></a>
+
+## Piano — Il client, fetta 1
+
+Pianificato il **3 settembre 2026**. Il piano resta sotto come è stato scritto: serve a
+eseguirlo, e servirà a capire perché il codice è com'è. L'esito va in fondo a esecuzione
+conclusa, come per tutte le fette precedenti.
+
+**Questo piano non è la voce «dashboard» della lista dei moduli.** Quella è un endpoint
+di lettura su `v_owner_dashboard` e resta il passo 1 qui sotto. Questo piano apre un
+fronte nuovo: **il client**, che `docs/09` elencava fra i trasversali mancanti come
+«fuori perimetro backend» e che da qui in poi nel perimetro ci entra.
+
+### Obiettivo
+
+Un'interfaccia che un proprietario vero possa usare per amministrare i propri immobili:
+entrare, vedere a colpo d'occhio cosa richiede attenzione, e da lì agire — registrare un
+immobile, redigere un contratto, invitare un inquilino, registrare una bolletta, farla
+leggere a una macchina, riaddebitarla.
+
+**Non un prodotto da dimostrazione.** Il criterio è dichiarato perché orienta cento
+decisioni piccole: accessibilità da tastiera, stati di caricamento e di errore
+progettati invece che improvvisati, form che non perdono ciò che è stato digitato,
+tabelle che reggono mille righe. Sono le cose che distinguono un'interfaccia che si
+mostra da una che si usa, e che aggiunte dopo costano il triplo.
+
+**Dentro:** la rotta della dashboard; la sessione in cookie con il refresh a singolo
+volo; il guscio dell'applicazione — autenticazione, navigazione, selezione
+dell'organizzazione, modello degli errori; e il percorso completo del **proprietario**:
+dashboard, immobili e stanze, contratti e parti, bollette con revisione dell'OCR,
+addebiti, inviti. Più la CI e l'immagine che li reggono.
+
+**Fuori, e non per dimenticanza:**
+
+- **il percorso dell'inquilino.** Non è una scelta di priorità ma una dipendenza: un
+  inquilino non esiste finché un proprietario non crea l'organizzazione, l'immobile, il
+  contratto e lo invita. Senza il percorso del proprietario, quello dell'inquilino non è
+  nemmeno provabile con dati veri. È la fetta 2, e comprende segnalazioni, spese
+  co-living e pagamenti dichiarati;
+- **i pagamenti e le spese co-living dal lato proprietario.** Esistono nell'API e sono
+  rimandati per tenere la fetta finita invece che larga: sono il primo candidato della
+  fetta 2 insieme all'inquilino;
+- **la traduzione in inglese.** L'interfaccia della fetta 1 è in italiano soltanto, ma
+  **non è rimandabile l'impianto**: le stringhe stanno in un catalogo dal primo giorno,
+  perché aggiungere una lingua a un'interfaccia con i testi nel JSX è una riscrittura.
+  Vedi la decisione 6;
+- **il mobile nativo.** `docs/09` ipotizzava Flutter o React Native. L'ipotesi è
+  **rivista** — vedi la decisione 2 — e una web app responsive copre entrambi i ruoli
+  con un codice solo. Il giorno in cui servisse una app vera, servirà per le notifiche
+  push e la fotocamera, cioè per l'inquilino, e sarà quella la conversazione;
+- **i manifest Kubernetes.** Restano il debito che erano. Questa fetta definisce il
+  *contratto* del reverse proxy — `/` ai file statici, `/api/v1` all'API — e lo realizza
+  in sviluppo e in `docker-compose.yml`; scriverlo per K8s è lavoro di esercizio, con il
+  resto di quel debito;
+- **le notifiche.** `Notifier` è una porta senza adattatore, quindi il token d'invito
+  **torna nella risposta HTTP** e il proprietario lo consegna come preferisce. Il client
+  non lo nasconde: lo presenta come qualcosa da copiare e mandare. È brutto ed è la
+  verità, e mascherarlo con una schermata che dice «invito inviato» sarebbe una bugia
+  nell'interfaccia.
+
+### Che cosa è stato deciso prima di pianificare
+
+Sei scelte, prese esplicitamente. Stanno qui perché il resto del piano le dà per
+assodate.
+
+| | Scelta | Alternativa principale scartata |
+|---|---|---|
+| Perimetro | guscio + proprietario end-to-end | le due home dei due ruoli, che sarebbe un guscio con poco dietro |
+| Piattaforma | web responsive, React + TypeScript + Vite | Flutter, che `docs/09` ipotizzava |
+| Collocazione | monorepo, `apps/web/` accanto a `crates/` | repository separato |
+| Sessione | refresh in cookie `httpOnly`, access in memoria | entrambi in `localStorage` |
+| Origine | **una sola**, con un reverse proxy davanti | `app.` e `api.` separati |
+| Base UI | shadcn/ui — Radix + Tailwind | Mantine, MUI |
+
+### Decisioni prese, con il perché
+
+#### 1. Una sola origine, e ne segue che CORS non serve
+
+È la decisione con più conseguenze, e quasi tutte sono cose che **non** si devono fare.
+
+Un solo dominio: `/` serve i file statici, `/api/v1` inoltra all'API. In sviluppo lo fa
+il proxy di Vite, in produzione un Ingress o un Caddy. Il browser vede una sola origine,
+e ne segue:
+
+- **CORS non va montato.** Era il primo lavoro che sembrava obbligatorio e sparisce: non
+  c'è nessuna richiesta cross-origin da autorizzare. Il debito «CORS non montato» resta
+  aperto per il giorno in cui un client di terze parti esisterà, e quel giorno sarà una
+  decisione sua;
+- **il cookie è di prima parte.** `SameSite=Strict` invece di `SameSite=None; Secure`,
+  che è la differenza fra un cookie che il browser non manda mai altrove e uno che manda
+  ovunque glielo si chieda;
+- **nessun elenco di origini ammesse** da tenere allineato fra ambienti, che è una
+  configurazione che si sbaglia in silenzio e si scopre in produzione.
+
+**Alternativa scartata: origini separate.** Più comoda da distribuire in modo
+indipendente, e costa tre pezzi di backend — CORS con credenziali, cookie
+`SameSite=None`, difesa CSRF — ciascuno sbagliabile senza che nulla protesti. Si
+comprerebbe indipendenza di deploy pagandola in superficie di sicurezza, su un prodotto
+che tratta contratti di locazione e importi.
+
+**Alternativa scartata: i file statici serviti dall'API Rust.** Un servizio solo e
+nessun proxy da configurare, ed è tentante. Costa però che la build del frontend deve
+finire nell'immagine dell'API, e che un processo HTTP fa due mestieri con profili di
+carico e di cache opposti — file immutabili con hash nel nome da un lato, risposte
+personali non memorizzabili dall'altro. Il proxy va scritto comunque per K8s.
+
+#### 2. Web responsive e non mobile nativo, che è una revisione di `docs/09`
+
+L'ipotesi scritta era «client mobile (Flutter o React Native)», ed è stata scritta prima
+che il perimetro dell'API fosse noto. Rivista guardando **che cosa fa il proprietario**:
+registra una bolletta con dodici campi, legge tabelle di addebiti, confronta una
+proposta dell'OCR con i numeri che ha digitato, riaddebita a un contratto. È lavoro da
+schermo grande e da tastiera.
+
+L'inquilino invece è mobile per natura — fotografa un guasto, guarda quanto deve — e una
+web app responsive lo copre bene, senza le due cose che richiederebbero davvero una app
+nativa: **notifiche push** e accesso alla fotocamera più fluido di `<input capture>`.
+Nessuna delle due è nella fetta 1, e la prima non è nemmeno possibile finché `Notifier`
+non ha un adattatore.
+
+**La decisione va rifatta quando l'inquilino sarà il fuoco**, ed è scritto qui perché
+chi farà la fetta 2 lo trovi.
+
+#### 3. La sessione: cookie per il refresh, memoria per l'access, e **nessun token CSRF**
+
+La parte controintuitiva è l'ultima, quindi va spiegata per intero.
+
+| | Dove vive | Chi lo manda |
+|---|---|---|
+| access token (15 min) | **solo in memoria** JavaScript | il client, come `Authorization: Bearer` |
+| refresh token (30 giorni) | cookie `httpOnly`, `Secure`, `SameSite=Strict`, `Path=/api/v1/auth` | il browser, da solo, e solo verso le rotte di autenticazione |
+
+L'access token in memoria muore al ricaricamento della pagina, e non è un problema: si
+riottiene dal cookie. Non è leggibile da un XSS che arrivi *dopo* il caricamento, perché
+non sta in nessuno storage persistente.
+
+**Perché non serve una difesa CSRF**, che è la conclusione che va argomentata invece di
+essere data per buona. Il CSRF è possibile quando il browser autentica una richiesta
+**da solo**, cioè con un cookie. Qui:
+
+- ogni rotta di business è autenticata dall'header `Authorization`, che un sito
+  attaccante **non può impostare** su una richiesta cross-origin senza il permesso di
+  CORS — che non concediamo, perché CORS non è montato affatto;
+- le sole rotte autenticate dal cookie sono `/api/v1/auth/refresh` e `/logout`, e su
+  quelle il cookie è `SameSite=Strict`: il browser **non lo manda** su una richiesta che
+  parte da un altro sito. Non c'è niente da falsificare.
+
+**Ne segue una condizione da non perdere di vista, ed è la ragione per cui questa nota è
+lunga**: l'argomento regge finché *nessuna rotta di business è autenticata da un
+cookie*. Il giorno in cui qualcuno aggiungesse una sessione a cookie per comodità, tutto
+questo cadrebbe **in silenzio** — nessun test fallirebbe. Va scritto nell'ADR e va
+messo un test che verifichi che l'unica rotta che accetta il cookie è quella di
+refresh.
+
+**Il `Path=/api/v1/auth` non è cosmetico**: limita l'invio del cookie alle sole rotte che
+lo usano, quindi una richiesta a `/api/v1/properties` non se lo porta dietro nemmeno per
+sbaglio. È difesa in profondità: se un giorno l'argomento sopra si incrinasse, il cookie
+comunque non arriva dove non serve.
+
+**Alternativa scartata: entrambi i token in `localStorage`.** Nessuna modifica al
+backend, e in cambio un XSS legge un refresh token che vale trenta giorni. Su questo
+prodotto è un rischio che si può accettare solo dicendolo, e non c'è ragione di
+accettarlo.
+
+#### 4. Il refresh token **sparisce dal corpo della risposta**, ed è una rottura
+
+Se l'API mettesse il refresh token *sia* nel cookie *sia* nel JSON, il cookie non
+proteggerebbe niente: un XSS lo leggerebbe dalla risposta del login. Metà misura, costo
+pieno.
+
+Quindi `SessionResponse` perde `refresh_token`, e l'API lo emette **solo** come cookie.
+`RefreshRequest` e la richiesta di logout smettono di accettarlo nel corpo e lo leggono
+dal cookie.
+
+**È una rottura del contratto, e va annunciata**: sulla linea 0.x è ammessa, entra nel
+commit che la causa e da lì nel changelog. Chi usa `curl` passa a un cookie jar
+(`-c`/`-b`), che è una riga in più negli esempi di `docs/05-api.md` e va aggiornata lì.
+
+**Alternativa scartata: un parametro che scelga fra cookie e corpo.** Un flag
+sull'autenticazione è una superficie in più da sbagliare, e sposta su chi chiama una
+decisione di sicurezza che deve essere del server.
+
+#### 5. Il refresh a **singolo volo**, che è la trappola più cara del client
+
+L'API ruota il refresh token e tratta il riuso come prova che qualcuno ne ha una copia:
+`Invariant::RefreshTokenReused` dice «possible reuse, revoke the chain». È corretto e
+severo, e in un browser si trasforma in un difetto se il client è ingenuo.
+
+Lo scenario, che **accadrà**: la pagina fa tre richieste in parallelo, l'access token è
+scaduto, tutte e tre ricevono `401`, tutte e tre chiamano `/auth/refresh` con lo stesso
+cookie. La prima ruota il token; la seconda e la terza presentano un token **già
+ruotato**; l'API revoca l'intera catena; l'utente viene buttato fuori. Con due schede
+aperte è ancora più facile.
+
+Il client deve quindi avere **una sola chiamata di refresh in volo**: una promessa
+condivisa che tutte le richieste in attesa aspettano, e da cui ripartono con il token
+nuovo. Non è un'ottimizzazione, è una condizione di correttezza.
+
+Fra schede diverse il problema resta e non lo risolve una promessa in memoria: serve un
+coordinamento (`BroadcastChannel` o un lock su `localStorage`). **Nella fetta 1 si
+accetta**, si documenta, e si mette nei debiti — il sintomo è raro, e il rimedio è
+ricaricare.
+
+#### 6. Il monorepo, e che cosa significa per `CLAUDE.md`
+
+`apps/web/` accanto a `crates/`. Il contratto dell'API e il client si muovono insieme: una
+rotta che cambia e un client che non la segue si vedono **nella stessa PR**, che è
+esattamente il difetto che un repository separato lascia scoprire tardi.
+
+Ne segue una cosa che va detta: **`CLAUDE.md` è oggi interamente su Rust**. «Niente
+`unwrap`», «errori con `thiserror`», «query come letterali statici» non hanno una
+traduzione in TypeScript, e lasciare il frontend senza regole significa lasciarlo senza
+criterio. Serve una sezione sua, corta, con le poche regole che valgono:
+
+1. **la lingua dell'interfaccia è l'italiano**, e l'inglese arriverà. Gli utenti sono
+   proprietari e inquilini italiani, e non contraddice la regola sull'inglese di
+   `CLAUDE.md`, che riguarda ciò che un estraneo incontra dal di fuori del repository —
+   commit, PR, README — non ciò che un utente legge nel prodotto.
+
+   **Ne segue un vincolo che vale dal primo giorno, ed è la ragione per cui questa voce
+   è più lunga delle altre: nessuna stringa visibile va scritta dentro un componente.**
+   La traduzione in inglese è già decisa, solo rimandata, e una fetta costruita con i
+   testi sparsi nel JSX la rende una riscrittura invece di un'aggiunta. Le stringhe
+   stanno in un catalogo per lingua, i componenti ne usano le chiavi, e la lingua è una
+   sola finché non ce ne sono due. Non serve una libreria di internazionalizzazione
+   nella fetta 1 — serve **il livello di indirezione**, che è la parte impossibile da
+   aggiungere dopo.
+
+   Ne segue anche che le date, gli importi e i numeri non si formattano a mano:
+   `Intl.DateTimeFormat` e `Intl.NumberFormat` con la lingua come parametro, altrimenti
+   `31/08/2026` e `184,20 €` restano italiani anche in inglese;
+2. **niente `any`**, e `strict` acceso in `tsconfig`. È l'equivalente di «zero warning»;
+3. **gli importi restano stringhe**: vedi la trappola apposita;
+4. **ogni stato di una schermata è progettato**: caricamento, vuoto, errore, e non solo
+   il caso felice;
+5. **nessuna chiamata `fetch` fuori dal livello dei dati.** È l'equivalente di «nessun
+   SQL negli handler»: un componente che chiama l'API da sé aggira gestione degli
+   errori, ritentativi e sessione.
+
+#### 7. shadcn/ui, cioè componenti copiati e non una dipendenza
+
+I componenti si copiano nel progetto. Il vantaggio non è filosofico: un gestionale
+richiede tabelle con ordinamento e filtri, form con validazione per campo, date pickers
+che capiscano il formato italiano, e con una libreria chiusa ognuno di questi si
+personalizza combattendo. Radix sotto garantisce accessibilità e gestione della
+tastiera, che è la parte che nessuno riscrive bene a mano.
+
+**Alternativa scartata: Tailwind nudo.** Controllo totale, e accessibilità, focus, ARIA
+su modali, menù e combobox da scrivere a mano. È il modo più rapido di costruire
+un'interfaccia che *sembra* professionale e non lo è.
+
+**Alternativa scartata: MUI.** Il `DataGrid` risolverebbe da solo metà delle schermate
+del proprietario, e il prodotto somiglierebbe a un'app Google salvo un lavoro di tema
+considerevole; le parti da gestionale più utili sono per giunta a pagamento.
+
+### Decomposizione
+
+**Undici passi.** I passi 1–5 sono la fondazione e non si tagliano: senza, non c'è
+niente da mostrare. Il **punto di taglio** è dopo il passo 8: con dashboard, immobili e
+contratti il proprietario ha un prodotto coerente, e bollette e inviti sono una fetta
+1-bis. Va deciso guardando, non adesso.
+
+1. **Backend: la rotta della dashboard.** `GET /api/v1/dashboard`, ruolo staff, che
+   legge `app.v_owner_dashboard` — otto numeri: `properties_count`, `active_leases`,
+   `monthly_rent_expected`, `total_outstanding`, `overdue_charges`, `open_tickets`,
+   `leases_expiring_90d`, `bills_pending_review`. Use case di sola lettura, DTO, rotta,
+   registrazione in `openapi.rs`, test di contratto. Nessuna migration: la vista esiste
+   dalla `0015` ed è `security_invoker`, quindi applica già la RLS del chiamante.
+2. **Backend: la sessione in cookie.** `Set-Cookie` su login e refresh con
+   `httpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`; lettura del cookie in refresh
+   e logout; rimozione di `refresh_token` da `SessionResponse` e dalle richieste. Il
+   `Secure` va reso condizionale per lo sviluppo su `http://localhost` — **è l'unica
+   configurazione nuova**, e va nella tabella di `docs/07-operazioni.md`, che è l'unico
+   documento capace di far fallire `cargo test`.
+3. **Backend: il test che tiene in piedi l'argomento CSRF.** Verifica che il cookie sia
+   accettato **solo** dalle rotte di autenticazione: una richiesta a una rotta di
+   business con il solo cookie e senza `Authorization` deve rispondere `401`. Senza
+   questo test la decisione 3 è una nota che nessuno rilegge.
+4. **Frontend: la fondazione.** `apps/web/` con Vite, React, TypeScript in `strict`,
+   Tailwind, shadcn/ui. Router (TanStack Router o React Router), livello dati (TanStack
+   Query), form (React Hook Form + Zod). Il proxy di Vite su `/api/v1`. Nessuna
+   schermata: solo che `npm run build` e `npm run typecheck` passino.
+5. **Frontend: il client dell'API e la sessione.** Un modulo solo che fa le richieste,
+   allega il `Bearer`, intercetta il `401`, esegue il **refresh a singolo volo** e
+   riprova. Traduzione di `ProblemDetails` in un tipo di errore che porta il `code`
+   stabile. È il pezzo su cui poggia tutto il resto e va scritto per primo e con i test.
+6. **Frontend: autenticazione e guscio.** Registrazione, login, uscita; selezione
+   dell'organizzazione con `X-Org-Id`; layout con navigazione; i componenti di stato —
+   caricamento, vuoto, errore — come pezzi di prima classe e non come `if` sparsi.
+7. **Frontend: la dashboard.** Gli otto numeri, ognuno **collegato al posto dove si
+   agisce**: `overdue_charges` porta allo scadenzario filtrato, `bills_pending_review`
+   alle bollette da rivedere. Un numero che non porta da nessuna parte è una decorazione.
+8. **Frontend: immobili, stanze e contratti.** Elenco con paginazione a cursore,
+   dettaglio, creazione, `PATCH` parziale, archiviazione. Contratti: bozza, parti
+   contrattuali, attivazione, disdetta, e gli stati **derivati** `expiring`/`expired`,
+   che non si possono filtrare (`lease.derived_status_filter`).
+9. **Frontend: bollette, OCR e addebiti.** Registrazione di una bolletta; caricamento
+   della scansione; **la schermata di revisione dell'OCR**, che è dove la fetta
+   precedente diventa visibile — la proposta della macchina accanto ai campi digitati,
+   con la confidenza per campo, e un gesto per accettare un valore; validazione;
+   riaddebito a un contratto. Addebiti con `effective_status`.
+10. **Frontend: inviti.** Invito di un inquilino e consegna del token, presentato per
+    quello che è finché `Notifier` non esiste.
+11. **CI, immagine e documentazione.** Un filtro di percorso per `apps/web/`, un job del
+    frontend, l'estensione del `Dockerfile` e del `docker-compose.yml`; `CLAUDE.md` con
+    la sezione del frontend; **due ADR** — la sessione in cookie senza CSRF, e la scelta
+    di piattaforma che rivede `docs/09`; e l'esito.
+
+### Trappole
+
+Tutte lette nel codice e nei documenti prima di scriverle qui; quelle marcate **da
+riprodurre** vanno verificate in esecuzione.
+
+**Il refresh concorrente revoca la sessione.** È la decisione 5 vista dal lato del
+difetto: senza il singolo volo, tre richieste parallele che scadono insieme fanno uscire
+l'utente. **Da riprodurre**: tre chiamate in parallelo con un access token scaduto
+devono produrre **un solo** `POST /auth/refresh` e nessuna revoca.
+
+**L'argomento CSRF cade in silenzio se una rotta di business accetta il cookie.** Non
+c'è nulla che lo impedisca strutturalmente, ed è la ragione del passo 3.
+
+**Gli importi sono stringhe decimali, e `parseFloat` li rovina.** L'API li manda come
+`"184.20"` apposta: un `float` binario non rappresenta `0.10`, e in contabilità la
+differenza si accumula. Sommare o confrontare importi nel client va fatto con una
+libreria decimale o in centesimi interi, e **mai** con l'aritmetica nativa. Vale anche
+per `confidence`, che è a quattro decimali.
+
+**`?status=overdue` sugli addebiti risponde `422`**, con `charge.derived_status_filter`;
+lo stesso vale per `expiring`/`expired` sui contratti. Un client che costruisca i filtri
+dall'elenco dei valori dell'enum ci finisce dentro. Gli stati derivati si mostrano e non
+si filtrano — si filtra con `?outstanding=true`.
+
+**Il limite del corpo è doppio**: 1 MiB in generale, 25 MiB sulle rotte di caricamento
+dei documenti. Un client che lasci scegliere una fotografia da 30 MB ottiene un errore
+che non spiega niente. La dimensione va controllata **prima** di inviare.
+
+**L'inquilino registrato da sé deve passare `X-Org-Id` per sempre.** È un debito già
+registrato: `pick_default_membership` preferisce il ruolo più alto e la registrazione
+crea sempre un'organizzazione personale di cui si è `owner`. Il sintomo è `200` con zero
+elementi — **una schermata vuota senza alcun errore**, che è il modo peggiore di
+sbagliare. Il client deve trattare l'organizzazione attiva come stato esplicito dal primo
+giorno, non aggiungerla quando qualcuno se ne accorge.
+
+**Il filtro dei percorsi della CI considera «codice» tutto ciò che non è `docs/*.md`.**
+Una modifica al solo frontend farebbe quindi girare l'intera CI Rust: sette minuti di
+test su PostgreSQL per un cambio di CSS. Va aggiunto un secondo output al job `changes`,
+e il job di riepilogo deve elencare il job nuovo fra i propri `needs`. **Il job di
+riepilogo si chiama `CI` ed è il check richiesto su `main` e `dev`**: rinominarlo blocca
+ogni merge finché non si aggiorna anche la protezione via `gh api`.
+
+**Il `Secure` sul cookie impedisce di entrare in sviluppo.** Su `http://localhost` il
+browser non manda un cookie `Secure`, quindi il refresh fallisce e la sessione dura
+quindici minuti. Va reso condizionale, ed è la sola configurazione nuova che questa fetta
+introduce.
+
+**La proposta dell'OCR non va scritta sopra i campi della bolletta senza chiedere.**
+Lo schema tiene separato ciò che ha letto la macchina da ciò che ha confermato una
+persona **perché l'accuratezza si possa misurare**. Un client che «applichi tutto» con
+un bottone e basta distrugge quel dato prima che lo si raccolga: l'accettazione va fatta
+campo per campo, o almeno registrata come un gesto della persona.
+
+**Il token d'invito è una credenziale e non va nei log né nelle tracce.** Torna nella
+risposta HTTP perché `Notifier` non esiste, e da lì va mostrato e dimenticato.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde con i test nuovi del backend, e il job del frontend
+verde: `typecheck`, lint, test, build.
+
+**Le tre verifiche che contano, e nessuna è una suite verde:**
+
+1. **il refresh a singolo volo, riprodotto al contrario**: senza la promessa condivisa,
+   tre richieste parallele con l'access token scaduto devono far uscire l'utente. Con la
+   promessa, una sola chiamata di refresh e nessuna revoca;
+2. **il cookie rifiutato dalle rotte di business**: una richiesta con il solo cookie e
+   senza `Authorization` deve rispondere `401`;
+3. **un giro a mano dal browser, con il binario vero**: registrazione, login, creazione
+   di un immobile, di un contratto e di una parte, attivazione, invito di un inquilino,
+   registrazione di una bolletta, caricamento della scansione, comparsa della proposta
+   dell'OCR, correzione, validazione, riaddebito — e il numero della dashboard che
+   cambia di conseguenza.
+
+**Due prove di qualità che non sono funzionali** e che il criterio «prodotto reale»
+rende obbligatorie:
+
+- **navigazione da sola tastiera** su un percorso completo, e nessuna trappola di focus
+  nelle modali;
+- **la schermata stretta**: 375 px di larghezza su dashboard, elenchi e almeno un form,
+  perché l'inquilino della fetta 2 arriverà da lì e le scelte di impianto si prendono
+  adesso.
+
+<a id="esito-client-fetta-1"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+Eseguito il **3 settembre 2026**. Il piano è rimasto sopra com'era scritto; questo è
+il resoconto di ciò che è successo mettendolo in pratica.
+
+**Tutti gli undici passi sono stati fatti.** Il punto di taglio dopo il passo 8 non
+è stato usato: bollette, OCR e inviti sono dentro, e il criterio per non tagliare è
+stato che senza la revisione dell'OCR la fetta precedente sarebbe rimasta invisibile
+— cioè che il taglio avrebbe risparmiato lavoro e cancellato la ragione per cui
+quella fetta era stata fatta.
+
+#### Le tre verifiche che contano, e come sono andate
+
+**1. Il refresh a singolo volo, riprodotto al contrario.** È in
+`apps/web/src/api/session.test.ts`, e la parte che conta è il doppio dell'API:
+`RotatingApi` ruota il token a ogni uso e revoca la catena al riuso, come fa
+`RefreshSession::ensure_usable`. Con `singleFlight: false` tre richieste parallele
+con l'access token scaduto producono **tre** chiamate a `/auth/refresh` e almeno una
+rifiutata; con la promessa condivisa ne producono **una** e la sessione resta viva.
+
+Il test del difetto non è decorazione: senza di lui il test del rimedio passerebbe
+anche con il singolo volo tolto, perché un doppio indulgente restituirebbe `200` a
+tutte e tre. È il test che dimostra che l'altro test verifica qualcosa.
+
+**2. Il cookie rifiutato dalle rotte di business.** È
+`the_session_cookie_is_refused_by_business_routes` in `crates/api/tests/http_contract.rs`:
+presenta un cookie **valido** a cinque rotte — la dashboard, tre elenchi e
+un'archiviazione — senza `Authorization`, e pretende `401 auth.token_missing` da
+tutte. Verificato anche il codice e non solo lo stato, perché un `401` per un'altra
+ragione non proverebbe la stessa cosa.
+
+**3. Il giro a mano dal browser**, con i binari veri: API, worker, PostgreSQL e
+MinIO. Registrazione → accesso → immobile → contratto → parte contrattuale →
+attivazione → invito con il token consegnato → bolletta → caricamento della
+scansione → comparsa della proposta → accettazione di due campi → applicazione →
+validazione → riaddebito. **Il numero della dashboard è cambiato di conseguenza**:
+insoluto da `0,00 €` a `191,40 €`, cioè esattamente la quota riaddebitata, e
+«bollette da rivedere» da `1` a `0` quando la bolletta è passata ad `allocated`.
+
+Un dettaglio che vale la pena registrare perché è il contratto che si vede
+funzionare: il contratto attivato con scadenza fra due mesi ha mostrato **«In
+scadenza (Attivo)»** — `effective_status` divergente da `status`, calcolato dal
+database e non dal client.
+
+#### Le due prove di qualità
+
+**La schermata a 375 px.** Dashboard, elenco degli addebiti e il form della bolletta
+da dodici campi. La tabella degli addebiti scorre **dentro il proprio contenitore** e
+la pagina no, che è la differenza fra un elenco consultabile e uno inutilizzabile;
+il form si impila senza perdere le spiegazioni sotto i campi; il menù di navigazione
+diventa a scomparsa e `aria-expanded` lo segue.
+
+**La navigazione da sola tastiera**, ed è qui che il metodo di verifica è cambiato.
+Il browser di automazione **non riesce a dispatchare `Invio`**: il suo evento arriva
+alla pagina con `key` vuoto, quindi il browser non lo riconosce come `Enter` e non
+esegue l'attivazione predefinita. `Tab` funziona, l'anello di focus si vede, ma
+premere invio su un bottone non fa niente — e la cosa non riguarda l'applicazione.
+
+Verificarlo a mano era quindi **impossibile con lo strumento a disposizione**, e
+dirlo è più utile che dichiararlo fatto. La verifica è diventata un test —
+`apps/web/src/features/auth/AuthPage.test.tsx` — con `@testing-library/user-event`,
+che produce eventi di tastiera veri: tabulazione fra i campi in ordine, `Invio` in un
+campo di testo che invia il form, barra spaziatrice che attiva il bottone. È una
+verifica **migliore** di quella prevista, perché si ripete a ogni esecuzione della
+suite invece di una volta sola; ed è anche il caso in cui un limite dello strumento
+ha prodotto una copertura che non era in piano.
+
+#### Che cosa il piano aveva previsto bene
+
+**Le trappole erano tutte reali, e tre si sono presentate esattamente come scritte.**
+
+Gli **stati derivati che non si filtrano** — `overdue` sugli addebiti, `expiring` sui
+contratti — hanno costretto a scrivere a mano gli elenchi delle opzioni dei filtri
+invece di derivarli dall'enum. La tentazione di derivarli c'era, ed è precisamente il
+modo in cui si arriva a un `422` in produzione.
+
+**Gli importi come stringhe** hanno retto senza eccezioni: `parseFloat` non compare
+in nessun file, e `apps/web/src/lib/decimal.ts` fa la somma su `bigint`. Il test che
+lo giustifica è quello che mostra `0.1 + 0.2 !== 0.3` accanto a `sumAmounts(['0.10',
+'0.20']) === '0.30'`.
+
+**L'organizzazione attiva come stato esplicito** ha evitato il sintomo previsto: si
+manda `X-Org-Id` sempre, anche quando coincide con quella del token, e il selettore
+la mostra anche quando ce n'è una sola — perché è ciò che rende diagnosticabile in
+due secondi un elenco vuoto che altrimenti non direbbe niente.
+
+**Il filtro dei percorsi della CI** è stato esteso con la seconda uscita, e il job di
+riepilogo si chiama ancora `CI`: la protezione dei branch non va toccata.
+
+#### Che cosa il piano non aveva previsto
+
+**I nomi dei campi dell'OCR erano stati inventati.** Il piano nominava
+`consumption_value`, `consumption_unit` ed `energy_amount`; `BillField::as_str` emette
+`consumption` — **una coppia valore-unità in un campo solo** — e non ha mai avuto un
+`energy_amount`. La prima versione della schermata mostrava quindi `CONSUMPTION` non
+tradotto e un «valore attuale» vuoto, e il difetto si è visto **soltanto** eseguendo
+il giro a mano con il worker acceso: nessun tipo lo intercettava, perché il nome di
+un campo è una stringa da entrambe le parti.
+
+Ne segue una cosa da sapere per la fetta 2: **i nomi dei campi dell'OCR sono un
+contratto non tipizzato fra il dominio Rust e il catalogo del client**, e l'unico
+modo di verificarlo è farlo girare. Un campo che il catalogo non conosce compare
+grezzo, che è deliberato — rumoroso invece che assente, come per gli enum letti dal
+database.
+
+**Non esiste un endpoint che elenchi le organizzazioni di un utente.** Il selettore
+è stato costruito su quelle che *questo browser* ha conosciuto, tenute in
+`localStorage`. Per il proprietario è indistinguibile da un elenco vero; per
+l'inquilino della fetta 2 non lo sarà. È il gemello esatto del debito già registrato
+sulle **persone** di un'organizzazione, ed è emerso allo stesso modo: costruendo il
+client. La sezione «cosa un client incontrerà per prime» ne prevedeva tre; erano
+quattro.
+
+**`Intl.NumberFormat` accetta una stringa**, e questo ha risolto un problema che il
+piano lasciava aperto: mostrare un importo senza passare da un `Number`. Un importo
+da dodici cifre intere più due decimali sta al limite della precisione di un double,
+e convertirlo per formattarlo avrebbe reintrodotto proprio l'errore che le stringhe
+decimali esistono per evitare. C'è comunque un ramo di riserva che mostra il valore
+grezzo: un numero senza simbolo di valuta è brutto, uno sbagliato è peggio.
+
+**Le date vanno spezzate a mano.** `new Date('2026-08-31')` è mezzanotte **UTC**, e a
+ovest di Greenwich la data mostrata diventa il 30. È un difetto che nessuno
+attribuisce al fuso orario, ed è coperto da un test che gira con `TZ` spostato.
+
+#### Le due domande sulla dashboard restano aperte, e adesso costano di più
+
+Il piano le aveva lasciate fuori di proposito: se `written_off` vada distinto da
+`void` come **perdita**, e se il credito da sovrapagamento vada mostrato.
+
+Restano aperte, e **la finestra in cui cambiarle era additivo si è chiusa**: adesso
+un client legge quegli otto numeri. Aggiungere un nono campo è ancora additivo;
+cambiare che cosa significa `total_outstanding` non lo è più. Le due domande sono
+scritte nel tipo di dominio (`OwnerDashboard`) e nel DTO, così chi le deciderà le
+trova dove guarderà.
+
+#### Quello che resta fuori, e che va saputo
+
+Il **percorso dell'inquilino** è la fetta 2, e con esso segnalazioni, spese co-living
+e pagamenti dichiarati — che nell'API esistono e nel client no. La ragione è la
+dipendenza dichiarata nel piano: un inquilino non esiste finché un proprietario non
+lo invita, quindi il percorso dell'inquilino non era nemmeno provabile con dati veri
+prima di questa fetta. Adesso lo è.
+
+Il **numero delle segnalazioni aperte** è in dashboard e porta a una schermata che
+non esiste ancora: mostra il vero e rimanda ai contratti. Fingere che il numero non
+esistesse sarebbe stato peggio che mostrarlo senza destinazione.
+
+Il **coordinamento del refresh fra schede**, il **bundle in un pezzo solo** e il
+**download degli allegati senza `Authorization`** sono i tre debiti nuovi, tutti
+registrati sopra con il perché e il quando.

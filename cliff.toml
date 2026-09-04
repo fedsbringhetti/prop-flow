@@ -30,7 +30,9 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
 {% for commit in commits %}
-- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}\
+- {% if commit.breaking %}**BREAKING** — {% endif %}\
+{% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}\
+{% if commit.breaking and commit.breaking_description %} — {{ commit.breaking_description }}{% endif %}\
 {% endfor %}
 {% endfor %}\n
 """
@@ -42,6 +44,10 @@ trim = true
 conventional_commits = true
 filter_unconventional = true
 split_commits = false
+# I commit che rompono il contratto non si filtrano mai, e il template li marca:
+# senza il marcatore un `feat(api)!:` comparirebbe nel changelog come una riga
+# qualsiasi, cioè la rottura sarebbe annunciata nella storia di git e **non** nella
+# superficie che la gente legge.
 protect_breaking_commits = true
 
 commit_parsers = [

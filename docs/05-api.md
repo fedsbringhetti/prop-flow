@@ -212,26 +212,145 @@ scrittura, evento o riga di audit.
 | Metodo | Percorso | Auth | Esito |
 |---|---|---|---|
 | POST | `/api/v1/auth/register` | no | `201` con `user_id` e `organization_id`. Crea utente e organizzazione personale in una transazione |
-| POST | `/api/v1/auth/login` | no | `200` con la sessione |
-| POST | `/api/v1/auth/refresh` | no | `200`, ruota il refresh token |
-| POST | `/api/v1/auth/logout` | sì | `204`, idempotente |
+| POST | `/api/v1/auth/login` | no | `200` con la sessione, più il **cookie** del refresh token |
+| POST | `/api/v1/auth/refresh` | cookie | `200`, ruota il refresh token e riposa il cookie. **Nessun corpo** |
+| POST | `/api/v1/auth/logout` | sì, più il cookie | `204`, idempotente. Cancella il cookie |
 
-Risposta di sessione, nella forma attesa da un client OAuth2:
+Risposta di sessione, nella forma attesa da un client OAuth2 **meno il refresh
+token**:
 
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9…",
   "token_type": "Bearer",
   "expires_in": 899,
-  "refresh_token": "15WVHF3OgkEM0SA6M2LbrA6l…",
   "organization_id": "019fce39-0e43-7011-84bf-1d03f6764daf",
   "role": "owner",
   "user_id": "019fce39-0e43-7011-84bf-1cf9fb30d27b"
 }
 ```
 
-Il refresh token in chiaro esiste **solo** in questa risposta: in database ne resta
-lo hash.
+#### Il refresh token è un cookie, e solo un cookie
+
+`SessionResponse` **non porta più `refresh_token`**, e le richieste di refresh e di
+logout **non lo accettano più nel corpo**. Esce e rientra soltanto qui:
+
+```
+Set-Cookie: propflow_refresh=…; Max-Age=2591999; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Strict
+```
+
+Metterlo *anche* nel JSON sarebbe metà misura a costo pieno: `HttpOnly` protegge
+dal fatto che uno script lo legga da `document.cookie`, e non servirebbe a nulla se
+lo stesso valore comparisse nella risposta del login, dove un XSS lo prenderebbe
+senza sforzo. Trenta giorni di sessione sono precisamente ciò che non deve essere
+leggibile da uno script.
+
+Ne segue la divisione che un client deve rispettare: **l'access token vive in
+memoria** e lo manda il client come `Authorization: Bearer`; **il refresh token
+vive nel cookie** e lo manda il browser da sé, solo verso `/api/v1/auth`. L'access
+token muore al ricaricamento della pagina, e non è un problema: si riottiene dal
+cookie.
+
+`Path=/api/v1/auth` non è cosmetico: una richiesta a `/api/v1/properties` non si
+porta dietro il cookie nemmeno per sbaglio. `SameSite=Strict` significa che il
+browser non lo manda su una richiesta che parte da un altro sito, ed è metà
+dell'argomento per cui **questa API non ha né vuole una difesa CSRF** — l'altra
+metà è che ogni rotta di business è autenticata dall'header `Authorization`, che
+un sito attaccante non può impostare cross-origin senza il permesso di CORS, che
+non concediamo perché CORS non è montato affatto. Vedi
+[ADR-038](08-decisioni.md#adr-038), che dice anche che cosa farebbe cadere
+l'argomento.
+
+`Secure` è **condizionale**: `PROPFLOW__SERVER__SECURE_COOKIES=false` lo toglie per
+lo sviluppo su `http://localhost`, dove un browser non manderebbe il cookie e la
+sessione durerebbe i quindici minuti dell'access token. Il default è `true`.
+
+**È una rottura del contratto**, non un'aggiunta, e sulla linea 0.x è ammessa. Chi
+usa `curl` passa a un cookie jar:
+
+```bash
+# Il login scrive il cookie nel jar; il corpo non porta più il refresh token.
+curl -sX POST http://localhost:8080/api/v1/auth/login \
+  -c cookies.txt -H 'content-type: application/json' \
+  -d '{ "email": "mario.rossi@example.it", "password": "cavallo batteria graffetta" }'
+
+# Il refresh non ha corpo: il token lo manda il jar, e ne riceve uno nuovo.
+curl -sX POST http://localhost:8080/api/v1/auth/refresh -b cookies.txt -c cookies.txt
+
+# L'uscita revoca la sessione e cancella il cookie.
+curl -X POST http://localhost:8080/api/v1/auth/logout \
+  -b cookies.txt -c cookies.txt -H "authorization: Bearer $TOKEN"
+```
+
+**Cookie assente e cookie rifiutato danno la stessa risposta**, `401` con lo stesso
+`code`: distinguerli direbbe a chi ha rubato un token se è ancora vivo, ed è la
+ragione per cui il refresh non separa già oggi «scaduto» da «riusato».
+
+Il **logout senza cookie resta `204`**. Non c'è nulla da revocare, il cookie si
+cancella comunque, e costringere un client che l'ha già perso a distinguere due
+esiti che per lui sono lo stesso non lo aiuterebbe.
+
+### Dashboard
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| GET | `/api/v1/dashboard` | **staff** | `200` con gli otto numeri dell'organizzazione attiva |
+
+Non prende parametri: l'organizzazione è quella attiva — quella del token, o quella
+dichiarata con `X-Org-Id`. Metterla nel percorso inviterebbe a chiederne una di cui
+non si è membri, e la risposta a quella domanda sarebbe comunque `403`.
+
+```json
+{
+  "organization_id": "019fce39-0e43-7011-84bf-1d03f6764daf",
+  "properties_count": 3,
+  "active_leases": 2,
+  "monthly_rent_expected": "1450.00",
+  "total_outstanding": "184.20",
+  "overdue_charges": 1,
+  "open_tickets": 2,
+  "leases_expiring_90d": 1,
+  "bills_pending_review": 4
+}
+```
+
+I due importi sono **stringhe decimali** come ovunque; i sei conteggi sono interi,
+perché contare non ha decimali.
+
+**È dello staff e non del membro.** La Row Level Security da sola non basterebbe:
+`app.v_owner_dashboard` è `security_invoker` e passa da `organizations_select`, che
+è `is_org_member` e non `is_org_staff` — un inquilino otterrebbe la riga con dentro
+i numeri dell'intera organizzazione. È uno dei pochi casi in cui il controllo
+applicativo non duplica la policy ma la **stringe**.
+
+#### Che cosa questi numeri contano davvero
+
+Sono quelli della vista, non un calcolo dell'API, e alcuni dicono meno di quanto il
+nome prometta:
+
+- **`monthly_rent_expected` è un'attesa dichiarata, non un incasso previsto.** Somma
+  `rent_amount` dei contratti con `status = 'active'`, e lo stato memorizzato resta
+  `active` anche dopo la scadenza perché nessuno scheduler lo riscrive
+  ([ADR-019](08-decisioni.md#adr-019)). `leases_expiring_90d` sta accanto per
+  questo: è quanto di quell'attesa sta per non esserci più;
+- **`total_outstanding` esclude `void` e `written_off`** e somma i soli residui
+  **positivi** (migration `0024`, [ADR-032](08-decisioni.md#adr-032));
+- **`bills_pending_review` conta `draft` *e* `pending_review`**, che sono due
+  popolazioni diverse: una bolletta registrata e senza scansione, e una che la
+  macchina ha letto e che aspetta una persona. Le conta insieme dalla `0015`;
+- **`open_tickets`** sono i sei stati non terminali, gli stessi dell'indice parziale
+  `tickets_open_ix` e dello stesso filtro `?open=true`.
+
+#### Due cose che non dice, e non per dimenticanza
+
+- **`written_off` non è distinto da `void`.** Entrambi escono dall'insoluto, ma solo
+  il primo è una perdita, e la distinzione conta in un report. Aggiungere un nono
+  numero è additivo; cambiare che cosa significa `total_outstanding` non lo è;
+- **il credito da sovrapagamento sparisce.** Un `outstanding_amount` negativo non
+  compensa gli altri insoluti — probabilmente giusto — e non compare da nessuna
+  parte, che è il numero che qualcuno cercherà.
+
+Nessuna migration: la vista esiste dalla `0015`.
 
 ### Immobili
 

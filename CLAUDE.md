@@ -19,6 +19,8 @@ Esempi di cose che *sembrano* sbagliate e non lo sono:
 - le query SQL sono letterali statici composti con `concat!` — `docs/08-decisioni.md#adr-006`
 - gli enum si leggono con cast a `text`, non con `#[derive(sqlx::Type)]` — `adr-007`
 - esistono **due** pool di connessione e usarne uno al posto dell'altro è un buco di sicurezza — `docs/04-sicurezza.md`
+- **CORS non è montato, e non è un debito**: client e API stanno sulla stessa origine, e non montarlo è metà dell'argomento per cui non serve una difesa CSRF — `docs/08-decisioni.md#adr-038`
+- il refresh token **non è nel corpo della risposta**, è solo un cookie — `adr-038`
 
 Partenza: **`docs/README.md`**, che è la mappa. Poi, in base al compito:
 
@@ -29,6 +31,7 @@ Partenza: **`docs/README.md`**, che è la mappa. Poi, in base al compito:
 | un nuovo use case o regola di dominio | `docs/02-architettura.md`, `docs/06-sviluppo.md` |
 | lo schema, una migration, la RLS | `docs/03-modello-dati.md`, `docs/08-decisioni.md` |
 | autenticazione, token, permessi, PII | `docs/04-sicurezza.md` |
+| il client web, una schermata, una stringa | `docs/08-decisioni.md#adr-039`, §2 di questo file |
 | deploy, configurazione, CI | `docs/07-operazioni.md` |
 | capire perché una cosa è fatta così | `docs/08-decisioni.md` |
 | sapere cosa manca | `docs/09-stato-e-roadmap.md` |
@@ -92,17 +95,52 @@ possibile.
 17. **Errori tipizzati con `thiserror`**, mai `anyhow` nelle librerie. `anyhow`
     solo nei binari.
 
+### TypeScript e il client web
+
+Il client vive in `apps/web/`. `CLAUDE.md` era interamente su Rust, e «niente
+`unwrap`», «errori con `thiserror`», «query come letterali statici» non hanno una
+traduzione in TypeScript: lasciare il frontend senza regole significherebbe
+lasciarlo senza criterio. Sono poche e valgono tutte.
+
+18. **L'interfaccia è in italiano, e nessuna stringa visibile sta dentro un
+    componente.** Le stringhe vivono in `apps/web/src/i18n/it.ts`; i componenti ne
+    usano le chiavi. Non contraddice la regola sull'inglese di §3, che riguarda ciò
+    che si incontra **dal di fuori del repository**. La traduzione in inglese è
+    decisa e solo rimandata: una fetta con i testi nel JSX la rende una riscrittura
+    invece di un'aggiunta, e il livello di indirezione è la parte impossibile da
+    aggiungere dopo ([ADR-039](docs/08-decisioni.md#adr-039)).
+19. **Date, importi e numeri passano da `Intl`, con la lingua come parametro.**
+    `@/lib/format`, mai una formattazione a mano: altrimenti `31/08/2026` e
+    `184,20 €` restano italiani anche in inglese.
+20. **Niente `any`, `strict` acceso.** È l'equivalente di «zero warning»: il
+    typecheck e il lint girano in CI e negano `any` esplicitamente.
+21. **Gli importi restano stringhe, e `parseFloat` è vietato.** L'API li manda come
+    `"184.20"` apposta. Sommare o confrontare passa da `@/lib/decimal`, che lavora
+    su interi. Vale anche per `confidence`, che ha quattro decimali.
+22. **Nessun `fetch` fuori dal livello dei dati.** È l'equivalente di «nessun SQL
+    negli handler»: si passa da `ApiClient` (`@/api`), che allega il token e
+    l'organizzazione attiva, traduce gli errori e rinnova la sessione. Un componente
+    che chiami l'API da sé aggira il **refresh a singolo volo**, e senza quello tre
+    richieste parallele scadute insieme fanno revocare la catena delle sessioni.
+23. **Ogni stato di una schermata è progettato**: caricamento, vuoto, errore, e non
+    solo il caso felice. I tre stanno in `@/components/state` come componenti di
+    prima classe, così il caso mancante si vede scrivendo la schermata e non
+    usandola.
+24. **L'organizzazione attiva è stato esplicito.** Si manda `X-Org-Id` sempre, anche
+    quando coincide con quella del token: senza, gli elenchi rispondono `200` con
+    zero elementi — una schermata vuota, nessun errore, nessun indizio.
+
 ### Sicurezza
 
-18. **Niente dati personali nei log, nelle tracce e negli eventi di dominio.**
+25. **Niente dati personali nei log, nelle tracce e negli eventi di dominio.**
     Email, token, password, corpi di richiesta: mai. Gli eventi trasportano
     identificatori e nomi di campo, non valori.
-19. **`Debug` non deve mostrare segreti.** `PasswordHash` e `TokenHash` hanno
+26. **`Debug` non deve mostrare segreti.** `PasswordHash` e `TokenHash` hanno
     implementazioni che stampano `<redatto>`; farlo anche per i tipi nuovi.
-20. **Il pool privilegiato (`begin_privileged`) si usa solo dove un contesto di
+27. **Il pool privilegiato (`begin_privileged`) si usa solo dove un contesto di
     sicurezza non può esistere**: registrazione, login, rotazione del refresh
     token. Ogni altro uso è un errore di progetto.
-21. **Nessun segreto nel repository.** Chiavi e password arrivano da file montati
+28. **Nessun segreto nel repository.** Chiavi e password arrivano da file montati
     o variabili d'ambiente. `.secrets/` è ignorato.
 
 ---
@@ -251,6 +289,27 @@ cargo run -p propflow-api               # Swagger UI su http://localhost:8080/do
 cargo run -p propflow-worker            # dispatcher dell'outbox
 ```
 
+Il client web, che vive in `apps/web/`:
+
+```bash
+cd apps/web
+npm ci                 # esattamente il lockfile, come `cargo --locked`
+npm run dev            # http://localhost:5173, con /api/v1 inoltrato all'API
+npm run typecheck      # `strict` acceso: è l'equivalente di «zero warning»
+npm run lint
+npm test               # fra questi, il refresh a singolo volo riprodotto al contrario
+npm run build
+```
+
+`npm run dev` presuppone l'API su `http://localhost:8080` e
+`PROPFLOW__SERVER__SECURE_COOKIES=false`: su HTTP un browser non manda un cookie
+`Secure`, e senza la sessione durerebbe i quindici minuti dell'access token.
+`PROPFLOW_API_URL` sposta la destinazione del proxy.
+
+In alternativa `docker compose up` avvia lo stack intero, client compreso, dietro
+il reverse proxy su `http://localhost:8081` — che è la stessa forma che avrà in
+produzione: `/` ai file statici, `/api/v1` all'API.
+
 `psql` non è necessario in locale: gli script usano il client dell'immagine
 `postgres:16-alpine` se non lo trovano.
 
@@ -266,9 +325,22 @@ crates/api        [bin] Axum: router, estrattori, DTO, OpenAPI
 crates/worker     [bin] dispatcher dell'outbox
 crates/migrator   [bin] migration dello schema
 migrations/             SQL append-only, applicato dal migratore
+apps/web/               client React + TypeScript, interfaccia in italiano
 ops/ci/                 script usati dalla pipeline e in locale
 ops/sql/                provisioning dei ruoli, invarianti dello schema
+ops/web/                Caddyfile del reverse proxy: una sola origine
 docs/                   documentazione di progetto — lettura obbligatoria
+```
+
+Dentro `apps/web/src/`:
+
+```
+i18n/        il catalogo delle stringhe. Nessun testo visibile fuori da qui
+lib/         decimali (mai `parseFloat`), formattazione con `Intl`
+api/         client, sessione con il refresh a singolo volo, tipi del filo
+app/         guscio: sessione, query, router, navigazione
+components/  primitive e i tre stati — caricamento, vuoto, errore
+features/    una cartella per modulo: dashboard, immobili, contratti, bollette…
 ```
 
 Direzione delle dipendenze, unica ammessa:

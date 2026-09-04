@@ -12,6 +12,13 @@ body_limit_bytes = 1048576
 # 25 MiB, solo sulle rotte di caricamento dei documenti. Il limite generale resta
 # 1 MiB: alzarlo per servire l'upload indebolirebbe ogni altro endpoint.
 upload_body_limit_bytes = 26214400
+# `Secure` sul cookie del refresh token. `true` è il valore che il progetto
+# spedisce, e resta `true` anche qui: questo file finisce nell'immagine, e un
+# default comodo per lo sviluppo diventerebbe la configurazione di produzione di
+# chi non lo sovrascrive. Lo sviluppo su `http://localhost` lo disattiva
+# dall'ambiente — vedi `.env.example` — perché il browser non manda un cookie
+# `Secure` su HTTP e il refresh fallirebbe sempre.
+secure_cookies = true
 
 [database]
 max_connections = 16

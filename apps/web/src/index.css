@@ -1,0 +1,88 @@
+@import 'tailwindcss';
+
+/*
+ * I colori stanno in variabili e non nelle classi.
+ *
+ * Un gestionale si guarda per ore: il contrasto va deciso una volta e riusato,
+ * non scelto di nuovo a ogni componente. Le variabili sono anche ciò che rende il
+ * tema scuro una ridefinizione di dodici righe invece di una caccia alle classi.
+ */
+@theme {
+  --color-canvas: oklch(0.985 0.002 250);
+  --color-surface: oklch(1 0 0);
+  --color-surface-muted: oklch(0.968 0.004 250);
+  --color-border-subtle: oklch(0.906 0.006 250);
+  --color-ink: oklch(0.22 0.015 260);
+  --color-ink-muted: oklch(0.52 0.012 260);
+  --color-accent: oklch(0.52 0.15 250);
+  --color-accent-ink: oklch(0.99 0.005 250);
+  --color-accent-soft: oklch(0.95 0.03 250);
+  --color-danger: oklch(0.55 0.19 25);
+  --color-danger-soft: oklch(0.96 0.03 25);
+  --color-warning: oklch(0.72 0.15 75);
+  --color-warning-soft: oklch(0.96 0.05 85);
+  --color-success: oklch(0.58 0.13 155);
+  --color-success-soft: oklch(0.95 0.04 155);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Le cifre in tabella devono incolonnarsi: un importo che balla di due pixel
+     per riga rende impossibile confrontare una colonna a colpo d'occhio. */
+  --font-numeric: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+
+  --radius-card: 0.75rem;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  * {
+    border-color: var(--color-border-subtle);
+  }
+
+  html {
+    /* Il focus non si toglie mai. Un gestionale si usa anche da tastiera, e
+       `outline: none` è il modo più rapido di rendere un'interfaccia inagibile
+       senza che nessuno se ne accorga guardandola. */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  /* Chi naviga da tastiera deve poter saltare la navigazione: senza, ogni
+     schermata comincia con dodici tabulazioni identiche. */
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+  }
+  .skip-link:focus {
+    left: 0.5rem;
+    top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.5rem;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

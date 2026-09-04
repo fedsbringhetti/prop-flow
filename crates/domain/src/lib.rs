@@ -22,6 +22,7 @@ pub mod lease;
 pub mod payment;
 pub mod ports;
 pub mod property;
+pub mod reporting;
 pub mod shared;
 pub mod ticket;
 

@@ -14,6 +14,7 @@ use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, Token
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment};
 use crate::property::{Property, PropertyResident, PropertyStatus, Room};
+use crate::reporting::OwnerDashboard;
 use crate::shared::{
     ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, OrgId,
     PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId, UtilityBillId,
@@ -971,4 +972,23 @@ pub trait SettlementRepository: Send {
 #[async_trait]
 pub trait EventSink: Send {
     async fn append(&mut self, event: &DomainEvent) -> RepositoryResult<()>;
+}
+
+/// La lettura che attraversa tutti i moduli insieme.
+///
+/// **Una porta a sé e non un metodo su `OrganizationRepository`**: quella legge
+/// l'aggregato organizzazione, questa legge una proiezione che di
+/// `app.organizations` usa la sola chiave. Metterle insieme farebbe sembrare la
+/// dashboard un attributo dell'organizzazione, e il giorno in cui arrivasse una
+/// seconda proiezione — quella dell'inquilino — non ci sarebbe un posto ovvio dove
+/// metterla.
+#[async_trait]
+pub trait DashboardRepository: Send {
+    /// Gli otto numeri dell'organizzazione indicata.
+    ///
+    /// `None` significa che la riga **non è visibile al chiamante**: la vista è
+    /// `security_invoker` e passa da `organizations_select`, cioè
+    /// `app.is_org_member(id)`. Non significa «organizzazione inesistente», e le
+    /// due cose sotto Row Level Security sono giustamente indistinguibili.
+    async fn owner_dashboard(&mut self, org_id: OrgId) -> RepositoryResult<Option<OwnerDashboard>>;
 }

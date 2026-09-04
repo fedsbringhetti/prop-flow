@@ -7,7 +7,8 @@ of maintenance issues from a photograph) and co-living management with expense
 splitting.
 
 Backend in **Rust** (Axum, SQLx) on **PostgreSQL 16** with Row Level Security, ports
-and adapters architecture.
+and adapters architecture. Web client in **React and TypeScript**, served from the
+same origin behind a reverse proxy.
 
 ## Quick start
 
@@ -29,6 +30,23 @@ docker compose exec -T postgres psql -U postgres -d postgres \
 cargo run -p propflow-migrator          # applies the schema
 cargo run -p propflow-api               # http://localhost:8080/docs
 ```
+
+The web client, in another terminal:
+
+```bash
+cd apps/web
+npm ci
+npm run dev                             # http://localhost:5173
+```
+
+Vite forwards `/api/v1` to the API, so the browser sees a **single origin** — the
+same contract a reverse proxy provides in production, and the reason there is no
+CORS to configure. `docker compose up` brings up the whole stack, client included,
+behind that proxy on `http://localhost:8081`.
+
+The interface is in Italian: its users are Italian owners and tenants. English is
+deferred, not declined, which is why no visible string is written inside a
+component — see [ADR-039](docs/08-decisioni.md#adr-039).
 
 Full suite (ephemeral PostgreSQL and MinIO containers, migrations, invariants, every
 test):
@@ -72,12 +90,19 @@ crates/api        [bin] Axum: router, DTOs, OpenAPI
 crates/worker     [bin] outbox dispatcher
 crates/migrator   [bin] schema migrations
 migrations/             append-only SQL
-ops/                    CI and development scripts, role provisioning
+apps/web/               React + TypeScript client, Italian interface
+ops/                    CI and development scripts, role provisioning, reverse proxy
 docs/                   project documentation
 ```
 
 ## Status
 
-The database schema covers the whole MVP. The backend covers authentication,
-properties, rooms, leases and invitations; the remaining modules are listed in
+The database schema and the backend cover the whole MVP: authentication, properties,
+rooms, leases, invitations, documents, maintenance issues, utility bills with
+automatic reading, charges, payments and co-living expenses.
+
+The web client covers the **owner's path** end to end — dashboard, properties and
+rooms, leases and parties, bills with OCR review, charges, invitations. The tenant's
+path is the next slice, and it is next by dependency rather than priority: a tenant
+does not exist until an owner invites one. What is missing, and why, is in
 [status and roadmap](docs/09-stato-e-roadmap.md).

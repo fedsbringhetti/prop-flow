@@ -240,55 +240,175 @@ async fn refresh_rotates_the_token_and_reuse_revokes_the_chain() {
         serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
     )
     .await;
-    let (_, session) = app
-        .post(
+    let (_, session, first_refresh) = app
+        .post_returning_cookie(
             "/api/v1/auth/login",
             serde_json::json!({ "email": email, "password": password }),
         )
         .await;
-    let first_refresh = session["refresh_token"]
-        .as_str()
-        .expect("refresh")
-        .to_owned();
+    // Il refresh token esce **solo** dal cookie: se ricomparisse nel corpo, il
+    // cookie `httpOnly` non proteggerebbe più niente, perché un XSS lo leggerebbe
+    // dalla risposta del login.
+    assert!(
+        session.get("refresh_token").is_none(),
+        "il refresh token non deve comparire nel corpo: {session}"
+    );
+    let first_refresh = first_refresh.expect("il login deve posare il cookie di sessione");
 
-    let (status, rotated) = app
-        .post(
-            "/api/v1/auth/refresh",
-            serde_json::json!({ "refresh_token": first_refresh }),
-        )
+    let (status, rotated, second_refresh) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&first_refresh), None)
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {rotated}");
-    let second_refresh = rotated["refresh_token"]
-        .as_str()
-        .expect("refresh")
-        .to_owned();
+    let second_refresh = second_refresh.expect("il refresh deve posare il cookie nuovo");
     assert_ne!(
         second_refresh, first_refresh,
         "il token non è stato ruotato"
     );
 
     // Riuso del token già consumato: rifiutato, e la catena viene revocata.
-    let (status, body) = app
-        .post(
-            "/api/v1/auth/refresh",
-            serde_json::json!({ "refresh_token": first_refresh }),
-        )
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&first_refresh), None)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
 
     // Anche il successore cade, perché non si sa quale delle due parti sia
     // legittima.
-    let (status, body) = app
-        .post(
-            "/api/v1/auth/refresh",
-            serde_json::json!({ "refresh_token": second_refresh }),
-        )
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&second_refresh), None)
         .await;
     assert_eq!(
         status,
         StatusCode::UNAUTHORIZED,
         "il rilevamento del riuso deve revocare tutte le sessioni, corpo: {body}"
     );
+}
+
+/// Senza cookie il refresh è `401`, con lo **stesso codice** di un cookie
+/// rifiutato.
+///
+/// Distinguerli direbbe a chi ha rubato un token se è ancora vivo, ed è la stessa
+/// ragione per cui il refresh non separa «scaduto» da «riusato» (ADR-022).
+#[tokio::test]
+async fn refresh_without_the_cookie_is_indistinguishable_from_a_bad_one() {
+    let app = require_app!();
+
+    let (missing_status, missing_body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", None, None)
+        .await;
+    let (bad_status, bad_body, _) = app
+        .post_with_cookie(
+            "/api/v1/auth/refresh",
+            Some("un-token-che-non-esiste"),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        missing_status,
+        StatusCode::UNAUTHORIZED,
+        "corpo: {missing_body}"
+    );
+    assert_eq!(bad_status, StatusCode::UNAUTHORIZED, "corpo: {bad_body}");
+    assert_eq!(
+        missing_body["code"], bad_body["code"],
+        "cookie assente e cookie rifiutato devono essere indistinguibili"
+    );
+}
+
+/// **Il test che tiene in piedi l'argomento CSRF.**
+///
+/// Nessuna difesa CSRF è montata, e la conclusione regge su una condizione
+/// precisa: che *nessuna rotta di business sia autenticata da un cookie*. Ogni
+/// rotta di business chiede `Authorization`, che un sito attaccante non può
+/// impostare cross-origin senza il permesso di CORS — che non concediamo, perché
+/// CORS non è montato affatto — e il cookie del refresh è `SameSite=Strict` su
+/// `Path=/api/v1/auth`.
+///
+/// Il giorno in cui qualcuno aggiungesse una sessione a cookie per comodità,
+/// quell'argomento cadrebbe **in silenzio**: nessun altro test fallirebbe. Questo
+/// sì. Non verifica una funzionalità: verifica che una porta resti chiusa.
+#[tokio::test]
+async fn the_session_cookie_is_refused_by_business_routes() {
+    let app = require_app!();
+    let email = common::unique_email("csrf");
+    let password = "cavallo batteria graffetta";
+    app.post(
+        "/api/v1/auth/register",
+        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+    )
+    .await;
+    let (_, _, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": password }),
+        )
+        .await;
+    let cookie = cookie.expect("il login deve posare il cookie di sessione");
+
+    // Un cookie **valido**, presentato su rotte di business senza `Authorization`.
+    // Sono lettura, scrittura e la proiezione che attraversa tutti i moduli: se
+    // una sola di queste accettasse il cookie, l'argomento sarebbe già caduto.
+    for (method, path) in [
+        ("GET", "/api/v1/dashboard"),
+        ("GET", "/api/v1/properties"),
+        ("GET", "/api/v1/leases"),
+        ("GET", "/api/v1/charges"),
+        (
+            "DELETE",
+            "/api/v1/properties/019fce39-0e43-7011-84bf-1d03f6764daf",
+        ),
+    ] {
+        let (status, body) = app.send_with_cookie_only(method, path, &cookie).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} ha accettato il solo cookie: l'argomento CSRF è caduto. Corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.token_missing",
+            "{method} {path}: il rifiuto deve essere per assenza di Authorization, corpo: {body}"
+        );
+    }
+}
+
+/// L'uscita cancella il cookie, e lo fa anche quando non c'era.
+#[tokio::test]
+async fn logout_clears_the_cookie_and_is_idempotent() {
+    let app = require_app!();
+    let email = common::unique_email("uscita");
+    let password = "cavallo batteria graffetta";
+    app.post(
+        "/api/v1/auth/register",
+        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+    )
+    .await;
+    let (_, session, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": password }),
+        )
+        .await;
+    let token = session["access_token"].as_str().expect("access token");
+    let cookie = cookie.expect("cookie di sessione");
+
+    let (status, _, cleared) = app
+        .post_with_cookie("/api/v1/auth/logout", Some(&cookie), Some(token))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(cleared, None, "il logout deve cancellare il cookie");
+
+    // La sessione è davvero caduta: il token revocato non rinnova più.
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&cookie), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
+
+    // Un secondo logout, ormai senza cookie, resta `204`: non c'è nulla da
+    // revocare, e costringere il client a distinguere i due casi non lo aiuta.
+    let (status, _, _) = app
+        .post_with_cookie("/api/v1/auth/logout", None, Some(token))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
@@ -4472,4 +4592,169 @@ async fn the_ocr_route_is_staff_only_and_unknown_bills_are_not_found() {
         missing["code"], "utility_bill.not_found",
         "corpo: {missing}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+/// Gli otto numeri si muovono insieme a ciò che il proprietario fa.
+///
+/// **È la prima superficie che attraversa tutti i moduli insieme**, quindi il
+/// primo posto dove si vedrebbe un errore di integrazione fra le fette: un
+/// addebito che non entra nell'insoluto, una bolletta che non risulta da
+/// rivedere, un canone che non si somma. Per questo il test verifica il
+/// *movimento* dei numeri e non i loro valori assoluti — che dipenderebbero da
+/// quante altre righe esistono nell'organizzazione.
+#[tokio::test]
+async fn the_dashboard_counts_what_the_owner_has_just_done() {
+    let app = require_app!();
+    let (owner, _org) = common::register_and_login(&app, "dashboard").await;
+
+    // Un'organizzazione appena creata: tutto a zero, e gli importi sono stringhe
+    // con due decimali come ogni altro importo dell'API.
+    let (status, empty) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {empty}");
+    assert_eq!(empty["properties_count"], 0, "corpo: {empty}");
+    assert_eq!(empty["active_leases"], 0);
+    assert_eq!(empty["monthly_rent_expected"], "0.00");
+    assert_eq!(empty["total_outstanding"], "0.00");
+    assert_eq!(empty["overdue_charges"], 0);
+    assert_eq!(empty["open_tickets"], 0);
+    assert_eq!(empty["leases_expiring_90d"], 0);
+    assert_eq!(empty["bills_pending_review"], 0);
+
+    let property = create_property(&app, &owner, "Immobile della dashboard").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(30)).await;
+    add_tenant(&app, &owner, &lease, "Inquilino Contato", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    // Un addebito già scaduto e mai pagato: entra nell'insoluto e in `overdue`.
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "800.00",
+                "due_date": day(-1),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+
+    // Una bolletta in bozza: è una delle due popolazioni di
+    // `bills_pending_review`, e la conta senza che nessuno abbia caricato nulla.
+    let (status, bill) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/utility-bills"),
+            &owner,
+            serde_json::json!({
+                "utility_type": "gas",
+                "period_start": day(-40),
+                "period_end": day(-10),
+                "total_amount": "120.00",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {bill}");
+
+    // Una segnalazione aperta.
+    let (status, ticket) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({ "title": "Il boiler perde", "description": "Da ieri sera" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {ticket}");
+
+    let (status, full) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {full}");
+    assert_eq!(full["properties_count"], 1, "corpo: {full}");
+    assert_eq!(full["active_leases"], 1, "corpo: {full}");
+    assert_eq!(full["monthly_rent_expected"], "800.00", "corpo: {full}");
+    assert_eq!(full["total_outstanding"], "800.00", "corpo: {full}");
+    assert_eq!(full["overdue_charges"], 1, "corpo: {full}");
+    assert_eq!(full["open_tickets"], 1, "corpo: {full}");
+    // Il contratto scade fra trenta giorni: rientra nella finestra dei novanta.
+    assert_eq!(full["leases_expiring_90d"], 1, "corpo: {full}");
+    assert_eq!(full["bills_pending_review"], 1, "corpo: {full}");
+
+    // Annullare l'addebito lo toglie **sia** dall'insoluto sia dagli scaduti: la
+    // pretesa è caduta, e non è dovuto niente. È la migration `0024` vista dalla
+    // dashboard.
+    let charge_id = charge["id"].as_str().expect("id");
+    let (status, voided) = app
+        .post_auth(
+            &format!("/api/v1/charges/{charge_id}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {voided}");
+
+    let (status, after) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {after}");
+    assert_eq!(after["total_outstanding"], "0.00", "corpo: {after}");
+    assert_eq!(after["overdue_charges"], 0, "corpo: {after}");
+}
+
+/// La dashboard è dello staff, e a un inquilino risponde `403` e non una riga di
+/// zeri.
+///
+/// La Row Level Security da sola non lo fermerebbe in modo utile: la vista passa
+/// da `organizations_select`, che è `is_org_member` e non `is_org_staff`, quindi
+/// un inquilino otterrebbe i numeri **dell'intera organizzazione**. È uno dei casi
+/// in cui il controllo applicativo non duplica la policy ma la stringe.
+#[tokio::test]
+async fn the_dashboard_is_staff_only() {
+    let app = require_app!();
+    let (owner, owner_org, tenant, _charge) =
+        charge_with_a_real_tenant(&app, "dashboard-inquilino").await;
+
+    let (status, body) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/dashboard",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {body}");
+    assert_eq!(body["code"], "org.staff_role_required", "corpo: {body}");
+
+    // Allo stesso proprietario risponde, così il `403` di sopra è del ruolo e non
+    // della rotta.
+    let (status, body) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+}
+
+/// Senza organizzazione attiva la dashboard non indovina: `403 org.not_selected`.
+///
+/// È il caso dell'inquilino registrato da sé, che ha la propria organizzazione
+/// personale in testa — un debito noto — ma qui vale per chiunque presenti un
+/// token senza organizzazione.
+#[tokio::test]
+async fn the_dashboard_needs_authentication() {
+    let app = require_app!();
+    let (status, body) = app.send("GET", "/api/v1/dashboard", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
+    assert_eq!(body["code"], "auth.token_missing", "corpo: {body}");
 }

@@ -31,6 +31,7 @@ use propflow_application::use_cases::property::{
     ArchiveProperty, CreateProperty, GetProperty, ListProperties, ListPropertyResidents,
     UpdateProperty,
 };
+use propflow_application::use_cases::reporting::GetOwnerDashboard;
 use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
 use propflow_application::use_cases::ticket::{
     AssignTicket, CancelTicket, CloseTicket, GetTicket, ListTicketMessages, ListTickets,
@@ -51,6 +52,10 @@ pub struct AppState {
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
+
+    /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
+    /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
+    pub owner_dashboard: Arc<GetOwnerDashboard>,
 
     pub create_property: Arc<CreateProperty>,
     pub get_property: Arc<GetProperty>,
@@ -172,6 +177,13 @@ pub struct AppState {
     pub unit_of_work: Arc<dyn UnitOfWorkFactory>,
     /// Usato solo dall'endpoint di prontezza.
     pub pools: DatabasePools,
+    /// Se il cookie del refresh token debba dichiarare `Secure`.
+    ///
+    /// Vive nello stato e non nella firma di `router()` perché a leggerlo sono gli
+    /// handler dell'autenticazione, non i layer: passarlo come quinto parametro
+    /// posizionale accanto a due limiti e un timeout sarebbe un `bool` anonimo
+    /// fra numeri, cioè un argomento che si scambia senza che nulla protesti.
+    pub secure_cookies: bool,
 }
 
 /// Componenti concrete costruite in `main`, prima di essere composte negli use case.
@@ -199,6 +211,8 @@ pub struct Dependencies {
     /// sui job direbbe una cosa e `model` un'altra.
     pub ocr_provider_name: String,
     pub pools: DatabasePools,
+    /// Vedi [`AppState::secure_cookies`]. `false` solo in sviluppo su HTTP.
+    pub secure_cookies: bool,
 }
 
 impl AppState {
@@ -215,6 +229,7 @@ impl AppState {
             presign_ttl_seconds,
             ocr_provider_name,
             pools,
+            secure_cookies,
         } = dependencies;
 
         Self {
@@ -241,6 +256,7 @@ impl AppState {
                 refresh_tokens,
                 Arc::clone(&clock),
             )),
+            owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),
             create_property: Arc::new(CreateProperty::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
@@ -466,6 +482,7 @@ impl AppState {
             clock,
             unit_of_work,
             pools,
+            secure_cookies,
         }
     }
 }

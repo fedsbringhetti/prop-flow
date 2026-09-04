@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 
 use super::repositories::{
-    AiJobQueue, AiJobRepository, ChargeRepository, DocumentRepository, EventSink,
-    ExpenseGroupRepository, ExpenseRepository, InvitationRepository, LeasePartyRepository,
-    LeaseRepository, OrgMemberRepository, OrganizationRepository, PaymentRepository,
-    PropertyRepository, RepositoryResult, RoomRepository, SessionRepository, SettlementRepository,
-    TicketMessageRepository, TicketRepository, UserRepository, UtilityBillRepository,
+    AiJobQueue, AiJobRepository, ChargeRepository, DashboardRepository, DocumentRepository,
+    EventSink, ExpenseGroupRepository, ExpenseRepository, InvitationRepository,
+    LeasePartyRepository, LeaseRepository, OrgMemberRepository, OrganizationRepository,
+    PaymentRepository, PropertyRepository, RepositoryResult, RoomRepository, SessionRepository,
+    SettlementRepository, TicketMessageRepository, TicketRepository, UserRepository,
+    UtilityBillRepository,
 };
 use crate::context::RequestContext;
 
@@ -41,6 +42,8 @@ pub trait UnitOfWork: Send {
     /// Solo accodamento e lettura: l'esito di un job lo scrive il worker. Vedi
     /// [`AiJobRepository`].
     fn ai_jobs(&mut self) -> &mut dyn AiJobRepository;
+    /// Sola lettura, e nessuna scrittura possibile: la dashboard è una vista.
+    fn dashboard(&mut self) -> &mut dyn DashboardRepository;
     fn events(&mut self) -> &mut dyn EventSink;
 
     async fn commit(self: Box<Self>) -> RepositoryResult<()>;

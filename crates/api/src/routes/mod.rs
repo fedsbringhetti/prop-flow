@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer};
 
 pub mod auth;
 pub mod billing;
+pub mod dashboard;
 pub mod documents;
 pub mod expenses;
 pub mod health;

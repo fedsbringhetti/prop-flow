@@ -11,6 +11,7 @@
 
 mod ai_job;
 mod billing;
+mod dashboard;
 mod document;
 mod expense;
 mod expense_group;
