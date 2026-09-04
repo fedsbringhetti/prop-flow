@@ -14,8 +14,9 @@ motivazioni.
 | [06 — Sviluppo](06-sviluppo.md) | Requisiti, avvio, strategia di test, ricette operative |
 | [07 — Operazioni](07-operazioni.md) | Configurazione, deploy, migrazioni in produzione, osservabilità, CI |
 | [08 — Decisioni](08-decisioni.md) | Registro delle decisioni architetturali con le motivazioni |
-| [09 — Stato e roadmap](09-stato-e-roadmap.md) | Cosa è implementato, cosa manca, debiti tecnici noti |
+| [09 — Stato e roadmap](09-stato-e-roadmap.md) | Cosa è implementato, cosa manca, debiti tecnici noti, **il piano in corso** |
 | [10 — Rilasci](10-rilasci.md) | Versionamento, changelog, flusso di rilascio, hotfix, rollback |
+| [11 — Piani conclusi](11-piani-conclusi.md) | Archivio dei piani già eseguiti, con i loro esiti. Append-only |
 
 ## Come leggere questa documentazione
 
@@ -28,6 +29,10 @@ documenti servono per quale compito.
 Se una scelta ti sembra sbagliata: cercala in [08 — Decisioni](08-decisioni.md)
 prima di cambiarla. Diverse decisioni derivano da un difetto osservato, e il
 documento riporta il difetto.
+
+Se la domanda è «perché questo modulo è fatto così»: l'esito del piano che lo ha
+prodotto, in [11 — Piani conclusi](11-piani-conclusi.md). `09` e `11` si dividono per
+**ciclo di vita**: il primo si riscrive a ogni fetta, il secondo non si riscrive mai.
 
 ## Convenzione
 

@@ -35,6 +35,7 @@ Partenza: **`docs/README.md`**, che è la mappa. Poi, in base al compito:
 | deploy, configurazione, CI | `docs/07-operazioni.md` |
 | capire perché una cosa è fatta così | `docs/08-decisioni.md` |
 | sapere cosa manca | `docs/09-stato-e-roadmap.md` |
+| sapere perché un modulo è fatto così | `docs/11-piani-conclusi.md`, l'esito della fetta che lo ha prodotto |
 
 Se la domanda è «cosa faccio adesso», la risposta è `docs/09-stato-e-roadmap.md`:
 stato attuale, prossimo passo suggerito, debiti noti e ciò che è deliberatamente
@@ -203,6 +204,16 @@ prende in mano.
 
 Il motivo è semplice e costoso: un piano che vive fuori dal repository non esiste
 per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
+
+**A esito scritto, il piano si sposta in `docs/11-piani-conclusi.md`, nello stesso
+commit.** I due file si dividono per **ciclo di vita** e non per argomento: `09` si
+riscrive a ogni fetta, `11` non si riscrive mai — nemmeno per correggere una
+previsione che l'esecuzione ha smentito, che è la parte più utile da rileggere.
+
+Lo spostamento sta nello stesso commit dell'esito perché è l'unico momento in cui chi
+lavora ha già entrambi i file aperti: una regola di migrazione che chieda un passaggio
+a parte non viene rispettata, e dopo due fette i file tornano a essere due archivi
+mescolati.
 
 ### Commit
 
