@@ -736,7 +736,7 @@ Gira senza database, quindi in ogni `cargo test`.
 
 **Contesto.** La porta `ObjectStorage` era dichiarata dal primo giorno e senza
 adattatore. Il piano della prima fetta dei documenti
-([09 — Stato e roadmap](09-stato-e-roadmap.md#piano-documenti-fetta-1)) aveva già
+([11 — Piani conclusi](11-piani-conclusi.md#piano-documenti-fetta-1)) aveva già
 deciso `rusty-s3` sopra `reqwest`, l'upload multipart attraverso l'API con download
 pre-firmato, e la cifratura a riposo lato bucket. Tre punti si sono decisi
 implementando, e stanno qui perché nessuno dei tre è deducibile dal codice.
@@ -1775,7 +1775,7 @@ e per giunta `ON DELETE SET NULL`, quindi la verifica avrebbe un'uscita per cost
 omettendo un campo facoltativo non è un confine; è un dosso che si legge come un confine,
 ed è esattamente l'errore che la `0029` è servita a smettere di fare. Il gate che conta è
 già in `can_access_expense_group`: si aggiunge qualcuno solo a un gruppo di cui si è già
-membri. Vedi anche [09 — Stato e roadmap](09-stato-e-roadmap.md#piano-coinquilini-visibili-fetta-1).
+membri. Vedi anche [11 — Piani conclusi](11-piani-conclusi.md#piano-coinquilini-visibili-fetta-1).
 
 **Conseguenze.** `app.shares_org_with` resta definita e non è più usata da alcuna policy;
 rimuoverla è un cambiamento a sé. `app.property_residents` è la prima funzione
