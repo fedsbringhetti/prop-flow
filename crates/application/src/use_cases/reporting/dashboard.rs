@@ -7,7 +7,7 @@ use propflow_domain::{Denial, RequestContext};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
-/// Gli otto numeri del proprietario.
+/// I nove numeri del proprietario.
 ///
 /// # `ensure_staff` e non `ensure_member`
 ///

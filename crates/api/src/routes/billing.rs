@@ -1339,7 +1339,7 @@ async fn charge_detail(
         (status = 200, description = "Addebito annullato. **Resta visibile** a chi doveva pagarlo", body = ChargeResponse),
         (status = 403, description = "Richiede ruolo proprietario o gestore", body = crate::error::ProblemDetails),
         (status = 404, description = "Non trovato o non visibile", body = crate::error::ProblemDetails),
-        (status = 409, description = "Solo un addebito emesso si annulla", body = crate::error::ProblemDetails),
+        (status = 409, description = "Solo un addebito `issued` si annulla: su uno parzialmente pagato del denaro è entrato, e la via è lo storno", body = crate::error::ProblemDetails),
     )
 )]
 async fn void_charge(
@@ -1363,10 +1363,10 @@ async fn void_charge(
     params(("id" = Uuid, Path, description = "Identificatore dell'addebito")),
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "Incasso abbandonato. Diverso dall'annullamento: era dovuto, ed è una perdita", body = ChargeResponse),
+        (status = 200, description = "Incasso abbandonato. Diverso dall'annullamento: era dovuto, ed è una perdita — il residuo, non l'importo", body = ChargeResponse),
         (status = 403, description = "Richiede ruolo proprietario o gestore", body = crate::error::ProblemDetails),
         (status = 404, description = "Non trovato o non visibile", body = crate::error::ProblemDetails),
-        (status = 409, description = "Solo un addebito emesso si storna", body = crate::error::ProblemDetails),
+        (status = 409, description = "Si storna da `issued` e da `partially_paid`: l'incassato resta incassato e si rinuncia al residuo. Da `paid`, `void` e `written_off` no", body = crate::error::ProblemDetails),
     )
 )]
 async fn write_off_charge(

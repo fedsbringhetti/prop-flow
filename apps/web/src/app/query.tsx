@@ -83,4 +83,10 @@ export const keys = {
   billOcr: (id: string) => ['bill-ocr', id] as const,
   documents: (ownerType: string, ownerId: string) => ['documents', ownerType, ownerId] as const,
   charges: (filters?: unknown) => ['charges', filters ?? null] as const,
+  charge: (id: string) => ['charge', id] as const,
+  /** La collezione: la coda delle dichiarazioni ne è il filtro `pending`. */
+  payments: (filters?: unknown) => ['payments', filters ?? null] as const,
+  /** I movimenti di un addebito. Chiave distinta dalla collezione, perché
+   *  un'invalidazione dell'una non deve rileggere l'altra. */
+  chargePayments: (chargeId: string) => ['charge-payments', chargeId] as const,
 }

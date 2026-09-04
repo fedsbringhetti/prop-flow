@@ -3527,6 +3527,407 @@ async fn a_voided_charge_shows_no_outstanding_amount_and_takes_no_payment() {
     );
 }
 
+/// Il giro che il prodotto non sapeva fare: l'insoluto **scende**.
+///
+/// Ottocento euro di canone, trecento incassati, e la dashboard passa da 800 a 500
+/// mentre lo stato dell'addebito diventa `partially_paid`. Prima di questa fetta
+/// l'unico modo di far scendere quel numero era rinunciare ai soldi.
+#[tokio::test]
+async fn recording_a_partial_payment_lowers_the_outstanding_total() {
+    let app = require_app!();
+    let (owner, _org, _tenant, charge) = charge_with_a_real_tenant(&app, "insoluto-scende").await;
+
+    let (_, before) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(before["total_outstanding"], "800.00", "corpo: {before}");
+    assert_eq!(
+        before["written_off_total"], "0.00",
+        "niente è stato stornato: {before}"
+    );
+
+    let (status, recorded) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some(&idempotency_key("acconto")),
+            serde_json::json!({ "amount": "300.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {recorded}");
+    assert_eq!(recorded["status"], "succeeded", "corpo: {recorded}");
+
+    let (_, after) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(
+        after["total_outstanding"], "500.00",
+        "l'insoluto scende dell'incassato: {after}"
+    );
+
+    let (_, balance) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(balance["status"], "partially_paid", "corpo: {balance}");
+    assert_eq!(balance["paid_amount"], "300.00");
+    assert_eq!(balance["outstanding_amount"], "500.00");
+}
+
+/// Il nono numero dice il **residuo** e non l'importo.
+///
+/// È il caso della decisione 3 del piano, e il modo più facile di sbagliarlo:
+/// ottocento euro con trecento incassati e poi stornati fanno una perdita di
+/// **500**, non di 800. Gli altri trecento sono entrati.
+///
+/// Il test verifica anche le due cose che rendono il numero possibile: che da
+/// `partially_paid` si **storni** (e non si annulli), e che `outstanding_amount`
+/// vada a zero — cioè che la colonna che rende il numero necessario non sia la
+/// colonna che lo produce.
+#[tokio::test]
+async fn the_ninth_number_counts_the_remainder_of_a_partially_paid_charge() {
+    let app = require_app!();
+    let (owner, _org, _tenant, charge) = charge_with_a_real_tenant(&app, "nono-numero").await;
+
+    app.post_idempotent(
+        &format!("/api/v1/charges/{charge}/payments"),
+        &owner,
+        None,
+        Some(&idempotency_key("parziale")),
+        serde_json::json!({ "amount": "300.00", "method": "bank_transfer" }),
+    )
+    .await;
+
+    // Annullare no: del denaro è entrato, e dire che la richiesta non è mai
+    // esistita sarebbe falso.
+    let (status, refused) = app
+        .post_auth(
+            &format!("/api/v1/charges/{charge}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {refused}");
+    assert_eq!(
+        refused["code"], "charge.invalid_transition",
+        "corpo: {refused}"
+    );
+
+    // Stornare sì: l'incassato resta incassato e si rinuncia al resto.
+    let (status, written_off) = app
+        .post_auth(
+            &format!("/api/v1/charges/{charge}/write-off"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "da `partially_paid` si storna: {written_off}"
+    );
+    assert_eq!(written_off["status"], "written_off", "corpo: {written_off}");
+
+    let (_, balance) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(
+        balance["outstanding_amount"], "0.00",
+        "la 0024 azzera il residuo su `written_off`, ed è la ragione per cui il nono numero \
+         non si può calcolare da qui: {balance}"
+    );
+    assert_eq!(balance["paid_amount"], "300.00", "il pagato resta un fatto");
+
+    let (status, dashboard) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {dashboard}");
+    assert_eq!(
+        dashboard["written_off_total"], "500.00",
+        "la perdita è il residuo, non l'importo: 800 meno i 300 incassati. \
+         Se qui c'è 800.00, la vista somma `amount`: {dashboard}"
+    );
+    assert_eq!(
+        dashboard["total_outstanding"], "0.00",
+        "lo storno esce dall'insoluto, come `void`: {dashboard}"
+    );
+}
+
+/// Un addebito **annullato** non è una perdita, e non entra nel nono numero.
+///
+/// È la distinzione per cui il numero esiste: `void` dice «non doveva essere
+/// chiesto», `written_off` dice «era dovuto e ci rinunciamo». Se entrambi
+/// contassero, il numero non aggiungerebbe niente a `total_outstanding`.
+#[tokio::test]
+async fn a_voided_charge_is_not_a_loss() {
+    let app = require_app!();
+    let (owner, _org, _tenant, charge) =
+        charge_with_a_real_tenant(&app, "annullato-non-perdita").await;
+
+    app.post_auth(
+        &format!("/api/v1/charges/{charge}/void"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let (_, dashboard) = app
+        .send("GET", "/api/v1/dashboard", Some(&owner), None)
+        .await;
+    assert_eq!(
+        dashboard["written_off_total"], "0.00",
+        "un annullamento non è una perdita: {dashboard}"
+    );
+    assert_eq!(dashboard["total_outstanding"], "0.00");
+}
+
+/// La coda: il proprietario trova una dichiarazione **senza sapere quale addebito
+/// guardare**.
+///
+/// È la ragione per cui `GET /api/v1/payments` esiste. Senza, l'unica via sarebbe
+/// aprire gli addebiti a uno a uno, e una notifica avviserebbe di qualcosa che poi
+/// non si trova.
+#[tokio::test]
+async fn the_queue_finds_a_declaration_without_knowing_its_charge() {
+    let app = require_app!();
+    let (owner, owner_org, tenant, charge) = charge_with_a_real_tenant(&app, "coda").await;
+
+    // Un incasso già registrato: c'è, ed è `succeeded`. Serve a provare che il
+    // filtro sullo stato seleziona e non prende tutto.
+    app.post_idempotent(
+        &format!("/api/v1/charges/{charge}/payments"),
+        &owner,
+        None,
+        Some(&idempotency_key("gia-incassato")),
+        serde_json::json!({ "amount": "100.00", "method": "bank_transfer" }),
+    )
+    .await;
+
+    let (status, declared) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payment-declarations"),
+            &tenant,
+            Some(&owner_org),
+            Some(&idempotency_key("dichiarazione-in-coda")),
+            serde_json::json!({ "amount": "700.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {declared}");
+    let declaration = declared["id"].as_str().expect("id").to_owned();
+
+    // La coda, senza nominare l'addebito.
+    let (status, queue) = app
+        .send("GET", "/api/v1/payments?status=pending", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {queue}");
+    let items = queue["items"].as_array().expect("items");
+    assert_eq!(
+        items.len(),
+        1,
+        "solo la dichiarazione, non l'incasso: {queue}"
+    );
+    assert_eq!(items[0]["id"], declaration, "corpo: {queue}");
+    assert_eq!(
+        items[0]["charge_id"], charge,
+        "la coda dice quale addebito guardare"
+    );
+
+    // Senza filtro ci sono entrambi.
+    let (_, all) = app
+        .send("GET", "/api/v1/payments", Some(&owner), None)
+        .await;
+    assert_eq!(
+        all["items"].as_array().expect("items").len(),
+        2,
+        "corpo: {all}"
+    );
+
+    // Confermata, esce dalla coda: uno stato in cui si entra e da cui non si esce
+    // sarebbe peggio di nessuno stato.
+    app.post_auth(
+        &format!("/api/v1/payments/{declaration}/confirm"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+    let (_, empty) = app
+        .send("GET", "/api/v1/payments?status=pending", Some(&owner), None)
+        .await;
+    assert!(
+        empty["items"].as_array().expect("items").is_empty(),
+        "corpo: {empty}"
+    );
+}
+
+/// La collezione è ristretta dalla **policy**, non da un ramo sul ruolo.
+///
+/// A un inquilino risponde `200` con i **propri** pagamenti — non `403`, e non
+/// quelli altrui. È `payments_select` a scegliere le righe, e la conseguenza da
+/// dire ad alta voce è che un incasso registrato senza `payer_user_id` **non
+/// compare** a chi l'ha pagato, pur muovendogli il saldo.
+#[tokio::test]
+async fn the_payment_collection_shows_a_tenant_only_their_own() {
+    let app = require_app!();
+    let (owner, owner_org, tenant, charge) =
+        charge_with_a_real_tenant(&app, "coda-inquilino").await;
+
+    // Un incasso **non attribuito**: lo staff lo vede, il pagante no.
+    app.post_idempotent(
+        &format!("/api/v1/charges/{charge}/payments"),
+        &owner,
+        None,
+        Some(&idempotency_key("non-attribuito")),
+        serde_json::json!({ "amount": "50.00", "method": "cash" }),
+    )
+    .await;
+
+    let (status, declared) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payment-declarations"),
+            &tenant,
+            Some(&owner_org),
+            Some(&idempotency_key("sua-dichiarazione")),
+            serde_json::json!({ "amount": "750.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {declared}");
+    let mine = declared["id"].as_str().expect("id").to_owned();
+
+    let (status, seen) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/payments",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "la collezione non è staff soltanto: {seen}"
+    );
+    let items = seen["items"].as_array().expect("items");
+    assert_eq!(
+        items.len(),
+        1,
+        "l'incasso non attribuito non è suo, e non lo vede: {seen}"
+    );
+    assert_eq!(items[0]["id"], mine, "corpo: {seen}");
+
+    // Allo staff si vedono entrambi, così il conteggio di sopra è della policy e
+    // non della rotta.
+    let (_, both) = app
+        .send("GET", "/api/v1/payments", Some(&owner), None)
+        .await;
+    assert_eq!(
+        both["items"].as_array().expect("items").len(),
+        2,
+        "corpo: {both}"
+    );
+}
+
+/// Il filtro sul contratto passa dall'addebito, e l'elenco annidato non è cambiato.
+///
+/// `lease_id` non è una colonna di `app.payments`: il legame è
+/// `payable_id → app.charges.lease_id`. E la rotta annidata continua a rispondere
+/// `404` su un addebito che non si vede, invece di una pagina vuota — che è il
+/// comportamento che rendere `charge_id` opzionale non doveva toccare.
+#[tokio::test]
+async fn filtering_by_lease_goes_through_the_charge_and_the_nested_route_is_unchanged() {
+    let app = require_app!();
+    let (owner, _org, _tenant, charge) = charge_with_a_real_tenant(&app, "per-contratto").await;
+
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let lease = detail["lease_id"].as_str().expect("lease_id").to_owned();
+
+    app.post_idempotent(
+        &format!("/api/v1/charges/{charge}/payments"),
+        &owner,
+        None,
+        Some(&idempotency_key("sul-contratto")),
+        serde_json::json!({ "amount": "120.00", "method": "bank_transfer" }),
+    )
+    .await;
+
+    let (status, filtered) = app
+        .send(
+            "GET",
+            &format!("/api/v1/payments?lease_id={lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {filtered}");
+    assert_eq!(
+        filtered["items"].as_array().expect("items").len(),
+        1,
+        "corpo: {filtered}"
+    );
+
+    // Un altro contratto: zero righe, non un errore.
+    let other_property = create_property(&app, &owner, "Immobile senza pagamenti").await;
+    let other_lease = draft_lease(&app, &owner, &other_property, None, -5, Some(300)).await;
+    let (_, none) = app
+        .send(
+            "GET",
+            &format!("/api/v1/payments?lease_id={other_lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert!(
+        none["items"].as_array().expect("items").is_empty(),
+        "corpo: {none}"
+    );
+
+    // La rotta annidata: invariata, `404` e non una pagina vuota.
+    let (stranger, _) = common::register_and_login(&app, "estraneo-elenco").await;
+    let (status, problem) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}/payments"),
+            Some(&stranger),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "charge.not_found", "corpo: {problem}");
+
+    // E al proprietario risponde con l'elenco di quell'addebito soltanto.
+    let (status, nested) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}/payments"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {nested}");
+    assert_eq!(
+        nested["items"].as_array().expect("items").len(),
+        1,
+        "corpo: {nested}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Spese co-living
 // ---------------------------------------------------------------------------
@@ -4598,7 +4999,7 @@ async fn the_ocr_route_is_staff_only_and_unknown_bills_are_not_found() {
 // Dashboard
 // ---------------------------------------------------------------------------
 
-/// Gli otto numeri si muovono insieme a ciò che il proprietario fa.
+/// I nove numeri si muovono insieme a ciò che il proprietario fa.
 ///
 /// **È la prima superficie che attraversa tutti i moduli insieme**, quindi il
 /// primo posto dove si vedrebbe un errore di integrazione fra le fette: un
@@ -4625,6 +5026,7 @@ async fn the_dashboard_counts_what_the_owner_has_just_done() {
     assert_eq!(empty["open_tickets"], 0);
     assert_eq!(empty["leases_expiring_90d"], 0);
     assert_eq!(empty["bills_pending_review"], 0);
+    assert_eq!(empty["written_off_total"], "0.00");
 
     let property = create_property(&app, &owner, "Immobile della dashboard").await;
     let lease = draft_lease(&app, &owner, &property, None, -10, Some(30)).await;

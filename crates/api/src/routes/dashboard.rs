@@ -19,9 +19,9 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/dashboard", get(dashboard))
 }
 
-/// Gli otto numeri, così come la vista li produce.
+/// I nove numeri, così come la vista li produce.
 ///
-/// I due importi sono **stringhe decimali** come ogni altro importo dell'API: un
+/// I tre importi sono **stringhe decimali** come ogni altro importo dell'API: un
 /// numero JSON passa da un float binario, e `184.20` che torna
 /// `184.19999999999999` è un errore che si accumula in contabilità. I sei conteggi
 /// sono interi, perché contare non ha decimali.
@@ -54,6 +54,18 @@ pub struct DashboardResponse {
     /// Bollette in `draft` **oppure** in `pending_review`: una registrata e senza
     /// scansione, e una che la macchina ha letto e che aspetta una persona.
     pub bills_pending_review: i64,
+    /// Quanto si è rinunciato a incassare: la somma dei **residui** degli addebiti
+    /// `written_off`. Dalla migration `0032`.
+    ///
+    /// **È il residuo, non l'importo.** Un addebito da `"800.00"` con `"300.00"`
+    /// incassati e poi stornato contribuisce `"500.00"`: gli altri trecento sono
+    /// entrati e non si sono persi.
+    ///
+    /// Sta accanto a `total_outstanding` e **non lo compensa**: quello dice quanto
+    /// è ancora dovuto, questo quanto non lo sarà mai. Un addebito `void` non
+    /// compare qui — non doveva essere chiesto, quindi non è una perdita.
+    #[schema(example = "500.00")]
+    pub written_off_total: String,
 }
 
 impl DashboardResponse {
@@ -68,6 +80,7 @@ impl DashboardResponse {
             open_tickets: dashboard.open_tickets,
             leases_expiring_90d: dashboard.leases_expiring_90d,
             bills_pending_review: dashboard.bills_pending_review,
+            written_off_total: format_amount(dashboard.written_off_total),
         }
     }
 }
@@ -76,7 +89,7 @@ impl DashboardResponse {
     get, path = "/api/v1/dashboard", tag = "dashboard",
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "Gli otto numeri dell'organizzazione attiva", body = DashboardResponse),
+        (status = 200, description = "I nove numeri dell'organizzazione attiva", body = DashboardResponse),
         (status = 401, description = "Autenticazione richiesta", body = crate::error::ProblemDetails),
         (status = 403, description = "Richiede ruolo proprietario o gestore, oppure l'organizzazione attiva non è del chiamante", body = crate::error::ProblemDetails),
     )

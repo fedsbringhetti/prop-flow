@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Banknote,
   Receipt,
   Wallet,
   X,
@@ -25,6 +26,7 @@ const navigation = [
   { to: '/contratti', label: t.nav.leases, icon: FileText, end: false },
   { to: '/bollette', label: t.nav.bills, icon: Receipt, end: false },
   { to: '/addebiti', label: t.nav.charges, icon: Wallet, end: false },
+  { to: '/pagamenti', label: t.nav.payments, icon: Banknote, end: false },
 ] as const
 
 /**

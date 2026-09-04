@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router'
 
 import { listCharges, voidCharge, writeOffCharge } from '@/api/endpoints'
+import type { ChargeFilters } from '@/api/endpoints'
 import type { Charge } from '@/api/types'
 import { Async, Empty } from '@/components/state'
 import { Button } from '@/components/ui/button'
@@ -18,22 +19,51 @@ import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { ChargeStatusBadge } from '../shared/status'
 
 /**
- * Lo scadenzario.
+ * Gli stati **memorizzati**, e sono questi cinque.
+ *
+ * `overdue` non c'è, ed è la trappola: è derivato dalla scadenza, e
+ * `?status=overdue` risponde `422` con `charge.derived_status_filter`. `draft`
+ * nemmeno: esiste nell'enum del database e l'applicazione non lo scrive mai, quindi
+ * offrirlo darebbe un elenco sempre vuoto.
+ *
+ * L'elenco è scritto a mano e **non derivato dall'enum dei tipi**: costruire un
+ * menù da `ChargeStatus` ci farebbe finire dentro entrambi.
+ */
+const FILTERABLE = ['issued', 'partially_paid', 'paid', 'void', 'written_off'] as const
+
+type FilterableStatus = (typeof FILTERABLE)[number]
+
+function filterableStatus(raw: string | null): FilterableStatus | undefined {
+  return FILTERABLE.find((status) => status === raw)
+}
+
+/**
+ * Lo scadenzario, e ogni altro elenco di addebiti.
  *
  * **Non c'è un filtro «scaduto»**, ed è deliberato: `overdue` è derivato dalla
  * scadenza e `?status=overdue` risponde `422` con `charge.derived_status_filter`.
  * Il filtro che serve è `?outstanding=true`, che enumera i tre stati dell'insoluto
  * e usa l'indice parziale che esiste per quello.
+ *
+ * Il filtro sullo stato memorizzato esiste invece per una ragione concreta: è la
+ * destinazione del riquadro **Perdite** del riepilogo. Un numero che non porta da
+ * nessuna parte è una decorazione, e senza questo filtro `written_off_total`
+ * sarebbe uno di quelli.
  */
 export function ChargesPage() {
   const client = useApi()
   const [params, setParams] = useSearchParams()
   const outstanding = params.get('insoluti') === '1'
+  const status = filterableStatus(params.get('stato'))
+
+  const filters: ChargeFilters = {
+    ...(outstanding ? { outstanding: true } : {}),
+    ...(status ? { status } : {}),
+  }
 
   const query = usePagedQuery({
-    queryKey: keys.charges({ outstanding }),
-    fetchPage: (after) =>
-      listCharges(client, { outstanding: outstanding ? true : undefined, after }),
+    queryKey: keys.charges({ outstanding, status: status ?? null }),
+    fetchPage: (after) => listCharges(client, { ...filters, after }),
   })
 
   return (
@@ -55,6 +85,27 @@ export function ChargesPage() {
               }}
             />
             {t.charge.outstandingOnly}
+          </label>
+
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-ink-muted">{t.charge.status}</span>
+            <select
+              className="h-8 rounded-lg border border-border-subtle bg-surface px-2 pr-7 text-sm"
+              value={status ?? ''}
+              onChange={(event) => {
+                const next = new URLSearchParams(params)
+                if (event.target.value) next.set('stato', event.target.value)
+                else next.delete('stato')
+                setParams(next, { replace: true })
+              }}
+            >
+              <option value="">{t.common.all}</option>
+              {FILTERABLE.map((value) => (
+                <option key={value} value={value}>
+                  {t.charge.statuses[value]}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
 
@@ -116,6 +167,11 @@ function ChargeRow({ charge }: { charge: Charge }) {
   })
 
   const closed = charge.status === 'void' || charge.status === 'written_off' || charge.status === 'paid'
+  // `void` è ammesso dal solo `issued`: su un addebito con del denaro dentro
+  // direbbe che la richiesta non è mai esistita, e l'API risponde `409`. Un
+  // bottone che produce sempre un errore è peggio di un bottone assente — la via
+  // è lo storno, che da `partially_paid` è invece ammesso.
+  const voidable = charge.status === 'issued'
   // Un residuo **negativo** è un credito verso l'inquilino: non compensa gli
   // altri insoluti e non compare nella dashboard, quindi almeno qui va detto.
   const credit = isNegative(charge.outstanding_amount)
@@ -123,8 +179,11 @@ function ChargeRow({ charge }: { charge: Charge }) {
   return (
     <Tr>
       <Td>
+        {/* Al **dettaglio dell'addebito**, e non più al contratto: è lì che si
+            registra un incasso, ed è il gesto che questa fetta ha aggiunto. Il
+            contratto resta raggiungibile da quella scheda. */}
         <Link
-          to={`/contratti/${charge.lease_id}`}
+          to={`/addebiti/${charge.id}`}
           className="font-medium text-accent underline-offset-4 hover:underline"
         >
           {t.charge.types[charge.charge_type]}
@@ -146,21 +205,28 @@ function ChargeRow({ charge }: { charge: Charge }) {
       <TdNumeric>{formatAmount(charge.paid_amount, { currency: charge.currency })}</TdNumeric>
       <TdNumeric className={credit ? 'text-success' : undefined}>
         {formatAmount(charge.outstanding_amount, { currency: charge.currency })}
+        {/* Il colore da solo non basta: chi non lo distingue vedrebbe un numero
+            negativo senza sapere che è un credito. La parola sta accanto. */}
+        {credit ? (
+          <span className="block text-xs font-medium">{t.charge.credit}</span>
+        ) : null}
       </TdNumeric>
       <Td className="text-right whitespace-nowrap">
         {closed ? null : (
           <span className="inline-flex gap-1">
-            <ConfirmAction
-              trigger={
-                <Button size="sm" variant="ghost">
-                  {t.charge.void}
-                </Button>
-              }
-              title={t.charge.voidConfirm}
-              explanation={t.charge.voidExplain}
-              confirmLabel={t.charge.void}
-              onConfirm={() => discard.mutateAsync()}
-            />
+            {voidable ? (
+              <ConfirmAction
+                trigger={
+                  <Button size="sm" variant="ghost">
+                    {t.charge.void}
+                  </Button>
+                }
+                title={t.charge.voidConfirm}
+                explanation={t.charge.voidExplain}
+                confirmLabel={t.charge.void}
+                onConfirm={() => discard.mutateAsync()}
+              />
+            ) : null}
             <ConfirmAction
               trigger={
                 <Button size="sm" variant="ghost">

@@ -1,22 +1,25 @@
 use std::sync::Arc;
 
-use propflow_domain::payment::Payment;
+use propflow_domain::payment::{Payment, PaymentStatus};
 use propflow_domain::ports::{PaymentPage, PaymentQuery, UnitOfWorkFactory};
-use propflow_domain::shared::{ChargeId, PaymentId};
+use propflow_domain::shared::{ChargeId, LeaseId, PaymentId};
 use propflow_domain::{Entity, RequestContext};
 
 use super::shared::visible_charge;
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ListPaymentsQuery {
-    pub charge_id: ChargeId,
+    /// L'addebito, quando l'elenco è il suo. `None` è la collezione.
+    pub charge_id: Option<ChargeId>,
+    pub status: Option<PaymentStatus>,
+    pub lease_id: Option<LeaseId>,
     pub after: Option<PaymentId>,
     pub limit: Option<u16>,
 }
 
-/// Elenca i pagamenti di un addebito.
+/// Elenca i pagamenti: quelli di un addebito, o quelli dell'organizzazione.
 ///
 /// `ensure_member`, e *quali* righe siano di chi le chiede lo decide
 /// `payments_select` — staff, oppure chi ha pagato, oppure chi ha incassato — non
@@ -31,9 +34,23 @@ pub struct ListPaymentsQuery {
 /// resta comunque visibile a tutti nel `paid_amount` del saldo, che viene dalla
 /// vista e non da questo elenco.
 ///
-/// L'addebito si rilegge prima: senza, un `charge_id` inesistente o invisibile
-/// darebbe una pagina vuota invece di un `404`, che è il modo peggiore di dire «non
-/// è tuo».
+/// # Due forme, e la prima non è cambiata
+///
+/// **Con `charge_id` l'addebito si rilegge prima**, come faceva la fetta contabile:
+/// senza, un `charge_id` inesistente o invisibile darebbe una pagina vuota invece
+/// di un `404`, che è il modo peggiore di dire «non è tuo».
+///
+/// **Senza `charge_id` è la collezione**, ed è la coda che il modulo dei pagamenti
+/// dal lato del proprietario richiede: *quali dichiarazioni aspettano una
+/// conferma*. Qui non c'è niente da rileggere prima — non c'è una risorsa padre di
+/// cui verificare la visibilità — e a restringere è la sola policy. Un elenco vuoto
+/// qui **è** la risposta corretta: significa che non ci sono pagamenti, non che
+/// qualcosa non si è trovato.
+///
+/// Il filtro `lease_id` non rilegge il contratto per la stessa ragione: è un
+/// filtro, non un padre. Un contratto altrui non produce un `403` ma zero righe,
+/// perché `payments_select` non mostra quelle righe comunque — e distinguere i due
+/// casi richiederebbe di leggere il contratto per dire che non si può leggere.
 pub struct ListPayments {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
 }
@@ -59,11 +76,20 @@ impl ListPayments {
             .clamp(1, PaymentQuery::MAX_LIMIT);
 
         let mut uow = self.unit_of_work.begin(context).await?;
-        let charge = visible_charge(uow.as_mut(), query.charge_id).await?;
+
+        // La rilettura c'è solo quando l'addebito è nel percorso. `visible_charge`
+        // traduce l'assenza in `404`, che è ciò che una sotto-risorsa deve dire; la
+        // collezione non ha un padre da cui derivare quel `404`.
+        let charge_id = match query.charge_id {
+            Some(id) => Some(visible_charge(uow.as_mut(), id).await?.id()),
+            None => None,
+        };
 
         uow.payments()
-            .list_for_charge(&PaymentQuery {
-                charge_id: charge.id(),
+            .list(&PaymentQuery {
+                charge_id,
+                status: query.status,
+                lease_id: query.lease_id,
                 after: query.after,
                 limit,
             })

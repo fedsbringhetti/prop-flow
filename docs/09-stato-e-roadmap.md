@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **1 settembre 2026**.
+Stato al **4 settembre 2026**.
 
 ## Come si usa questo documento
 
@@ -31,9 +31,9 @@ Le regole stanno anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 31 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 32 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
-170 indici, 66 policy RLS, 50 trigger, 4 viste, 34 funzioni.
+171 indici, 66 policy RLS, 50 trigger, 4 viste, 34 funzioni.
 
 Coperti a schema: utenti e organizzazioni, immobili e stanze, contratti e parti
 contrattuali, documenti con allegato polimorfico, segnalazioni con thread e storico,
@@ -60,21 +60,21 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Documenti: caricamento multipart, elenco, download pre-firmato, archiviazione | completo per la fetta 1 |
 | Segnalazioni: apertura, elenco filtrato, dettaglio con storico, thread con note interne, sette transizioni, costi, allegati | completo per la fetta 1 |
 | Bollette: registrazione manuale, correzione, validazione, annullamento, riaddebito, allegati | completo per la fetta 1 |
-| Addebiti: emissione, elenco e dettaglio con il saldo dalla vista, annullamento, rinuncia all'incasso, allegati | completo per la fetta 1 |
-| Pagamenti: incasso registrato dallo staff, dichiarazione dell'inquilino, conferma e rifiuto, elenco e dettaglio, idempotenza fornita dal client, stato dell'addebito ricalcolato dai pagamenti | completo per la fetta 1 |
+| Addebiti: emissione, elenco e dettaglio con il saldo dalla vista, annullamento, rinuncia all'incasso **anche da `partially_paid`**, allegati | completo per la fetta A |
+| Pagamenti: incasso registrato dallo staff, dichiarazione dell'inquilino, conferma e rifiuto, dettaglio, elenco per addebito **e collezione dell'organizzazione** con i filtri `status` e `lease_id`, idempotenza fornita dal client, stato dell'addebito ricalcolato dai pagamenti | completo per la fetta A |
 | Spese co-living: gruppi con il creatore già dentro, composizione con uscita e rientro, spese con ripartizione `equal` e `weighted`, saldi letti dalla vista, regolamenti a due tempi confermati da chi riceve | completo per la fetta 1 |
 | Coinquilini visibili: elenco dei residenti di un immobile letto da una funzione che proietta, anagrafica ristretta al perimetro della casa | completo per la fetta 1 |
 | OCR delle bollette: porta `OcrProvider` senza fornitore scelto, adattatore deterministico, coda `ai_jobs` con `SKIP LOCKED`, `pending_review` con le sue uscite, stato del job dall'API | completo per la fetta 1 |
 | Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox, lettura automatica delle bollette | completi |
-| Dashboard: `GET /dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto | completo |
+| Dashboard: `GET /dashboard`, **nove** numeri letti da `v_owner_dashboard`, staff soltanto | completo |
 | Sessione in cookie: refresh `HttpOnly` fuori dal corpo, `Secure` condizionale, test che tiene in piedi l'argomento CSRF | completo |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-413 test: 204 unitari di dominio, 16 applicativi, 26 di infrastruttura, 11 unitari
-del bordo HTTP, 75 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 75 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+423 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+del bordo HTTP, 76 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 81 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
 ### Client web — il percorso del proprietario
 
@@ -88,18 +88,24 @@ dell'API dietro un reverse proxy.
 | Client dell'API con il **refresh a singolo volo** e la traduzione di `ProblemDetails` | completo |
 | Guscio: registrazione, accesso, uscita, organizzazione attiva, navigazione | completo |
 | I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
-| Dashboard: otto numeri, ognuno collegato al posto dove si agisce | completo |
+| Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
 | Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
 | Stanze e residenti | completo per la fetta 1 |
 | Contratti: elenco, bozza, parti, attivazione, disdetta, stati derivati mostrati e non filtrati | completo per la fetta 1 |
 | Inviti: emissione e consegna del token, presentato per quello che è | completo per la fetta 1 |
 | Bollette: registrazione, scansione, **revisione dell'OCR campo per campo**, validazione, riaddebito | completo per la fetta 1 |
-| Addebiti: scadenzario, annullamento, rinuncia all'incasso | completo per la fetta 1 |
+| Addebiti: scadenzario, filtro sullo stato memorizzato, **scheda del singolo addebito**, annullamento, rinuncia all'incasso, credito da sovrapagamento evidenziato | completo per la fetta A |
+| Pagamenti: registrazione di un incasso con l'attribuzione come scelta esplicita, **coda delle dichiarazioni** con conferma e rifiuto, chiave di idempotenza generata una volta per intento | completo per la fetta A |
 | Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
 
-27 test: 12 sulla sessione e sul client dell'API — fra cui il refresh a singolo
-volo **riprodotto anche al contrario** — 11 sui decimali e sulla formattazione, 4
-sul percorso da sola tastiera.
+37 test: 12 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+volo **riprodotto anche al contrario** — 11 sui decimali e sulla formattazione, 5
+sulla chiave di idempotenza, 9 sui percorsi da sola tastiera e sui form che non
+perdono ciò che è stato digitato.
+
+Il test sulla chiave di idempotenza è stato **verificato contro il difetto**:
+sostituendo `intent.current()` con un `randomUUID()` dentro `mutationFn` fallisce. Un
+test che non fallisce quando il codice è sbagliato è un verde che non prova nulla.
 
 ## Non implementato
 
@@ -126,13 +132,18 @@ porta → use case → repository → endpoint → test.
    /api/v1/dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto.
    Nessuna migration: la vista esiste dalla `0015`.
 
+   **Le due semantiche che erano rimaste aperte sono state decise**, nella fetta A e
+   con il client davanti, che era la condizione: `written_off_total` è il nono
+   numero, ed è il **residuo** e non l'importo; il credito da sovrapagamento resta
+   fuori dal riepilogo e si evidenzia per addebito. Vedi
+   [ADR-040](08-decisioni.md#adr-040) e
+   [l'esito](11-piani-conclusi.md#esito-completare-il-prodotto-fetta-a).
+
    La voce si tiene perché la sua conclusione — «sbloccata non vuol dire
    prioritaria», e la finestra sulle semantiche la chiude il **primo client** e non
-   l'esistenza dell'endpoint — resta vera e generale, e perché quella finestra
-   adesso **si è chiusa**: le due semantiche non decise (se `written_off` sia una
-   perdita a sé, se il credito da sovrapagamento vada mostrato) sono ancora aperte
-   e cambiarle ora è una rottura. Sono scritte nel tipo di dominio `OwnerDashboard`
-   e nel DTO, così chi le deciderà le trova dove guarderà.
+   l'esistenza dell'endpoint — resta vera e generale, e vale per la prossima cosa a
+   buon mercato che sembrerà ovvia. La finestra si è chiusa nel modo previsto:
+   costruendo il client, non scrivendo l'endpoint.
 
    L'eccezione che quella conclusione ammetteva — «vale se serve qualcosa da
    mostrare presto» — è esattamente il caso che si è verificato: la dashboard
@@ -151,14 +162,17 @@ l'OCR (punto 1); allargare gli owner ad avatar, spese e pagamenti è additivo e 
 quando quei moduli esistono. Il resoconto è in fondo:
 [Piano — Documenti, fetta 1](11-piani-conclusi.md#piano-documenti-fetta-1).
 
-**Pagamenti** è implementato nella fetta 1: incasso registrato dallo staff,
-dichiarazione dell'inquilino in `pending`, conferma e rifiuto, elenco e dettaglio dei
-pagamenti di un addebito, idempotenza fornita dal client, e stato dell'addebito
+**Pagamenti** è implementato nella fetta 1 e **completato dal lato del proprietario
+nella fetta A**: incasso registrato dallo staff, dichiarazione dell'inquilino in
+`pending`, conferma e rifiuto, dettaglio, elenco di un addebito e — dalla fetta A —
+la **collezione dell'organizzazione** con i filtri `status` e `lease_id`, che è la
+coda delle dichiarazioni. Idempotenza fornita dal client, e stato dell'addebito
 ricalcolato dai pagamenti. Restano fuori, e non per dimenticanza, i rimborsi, i
 provider veri con i loro webhook, i pagamenti di quote e regolamenti — che restano
 fuori **per sempre**, non in attesa: vedi sotto — e il
-pagamento della bolletta al fornitore, che non è modellato affatto. Il resoconto è in
-fondo: [Piano — Pagamenti, fetta 1](11-piani-conclusi.md#piano-pagamenti-fetta-1).
+pagamento della bolletta al fornitore, che non è modellato affatto. I resoconti sono
+in fondo: [Piano — Pagamenti, fetta 1](11-piani-conclusi.md#piano-pagamenti-fetta-1)
+e [Piano — Completare il prodotto, fetta A](11-piani-conclusi.md#piano-completare-il-prodotto).
 
 **Spese co-living** è implementato nella fetta 1: gruppi con chi li crea già dentro,
 composizione con uscita e rientro, spese ripartite `equal` e `weighted` con la somma
@@ -219,7 +233,7 @@ cambia il contesto.
 | `retention_until` non viene applicato da nessuno | La colonna esiste e nessuna riga la valorizza; anche valorizzata, nessun job la legge. Lo schema la prevede come job applicativo e non come trigger, deliberatamente | Prima del primo dato reale soggetto a un obbligo di conservazione |
 | Il caricamento tiene il file intero in memoria | `UploadDocument` riceve `Vec<u8>` e lo passa allo storage. Con il limite di 25 MiB e poche richieste concorrenti è sostenibile; non lo è con caricamenti grandi e concorrenza alta | Quando i caricamenti superano le decine di MiB, o quando il profilo di memoria dell'API lo mostra. Lo streaming verso lo storage richiede di cambiare la firma della porta |
 | Il caricamento apre due transazioni | La prima verifica che l'owner sia visibile prima di scrivere l'oggetto, la seconda registra la riga: l'oggetto va scritto fuori transazione, e senza la verifica preliminare chiunque potrebbe riempire il bucket puntando a identificatori a caso | Se il costo si vede sul pool di connessioni. La verifica non si toglie: è ciò che impedisce di scrivere byte per una richiesta che finirà `404` |
-| L'incasso non attribuito è invisibile a chi ha pagato | `payments_select` mostra la riga a staff, pagante e incassante. Uno staff che registri un incasso senza valorizzare `payer_user_id` produce un pagamento che l'inquilino **non vede nel proprio elenco**, pur vedendone l'effetto in `paid_amount` sul saldo. È lecito — un bonifico da un conto che non si sa a chi ricondurre esiste — ma oggi è anche il comportamento di chi semplicemente omette il campo, cioè il caso più facile | Con il primo client: è lì che si vede se l'attribuzione debba diventare obbligatoria, o se convenga dedurla dalle parti del contratto |
+| ~~L'incasso non attribuito è invisibile a chi ha pagato~~ — **chiuso** dalla fetta A, e non toccando la colonna | La domanda era «obbligatorio, o dedotto dalle parti?»: **nessuno dei due**. Obbligarlo toglierebbe all'API il modo di dire «non attribuito», che è un caso vero; dedurlo non si può, perché un contratto ha spesso più inquilini con le loro quote, e una parte che non ha ancora accettato l'invito non ha un `user_id` a cui attribuire nulla. Il difetto era che ometterlo fosse il **default**, e il rimedio sta nel form: nessun vuoto inviabile, e una voce «non attribuito» che porta scritta la sua conseguenza. Vedi [ADR-040](08-decisioni.md#adr-040) | Chiuso |
 | Nessuna via per ritirare una dichiarazione | `payments_update` è staff soltanto, quindi chi dichiara di aver pagato può creare qualcosa che poi non può disfare. L'uscita esiste ed è il rifiuto dello staff, ma l'inquilino che si accorge subito di aver sbagliato importo non ha rimedio proprio. Darglielo non è una rotta in più: richiede una policy che ammetta l'`UPDATE` del pagante sulla **propria** riga in `pending`, cioè una migration e un secondo `WITH CHECK` da scrivere con attenzione | Se il caso si presenta davvero. Documentato nell'API perché è controintuitivo |
 | `refunded_amount` è sottratto e non è mai valorizzato | Il repository somma `amount - refunded_amount` come fa la vista, e la colonna vale sempre zero. È deliberato — è ciò che rende la formula *la stessa* il giorno in cui non varrà più zero — e va saputo, perché letto oggi sembra codice per un caso che non esiste | Con i rimborsi, che sono anche il momento in cui la `GRANT` della `0025` va allargata |
 | ~~Un coinquilino non può scoprire l'`user_id` di un altro~~ — **chiuso** dalla migration `0030`, vedi [l'esito](11-piani-conclusi.md#esito-coinquilini-visibili-fetta-1) | Era bloccante nel co-living per stanza: con `lease_type = 'room'` ognuno ha il proprio contratto, `can_access_lease` è per contratto, e l'`user_id` dei coinquilini non compariva da nessuna parte. `GET /properties/{id}/residents` lo restituisce, e il perimetro è la **casa** | Chiuso |
@@ -231,36 +245,38 @@ cambia il contesto.
 | Il bundle del client è un pezzo solo, 597 kB (181 kB compressi) | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette. Su desktop non si nota, e il proprietario è su desktop; l'inquilino della fetta 2 è su rete mobile e lo noterà. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | Con la fetta 2, insieme al percorso dell'inquilino |
 | Gli allegati si scaricano da un link senza `Authorization` | `GET /documents/{id}/content` risponde `307` verso un URL pre-firmato, e il client ci arriva con un `<a href>` — che è ciò che permette al browser di scaricare invece di tenere i byte in memoria. Il link però non porta il token, quindi funziona solo finché la rotta accetta la richiesta dal contesto della scheda. Oggi funziona; il giorno in cui l'API pretendesse l'header su quella rotta, il download smetterebbe di funzionare **senza che nulla in questo repository cambi** | Se il download smette di funzionare, o quando si decida come firmare i link lato client. L'alternativa è un `fetch` con il token seguito da un `blob:` URL, che tiene il file in memoria — accettabile per un PDF, non per una scansione da 25 MB |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
+| La coda delle dichiarazioni non si filtra per immobile | `GET /api/v1/payments` ha `status` e `lease_id`, e non `property_id`: `app.payments` non ha quella colonna e il legame passerebbe da due salti (`payment → charge → lease → property`). Con pochi immobili la coda sta in una pagina e il filtro non compra niente; con decine diventa lunga | Quando gli immobili per organizzazione passano la decina, o se qualcuno chiede «i pagamenti di questa casa» |
+| Un filtro parametrico su un enum non usa un indice parziale | Misurato, non dedotto: `($1::text IS NULL OR status = $1::app.payment_status)` **non** tocca `payments_pending_ix`, perché il cast `text → enum` passa da `enum_in`, che PostgreSQL dichiara `STABLE` e non `IMMUTABLE`, e non viene quindi ridotto a una costante. Il rimedio è nel repository dei pagamenti — una condizione ridondante che nomina il letterale — ed è **locale a quella query**. Ogni altro elenco del progetto usa lo stesso pattern parametrico su uno stato, e nessuno di quelli ha oggi un indice parziale da mancare | Quando un altro elenco filtrato per stato acquisisce un indice parziale. La misura e il rimedio stanno in [ADR-040](08-decisioni.md#adr-040) |
+| Un `.env` più vecchio dello storage impedisce l'avvio dell'API | `.env.example` ha quattro variabili `PROPFLOW__STORAGE__*` che un file copiato prima della fetta dei documenti non ha, e l'API si ferma all'avvio con `missing field access_key_id for key "default.storage"`. È la validazione della configurazione che fa il suo mestiere, ma il messaggio non dice **da dove** debba arrivare la variabile né che `.env.example` la porti | Quando qualcuno lo incontra. Il rimedio non è un default — uno storage configurato a caso è peggio di un avvio fallito — ma un messaggio che nomini `.env.example` |
 
 ## Prossimo passo suggerito
 
-**La fetta A del [piano per completare il prodotto](#piano-completare-il-prodotto)**:
-i pagamenti dal lato del proprietario.
+**La fetta B: l'inquilino** — il piano è più sotto, e il passo che lo apre è `B0`,
+l'endpoint delle organizzazioni.
 
-È la scelta contro l'istinto, e la ragione sta nella decisione 1 di quel piano: il
-percorso dell'inquilino è la metà che manca, ma **il giro del denaro è rotto adesso**,
-per l'utente che già esiste. Dall'interfaccia un addebito si emette e poi si può solo
-annullare o stornare — l'insoluto sale e non scende mai, e l'unico modo di farlo
-scendere è rinunciare ai soldi.
+**La fetta A è conclusa**: il giro del denaro dal lato del proprietario è chiuso, e
+l'insoluto adesso scende. Il resoconto è in fondo all'archivio:
+[Piano — Completare il prodotto, fetta A](11-piani-conclusi.md#piano-completare-il-prodotto)
+· [esito](11-piani-conclusi.md#esito-completare-il-prodotto-fetta-a).
 
-Il percorso dell'inquilino è la fetta B, ed è già scomposta: adesso — per la prima
-volta — è provabile con dati veri, perché un inquilino non esiste finché un
-proprietario non lo invita.
+**La fetta A-bis — le notifiche — resta aperta e viene prima o dopo la B a
+scelta.** Sono i passi 9 e 10 del piano archiviato, dichiarati come punto di taglio
+fin dalla pianificazione. Vengono *prima* se l'onboarding deve funzionare per utenti
+veri, perché oggi il token d'invito lo consegna a mano il proprietario; vengono *dopo*
+se il fuoco è la copertura funzionale. Non c'è una dipendenza tecnica in nessuna delle
+due direzioni.
 
-Le **due semantiche della dashboard** che erano rimaste aperte sono state decise, e
-sono nel piano: `written_off` diventa un nono numero (decisione 2, insieme allo storno
-parziale, perché altrimenti conterebbe metà delle perdite) e il credito da
-sovrapagamento resta visibile per addebito e non in dashboard (decisione 4).
+Il percorso dell'inquilino è **provabile con dati veri per la prima volta**, perché un
+inquilino non esiste finché un proprietario non lo invita — e ora c'è anche un
+proprietario che sa incassare.
 
-Resta anche la decisione che continua a bloccare più valore di ogni riga di codice,
-ed è quella qui sotto: **il fornitore di OCR**.
+Le **due semantiche della dashboard** che erano rimaste aperte **sono state decise**:
+`written_off_total` è il nono numero, ed è il residuo e non l'importo; il credito da
+sovrapagamento resta fuori dal riepilogo e si evidenzia per addebito. Vedi
+[ADR-040](08-decisioni.md#adr-040).
 
-La sezione che segue sulla dashboard è stata scritta quando la dashboard non c'era.
-Si tiene perché la conclusione a cui arriva — «sbloccata non è prioritaria» — è
-generale e vale per la prossima cosa a buon mercato che sembrerà ovvia; e perché la
-sua eccezione, «vale se serve qualcosa da mostrare presto», è precisamente il caso
-che si è verificato: la dashboard è stata fatta come **passo 1 del client**, cioè per
-la ragione che quella sezione ammetteva.
+Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
+quella qui sotto: **il fornitore di OCR**.
 
 «Far sì che i coinquilini si vedano» è stato fatto: vedi
 [l'esito](11-piani-conclusi.md#esito-coinquilini-visibili-fetta-1). L'**OCR delle bollette** è stato fatto:
@@ -271,10 +287,20 @@ rimanda deliberatamente la scelta del fornitore.
 **Il perimetro funzionale dell'MVP è chiuso.** Non resta alcun modulo che abbia lo
 schema e non il codice. Ne segue un cambiamento nel modo di scegliere che cosa fare, e
 vale la pena dirlo perché finora l'ordine se lo dettava lo schema: da qui in poi
-**l'ordine non è più derivabile**. Le prossime decisioni sono di prodotto — quali sono i
-due numeri della dashboard la cui semantica non è decisa, se serva un client mostrabile
-presto, se l'accuratezza dell'OCR valga il costo di misurarla — e non hanno una risposta
-che si possa leggere in `migrations/`.
+**l'ordine non è più derivabile**. Le prossime decisioni sono di prodotto — se
+l'onboarding debba funzionare senza che il proprietario consegni un codice a mano, se
+l'accuratezza dell'OCR valga il costo di misurarla, dove il prodotto verrà esercito —
+e non hanno una risposta che si possa leggere in `migrations/`.
+
+La misura con cui la fetta A era stata pianificata, rifatta: delle **88 rotte
+documentate** — 86 di prodotto più le due di salute — **29 non le chiama nessuno**, ed
+erano 37 su 87. Le rimanenti sono quasi tutte in due blocchi, che sono i passi da B2 a
+B6: **le segnalazioni** (13 rotte) e le **spese co-living con i regolamenti** (15).
+Più l'archiviazione di un documento, che è il passo B8.
+
+Il conteggio va letto con la sua avvertenza: «chiamata dal client» significa che una
+funzione in `apps/web/src/api/endpoints.ts` la nomina, non che ogni suo parametro sia
+raggiungibile dall'interfaccia.
 
 ### La decisione che ora blocca più valore di ogni riga di codice
 
@@ -304,10 +330,18 @@ job abbandonato resta `running` per sempre**. La prima si vede appena si costrui
 l'interfaccia di un gruppo di spesa; le altre due no, ed è la ragione per cui stanno
 scritte.
 
-### Perché la dashboard resta ultima
+### Perché la dashboard doveva restare ultima
 
-Va detto qui perché è la conclusione **sbagliata** che questa fetta invitava a trarre, e
-il piano dei pagamenti l'aveva quasi presa.
+**Scritta quando la dashboard non c'era, e tenuta perché la sua conclusione è
+generale**: vale per la prossima cosa a buon mercato che sembrerà ovvia. Diceva perché
+era la conclusione **sbagliata** che la fetta contabile invitava a trarre, e il piano
+dei pagamenti l'aveva quasi presa.
+
+Il seguito ha dato ragione a entrambe le parti dell'argomento: la dashboard è stata
+fatta come **passo 1 del client**, cioè per l'eccezione che questa sezione ammetteva
+(«vale se serve qualcosa da mostrare presto»), e le sue due semantiche aperte sono
+state decise **una fetta dopo, con il client davanti** — che è precisamente quando
+questa sezione diceva che si sarebbero potute decidere.
 
 Fino a questa fetta due dei suoi numeri mentivano: `total_outstanding` contava come
 credito anche gli addebiti annullati e stornati — corretto dalla `0024`,
@@ -326,15 +360,25 @@ sono decise**, ed è ciò che questo progetto tiene fuori per principio — la s
 ragione per cui `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere
 un campo dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura.
 
-Le due domande, da decidere **prima** di scrivere l'endpoint e non dopo:
+Le due domande erano queste, **e hanno una risposta dalla fetta A**. Restano scritte
+nella forma in cui erano aperte perché è quella che mostra che cosa il primo client
+serviva a decidere:
 
-- **`written_off` va riportato a parte come perdita?** Oggi esce dall'insoluto insieme
-  a `void`, e i due sono distinti nello stato e indistinguibili in dashboard. La
-  distinzione conta nei report, e la dashboard è il primo report;
-- **il credito da sovrapagamento va mostrato?** `outstanding_amount` negativo esiste ed
-  è escluso dal totale dal `WHERE outstanding_amount > 0` della vista. Non compensa gli
-  altri insoluti — probabilmente giusto — ma sparisce del tutto, e un credito verso
-  l'inquilino che non compare da nessuna parte è un numero che qualcuno cercherà.
+- **`written_off` va riportato a parte come perdita?** *Sì*, ed è il nono numero
+  `written_off_total`. Usciva dall'insoluto insieme a `void`, e i due erano distinti
+  nello stato e indistinguibili in dashboard; la distinzione conta nei report, e la
+  dashboard è il primo report. La risposta ha portato con sé una seconda decisione che
+  la domanda non conteneva — **lo storno esteso a `partially_paid`** — senza la quale
+  il numero avrebbe contato metà delle perdite;
+- **il credito da sovrapagamento va mostrato?** *Sì, ma non qui.* `outstanding_amount`
+  negativo esiste ed è escluso dal totale dal `WHERE outstanding_amount > 0` della
+  vista. Non compensa gli altri insoluti — ed è giusto, un credito non è un insoluto
+  negativo — e non sparisce più del tutto: si evidenzia **per addebito**, nell'elenco
+  e nella scheda, con la parola accanto al numero.
+
+Entrambe in [ADR-040](08-decisioni.md#adr-040). Ed erano additive quando sono state
+prese, che è esattamente ciò che questa sezione sosteneva: la finestra l'ha chiusa il
+primo client, non l'esistenza dell'endpoint.
 
 L'unico argomento per anticiparla, e va riconosciuto perché è vero: è la prima
 superficie di lettura che attraversa **tutti** i moduli insieme, quindi il primo posto
@@ -353,291 +397,96 @@ stessi due stati della vista invece di sommare gli importi e basta.
 Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
 adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
 proprietario. Va implementata prima di considerare l'onboarding pronto per utenti
-reali, ed è oggi l'ultima porta senza implementazione — e da questa fetta ha un secondo
-consumatore in attesa: una dichiarazione di pagamento in `pending` non avvisa nessuno,
-quindi lo staff la scopre solo guardando.
+reali, ed è oggi l'ultima porta senza implementazione.
+
+**Dalla fetta A ha un secondo consumatore in attesa, e la coda ne attenua il
+sintomo**: una dichiarazione di pagamento in `pending` non avvisa nessuno, ma da
+`/pagamenti` si trova senza sapere quale addebito guardare. Prima non si trovava
+affatto. La notifica resta la cosa che toglie il «guardare», ed è la fetta A-bis qui
+sotto.
 
 ---
 
-<a id="piano-completare-il-prodotto"></a>
+<a id="piano-completare-il-prodotto-cosa-resta"></a>
 
-## Piano — Completare il prodotto
+## Piano — Completare il prodotto: che cosa resta
 
-Pianificato il **4 settembre 2026**. Il piano resta qui come è stato scritto finché
-non è concluso; a esito scritto si sposta in
-[11 — Piani conclusi](11-piani-conclusi.md), nello stesso commit.
+La fetta A è conclusa. Il piano che l'aveva prodotta è archiviato per intero in
+[11 — Piani conclusi](11-piani-conclusi.md#piano-completare-il-prodotto), con il suo
+esito, e **le sue otto decisioni valgono ancora**: quel documento resta la fonte del
+*perché*, e questo del *cosa*.
 
-### Obiettivo
+Le due liste si sovrappongono di proposito. L'archivio non si riscrive mai, quindi
+contiene anche le fette B e C come erano state pensate; questo file si riscrive a ogni
+fetta, e contiene ciò che resta con il dettaglio per eseguirlo. Chi legge solo questo
+può eseguire; chi vuole sapere perché va di là.
 
-Chiudere la distanza fra l'API e il prodotto. Misurata, non stimata: delle **87 rotte
-documentate** il client ne chiama 50, e **37 non le chiama nessuno**. Più quattro
-debiti trasversali del client e l'ultima porta senza adattatore.
+### Fetta A-bis — le notifiche
 
-Non è una fetta sola, e dichiararlo è metà del piano: 37 rotte su tre moduli in un
-colpo è precisamente il tipo di lavoro che si abbandona a metà, e che poi si rilegge
-come «quasi finito» per mesi. Sono **due fette con un punto di taglio ciascuna**, più
-una terza che si nomina e non si pianifica.
+I passi **9 e 10** del piano archiviato, dichiarati come punto di taglio fin dalla
+pianificazione: dopo A8 il proprietario ha un modulo contabile completo con ciò che
+l'API già sa fare, e le notifiche sono un fronte diverso — tocca una **porta**, non
+una schermata.
 
-**Fetta A — il giro del denaro si chiude.** Pagamenti dal lato del proprietario, lo
-storno esteso agli addebiti parzialmente pagati, il nono numero della dashboard, il
-credito da sovrapagamento visibile, e l'adattatore delle notifiche.
+Va prima della fetta B se l'onboarding deve funzionare per utenti veri: oggi il token
+d'invito lo consegna a mano il proprietario, e l'interfaccia lo dice apertamente
+invece di fingere. Va dopo se il fuoco è la copertura funzionale. **Nessuna dipendenza
+tecnica in nessuna delle due direzioni.**
 
-**Fetta B — l'inquilino.** L'endpoint delle organizzazioni, segnalazioni, spese
-co-living, dichiarazione di pagamento, allegati sugli owner rimasti, e i due debiti
-del client che l'inquilino incontrerebbe per primo.
-
-**Fetta C — prima degli utenti veri.** Nominata e **non pianificata**: rate limiting
-per IP, verifica dell'email bloccante, manifest Kubernetes, backup e restore,
-metriche, alerting, cron per le partizioni di `audit_log`. Non è dimenticanza ed è la
-ragione per cui ha un nome: dipendono da **dove** il prodotto viene esercito, che non
-è deciso, e pianificarle adesso significherebbe scrivere un piano su un'ipotesi.
-
-**Fuori, e non per dimenticanza:**
-
-- **il fornitore di OCR.** Resta la decisione che blocca più valore di ogni riga di
-  codice, ed è una decisione sul trattamento dei dati personali: non è un compito di
-  sviluppo e non va messa in coda con quelli. Vedi
-  [ADR-037](08-decisioni.md#adr-037);
-- **il triage AI delle segnalazioni**, che dipende dalla stessa scelta e in più ha
-  una domanda di prodotto sua — con quale soglia di confidenza una macchina possa
-  scrivere la categoria di una segnalazione;
-- **la traduzione in inglese.** Il catalogo esiste dal primo giorno, quindi aggiungere
-  una lingua è un file in più e non una riscrittura: è una decisione di mercato, non
-  di completezza, e non blocca nulla;
-- **il mobile nativo**, che [ADR-039](08-decisioni.md#adr-039) rimanda alla
-  conversazione sulle notifiche push — cioè a dopo che `Notifier` esiste, non prima;
-- **la ricerca full-text**, che è V2 e va alimentata dall'outbox.
-
-### Che cosa è stato deciso prima di pianificare
-
-Sei scelte, prese esplicitamente. Le ultime due sono nate **leggendo il codice** dopo
-la prima stesura, e hanno cambiato la decomposizione: vedi le decisioni 7 e 8.
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| Ordine | pagamenti, poi inquilino | l'inquilino per intero subito, pagamenti compresi |
-| Perdite | nono numero in dashboard, **dentro la fetta A** | lasciare `written_off` indistinguibile da `void` |
-| Sovrapagamenti | visibili per addebito, **non** in dashboard | un decimo riquadro, oppure compensare l'insoluto |
-| Porte senza adattatore | `Notifier` dentro, OCR fuori | entrambe, o nessuna |
-| Posta in sviluppo | raccoglitore SMTP locale nel compose | aspettare un server vero, o un fornitore con API |
-| Coda dei pagamenti | `GET /api/v1/payments`, **dentro la fetta A** | solo per addebito, senza coda |
-
-### Decisioni prese, con il perché
-
-#### 1. I pagamenti prima dell'inquilino, ed è una scelta contro l'istinto
-
-L'istinto dice l'inquilino: è metà del prodotto, è la parte che manca, ed è appena
-diventata provabile con dati veri. È un buon argomento e non è quello decisivo.
-
-Il decisivo è che **il giro del denaro è rotto adesso, per l'utente che già esiste**.
-Dall'interfaccia un proprietario emette un addebito e poi può solo annullarlo o
-stornarlo: **non può registrare un incasso**. Ne segue che l'insoluto in dashboard
-sale e non scende mai, e che l'unico modo di farlo scendere è rinunciare ai soldi.
-Il numero più in vista del prodotto è oggi un numero che mente per omissione.
-
-**Alternativa scartata: l'inquilino per intero, pagamenti compresi.** Racconto di
-prodotto più coerente, fetta molto più grande, e il buco dei pagamenti resta aperto
-per tutto il tempo in cui la si costruisce.
-
-#### 2. Il nono numero e lo storno parziale nella **stessa** fetta
-
-`written_off_total` da solo sarebbe un numero contabile che conta **metà** delle
-perdite, e per una ragione strutturale: oggi `Charge::write_off` è ammesso dal solo
-`issued`, quindi un addebito su cui è entrato del denaro non è stornabile. Il caso
-non è di scuola — l'inquilino che versa trecento euro su ottocento e sparisce è
-precisamente il caso in cui una perdita si materializza.
-
-Un numero che dice meno del proprio nome è peggio di un numero assente: chi lo legge
-non ha modo di sapere che è parziale. Quindi le due cose stanno insieme, e stanno
-nella fetta A perché estendere lo storno richiede di rispondere a «che ne è del
-denaro già incassato», che è una domanda del modulo dei pagamenti.
-
-**Lo storno sì, l'annullamento no.** `void` su un addebito parzialmente pagato
-significherebbe che del denaro è stato ricevuto contro una pretesa che non è mai
-esistita, e quella è una domanda a cui questo piano non risponde. Lo storno non ce
-l'ha: il denaro incassato resta incassato, e si rinuncia al resto. La distinzione è
-già scritta nel dominio, in `Charge::void`, e va rispettata invece che appianata.
-
-#### 3. La perdita è il **residuo**, non l'importo
-
-Ne segue dalla decisione 2 e va scritta perché è il modo più facile di sbagliare
-questo numero. Un addebito da 800 € con 300 € incassati e poi stornato è una perdita
-di **500**, non di 800: gli altri trecento sono entrati.
-
-Quindi `written_off_total` somma `amount - paid_amount` sugli addebiti `written_off`,
-e non `amount`. La vista sa già calcolare `paid_amount`; quello che non si può usare
-è `outstanding_amount`, che dalla migration `0024` vale `0.00` proprio su
-`written_off`. È la stessa colonna che rende il numero necessario e che non può
-produrlo.
-
-#### 4. Il credito da sovrapagamento si **evidenzia**, e non si filtra
-
-Un `outstanding_amount` negativo è un credito verso l'inquilino, e oggi non compare
-da nessuna parte perché la vista somma con `WHERE outstanding_amount > 0`.
-
-Resta fuori dalla dashboard — è un cruscotto di ciò che è dovuto, e un credito non è
-un insoluto negativo — e nell'elenco degli addebiti **si evidenzia**, come già fa.
-
-**Filtrarlo non si può, e la prima stesura di questo piano lo dava per fatto.** Un
-sovrapagamento porta lo stato ricalcolato a `paid`, quindi `?outstanding=true` lo
-esclude per costruzione; e `ChargeQuery` non ha nulla sul segno del residuo. Un
-filtro vero richiederebbe un parametro nuovo e un indice parziale che lo regga, cioè
-il lavoro che `charges_outstanding_ix` è costato per l'insoluto. È rinviato **con la
-sua ragione**, e non è una dimenticanza: il caso d'uso — «mostrami tutti i crediti» —
-non è ancora nato, e costruire l'indice prima del caso è il modo di costruire quello
-sbagliato.
-
-**Alternativa scartata: compensare `total_outstanding`.** Cambierebbe il significato
-di un numero che un client legge già, quindi sarebbe una rottura, e nasconderebbe
-esattamente lo scarto che la contabilità esiste per scoprire.
-
-#### 5. `Notifier` dentro, adattatore SMTP, e un raccoglitore locale in sviluppo
-
-È l'ultima porta dichiarata e senza implementazione, e ha **due** consumatori in
-attesa: l'invito, che oggi passa da «copia questo codice e mandalo tu», e — dalla
-fetta A — la dichiarazione di pagamento in `pending`.
-
-**SMTP e non un fornitore con la sua API**, per la stessa ragione per cui
-`ObjectStorage` ha un adattatore solo che parla anche con MinIO: con SMTP il
-fornitore diventa un **dato di configurazione** invece di un ramo del codice, e
-cambiarlo è una variabile d'ambiente. Un adattatore per l'API di un fornitore
-specifico si scrive quando quel fornitore offre qualcosa che SMTP non ha —
-tracciamento delle aperture, template remoti — che è roba di V2.
-
-**In sviluppo l'adattatore parla con un raccoglitore SMTP locale nel compose**, come
-MinIO sta al posto di S3: si scrive e si verifica senza credenziali di nessuno, e
-server e mittente veri restano configurazione di deploy. Ne segue che questa fetta
-**non è bloccata** da una scelta di fornitore, che era il rischio della prima stesura.
-
-**Il token dell'invito continua a tornare nella risposta HTTP.** Toglierlo sarebbe una
-rottura, e soprattutto lascerebbe senza rimedio il caso in cui l'email non arriva. Il
-client mostra «invito inviato a …» e tiene il codice sotto un dettaglio richiudibile,
-che è la verità: l'email è partita, e se non arriva c'è ancora una via.
-
-#### 6. L'endpoint delle organizzazioni **prima** della fetta B, non dopo
-
-Il selettore dell'organizzazione lavora oggi su ciò che *quel browser* ha conosciuto,
-perché nessun endpoint elenca le organizzazioni di un utente. Per il proprietario, che
-ne ha una, è indistinguibile da un elenco vero. **Per l'inquilino non lo è**: su un
-browser mai usato non vedrebbe l'organizzazione del proprietario finché non riaccetta
-un invito, e il sintomo sarebbe una schermata vuota senza errore — il modo peggiore di
-sbagliare, e quello che la fetta del client ha già speso una decisione per evitare.
-
-Quindi è il passo **B0** e non un debito da chiudere dopo: costruirci sopra le
-schermate dell'inquilino significherebbe costruirle su un difetto noto.
-
-La rotta è `GET /api/v1/organizations`, senza prefisso `me`: `organizations_select` è
-già `is_org_member`, quindi la Row Level Security restringe da sé alle proprie, e il
-percorso dice il vero senza aggiungere una parola.
-
-#### 7. `GET /api/v1/payments`, la rotta che manca perché la coda esista
-
-**Trovata leggendo il codice, e non c'era nella prima stesura di questo piano.**
-`PaymentQuery` ha `charge_id` **obbligatorio**, non esiste una rotta di collezione, e
-un filtro sullo stato non c'è — con la ragione scritta nel dominio: «i pagamenti di un
-addebito sono pochi, e un filtro su un elenco che sta in una pagina non compra
-niente». Vero per l'elenco *di un addebito*, e falso per la domanda che la fetta A
-pone: **quali dichiarazioni aspettano una conferma, in tutta l'organizzazione**.
-
-Senza quella rotta la coda non esiste, il proprietario scopre una dichiarazione solo
-aprendo gli addebiti a uno a uno, e la notifica della decisione 5 avviserebbe di
-qualcosa che poi non si trova.
-
-`GET /api/v1/payments`, paginata a cursore come le altre, con `?status=` e
-`?lease_id=`. L'organizzazione la restringe la Row Level Security, come per ogni altra
-collezione: non serve un parametro. `PaymentQuery` diventa quindi `charge_id:
-Option<ChargeId>` più i filtri nuovi, e la rotta annidata esistente resta com'è —
-passa lo stesso oggetto con l'addebito valorizzato.
-
-**Ne segue un indice.** Il filtro sullo stato su una collezione che cresce con ogni
-incasso vuole un indice parziale su `pending`, che è la stessa forma di
-`charges_outstanding_ix` e di `tickets_open_ix`. Va nella stessa migration del nono
-numero.
-
-#### 8. L'invito **non può** passare dall'outbox, e l'istinto dice il contrario
-
-È la trappola più cara di questa fetta e va scritta come decisione, perché la via
-sbagliata è quella che sembra giusta.
-
-L'istinto — corretto ovunque altrove in questo progetto — è: lo use case emette un
-evento nella stessa transazione, il worker lo consuma e manda l'email. È il pattern
-dell'outbox, ed è la ragione per cui la fetta dell'OCR dice «l'esito di un caricamento
-non dipende dalla disponibilità del fornitore».
-
-**Qui non si può, e la ragione è nel dominio.** Il token d'invito in chiaro esiste
-**solo** nella risposta HTTP: in database ne resta lo hash, e gli eventi di dominio
-non trasportano valori né credenziali — «identificatori e nomi di campo, non valori».
-Un worker che leggesse `InvitationIssued` non avrebbe niente da spedire. Metterci il
-token dentro significherebbe scrivere una credenziale in una tabella che esiste per
-essere pubblicata su un broker, che è il contrario di ciò per cui il token è hashato.
-
-Quindi l'invio dell'invito è **dopo il commit, best-effort**: se il fornitore di posta
-non risponde, l'invito resta valido e il token resta nella risposta. Il fallimento va
-nei log senza il destinatario e senza il token, e **non** diventa un errore HTTP —
-l'invito è stato creato, dirlo fallito sarebbe falso.
-
-**La dichiarazione di pagamento non ha questo vincolo**: non c'è alcuna credenziale
-da recapitare, quindi potrebbe passare dall'outbox. In questa fetta segue comunque la
-stessa via — dopo il commit, best-effort — per non avere **due** meccanismi di invio
-appena nato il primo. Il giorno in cui le notifiche diventeranno molte, l'outbox è la
-strada, e questa nota è scritta perché chi ci arriverà sappia che per l'invito quella
-strada resta chiusa.
-
-### Decomposizione
-
-#### Fetta A — il giro del denaro si chiude
-
-Undici passi. Il **punto di taglio è dopo A8**: lì il proprietario ha un modulo
-contabile completo con quello che l'API già sa fare, e le notifiche sono una fetta
-A-bis.
-
-1. **Dominio: lo storno da `partially_paid`.** `Charge::write_off` ammette anche quello
-   stato; `void` no, e il commento che lo spiega resta. Test unitari sulle due
-   transizioni e sul rifiuto di `void`. Nessuna migration: la `0023` concede già
-   l'`UPDATE` sulla sola `status`.
-2. **Migration: il nono numero e l'indice della coda.** `CREATE OR REPLACE VIEW
-   app.v_owner_dashboard` in una migration nuova — lo schema è append-only, quindi la
-   `0015` non si tocca — con `written_off_total` calcolato come
-   `SUM(amount - paid_amount)` sugli addebiti `written_off`. Nella stessa migration
-   l'indice parziale su `app.payments` per `status = 'pending'` (decisione 7).
-   Invarianti dello schema, e il controllo che la vista resti `security_invoker`.
-3. **Backend: il nono numero esce.** `OwnerDashboard`, il repository, il DTO, il test
-   di contratto che lo verifica su un addebito **parzialmente pagato** e poi stornato.
-4. **Backend: `GET /api/v1/payments`.** `PaymentQuery` con `charge_id` opzionale più
-   `status` e `lease_id`, repository, use case, rotta, registrazione in `openapi.rs`,
-   test di contratto — compreso che un inquilino veda i **propri** pagamenti e non
-   quelli altrui, che è la policy e non un ramo sul ruolo.
-5. **Client: il livello dati dei pagamenti.** Le sei rotte più quella nuova, con la
-   chiave di idempotenza generata **una volta per intento** e riusata a ogni
-   ritentativo.
-6. **Client: registrare un incasso.** Dal dettaglio di un addebito. `payer_user_id` è
-   una scelta esplicita fra le parti del contratto — o un «non attribuito» dichiarato
-   — e non un campo che si dimentica.
-7. **Client: la coda delle dichiarazioni.** Elenco dei pagamenti `pending`
-   dell'organizzazione, conferma e rifiuto, con la spiegazione di che cosa muove il
-   saldo e che cosa no.
-8. **Client: i due numeri.** Il nono riquadro in dashboard e il credito evidenziato
-   nell'elenco addebiti.
-9. **`Notifier`: la porta e l'adattatore.** La variante `PaymentDeclared` in
+1. **`Notifier`: la porta e l'adattatore.** La variante `PaymentDeclared` in
    `NotificationContent` — oggi ce n'è **una sola**, `TenantInvitation` —
-   l'adattatore SMTP in `infrastructure`, il raccoglitore locale nel
+   l'adattatore SMTP in `propflow-infrastructure`, il raccoglitore SMTP locale nel
    `docker-compose.yml`, la configurazione in `AppConfig` e nelle tabelle di
    [07 — Operazioni](07-operazioni.md).
-10. **Gli invii.** Iniezione della porta in `InviteTenant` e in `DeclarePayment`:
-    firma degli use case, `AppState`, `Dependencies`, `main.rs` e l'harness dei test.
-    Invio **dopo il commit e best-effort** (decisione 8). Il client mostra «inviato» e
-    tiene il codice sotto un dettaglio.
-11. **Documentazione ed esito.** ADR per l'adattatore SMTP e per il nono numero;
-    aggiornamento di [05 — API](05-api.md); esito, e il piano si sposta nell'archivio.
+2. **Gli invii.** Iniezione della porta in `InviteTenant` e in `DeclarePayment`:
+   firma degli use case, `AppState`, `Dependencies`, `main.rs` e l'harness dei test.
+   Invio **dopo il commit e best-effort**. Il client mostra «inviato» e tiene il
+   codice sotto un dettaglio richiudibile.
 
-#### Fetta B — l'inquilino
+**Le decisioni 5 e 8 del piano archiviato governano questi due passi e vanno lette
+prima di toccarli.** In breve, e senza sostituire l'originale:
+
+- **SMTP e non un fornitore con la sua API**, per la stessa ragione per cui
+  `ObjectStorage` ha un adattatore solo che parla anche con MinIO: il fornitore
+  diventa un **dato di configurazione** invece di un ramo del codice;
+- **l'invito non può passare dall'outbox**, ed è la trappola più cara della fetta. Il
+  token in chiaro esiste **solo** nella risposta HTTP — in database ne resta lo hash,
+  e gli eventi di dominio non trasportano valori né credenziali — quindi un worker che
+  leggesse `TenantInvited` non avrebbe niente da spedire. Metterci il token dentro
+  significherebbe scrivere una credenziale in una tabella che esiste per essere
+  pubblicata su un broker. L'invio è **dopo il commit, best-effort**: se la posta non
+  risponde, l'invito resta valido, il token resta nella risposta, e il fallimento va
+  nei log **senza il destinatario e senza il token**;
+- **la dichiarazione di pagamento non ha quel vincolo** — non c'è una credenziale da
+  recapitare — ma segue la stessa via, per non avere **due** meccanismi di invio
+  appena nato il primo.
+
+**Le altre due trappole di questi passi**, dal piano archiviato:
+
+- **`Notifier` non è iniettata da nessuna parte.** `InviteTenant::new` prende tre
+  argomenti e nessuno è un `Notifier`. Non è «scrivere un adattatore»;
+- **l'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
+  `docs/04` vieta email, token e corpi nei log, e un client SMTP che registri la
+  richiesta li registra tutti e tre insieme. La porta ha già un `Debug` redatto, e
+  l'adattatore non deve annullarlo;
+- **un raccoglitore SMTP locale non è un fornitore vero.** Accetta tutto: non verifica
+  SPF, DKIM né i rimbalzi. Verifica che il messaggio parta e che cosa contiene, **non**
+  che sarebbe recapitato. È lo stesso limite di MinIO rispetto a S3.
+
+**Come si saprà che è finita:** un'email di invito che arriva davvero nel raccoglitore
+locale, con il token nel corpo e in **nessuna** riga di log.
+
+### Fetta B — l'inquilino
 
 Dieci passi. Il **punto di taglio è dopo B3**: con le segnalazioni complete
 l'inquilino ha un prodotto che sta in piedi, e le spese co-living sono una fetta
 B-bis.
 
 0. **Backend: `GET /api/v1/organizations`.** Use case di lettura, DTO, rotta, test di
-   contratto. Chiude il debito che il primo client ha trovato.
+   contratto. Chiude il debito che il primo client ha trovato. La rotta è senza
+   prefisso `me`: `organizations_select` è già `is_org_member`, quindi la Row Level
+   Security restringe da sé alle proprie, e il percorso dice il vero senza aggiungere
+   una parola (decisione 6 del piano archiviato).
 1. **Client: il selettore letto dall'API**, e non più dal `localStorage`. Quello resta
    solo per ricordare **quale** era attiva, che è una preferenza e non un elenco.
 2. **Client: segnalazioni, la lettura.** Apertura su un immobile, elenco con
@@ -651,8 +500,9 @@ B-bis.
    saldi con il netto.
 6. **Client: i regolamenti a due tempi.** Dichiarazione, conferma di chi riceve,
    rifiuto, ritiro di chi ha dichiarato.
-7. **Client: la dichiarazione di pagamento** dell'inquilino, con la chiave di
-   idempotenza della fetta A.
+7. **Client: la dichiarazione di pagamento** dell'inquilino. **La chiave di
+   idempotenza c'è già**: `@/api/idempotency`, dalla fetta A, con i suoi test. Va
+   riusata e non riscritta.
 8. **Client: gli allegati sugli owner rimasti** — immobile, stanza, contratto,
    segnalazione, addebito — e l'archiviazione di un documento.
 9. **Client: i due debiti che l'inquilino incontra.** Divisione del bundle per rotta,
@@ -660,86 +510,23 @@ B-bis.
    il coordinamento del refresh fra schede.
 10. **Documentazione ed esito.**
 
-### Trappole
+#### Le trappole della fetta B
 
-Tutte lette nel codice e nei documenti prima di scriverle qui. Le prime quattro sono
-state trovate **rileggendo il codice dopo la prima stesura del piano**, e ognuna
-avrebbe cambiato il lavoro a metà strada.
-
-**L'invito non può passare dall'outbox.** È la decisione 8, vista dal lato del
-difetto: il worker non ha il token in chiaro, e metterglielo in un evento
-significherebbe scrivere una credenziale in una tabella pensata per essere pubblicata.
-Chi arriva qui con l'abitudine dell'outbox — cioè chiunque abbia letto il resto del
-progetto — prende la strada sbagliata per la ragione giusta.
-
-**`Notifier` non è iniettata da nessuna parte.** `InviteTenant::new` prende tre
-argomenti e nessuno è un `Notifier`, e `NotificationContent` ha **una sola variante**.
-Il passo 9 non è «scrivere un adattatore»: tocca la porta, lo use case, `AppState`,
-`Dependencies`, `main.rs` e l'harness dei test.
-
-**`PaymentQuery` è per addebito, non per organizzazione.** `charge_id` è obbligatorio
-e non c'è filtro sullo stato, con una ragione scritta che vale per l'elenco di un
-addebito e non per la coda. Renderlo opzionale non deve cambiare il comportamento
-della rotta annidata, che continua a passare l'addebito valorizzato.
-
-**Il credito non è filtrabile lato server**, perché un sovrapagamento porta lo stato a
-`paid` e `?outstanding=true` lo esclude. Si evidenzia; filtrarlo è un parametro nuovo
-e un indice, ed è rinviato con la ragione (decisione 4).
-
-**La chiave di idempotenza non si rigenera al ritentativo.** La genera il client, ed è
-deliberato: se la generasse il server ogni ritentativo produrrebbe una chiave nuova,
-quindi un secondo pagamento, quindi un saldo che scende **due volte**, e `audit_log`
-mostrerebbe due inserimenti perfettamente legittimi. Ne segue una condizione precisa
-lato client: la chiave si genera **all'intento** — l'invio del form — e si riusa per
-ogni tentativo successivo. Generarla dentro `mutationFn` la rigenererebbe a ogni
-ritentativo, che è esattamente il difetto che l'header esiste per impedire.
-
-**La perdita è il residuo e non l'importo.** Vedi la decisione 3. Sommare `amount`
-gonfia le perdite di tutto ciò che è stato incassato. E `outstanding_amount` non serve
-a calcolarle, perché la `0024` lo azzera proprio su `written_off`: è la stessa colonna
-che rende il numero necessario e che non può produrlo.
-
-**Una chiave ripetuta risponde `200`, non `201` e non `409`.** Il client deve trattare
-i due stati come lo stesso esito riuscito. Il `409` esiste per due casi che la
-rilettura non assorbe — la stessa chiave verso un **altro** addebito, e una chiave
-usata da qualcuno di cui il chiamante non vede i pagamenti — e nessuno dei due si
-risolve riprovando.
-
-**Chi dichiara non può ritirare, e il client non deve offrirglielo.**
-`payments_update` è staff soltanto, quindi un bottone «ritira la dichiarazione»
-otterrebbe zero righe aggiornate, cioè `auth.denied_by_policy` — il codice riservato
-ai nostri difetti. L'uscita da `pending` è il rifiuto, ed è dello staff.
-
-**`payer_user_id` omesso rende l'incasso invisibile a chi ha pagato.** È lecito — un
-bonifico da un conto che non si sa a chi ricondurre esiste — ma è anche il
-comportamento di chi semplicemente dimentica il campo, che è il caso più facile. Il
-debito dice che con il primo client si vede se debba diventare obbligatorio: **questa
-è quella occasione**, e la risposta va scritta nell'esito.
-
-**Il rifiuto azzera `paid_at` e non muove il saldo**, perché un pagamento `pending`
-non lo aveva mosso. Un client che mostrasse «saldo aggiornato» dopo un rifiuto direbbe
-il falso.
-
-**Un raccoglitore SMTP locale non è un fornitore vero.** Accetta tutto: non verifica
-SPF, DKIM né i rimbalzi, e un indirizzo inesistente gli va benissimo. Verifica che il
-messaggio parta e che cosa contiene, **non** che sarebbe recapitato. È lo stesso
-limite di MinIO rispetto a S3, ed è il motivo per cui la prima spedizione verso un
-server vero va guardata.
-
-**L'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
-`docs/04` vieta email, token e corpi nei log, e un client SMTP che registri la
-richiesta li registra tutti e tre insieme. Il token dell'invito in particolare è una
-**credenziale**: va nel corpo del messaggio e in nessun log. La porta ha già un `Debug`
-redatto, e l'adattatore non deve annullarlo.
+Tutte lette nel codice prima di scriverle, e riportate qui perché il piano che le ha
+prodotte è archiviato e nessuno lo aprirà mentre esegue.
 
 **`?open=true` non è zucchero per `status <> 'closed'`.** L'indice parziale
 `tickets_open_ix` è definito su esattamente sei valori, e una disuguaglianza non lo
-userebbe. Lo stesso vale per `?outstanding=true` sugli addebiti.
+userebbe. Lo stesso vale per `?outstanding=true` sugli addebiti. **E la fetta A ha
+aggiunto una ragione in più per crederci**: sui pagamenti si è misurato che perfino un
+filtro parametrico su un enum non usa un indice parziale, perché il cast `text → enum`
+non è costante-foldabile. Vedi [ADR-040](08-decisioni.md#adr-040).
 
 **`resolved` esiste nell'enum e l'API non lo produce mai.** Un client che costruisse i
-filtri dai valori dell'enum offrirebbe uno stato che non esiste — è la stessa forma
-della trappola sugli stati derivati, che la fetta del client ha già incontrato due
-volte.
+filtri dai valori dell'enum offrirebbe uno stato che non esiste. È la stessa forma
+della trappola sugli stati derivati, incontrata due volte nella fetta del client e una
+terza nella fetta A — dove il menù degli stati di un addebito è scritto a mano proprio
+per questo.
 
 **La riapertura è di chi ha segnalato, e il codice lo dice.** A un coinquilino che ci
 provi l'API risponde `403 ticket.not_yours` e **non** `org.staff_role_required`: non
@@ -749,9 +536,9 @@ codice, e mostra due messaggi diversi.
 **`estimated_cost` è `null` per chi non è staff anche quando un valore c'è.** Mostrare
 `0,00 €` sarebbe una bugia; mostrare `—` è la verità.
 
-**Le note interne non arrivano proprio.** Le filtra la policy di SELECT, non un campo
-della risposta: il client non deve nasconderle, non le riceve. E a un inquilino che le
-chieda esplicitamente l'API risponde `403`.
+**Le note interne non arrivano proprio.** Le filtra la policy di `SELECT`, non un
+campo della risposta: il client non deve nasconderle, **non le riceve**. E a un
+inquilino che le chieda esplicitamente l'API risponde `403`.
 
 **Tre metodi di ripartizione su cinque danno `422`.** `percentage`, `exact` e
 `by_usage` compaiono nella specifica e sono rifiutati. Ancora una volta: costruire il
@@ -773,39 +560,59 @@ controllo che fallisce a caso.
 dove prima c'era uno scheletro. I tre stati esistono già come componenti: i confini
 vanno messi dove quelli sono, non dove capita.
 
-### Come si saprà che è finita
+**Chi dichiara un pagamento non può ritirarlo, e il client non deve offrirglielo.**
+`payments_update` è staff soltanto, quindi un bottone «ritira la dichiarazione»
+otterrebbe zero righe aggiornate, cioè `auth.denied_by_policy` — il codice riservato
+ai nostri difetti. La fetta A lo ha già rispettato dal lato del proprietario: nella
+coda le due azioni sono conferma e rifiuto, e nessuna delle due è dell'inquilino. Il
+**ritiro esiste invece fra i regolamenti** (`settlements_update` ammette
+`from_user_id`), ed è il passo 6: le due cose si somigliano e non sono la stessa.
+
+#### Come si saprà che è finita
 
 `./ops/ci/test-integration.sh` verde e il job del client verde sono il minimo, non il
-criterio.
-
-**Fetta A, le quattro verifiche che contano:**
-
-1. **L'insoluto scende.** Un giro a mano dal browser: addebito da 800 €, incasso di
-   300 € registrato, la dashboard passa da 800 a 500 e lo stato dell'addebito diventa
-   `partially_paid`. È il giro che oggi non si può fare.
-2. **La stessa chiave inviata due volte lascia il saldo dov'è.** Non è la suite: è il
-   doppio clic su un bottone, fatto a mano, con il saldo guardato prima e dopo.
-3. **Il nono numero dice il residuo.** Sull'addebito del punto 1, stornato dopo
-   l'incasso parziale: `written_off_total` deve valere **500** e non 800.
-4. **La coda trova la dichiarazione.** Un inquilino dichiara di aver pagato — dal
-   `curl`, finché la fetta B non esiste — e il proprietario la trova nella coda senza
-   sapere quale addebito guardare. È la ragione per cui la rotta della decisione 7
-   esiste.
-
-Più, se i passi 9 e 10 sono dentro: **un'email di invito che arriva davvero** nel
-raccoglitore locale, con il token nel corpo e in **nessuna** riga di log.
-
-**Fetta B, le tre verifiche che contano:**
+criterio. Le tre verifiche che contano:
 
 1. **Un inquilino entra da un browser mai usato e vede l'organizzazione del
    proprietario**, senza incollare niente. È il debito B0 visto dal lato di chi lo
    subiva.
 2. **Una segnalazione fa il giro completo**: l'inquilino la apre, il proprietario la
    classifica, l'assegna, la sospende, la chiude; l'inquilino la riapre. E il numero
-   `open_tickets` in dashboard cambia di conseguenza.
-3. **I saldi di un gruppo di spesa sommano a zero**, con un membro uscito che ha ancora
-   un conto aperto — che è il caso per cui la migration `0027` esiste.
+   `open_tickets` in dashboard cambia di conseguenza — che è anche il momento in cui
+   quel riquadro smette di portare ai contratti per mancanza di una destinazione
+   propria.
+3. **I saldi di un gruppo di spesa sommano a zero**, con un membro uscito che ha
+   ancora un conto aperto — che è il caso per cui la migration `0027` esiste.
 
-Più le due prove di qualità che il criterio «prodotto reale» rende obbligatorie, come
-per la fetta precedente: **navigazione da sola tastiera** su un percorso completo, e
-**375 px** sulle schermate nuove.
+Più le due prove di qualità che il criterio «prodotto reale» rende obbligatorie:
+**navigazione da sola tastiera** su un percorso completo, e **375 px** sulle schermate
+nuove.
+
+### Fetta C — prima degli utenti veri
+
+**Nominata e non pianificata**, come nella stesura originale: rate limiting per IP,
+verifica dell'email bloccante, manifest Kubernetes, backup e restore, metriche,
+alerting, cron per le partizioni di `audit_log`.
+
+Non è dimenticanza, ed è la ragione per cui ha un nome: dipendono da **dove** il
+prodotto viene esercito, che non è deciso, e pianificarle adesso significherebbe
+scrivere un piano su un'ipotesi.
+
+### Fuori, e non per dimenticanza
+
+- **il fornitore di OCR.** Resta la decisione che blocca più valore di ogni riga di
+  codice, ed è una decisione sul trattamento dei dati personali: non è un compito di
+  sviluppo e non va messa in coda con quelli. Vedi
+  [ADR-037](08-decisioni.md#adr-037) e la sezione più sopra;
+- **il triage AI delle segnalazioni**, che dipende dalla stessa scelta e in più ha una
+  domanda di prodotto sua — con quale soglia di confidenza una macchina possa scrivere
+  la categoria di una segnalazione;
+- **la traduzione in inglese.** Il catalogo esiste dal primo giorno, quindi aggiungere
+  una lingua è un file in più e non una riscrittura: è una decisione di mercato, non
+  di completezza, e non blocca nulla;
+- **il mobile nativo**, che [ADR-039](08-decisioni.md#adr-039) rimanda alla
+  conversazione sulle notifiche push — cioè a **dopo la fetta A-bis**, non prima;
+- **la ricerca full-text**, che è V2 e va alimentata dall'outbox;
+- **il filtro sui crediti da sovrapagamento.** Rinviato con la sua ragione in
+  [ADR-040](08-decisioni.md#adr-040): richiederebbe un parametro nuovo e un indice
+  parziale che lo regga, e il caso d'uso «mostrami tutti i crediti» non è ancora nato.

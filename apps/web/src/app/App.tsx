@@ -5,11 +5,13 @@ import { LoginPage, RegisterPage } from '@/features/auth/AuthPage'
 import { BillDetailPage } from '@/features/bills/BillDetailPage'
 import { BillsPage } from '@/features/bills/BillsPage'
 import { NewBillPage } from '@/features/bills/NewBillPage'
+import { ChargeDetailPage } from '@/features/charges/ChargeDetailPage'
 import { ChargesPage } from '@/features/charges/ChargesPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
 import { LeasesPage } from '@/features/leases/LeasesPage'
 import { NewLeasePage } from '@/features/leases/NewLeasePage'
+import { PaymentsPage } from '@/features/payments/PaymentsPage'
 import { NewPropertyPage } from '@/features/properties/NewPropertyPage'
 import { PropertiesPage } from '@/features/properties/PropertiesPage'
 import { PropertyDetailPage } from '@/features/properties/PropertyDetailPage'
@@ -64,6 +66,8 @@ export function App() {
           <Route path="/bollette/nuova" element={<NewBillPage />} />
           <Route path="/bollette/:id" element={<BillDetailPage />} />
           <Route path="/addebiti" element={<ChargesPage />} />
+          <Route path="/addebiti/:id" element={<ChargeDetailPage />} />
+          <Route path="/pagamenti" element={<PaymentsPage />} />
         </Route>
         {/* Chi è già entrato non deve poter tornare al login da un segnalibro:
             vedrebbe un form che non serve a niente. */}

@@ -82,6 +82,7 @@ export const it = {
     leases: 'Contratti',
     bills: 'Bollette',
     charges: 'Addebiti',
+    payments: 'Pagamenti',
     main: 'Navigazione principale',
   },
 
@@ -100,6 +101,9 @@ export const it = {
     leasesExpiringNote: 'Entro novanta giorni.',
     billsPendingReview: 'Bollette da rivedere',
     billsPendingReviewNote: 'In bozza o lette dalla macchina.',
+    writtenOffTotal: 'Perdite',
+    writtenOffTotalNote: 'Residuo degli addebiti stornati. Gli annullati non contano.',
+    goToWrittenOff: 'Vedi gli addebiti stornati',
     goToOverdue: 'Vedi lo scadenzario',
     goToBills: 'Vedi le bollette',
     goToLeases: 'Vedi i contratti',
@@ -433,7 +437,11 @@ export const it = {
     writeOff: 'Rinuncia all’incasso',
     writeOffConfirm: 'Rinunciare a incassare questo addebito?',
     writeOffExplain:
-      'Vuol dire «era dovuto e ci rinunciamo»: è una perdita, ed è diverso dall’annullamento.',
+      'Vuol dire «era dovuto e ci rinunciamo»: è una perdita, ed è diverso dall’annullamento. Si può anche su un addebito già pagato in parte: quello che è stato incassato resta incassato, e si rinuncia al residuo.',
+    /** `void` resta ammesso dal solo `issued`: su un addebito con del denaro
+     *  dentro dire «non doveva essere chiesto» sarebbe falso. */
+    voidNotWhenPartlyPaid:
+      'Su questo addebito è già entrato del denaro: annullarlo direbbe che non doveva essere chiesto. La via è la rinuncia all’incasso.',
     writtenOff: 'Rinuncia registrata.',
     created: 'Addebito emesso.',
     empty: 'Nessun addebito.',
@@ -442,6 +450,15 @@ export const it = {
     /** `?status=overdue` risponde 422: lo stato è derivato dalla scadenza. */
     derivedStatusNote: 'Scaduto è derivato dalla scadenza: si vede, e si filtra con «solo insoluti».',
     fromBill: 'Da bolletta',
+    detailTitle: 'Addebito',
+    /** Un residuo negativo è un credito verso l'inquilino: non compensa gli altri
+     *  insoluti, non compare nel riepilogo, e almeno qui va detto. */
+    credit: 'Credito',
+    creditExplain:
+      'È stato incassato più di quanto era dovuto. Il credito resta su questo addebito: non abbassa l’insoluto degli altri e non compare nel riepilogo.',
+    issuedAt: 'Emesso il',
+    notes: 'Note',
+    backToList: 'Torna agli addebiti',
     types: {
       rent: 'Canone',
       deposit: 'Deposito',
@@ -459,6 +476,81 @@ export const it = {
       overdue: 'Scaduto',
       void: 'Annullato',
       written_off: 'Stornato',
+    },
+  },
+
+  payment: {
+    title: 'Pagamenti',
+    queueTitle: 'Dichiarazioni da verificare',
+    queueSubtitle:
+      'Chi dice di aver pagato, in attesa di una conferma. Finché sono qui non muovono nessun saldo.',
+    chargePayments: 'Movimenti di questo addebito',
+    record: 'Registra un incasso',
+    recordTitle: 'Registra un incasso',
+    recordExplain:
+      'Un incasso che hai già visto sull’estratto conto. Nasce confermato e abbassa subito il residuo.',
+    amount: 'Importo incassato',
+    method: 'Strumento',
+    paidAt: 'Data del movimento',
+    paidAtHint: 'Vuoto significa adesso.',
+    reference: 'Causale o riferimento',
+    referenceHint: 'Quello che leggi sull’estratto conto: serve a ritrovarlo.',
+    payer: 'A chi attribuirlo',
+    /** `payer_user_id` omesso rende l'incasso invisibile a chi ha pagato: è
+     *  lecito, ma va scelto e non subìto. */
+    payerHint:
+      'Chi non lo vede non lo trova nel proprio elenco, pur vedendone l’effetto sul residuo.',
+    payerUnattributed: 'Non attribuito',
+    payerUnattributedHint:
+      'Scegli questo per un bonifico che non sai a chi ricondurre. Nessuno degli inquilini lo vedrà.',
+    payerNoCandidates:
+      'Nessun inquilino ha ancora accettato l’invito: finché non lo fa, l’incasso può solo restare non attribuito.',
+    recorded: 'Incasso registrato.',
+    status: 'Stato',
+    /** Quando la riga è arrivata: `created_at`, che c'è **sempre**. È la data che
+     *  ordina una coda di lavoro. */
+    declaredAt: 'Ricevuto il',
+    /** Quando il denaro si è mosso: `paid_at`, che su una dichiarazione **può
+     *  mancare** — chi dichiara non è obbligato a dire quando — e che il rifiuto
+     *  azzera. Sta accanto alla precedente e non al suo posto: una colonna sola
+     *  sarebbe vuota proprio nel caso comune. */
+    movedAt: 'Pagato il',
+    charge: 'Addebito',
+    confirm: 'Conferma',
+    confirmTitle: 'Confermare questa dichiarazione?',
+    confirmExplain:
+      'Da qui il denaro conta: il residuo dell’addebito scende e il suo stato si ricalcola.',
+    confirmed: 'Dichiarazione confermata.',
+    reject: 'Rifiuta',
+    rejectTitle: 'Rifiutare questa dichiarazione?',
+    /** Un `pending` non aveva mosso il saldo: dire «saldo aggiornato» dopo un
+     *  rifiuto sarebbe falso. */
+    rejectExplain:
+      'La dichiarazione passa ad annullata. Il saldo resta dov’è: una dichiarazione in attesa non lo aveva mosso.',
+    rejected: 'Dichiarazione rifiutata.',
+    empty: 'Nessun movimento su questo addebito.',
+    queueEmpty: 'Nessuna dichiarazione in attesa.',
+    queueEmptyHint: 'Quando un inquilino dichiara di aver pagato, lo trovi qui.',
+    pendingDoesNotMove: 'In attesa: non muove il saldo finché non la confermi.',
+    onlyStaffDecides:
+      'A confermare o rifiutare è chi amministra: chi ha dichiarato non può ritirare.',
+    goToCharge: 'Vai all’addebito',
+    methods: {
+      bank_transfer: 'Bonifico',
+      sepa_direct_debit: 'Addebito SEPA',
+      card: 'Carta',
+      cash: 'Contanti',
+      check: 'Assegno',
+      other: 'Altro',
+    },
+    statuses: {
+      pending: 'In attesa',
+      authorized: 'Autorizzato',
+      succeeded: 'Incassato',
+      failed: 'Fallito',
+      cancelled: 'Rifiutato',
+      refunded: 'Rimborsato',
+      partially_refunded: 'Rimborsato in parte',
     },
   },
 
@@ -499,6 +591,11 @@ export const it = {
     'charge.not_found': 'Addebito non trovato.',
     'charge.invalid_transition': 'Non si può fare da questo stato.',
     'charge.derived_status_filter': 'Scaduto è derivato: filtra con «solo insoluti».',
+    'payment.not_found': 'Pagamento non trovato.',
+    'payment.invalid_transition': 'Questa dichiarazione non è più in attesa.',
+    'payment.idempotency_key_reused':
+      'Questa operazione era già stata inviata per un altro addebito. Ricarica e riprova.',
+    'request.idempotency_key_missing': 'Manca la chiave dell’operazione. Ricarica la pagina.',
     'document.not_found': 'Documento non trovato.',
     'request.payload_too_large': 'Il file è troppo grande.',
     'endpoint.not_found': 'Questa pagina non esiste.',

@@ -294,7 +294,7 @@ esiti che per lui sono lo stesso non lo aiuterebbe.
 
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
-| GET | `/api/v1/dashboard` | **staff** | `200` con gli otto numeri dell'organizzazione attiva |
+| GET | `/api/v1/dashboard` | **staff** | `200` con i nove numeri dell'organizzazione attiva |
 
 Non prende parametri: l'organizzazione è quella attiva — quella del token, o quella
 dichiarata con `X-Org-Id`. Metterla nel percorso inviterebbe a chiederne una di cui
@@ -310,11 +310,12 @@ non si è membri, e la risposta a quella domanda sarebbe comunque `403`.
   "overdue_charges": 1,
   "open_tickets": 2,
   "leases_expiring_90d": 1,
-  "bills_pending_review": 4
+  "bills_pending_review": 4,
+  "written_off_total": "500.00"
 }
 ```
 
-I due importi sono **stringhe decimali** come ovunque; i sei conteggi sono interi,
+I tre importi sono **stringhe decimali** come ovunque; i sei conteggi sono interi,
 perché contare non ha decimali.
 
 **È dello staff e non del membro.** La Row Level Security da sola non basterebbe:
@@ -335,6 +336,19 @@ nome prometta:
   questo: è quanto di quell'attesa sta per non esserci più;
 - **`total_outstanding` esclude `void` e `written_off`** e somma i soli residui
   **positivi** (migration `0024`, [ADR-032](08-decisioni.md#adr-032));
+- **`written_off_total` è il residuo degli addebiti stornati, non il loro importo.**
+  Un addebito da 800 con 300 incassati e poi stornato vale **500**: gli altri
+  trecento sono entrati e non si sono persi. Dalla migration `0032`,
+  [ADR-040](08-decisioni.md#adr-040).
+
+  Sta accanto a `total_outstanding` e **non lo compensa**: quello dice quanto è
+  ancora dovuto, questo quanto non lo sarà mai. Un addebito **annullato** non compare
+  qui — `void` dice «non doveva essere chiesto», quindi non è una perdita — ed è la
+  distinzione per cui il numero esiste.
+
+  Non si calcola da `outstanding_amount`: la `0024` lo azzera proprio su
+  `written_off`, quindi è la stessa colonna che rende il numero necessario e che non
+  può produrlo;
 - **`bills_pending_review` conta `draft` *e* `pending_review`**, che sono due
   popolazioni diverse: una bolletta registrata e senza scansione, e una che la
   macchina ha letto e che aspetta una persona. Le conta insieme dalla `0015`;
@@ -920,13 +934,32 @@ riferimento polimorfico dei documenti, come per ogni altro aggregato.
 | POST | `/api/v1/leases/{lease_id}/charges` | staff | `201`, stato iniziale **`issued`**. `404` se il contratto non è visibile |
 | GET | `/api/v1/charges` | membro | `200`, pagina keyset con il saldo. Filtri `lease_id`, `charge_type`, `status`, `outstanding` |
 | GET | `/api/v1/charges/{id}` | membro | `200` con il saldo, o `404` |
-| POST | `/api/v1/charges/{id}/void` | staff | `200`. **Resta visibile** a chi doveva pagarlo |
-| POST | `/api/v1/charges/{id}/write-off` | staff | `200`. Rinuncia all'incasso: diverso dall'annullamento |
+| POST | `/api/v1/charges/{id}/void` | staff | `200` dal solo `issued`. **Resta visibile** a chi doveva pagarlo. `409` se è già entrato del denaro |
+| POST | `/api/v1/charges/{id}/write-off` | staff | `200` da `issued` **e da `partially_paid`**. Rinuncia all'incasso: diverso dall'annullamento |
 | POST | `/api/v1/charges/{id}/documents` | membro | `201` |
 | GET | `/api/v1/charges/{id}/documents` | membro | `200`, pagina keyset |
 | POST | `/api/v1/charges/{charge_id}/payments` | staff | `201`. Vedi [Pagamenti](#pagamenti) |
 | POST | `/api/v1/charges/{charge_id}/payment-declarations` | membro | `201`. Vedi [Pagamenti](#pagamenti) |
 | GET | `/api/v1/charges/{charge_id}/payments` | membro | `200`, pagina keyset |
+
+#### Le due uscite non sono simmetriche
+
+**`void` è ammesso dal solo `issued`; `write-off` anche da `partially_paid`.**
+Non è una svista da appianare:
+
+- **annullare** significa «la richiesta non doveva essere fatta». Su un addebito su
+  cui è entrato del denaro sarebbe falso — qualcosa è stato ricevuto contro una
+  pretesa che allora non è mai esistita — e a quella domanda questo modello non
+  risponde. Risposta: `409 charge.invalid_transition`;
+- **stornare** significa «era dovuto e ci rinunciamo». L'incassato **resta
+  incassato** e si rinuncia al residuo, quindi la domanda non si pone. È anzi il
+  caso in cui una perdita si materializza davvero.
+
+Da `paid`, `void` e `written_off` sono rifiutati entrambi: non c'è un residuo a cui
+rinunciare, e gli ultimi due sono terminali.
+
+La perdita che ne risulta è `written_off_total` in dashboard, ed è il **residuo**:
+vedi [ADR-040](08-decisioni.md#adr-040).
 
 **Non esiste un `PATCH`**, e non è una dimenticanza: un addebito emesso è una
 **pretesa verso una persona**, e riscriverne l'importo dopo averla comunicata non è una
@@ -1031,9 +1064,44 @@ Il denaro che entra. Due vie di ingresso, e una sola porta da cui il saldo si mu
 | POST | `/api/v1/charges/{charge_id}/payments` | staff | `201`, stato iniziale **`succeeded`**: l'incasso visto sull'estratto conto. `200` se la chiave di idempotenza era già stata usata |
 | POST | `/api/v1/charges/{charge_id}/payment-declarations` | membro | `201`, stato iniziale **`pending`**: l'inquilino dichiara di aver pagato. **Non muove il saldo.** `200` sulla chiave ripetuta |
 | GET | `/api/v1/charges/{charge_id}/payments` | membro | `200`, pagina keyset. `404` se l'addebito non è visibile |
+| GET | `/api/v1/payments` | membro | `200`, pagina keyset. Filtri `status`, `lease_id`. Con `?status=pending` è la **coda delle dichiarazioni** |
 | GET | `/api/v1/payments/{id}` | membro | `200` o `404` |
 | POST | `/api/v1/payments/{id}/confirm` | staff | `200`. Porta a `succeeded`: da qui il saldo si muove e lo stato dell'addebito si ricalcola |
 | POST | `/api/v1/payments/{id}/reject` | staff | `200`. Porta a `cancelled` e **azzera `paid_at`**. Il saldo resta dov'era |
+
+#### Due elenchi, e la ragione non è la simmetria REST
+
+`/charges/{id}/payments` risponde «quali pagamenti ha ricevuto **questo** addebito».
+È una sotto-risorsa: l'addebito si rilegge prima, quindi uno che non si vede dà
+`404` e non una pagina vuota — che sarebbe il modo peggiore di dire «non è tuo».
+
+`/payments` risponde a una domanda che quella rotta non può porre, perché per porla
+bisognerebbe già sapere quale addebito guardare: **quali dichiarazioni aspettano una
+conferma, in tutta l'organizzazione**. Senza, una dichiarazione si scoprirebbe
+aprendo gli addebiti a uno a uno.
+
+Qui invece **un elenco vuoto è una risposta e non un `404`**: non c'è una risorsa
+padre di cui verificare la visibilità, e «non ci sono pagamenti» e «non ce ne sono di
+tuoi» danno la stessa pagina — distinguerle richiederebbe di leggere righe che al
+chiamante non spettano.
+
+**Non è staff soltanto.** A un inquilino risponde `200` con i **propri** pagamenti: a
+scegliere le righe è `payments_select`, non un ramo sul ruolo. È la differenza con
+`/dashboard`, dove il controllo applicativo *stringe* la policy invece di ripeterla.
+Ne segue che un incasso registrato senza `payer_user_id` non compare a chi l'ha
+pagato — vedi [`payer_user_id`, che non è anagrafica](#payer_user_id-che-non-è-anagrafica).
+
+**Nessun filtro sullo stato è derivato**, a differenza degli addebiti e dei
+contratti: lo stato di un pagamento è sempre quello memorizzato, quindi nessun valore
+risponde `422`. Quattro dei sette descrivono però situazioni che questa API non
+scrive mai — `authorized`, `failed`, `refunded`, `partially_refunded` — e filtrarli
+restituisce legittimamente zero righe.
+
+`lease_id` **non è una colonna di `app.payments`**: il legame passa dall'addebito
+pagato, e il filtro è quindi un `EXISTS` sul contratto di quell'addebito.
+
+L'organizzazione non è un parametro, qui come su ogni altra collezione: a
+restringerla è la policy.
 
 #### `Idempotency-Key`: obbligatoria, e la fornisce il client
 
@@ -1094,6 +1162,14 @@ non c'è.
 - sulla **registrazione** è un campo opzionale del corpo. Omesso, l'incasso resta
   visibile allo staff soltanto — lecito, un bonifico da un conto che non si sa a chi
   ricondurre esiste, ma va scelto e non subìto.
+
+**Resta opzionale, ed è stato deciso e non rinviato.** Il debito chiedeva se con il
+primo client dovesse diventare obbligatorio, o se convenisse dedurlo dalle parti del
+contratto: **nessuna delle due**. Obbligarlo toglierebbe all'API il modo di dire
+«non attribuito», e dedurlo non si può perché un contratto ha spesso più inquilini
+con le loro quote. Il difetto vero era che ometterlo fosse il *default*, e il rimedio
+sta nel form: nessun vuoto inviabile, e una voce «non attribuito» che porta scritta
+la sua conseguenza. Vedi [ADR-040](08-decisioni.md#adr-040).
 
 Il totale incassato resta comunque visibile a chiunque veda l'addebito, nel
 `paid_amount` del saldo, che viene dalla vista e non dall'elenco dei pagamenti.

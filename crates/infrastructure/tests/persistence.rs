@@ -2837,15 +2837,98 @@ async fn a_declaration_does_not_move_the_balance_and_the_confirmation_does() {
         .execute(
             &tenant,
             ListPaymentsQuery {
-                charge_id: charge.id(),
-                after: None,
-                limit: None,
+                charge_id: Some(charge.id()),
+                ..ListPaymentsQuery::default()
             },
         )
         .await
         .expect("elenco riuscito");
     assert_eq!(listed.items.len(), 1);
     assert_eq!(listed.items[0].id(), declared.payment.id());
+}
+
+/// Il predicato ridondante che rende utilizzabile `payments_pending_ix` **non
+/// seleziona nulla per conto proprio**.
+///
+/// Esiste solo per il planner: il repository lo accende quando il filtro chiede
+/// `pending` e lo spegne altrimenti, e su ogni altro stato deve restare vero per
+/// tutte le righe. Se si accendesse per sbaglio, un elenco filtrato su `succeeded`
+/// risponderebbe **zero righe senza alcun errore** — che è il modo peggiore di
+/// sbagliare, perché sembra «non ci sono pagamenti».
+///
+/// Va sulla persistenza e non sull'unità perché è una proprietà della query, non
+/// della condizione: a girare deve essere il SQL vero, contro il database vero.
+#[tokio::test]
+async fn the_redundant_predicate_selects_nothing_of_its_own() {
+    let env = require_db!();
+    let owner = register_owner(&env, "predicato-ridondante").await;
+    let property_id = create_property(&env, &owner, "Immobile della coda", "Bologna").await;
+    let lease = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    let charge = issue_charge(&env, &owner, lease.id(), "800.00", 20).await;
+
+    // Un incasso `succeeded`, registrato dallo staff.
+    RecordPayment::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            RecordPaymentCommand {
+                charge_id: charge.id(),
+                amount: "300.00".parse().expect("importo"),
+                method: PaymentMethod::BankTransfer,
+                paid_at: None,
+                reference: None,
+                payer_user_id: None,
+                idempotency_key: key("coda-succeeded"),
+            },
+        )
+        .await
+        .expect("incasso registrato");
+
+    let list = ListPayments::new(Arc::clone(&env.factory));
+
+    let succeeded = list
+        .execute(
+            &owner,
+            ListPaymentsQuery {
+                status: Some(PaymentStatus::Succeeded),
+                ..ListPaymentsQuery::default()
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert_eq!(
+        succeeded.items.len(),
+        1,
+        "il ramo `pending` è spento e non deve togliere righe"
+    );
+
+    let pending = list
+        .execute(
+            &owner,
+            ListPaymentsQuery {
+                status: Some(PaymentStatus::Pending),
+                ..ListPaymentsQuery::default()
+            },
+        )
+        .await
+        .expect("elenco riuscito");
+    assert!(
+        pending.items.is_empty(),
+        "un incasso registrato nasce `succeeded`, non entra nella coda"
+    );
+
+    let everything = list
+        .execute(&owner, ListPaymentsQuery::default())
+        .await
+        .expect("elenco riuscito");
+    assert_eq!(everything.items.len(), 1, "senza filtro ci sono tutti");
 }
 
 /// **La decisione più importante della fetta, verificata**: un secondo invio con la

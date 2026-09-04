@@ -4,11 +4,11 @@ use rust_decimal::Decimal;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use propflow_domain::payment::{IdempotencyKey, Payable, Payment, PaymentParts};
+use propflow_domain::payment::{IdempotencyKey, Payable, Payment, PaymentParts, PaymentStatus};
 use propflow_domain::ports::{
     PaymentPage, PaymentQuery, PaymentRepository, RepositoryError, RepositoryResult,
 };
-use propflow_domain::shared::{ChargeId, Currency, Money, OrgId, PaymentId, UserId};
+use propflow_domain::shared::{ChargeId, Currency, LeaseId, Money, OrgId, PaymentId, UserId};
 
 use super::user::try_get;
 use crate::db::db_enums;
@@ -37,6 +37,33 @@ use crate::db::uow::PgUnitOfWork;
 macro_rules! balance_statuses {
     () => {
         "'succeeded','partially_refunded'"
+    };
+}
+
+/// Lo stato della **coda delle dichiarazioni**, come letterale SQL.
+///
+/// Stessa forma di `outstanding_statuses!` sugli addebiti, e stessa ragione: è il
+/// predicato dell'indice parziale `payments_pending_ix` della migration `0032`, e
+/// per usarlo il planner deve poter dimostrare che il predicato della query lo
+/// implica.
+///
+/// **Il filtro parametrico da solo non basta, ed è stato misurato invece che
+/// dedotto.** `($1::text IS NULL OR status = $1::app.payment_status)` — il pattern
+/// che ogni altro elenco di questo progetto usa — produce un `Bitmap Index Scan`
+/// su `payments_org_status_ix` seguito da un `Sort`, e **non** tocca l'indice
+/// parziale. La causa è che il cast da `text` a un enum passa da `enum_in`, che
+/// PostgreSQL dichiara `STABLE` e non `IMMUTABLE`: `'pending'::text::app.payment_status`
+/// non viene quindi ridotto a una costante, nemmeno nel piano *custom*, e senza una
+/// costante l'implicazione non è dimostrabile.
+///
+/// Il rimedio è la condizione ridondante qui sotto: quando il chiamante chiede
+/// `pending` si aggiunge lo stesso predicato **scritto per esteso**, che il planner
+/// riconosce. Con lo stesso banco di prova il piano diventa
+/// `Index Scan using payments_pending_ix`, e resta tale anche dopo le sei
+/// esecuzioni che portano al piano generico.
+macro_rules! pending_status {
+    () => {
+        "'pending'::app.payment_status"
     };
 }
 
@@ -103,21 +130,54 @@ impl PaymentRepository for PgUnitOfWork {
         row.as_ref().map(map_payment).transpose()
     }
 
-    async fn list_for_charge(&mut self, query: &PaymentQuery) -> RepositoryResult<PaymentPage> {
+    async fn list(&mut self, query: &PaymentQuery) -> RepositoryResult<PaymentPage> {
         // Il cursore keyset sfrutta l'ordinamento degli UUIDv7: ordinare per id
         // equivale a ordinare per data di creazione, senza una colonna in più. Si
         // chiede una riga in più del limite per sapere se esiste una pagina
         // successiva senza un secondo `COUNT`.
+        //
+        // **`payable_type = 'charge'` resta incondizionato**, e non è un residuo
+        // della rotta annidata: `Payable` ha una sola variante e le altre due —
+        // `expense_share` e `settlement` — non si scriveranno mai, perché un
+        // regolamento fra coinquilini non è denaro che l'organizzazione incassa.
+        // Toglierlo farebbe passare da `payable_from_db` righe che il dominio non
+        // sa mappare, cioè un errore di lettura al posto di una pagina.
+        //
+        // **Il filtro sul contratto è un `EXISTS` e non una `JOIN`**: la `JOIN`
+        // moltiplicherebbe le righe se un giorno il legame smettesse di essere
+        // uno-a-uno, e il cursore keyset conta le righe che restituisce. `EXISTS`
+        // si ferma alla prima corrispondenza e non tocca la cardinalità.
+        // `deleted_at IS NULL` sull'addebito perché `app.charges` ha il soft delete
+        // e `app.payments` no.
+        // `$3` è **ridondante rispetto a `$2`** e non è un secondo filtro: vale
+        // `true` esattamente quando `$2` è `pending`, e in quel caso ripete lo
+        // stesso predicato scritto per esteso. È ciò che rende utilizzabile
+        // `payments_pending_ix` — vedi `pending_status!`, che porta la misura. Su
+        // ogni altro stato il ramo è spento e la condizione è vera per tutte le
+        // righe, quindi non cambia il risultato: il test
+        // `the_redundant_predicate_selects_nothing_of_its_own` lo fissa.
         let fetch = i64::from(query.limit) + 1;
         let rows = sqlx::query(concat!(
             select_payment!(),
             " WHERE payable_type = 'charge'::app.payable_type
-                AND payable_id = $1
-                AND ($2::uuid IS NULL OR id > $2)
+                AND ($1::uuid IS NULL OR payable_id = $1)
+                AND ($2::text IS NULL OR status = $2::app.payment_status)
+                AND ($3::bool IS NOT TRUE OR status = ",
+            pending_status!(),
+            ")
+                AND ($4::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM app.charges c
+                       WHERE c.id = app.payments.payable_id
+                         AND c.lease_id = $4
+                         AND c.deleted_at IS NULL))
+                AND ($5::uuid IS NULL OR id > $5)
               ORDER BY id
-              LIMIT $3"
+              LIMIT $6"
         ))
-        .bind(query.charge_id.as_uuid())
+        .bind(query.charge_id.map(ChargeId::as_uuid))
+        .bind(query.status.map(db_enums::payment_status_to_db))
+        .bind(query.status == Some(PaymentStatus::Pending))
+        .bind(query.lease_id.map(LeaseId::as_uuid))
         .bind(query.after.map(PaymentId::as_uuid))
         .bind(fetch)
         .fetch_all(&mut *self.tx)
@@ -310,6 +370,23 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",");
         assert_eq!(from_domain, balance_statuses!());
+    }
+
+    /// Il letterale della coda e il valore di dominio sono lo stesso stato.
+    ///
+    /// Vale per la stessa ragione del test qui sopra: il predicato vive in due
+    /// posti — la condizione SQL e il `Some(PaymentStatus::Pending)` che accende il
+    /// ramo — e se divergessero la query filtrerebbe uno stato e l'indice ne
+    /// coprirebbe un altro, cioè zero righe restituite senza alcun errore.
+    #[test]
+    fn the_pending_literal_and_the_domain_value_agree() {
+        assert_eq!(
+            format!(
+                "'{}'::app.payment_status",
+                db_enums::payment_status_to_db(PaymentStatus::Pending)
+            ),
+            pending_status!()
+        );
     }
 
     /// E l'elenco **non** è quello di `payments_payable_ix`, che comprende anche

@@ -4,6 +4,7 @@ import type {
   BillStatus,
   ChargeStatus,
   LeaseStatus,
+  PaymentStatus,
   PropertyStatus,
   RoomStatus,
 } from '@/api/types'
@@ -118,4 +119,32 @@ export function ChargeStatusBadge({
       <span className="text-xs text-ink-muted">({t.charge.statuses[status]})</span>
     </span>
   )
+}
+
+/**
+ * Lo stato di un pagamento.
+ *
+ * **Nessun valore è derivato**, a differenza degli addebiti e dei contratti: qui
+ * `status` è sempre quello memorizzato, quindi non c'è una coppia da mostrare né
+ * un filtro da rifiutare.
+ *
+ * `pending` è `warning` perché **aspetta una persona** — è la coda — e non perché
+ * sia un problema. `cancelled` è `muted` e non `danger`: una dichiarazione
+ * rifiutata è una cosa conclusa, non un guasto.
+ *
+ * I quattro stati che l'API non scrive mai hanno comunque il loro tono: una riga
+ * che li portasse va mostrata, non nascosta dietro un colore di ripiego.
+ */
+const paymentTone: Record<PaymentStatus, BadgeTone> = {
+  pending: 'warning',
+  authorized: 'info',
+  succeeded: 'success',
+  failed: 'danger',
+  cancelled: 'muted',
+  refunded: 'muted',
+  partially_refunded: 'info',
+}
+
+export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
+  return <Badge tone={paymentTone[status]}>{t.payment.statuses[status]}</Badge>
 }
