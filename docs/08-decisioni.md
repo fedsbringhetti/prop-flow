@@ -2075,3 +2075,158 @@ inglese.
 che oggi non ci sono: le notifiche push, che richiedono un adattatore di
 `Notifier`, e la fotocamera. È scritto qui perché chi farà quella fetta lo trovi
 invece di riderivarlo.
+
+---
+
+<a id="adr-040"></a>
+
+## ADR-040 — La perdita è un numero a sé, ed è il residuo
+
+**4 settembre 2026.** Chiude le due semantiche che la fetta della dashboard aveva
+lasciato aperte, e che erano scritte nel tipo `OwnerDashboard` perché chi le avrebbe
+decise sarebbe arrivato da lì. La finestra in cui cambiarle era additiva la chiude
+il primo client: questa è quella occasione.
+
+### Il difetto: un numero che scende senza dire perché
+
+`app.v_owner_dashboard` portava otto numeri e in nessuno si vedeva una perdita.
+`void` e `written_off` escono entrambi da `total_outstanding` e da
+`overdue_charges` — dalla migration `0024`, che è corretta — e da lì in poi sono
+**indistinguibili**. Il proprietario vedeva l'insoluto scendere e non aveva modo di
+sapere se fosse sceso perché qualcuno aveva pagato o perché si era rinunciato a
+incassare.
+
+I due stati sono diversi in natura, e la distinzione era già scritta nel dominio:
+`void` dice «non doveva essere chiesto», `written_off` dice «era dovuto e ci
+rinunciamo». Solo il secondo è una perdita, e la dashboard è il primo report.
+
+### La decisione, che sono tre cose e non una
+
+**1. Un nono numero, `written_off_total`** (migration `0032`), sommato sui soli
+addebiti `written_off`. Si **aggiunge** e non ridefinisce: `total_outstanding`
+continua a dire quanto è ancora dovuto. Aggiungere un campo è additivo; cambiare
+cosa significa un campo che un client legge già è una rottura.
+
+**2. La perdita è il residuo, non l'importo.** Un addebito da 800 € con 300 €
+incassati e poi stornato è una perdita di **500**: gli altri trecento sono entrati.
+La vista somma quindi `amount - paid_amount`.
+
+**`outstanding_amount` non poteva produrlo**, ed è la parte che merita di essere
+scritta: la `0024` lo azzera proprio su `written_off`. È la **stessa colonna** che
+rende questo numero necessario — è azzerandola che la perdita è sparita dalla vista
+— e che non può calcolarlo. Chi ci arriva cercando la via breve la trova, e non
+funziona.
+
+Nessun `GREATEST(..., 0)`: un sovrapagamento su un addebito poi stornato dà una
+perdita negativa, e troncarla nasconderebbe uno scarto che la contabilità esiste per
+scoprire. È lo stesso argomento con cui la `0024` tiene `paid` fuori dagli stati che
+azzerano.
+
+**3. Lo storno si estende a `partially_paid`, e l'annullamento no.** Senza questo,
+il nono numero avrebbe contato **metà** delle perdite per una ragione strutturale:
+`Charge::write_off` era ammesso dal solo `issued`, quindi un addebito su cui fosse
+entrato del denaro non era stornabile. E il caso non è di scuola — l'inquilino che
+versa trecento euro su ottocento e sparisce è precisamente il caso in cui una
+perdita si materializza.
+
+Un numero che dice meno del proprio nome è peggio di un numero assente, perché chi
+lo legge non ha modo di sapere che è parziale. Le due cose stanno quindi nella
+stessa fetta.
+
+**`void` resta al solo `issued`**, e l'asimmetria è deliberata: annullare un
+addebito su cui è entrato del denaro significherebbe che qualcosa è stato ricevuto
+contro una pretesa che non è mai esistita, e a quella domanda questo modello non
+risponde. Lo storno non ce l'ha — l'incassato resta incassato e si rinuncia al resto
+— ed è la via che il client indica al posto del bottone che toglie.
+
+Nessuna migration per il lato dominio: la `0023` concede già l'`UPDATE` sulla sola
+`status`.
+
+### Il credito da sovrapagamento si evidenzia, e non si filtra
+
+Era la seconda semantica aperta. Un `outstanding_amount` negativo è un credito verso
+l'inquilino, e la vista lo esclude dal totale con `WHERE outstanding_amount > 0`.
+
+**Resta fuori dalla dashboard**: è un cruscotto di ciò che è dovuto, e un credito non
+è un insoluto negativo. Compensarlo cambierebbe il significato di un numero che un
+client legge già — quindi una rottura — e nasconderebbe esattamente lo scarto che la
+contabilità esiste per scoprire.
+
+**Si mostra per addebito**, nell'elenco e nella scheda, con la parola accanto al
+numero e non con il solo colore.
+
+**Filtrarlo lato server non si può**, e va detto perché sembra un'omissione: un
+sovrapagamento porta lo stato ricalcolato a `paid`, quindi `?outstanding=true` lo
+esclude per costruzione, e `ChargeQuery` non ha nulla sul segno del residuo. Un
+filtro vero vorrebbe un parametro nuovo e un indice parziale che lo regga, cioè il
+lavoro che `charges_outstanding_ix` è costato per l'insoluto. È **rinviato con la
+sua ragione**: il caso d'uso «mostrami tutti i crediti» non è ancora nato, e
+costruire l'indice prima del caso è il modo di costruire quello sbagliato.
+
+### La conseguenza operativa: `CREATE OR REPLACE VIEW` riscrive tutto
+
+Trovata sbagliando, e la si scrive perché il sintomo è muto. La `0032` è partita dal
+corpo della `0015`, che è il primo che si trova cercando
+`CREATE VIEW app.v_owner_dashboard`, e ha così **rimesso in piedi il difetto che la
+`0017` aveva corretto**: `status = 'active'` al posto di
+`app.lease_in_force(...)` in tre punti, cioè contratti scaduti di nuovo contati fra
+quelli in essere e i loro canoni di nuovo sommati.
+
+La migrazione non ha protestato — non aveva motivo — e il sintomo sarebbe stato due
+numeri gonfi. L'ha vista un test di persistenza che la `0017` si era lasciata dietro
+apposta.
+
+**Ne segue una regola per ogni prossima sostituzione di vista: il corpo si riprende
+dall'ultima migration che l'ha toccata, non dalla prima che l'ha creata.**
+
+### Il filtro parametrico non usa un indice parziale su un enum
+
+L'altra conseguenza misurata, e vale oltre questa vista. `GET /api/v1/payments`
+porta con sé `payments_pending_ix`, parziale su `status = 'pending'`. Il pattern che
+ogni altro elenco di questo progetto usa —
+`($1::text IS NULL OR status = $1::app.payment_status)` — su un banco di 80 000
+pagamenti **non lo tocca**: produce un `Bitmap Index Scan` su
+`payments_org_status_ix` seguito da un `Sort`.
+
+La causa non è la selettività. Il cast da `text` a un enum passa da `enum_in`, che
+PostgreSQL dichiara `STABLE` e non `IMMUTABLE`: `'pending'::text::app.payment_status`
+non viene ridotto a una costante nemmeno nel piano *custom*, e senza una costante il
+planner non può dimostrare che il predicato della query implica quello dell'indice.
+
+È la stessa conclusione di `charges_outstanding_ix` per una ragione diversa — là il
+problema è che da un `bool` non si deriva *quali* valori l'indice contenga — e lo
+stesso rimedio: **il predicato si scrive per esteso**. Il repository aggiunge una
+condizione ridondante, accesa da un booleano che vale `true` esattamente quando il
+filtro chiede `pending`. Con quella il piano diventa
+`Index Scan using payments_pending_ix`, e ci resta anche dopo le sei esecuzioni che
+portano al piano generico. Su ogni altro stato il ramo è spento e il risultato non
+cambia, quindi `?status=` resta un filtro generale.
+
+### `payer_user_id` resta facoltativo nell'API e diventa obbligatorio nel form
+
+Il debito diceva «con il primo client si vede se l'attribuzione debba diventare
+obbligatoria, o se convenga dedurla dalle parti del contratto». Costruendolo si è
+visto che **nessuna delle due**, e che il problema stava altrove.
+
+**Obbligatorio nell'API sarebbe sbagliato**: un bonifico da un conto che non si sa a
+chi ricondurre esiste, e togliere il campo nullo lascerebbe l'API senza un modo di
+dirlo — non c'è un valore sentinella per «deliberatamente non attribuito» che non sia
+`NULL`.
+
+**Dedurlo dalle parti del contratto non si può**: un contratto ha spesso più
+inquilini con le loro quote, quindi «il» pagante non è determinato; e una parte senza
+`user_id` è un invitato che non ha ancora accettato, a cui attribuire un incasso è
+impossibile perché la policy confronta un identificatore che non esiste ancora.
+
+**Il difetto vero è che ometterlo era il default.** Il rimedio sta nel form: nessun
+vuoto inviabile, un elenco di chi ha accettato, e una voce «non attribuito» che
+porta scritta la sua conseguenza — che chi ha pagato non vedrà quella riga nel
+proprio elenco, pur vedendone l'effetto sul residuo. Un campo dimenticato diventa
+così una scelta dichiarata, senza togliere una capacità legittima.
+
+Quando **nessuno** ha ancora accettato l'invito resta la sola voce «non attribuito»,
+con la ragione: è uno stato vero che l'API non può distinguere dalla distrazione, e
+il client lo dice invece di offrire un menù di nomi che darebbero tutti lo stesso
+esito.
+
+Il debito è quindi **chiuso**, e la colonna resta com'è.

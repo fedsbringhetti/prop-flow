@@ -5,8 +5,8 @@ usano `security_invoker`, introdotto in 15, senza il quale una vista girerebbe c
 i diritti del proprietario e aggirerebbe la Row Level Security del chiamante.
 
 Numeri dello schema attuale: **24 tabelle** più `audit_log` partizionata,
-**35 enum**, **6 domini**, **170 indici**, **66 policy RLS**, **50 trigger**,
-**4 viste**, **34 funzioni**, **31 migration**.
+**35 enum**, **6 domini**, **171 indici**, **66 policy RLS**, **50 trigger**,
+**4 viste**, **34 funzioni**, **32 migration**.
 
 ## Diagramma ER
 
@@ -437,7 +437,7 @@ Contengono solo aggregazioni derivabili, nessuna regola di business.
 | `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto. **Residuo azzerato e mai scaduto** per `void` e `written_off` |
 | `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living. **Comprende chi è uscito** finché il suo netto è diverso da zero |
 | `v_property_occupancy` | Stanze totali e occupate, percentuale, contratti in essere e loro canone |
-| `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere |
+| `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere, e — dalla `0032` — le **perdite**, cioè il residuo degli addebiti stornati |
 
 Le due viste sui contratti non filtrano `status = 'active'` ma
 `app.lease_in_force(status, start_date, end_date)`: lo stato memorizzato resta
