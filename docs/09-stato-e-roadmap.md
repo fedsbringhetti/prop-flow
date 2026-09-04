@@ -464,15 +464,15 @@ Restano quindi **due fette**:
 
 | | Fetta | Stato |
 |---|---|---|
-| 1 | [L'inquilino](#fetta-b--linquilino) — dodici passi, punto di taglio dopo `B4` | la prossima |
+| 1 | [L'inquilino](#fetta-b--linquilino) — dodici passi, punto di taglio dopo `B5` | la prossima |
 | 2 | [Prima degli utenti veri](#prima-degli-utenti-veri) — notifiche, poi il resto | quando il prodotto lo apre qualcun altro |
 
 ### Fetta B — l'inquilino
 
 Pianificata il **4 settembre 2026**, dopo la fetta A e leggendo il codice che tocca.
-**Dodici passi**, `B0`–`B11`. Il **punto di taglio è dopo `B4`**: lì l'inquilino ha un
-prodotto che sta in piedi — entra, vede che cosa deve, segnala un guasto e ne segue il
-corso — e le spese co-living sono una fetta B-bis.
+**Dodici passi**, `B0`–`B11`. Il **punto di taglio è dopo `B5`**: lì l'inquilino ha un
+prodotto che sta in piedi — entra, vede che cosa deve, **dichiara di aver pagato**,
+segnala un guasto e ne segue il corso — e le spese co-living sono una fetta B-bis.
 
 #### Obiettivo
 
@@ -497,7 +497,8 @@ lavoro dal piano invece di aggiungerne.
 | Assegnazione | **solo a sé stessi**, nessun endpoint delle persone | `GET /members` dentro questa fetta |
 | Pagina iniziale dell'inquilino | lo scadenzario, nessuna rotta nuova | una dashboard dell'inquilino |
 | Composizione dei gruppi di spesa | dai residenti dell'immobile, che esistono già | un elenco di persone dell'organizzazione |
-| Punto di taglio | dopo `B4`, con le segnalazioni complete | dopo le spese, cioè mai |
+| Navigazione dell'inquilino | addebiti, segnalazioni, contratto, bollette | tutto ciò che l'API gli concede, o il solo minimo |
+| Punto di taglio | dopo `B5`, **dichiarazione di pagamento compresa** | dopo le sole segnalazioni, lasciando il giro del denaro a metà |
 
 #### Decisioni prese, con il perché
 
@@ -575,6 +576,18 @@ domanda di prodotto che nessuno ha ancora posto: *quali* numeri. È **rinviata c
 sua ragione**, ed è già annotata nel tipo `GetOwnerDashboard` («il suo è un altro
 elenco, e sarà un'altra proiezione con la sua rotta»).
 
+**Le voci che vede sono quattro**: *Addebiti*, *Segnalazioni*, *Contratto*, *Bollette*
+— più *Spese* da `B6`. **Riepilogo esce** perché gli risponde `403`.
+
+**Immobili esce**, e la ragione non è la sicurezza: `ListProperties` è `ensure_member` e
+gliene mostrerebbe uno. Una voce di navigazione che porta a un elenco di un elemento è
+rumore, e la scheda dell'immobile resta raggiungibile dal contratto — che è anche il
+modo in cui ci si arriva pensando.
+
+**Le bollette restano**, ed è la voce su cui si esita: sono lette e non agite. Ma sono
+la ragione di metà dei suoi addebiti, e un riaddebito che non si può risalire a un
+documento è una cifra da accettare sulla fiducia.
+
 ##### 5. Il guscio si adatta al ruolo, ed è un passo suo
 
 È la cosa che l'abbozzo precedente di questa fetta non nominava, e che si vede
@@ -641,8 +654,9 @@ a niente».
 ##### `B2` — Client: il guscio si adatta al ruolo
 
 La navigazione diventa una funzione del ruolo, e la pagina iniziale con essa
-(decisioni 4 e 5). Le azioni di scrittura riservate allo staff spariscono per chi non
-lo è.
+(decisioni 4 e 5). Per l'inquilino: *Addebiti*, *Segnalazioni*, *Contratto*,
+*Bollette*, e atterraggio su `/addebiti`. Le azioni di scrittura riservate allo staff
+spariscono per chi non lo è.
 
 **Il ramo sta in un posto solo.** Un `useIsStaff()` letto dalla sessione, e i punti in
 cui si usa contati sulle dita: la navigazione, la rotta iniziale, e i bottoni delle
@@ -658,7 +672,7 @@ Apertura su un immobile (`POST /properties/{id}/tickets`, `ensure_member` — è
 punto in cui l'inquilino prende la parola), elenco con `?open=true`, dettaglio con lo
 storico degli stati, thread dei messaggi **paginato a parte** dal dettaglio.
 
-##### `B4` — Client: segnalazioni, le transizioni ← *punto di taglio*
+##### `B4` — Client: segnalazioni, le transizioni
 
 Le sette sotto-risorse, con i percorsi esatti perché uno di essi non si chiama come il
 suo use case:
@@ -669,28 +683,40 @@ Più il `PATCH /tickets/{id}`, che è **solo i costi** ed è staff.
 
 L'instradamento è **sui codici e non sul ruolo** — vedi le trappole.
 
-##### `B5` — Client: spese co-living, i gruppi
+##### `B5` — Client: la dichiarazione di pagamento ← *punto di taglio*
+
+`POST /charges/{id}/payment-declarations`, dal dettaglio dell'addebito che **esiste
+già** dalla fetta A.
+
+**Sta prima del taglio e non dopo**, ed è un cambiamento rispetto alla prima stesura di
+questo piano: è il passo che chiude il giro che la fetta A ha aperto. Là la coda delle
+dichiarazioni è stata costruita e collaudata **da `curl`**, perché un inquilino non
+aveva un'interfaccia; qui quella coda diventa una cosa che accade da sé. Lasciarlo
+dopo il taglio avrebbe reso il criterio di completamento incoerente con la
+decomposizione — la verifica 3 lo richiede.
+
+**La chiave di idempotenza c'è già**: `@/api/idempotency` dalla fetta A, con i suoi
+cinque test. Va **riusata e non riscritta**, e la condizione è la stessa: si genera
+all'intento e si riusa a ogni tentativo.
+
+Il corpo **non ha `payer_user_id`**: chi dichiara è sempre chi chiama, perché
+`payments_insert` lo esige a chi non è staff. E **non c'è un bottone per ritirarla**:
+vedi le trappole.
+
+##### `B6` — Client: spese co-living, i gruppi
 
 Creazione, composizione dai residenti (decisione 6), ingresso e uscita,
-archiviazione.
+archiviazione. Da qui compare la voce *Spese* nella navigazione.
 
-##### `B6` — Client: spese e saldi
+##### `B7` — Client: spese e saldi
 
 Ripartizione `equal` e `weighted`, quote mostrate, saldi con il netto.
 
-##### `B7` — Client: i regolamenti a due tempi
+##### `B8` — Client: i regolamenti a due tempi
 
 Dichiarazione, conferma di **chi riceve**, rifiuto, e il **ritiro di chi ha
 dichiarato** — che fra i pagamenti non esiste. Vedi le trappole: le due cose si
 somigliano e non sono la stessa.
-
-##### `B8` — Client: la dichiarazione di pagamento dell'inquilino
-
-`POST /charges/{id}/payment-declarations`. **La chiave di idempotenza c'è già**:
-`@/api/idempotency` dalla fetta A, con i suoi cinque test. Va riusata e non riscritta.
-
-Il corpo **non ha `payer_user_id`**: chi dichiara è sempre chi chiama, perché
-`payments_insert` lo esige a chi non è staff.
 
 ##### `B9` — Client: gli allegati sugli owner rimasti
 
@@ -801,8 +827,9 @@ criterio. Le quattro verifiche che contano, tutte da fare **a mano e con due acc
    momento in cui quel riquadro smette di portare ai contratti per mancanza di una
    destinazione propria;
 3. **L'inquilino dichiara di aver pagato dall'interfaccia**, e il proprietario la
-   trova nella coda della fetta A. È il giro che nella fetta A si era potuto provare
-   solo da `curl`;
+   conferma dalla coda della fetta A: il residuo dell'addebito scende. È il giro che
+   nella fetta A si era potuto provare solo da `curl`, ed è la ragione per cui `B5`
+   sta **dentro** il punto di taglio;
 4. **I saldi di un gruppo di spesa sommano a zero**, con un membro uscito che ha
    ancora un conto aperto — il caso per cui la migration `0027` esiste.
 
