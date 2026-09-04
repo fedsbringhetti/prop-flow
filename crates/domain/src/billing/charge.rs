@@ -294,10 +294,15 @@ impl Charge {
     /// deve poter vedere che la richiesta non c'è più; una bolletta inserita male
     /// invece è un documento nostro, e non c'è nessuno a cui dirlo.
     ///
-    /// Ammesso dal solo `issued`, che in questa fetta è l'unico stato che
-    /// l'applicazione produce. Estenderlo a `partially_paid` è una decisione del
-    /// modulo dei pagamenti: annullare un addebito su cui è già entrato del
-    /// denaro chiede prima di dire cosa ne è di quel denaro.
+    /// **Ammesso dal solo `issued`, e resta così.** La domanda che
+    /// `partially_paid` porrebbe — «che ne è del denaro già incassato» — non ha
+    /// risposta qui: annullare significa che la richiesta non è mai esistita, e
+    /// del denaro ricevuto contro una pretesa mai esistita questo modello non sa
+    /// dire niente. Chi si trova in quel caso **storna**, che dice il vero:
+    /// l'incassato resta incassato e si rinuncia al resto — vedi
+    /// [`Self::write_off`], che da `partially_paid` è invece ammesso.
+    ///
+    /// L'asimmetria fra i due è deliberata e non una svista da appianare.
     pub fn void(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
         if !matches!(self.status, ChargeStatus::Issued) {
             return Err(DomainError::Invariant(Invariant::ChargeNotVoidable));
@@ -313,8 +318,32 @@ impl Charge {
     /// «non doveva essere chiesto», `written_off` dice «era dovuto e ci
     /// rinunciamo». Entrambi escono dall'insoluto, ma solo il secondo è una
     /// perdita.
+    ///
+    /// # Ammesso anche da `partially_paid`, e senza quello il numero mentirebbe
+    ///
+    /// Un addebito su cui è entrato del denaro **è** stornabile, ed è anzi il caso
+    /// in cui una perdita si materializza per davvero: l'inquilino che versa
+    /// trecento euro su ottocento e sparisce. Limitare lo storno a `issued` — come
+    /// faceva la fetta contabile, quando i pagamenti non esistevano — renderebbe
+    /// `written_off_total` un numero che conta **metà** delle perdite senza dirlo,
+    /// e un numero che dice meno del proprio nome è peggio di un numero assente.
+    ///
+    /// La domanda che l'annullamento non sa reggere qui non si pone: il denaro
+    /// incassato **resta incassato**, e si rinuncia soltanto al residuo. È per
+    /// questo che `void` resta al solo `issued` e questo no.
+    ///
+    /// **La perdita è quindi il residuo e non l'importo**, e non si legge da
+    /// `outstanding_amount`: la migration `0024` lo azzera proprio su
+    /// `written_off`. La somma la fa `app.v_owner_dashboard` come
+    /// `amount - paid_amount`.
+    ///
+    /// Nessuna migration: la `0023` concede già l'`UPDATE` sulla sola `status`, e
+    /// `partially_paid` è un valore che quella colonna già porta.
     pub fn write_off(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
-        if !matches!(self.status, ChargeStatus::Issued) {
+        if !matches!(
+            self.status,
+            ChargeStatus::Issued | ChargeStatus::PartiallyPaid
+        ) {
             return Err(DomainError::Invariant(Invariant::ChargeNotWriteOffable));
         }
         self.status = ChargeStatus::WrittenOff;
@@ -674,7 +703,8 @@ mod tests {
 
     #[test]
     fn the_transition_table_is_complete() {
-        // void e write_off: dal solo `issued`, e nessuno dei due è ripetibile.
+        // void dal solo `issued`, write_off anche da `partially_paid`; nessuno dei
+        // due è ripetibile.
         let mut voided = charge();
         voided.void(Utc::now()).expect("annullabile");
         assert_eq!(voided.status(), ChargeStatus::Void);
@@ -691,6 +721,58 @@ mod tests {
         assert!(
             written_off.void(Utc::now()).is_err(),
             "un addebito stornato non si annulla"
+        );
+    }
+
+    /// Il caso per cui il nono numero della dashboard esiste: trecento euro su
+    /// ottocento, e poi l'inquilino sparisce.
+    ///
+    /// La perdita è **cinquecento**, non ottocento — gli altri trecento sono
+    /// entrati — e l'asimmetria con l'annullamento è la parte che va fissata: da
+    /// `partially_paid` si storna e non si annulla.
+    #[test]
+    fn a_partially_paid_charge_is_written_off_but_never_voided() {
+        let now = Utc::now();
+
+        let mut partial = charge(); // 800.00, issued
+        assert!(partial.apply_payment(dec("300.00"), now).expect("ammesso"));
+        assert_eq!(partial.status(), ChargeStatus::PartiallyPaid);
+
+        let mut voidable = partial.clone();
+        assert!(
+            voidable.void(now).is_err(),
+            "annullare direbbe che la pretesa non è mai esistita, e trecento euro sono entrati"
+        );
+        assert_eq!(voidable.status(), ChargeStatus::PartiallyPaid);
+
+        partial
+            .write_off(now)
+            .expect("stornabile da partially_paid");
+        assert_eq!(partial.status(), ChargeStatus::WrittenOff);
+        assert!(partial.write_off(now).is_err(), "non è ripetibile");
+
+        // La perdita è il residuo: l'aritmetica che la dashboard somma come
+        // `amount - paid_amount`, e che `outstanding_amount` non può dare perché
+        // la `0024` lo azzera proprio su questo stato.
+        assert_eq!(
+            partial.amount().amount() - dec("300.00"),
+            dec("500.00"),
+            "la perdita è il residuo, non l'importo"
+        );
+    }
+
+    /// Gli altri tre stati restano fuori, e ognuno per una ragione sua: da `paid`
+    /// non c'è niente a cui rinunciare, e `void` e `written_off` sono terminali.
+    #[test]
+    fn writing_off_is_refused_from_every_other_state() {
+        let now = Utc::now();
+
+        let mut paid = charge();
+        paid.apply_payment(dec("800.00"), now).expect("ammesso");
+        assert_eq!(paid.status(), ChargeStatus::Paid);
+        assert!(
+            paid.write_off(now).is_err(),
+            "un addebito coperto non ha un residuo a cui rinunciare"
         );
     }
 
