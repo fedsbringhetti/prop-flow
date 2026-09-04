@@ -984,7 +984,7 @@ pub trait EventSink: Send {
 /// metterla.
 #[async_trait]
 pub trait DashboardRepository: Send {
-    /// Gli otto numeri dell'organizzazione indicata.
+    /// I nove numeri dell'organizzazione indicata.
     ///
     /// `None` significa che la riga **non è visibile al chiamante**: la vista è
     /// `security_invoker` e passa da `organizations_select`, cioè

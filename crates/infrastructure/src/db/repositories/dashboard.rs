@@ -11,13 +11,13 @@ use crate::db::uow::PgUnitOfWork;
 
 /// La dashboard **si legge e non si ricalcola**.
 ///
-/// Nessun `COUNT` scritto qui: gli otto numeri escono da `app.v_owner_dashboard`
+/// Nessun `COUNT` scritto qui: i nove numeri escono da `app.v_owner_dashboard`
 /// così come sono. Riprodurli in SQL nostro sarebbe una seconda definizione di
 /// «insoluto» e di «segnalazione aperta», e le due divergerebbero alla prima
 /// migration che tocca la vista — che è precisamente ciò che la `0024` ha fatto,
 /// togliendo `void` e `written_off` dal residuo.
 ///
-/// I due importi si castano a `numeric` come ovunque: `app.money_amount` è un
+/// I tre importi si castano a `numeric` come ovunque: `app.money_amount` è un
 /// dominio, e il cast rende la decodifica indipendente dalla risoluzione degli OID
 /// dei tipi definiti dall'utente.
 ///
@@ -38,7 +38,8 @@ impl DashboardRepository for PgUnitOfWork {
                     overdue_charges,
                     open_tickets,
                     leases_expiring_90d,
-                    bills_pending_review
+                    bills_pending_review,
+                    written_off_total::numeric     AS written_off_total
                FROM app.v_owner_dashboard
               WHERE org_id = $1",
         )
@@ -54,6 +55,7 @@ impl DashboardRepository for PgUnitOfWork {
         let org_id: uuid::Uuid = try_get(&row, "org_id")?;
         let monthly_rent_expected: Decimal = try_get(&row, "monthly_rent_expected")?;
         let total_outstanding: Decimal = try_get(&row, "total_outstanding")?;
+        let written_off_total: Decimal = try_get(&row, "written_off_total")?;
 
         Ok(Some(OwnerDashboard {
             org_id: OrgId::from_uuid(org_id),
@@ -65,6 +67,7 @@ impl DashboardRepository for PgUnitOfWork {
             open_tickets: try_get(&row, "open_tickets")?,
             leases_expiring_90d: try_get(&row, "leases_expiring_90d")?,
             bills_pending_review: try_get(&row, "bills_pending_review")?,
+            written_off_total,
         }))
     }
 }
