@@ -12,7 +12,7 @@ use crate::expense::{
 };
 use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
-use crate::payment::{IdempotencyKey, Payment};
+use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
 use crate::property::{Property, PropertyResident, PropertyStatus, Room};
 use crate::reporting::OwnerDashboard;
 use crate::shared::{
@@ -673,15 +673,51 @@ pub trait ChargeRepository: Send {
     async fn update_status(&mut self, charge: &Charge) -> RepositoryResult<()>;
 }
 
-/// Filtro di elenco dei pagamenti di un addebito, con paginazione keyset.
+/// Filtro di elenco dei pagamenti, con paginazione keyset.
 ///
-/// **Non c'è un filtro sullo stato**, e non è una dimenticanza: i pagamenti di un
-/// addebito sono pochi — uno, due, raramente di più — e un filtro su un elenco che
-/// sta in una pagina non compra niente. Chi vuole i soli incassi veri guarda
-/// `paid_amount` sul saldo, che è il numero per cui la vista esiste.
+/// # `charge_id` è **opzionale**, e non lo era
+///
+/// La fetta contabile l'aveva obbligatorio, con una ragione scritta: «i pagamenti
+/// di un addebito sono pochi, e un filtro su un elenco che sta in una pagina non
+/// compra niente». Resta vero per l'elenco **di un addebito**, e falso per la
+/// domanda che il modulo dei pagamenti pone dal lato di chi amministra: *quali
+/// dichiarazioni aspettano una conferma, in tutta l'organizzazione*. Senza una
+/// collezione quella domanda non ha risposta, e una dichiarazione si scopre solo
+/// aprendo gli addebiti a uno a uno.
+///
+/// La rotta annidata continua a passare l'addebito valorizzato, quindi il suo
+/// comportamento non cambia: è lo stesso oggetto con un campo in più riempito.
+///
+/// # Nessun `org_id`, e non è una dimenticanza
+///
+/// A restringere all'organizzazione è `payments_select`, che è
+/// `org_id = current_org_id()` più i due rami su pagante e incassante. Un filtro
+/// applicativo ripeterebbe la policy e darebbe l'impressione che la query sia
+/// sicura per conto proprio — è la stessa scelta di [`ExpenseGroupQuery`] e di
+/// [`TicketQuery`].
+///
+/// Ne segue la conseguenza che vale la pena dire ad alta voce: **un inquilino che
+/// chiami la collezione ottiene i propri pagamenti**, non un `403`. A decidere
+/// quali righe siano sue è la policy, non un ramo sul ruolo.
 #[derive(Debug, Clone)]
 pub struct PaymentQuery {
-    pub charge_id: ChargeId,
+    /// L'addebito, quando l'elenco è il suo. `None` è la collezione.
+    pub charge_id: Option<ChargeId>,
+    /// Lo stato, per esteso.
+    ///
+    /// **Il valore che serve è `pending`**, ed è la coda delle dichiarazioni.
+    /// L'indice `payments_pending_ix` della migration `0032` è parziale su quel
+    /// solo valore, quindi la query deve nominarlo: una disuguaglianza non lo
+    /// userebbe. È la stessa forma di `?outstanding=true` sugli addebiti.
+    pub status: Option<PaymentStatus>,
+    /// Il contratto degli addebiti che i pagamenti saldano.
+    ///
+    /// **Non è una colonna di `app.payments`**: il legame passa da
+    /// `payable_id → app.charges.lease_id`, quindi il filtro è un `EXISTS` e non
+    /// un confronto. Esiste perché la domanda «chi mi deve dei soldi su questo
+    /// contratto» si pone dalla scheda del contratto, dove l'addebito non è ancora
+    /// scelto.
+    pub lease_id: Option<LeaseId>,
     pub after: Option<PaymentId>,
     pub limit: u16,
 }
@@ -689,6 +725,18 @@ pub struct PaymentQuery {
 impl PaymentQuery {
     pub const DEFAULT_LIMIT: u16 = 25;
     pub const MAX_LIMIT: u16 = 100;
+}
+
+impl Default for PaymentQuery {
+    fn default() -> Self {
+        Self {
+            charge_id: None,
+            status: None,
+            lease_id: None,
+            after: None,
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -728,7 +776,9 @@ pub trait PaymentRepository: Send {
         key: &IdempotencyKey,
     ) -> RepositoryResult<Option<Payment>>;
 
-    async fn list_for_charge(&mut self, query: &PaymentQuery) -> RepositoryResult<PaymentPage>;
+    /// Elenca i pagamenti che il filtro seleziona, dentro il perimetro della
+    /// policy. Senza `charge_id` è la collezione dell'organizzazione.
+    async fn list(&mut self, query: &PaymentQuery) -> RepositoryResult<PaymentPage>;
 
     /// Somma dei pagamenti che **contano nel saldo** di un addebito.
     ///

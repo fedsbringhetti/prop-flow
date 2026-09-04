@@ -8,7 +8,7 @@ use propflow_application::use_cases::payment::{
 };
 use propflow_domain::DomainError;
 use propflow_domain::payment::{Payable, Payment, PaymentMethod, PaymentStatus};
-use propflow_domain::shared::{ChargeId, PaymentId, UserId};
+use propflow_domain::shared::{ChargeId, LeaseId, PaymentId, UserId};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -38,6 +38,15 @@ use crate::state::AppState;
 /// abbastanza da doverlo dire: `payments_update` è staff soltanto, quindi chi
 /// dichiara può creare qualcosa che poi non può disfare. L'uscita esiste ed è il
 /// rifiuto, che è dello staff.
+///
+/// **Due elenchi e non uno**, e la ragione non è la simmetria REST.
+/// `/charges/{id}/payments` risponde «quali pagamenti ha ricevuto questo
+/// addebito»: è una sotto-risorsa, quindi un addebito invisibile dà `404` e non
+/// una pagina vuota. `/payments` risponde a una domanda che quella rotta non può
+/// porre — *quali dichiarazioni aspettano una conferma, in tutta
+/// l'organizzazione* — e senza di essa una dichiarazione si scoprirebbe solo
+/// aprendo gli addebiti a uno a uno. È la rotta che rende la coda una cosa
+/// esistente, e non una vista che si costruisce a mano.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -48,6 +57,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/charges/{charge_id}/payment-declarations",
             post(declare_payment),
         )
+        .route("/api/v1/payments", get(list_all_payments))
         .route("/api/v1/payments/{id}", get(payment_detail))
         .route("/api/v1/payments/{id}/confirm", post(confirm_payment))
         .route("/api/v1/payments/{id}/reject", post(reject_payment))
@@ -272,6 +282,50 @@ pub struct ListPaymentsParams {
     pub limit: Option<u16>,
 }
 
+/// I filtri della collezione.
+///
+/// **Non c'è un parametro per l'organizzazione**, e non è una dimenticanza: a
+/// restringere è `payments_select`, che è `org_id = current_org_id()` più i due
+/// rami su pagante e incassante. Vale per ogni altra collezione di questa API.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListAllPaymentsParams {
+    /// Lo stato, per esteso. **`pending` è la coda delle dichiarazioni**, ed è il
+    /// valore per cui questa rotta esiste.
+    ///
+    /// A differenza degli addebiti e dei contratti qui **nessun valore è
+    /// derivato**: lo stato di un pagamento è sempre quello memorizzato, quindi
+    /// non c'è un `422` da produrre su un filtro. Quattro dei sette valori
+    /// descrivono però situazioni che questa API non scrive mai — `authorized`,
+    /// `failed`, `refunded`, `partially_refunded` — e filtrarli restituisce
+    /// legittimamente zero righe.
+    #[serde(default)]
+    pub status: Option<PaymentStatusDto>,
+    /// Il contratto degli addebiti che i pagamenti saldano.
+    ///
+    /// **Non è una colonna di `app.payments`**: il legame passa dall'addebito, e
+    /// il filtro è quindi un `EXISTS` sul contratto dell'addebito pagato.
+    #[serde(default)]
+    pub lease_id: Option<Uuid>,
+    #[serde(default)]
+    pub after: Option<Uuid>,
+    #[serde(default)]
+    pub limit: Option<u16>,
+}
+
+impl From<PaymentStatusDto> for PaymentStatus {
+    fn from(value: PaymentStatusDto) -> Self {
+        match value {
+            PaymentStatusDto::Pending => Self::Pending,
+            PaymentStatusDto::Authorized => Self::Authorized,
+            PaymentStatusDto::Succeeded => Self::Succeeded,
+            PaymentStatusDto::Failed => Self::Failed,
+            PaymentStatusDto::Cancelled => Self::Cancelled,
+            PaymentStatusDto::Refunded => Self::Refunded,
+            PaymentStatusDto::PartiallyRefunded => Self::PartiallyRefunded,
+        }
+    }
+}
+
 /// `201` se il pagamento è stato scritto adesso, `200` se la chiave di idempotenza
 /// era già stata usata e si sta restituendo quello di prima.
 ///
@@ -398,7 +452,60 @@ async fn list_payments(
         .execute(
             &context,
             ListPaymentsQuery {
-                charge_id: ChargeId::from_uuid(charge_id),
+                charge_id: Some(ChargeId::from_uuid(charge_id)),
+                after: params.after.map(PaymentId::from_uuid),
+                limit: params.limit,
+                ..ListPaymentsQuery::default()
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(PaymentPageResponse {
+        items: page
+            .items
+            .iter()
+            .map(PaymentResponse::from_domain)
+            .collect(),
+        next_cursor: page.next_cursor.map(|id| id.as_uuid()),
+    }))
+}
+
+/// La coda delle dichiarazioni, e ogni altro elenco di pagamenti dell'organizzazione.
+///
+/// **Un elenco vuoto è una risposta e non un `404`**: qui non c'è una risorsa
+/// padre di cui verificare la visibilità, quindi «non ci sono pagamenti» e «non ce
+/// ne sono di tuoi» danno la stessa pagina — e devono, perché distinguerle
+/// richiederebbe di leggere righe che al chiamante non spettano.
+///
+/// **Non è staff soltanto.** A un inquilino risponde `200` con i **propri**
+/// pagamenti: a scegliere le righe è `payments_select`, non un ramo sul ruolo. È
+/// la differenza con `/dashboard`, dove il controllo applicativo *stringe* la
+/// policy invece di ripeterla.
+#[utoipa::path(
+    get, path = "/api/v1/payments", tag = "pagamenti",
+    params(ListAllPaymentsParams),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Pagina di pagamenti dell'organizzazione attiva, ristretta dalla policy a ciò che il chiamante può vedere", body = PaymentPageResponse),
+        (status = 401, description = "Autenticazione richiesta", body = crate::error::ProblemDetails),
+        (status = 403, description = "Nessuna organizzazione attiva, o non se ne è membri", body = crate::error::ProblemDetails),
+    )
+)]
+async fn list_all_payments(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Query(params): Query<ListAllPaymentsParams>,
+) -> ApiResult<Json<PaymentPageResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let page = state
+        .list_payments
+        .execute(
+            &context,
+            ListPaymentsQuery {
+                charge_id: None,
+                status: params.status.map(PaymentStatus::from),
+                lease_id: params.lease_id.map(LeaseId::from_uuid),
                 after: params.after.map(PaymentId::from_uuid),
                 limit: params.limit,
             },

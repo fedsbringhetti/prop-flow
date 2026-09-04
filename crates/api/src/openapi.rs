@@ -83,6 +83,7 @@ use utoipa::{Modify, OpenApi};
         crate::routes::payments::record_payment,
         crate::routes::payments::declare_payment,
         crate::routes::payments::list_payments,
+        crate::routes::payments::list_all_payments,
         crate::routes::payments::payment_detail,
         crate::routes::payments::confirm_payment,
         crate::routes::payments::reject_payment,
