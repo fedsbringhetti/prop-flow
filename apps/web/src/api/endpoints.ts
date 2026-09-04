@@ -12,6 +12,9 @@ import type {
   LeaseParty,
   LeasePartyRole,
   Page,
+  Payment,
+  PaymentMethod,
+  PaymentStatus,
   Property,
   PropertyResident,
   PropertyStatus,
@@ -431,10 +434,150 @@ export function issueCharge(
   return client.post<Charge>(`/leases/${leaseId}/charges`, input)
 }
 
+export function getCharge(client: ApiClient, id: Uuid): Promise<Charge> {
+  return client.get<Charge>(`/charges/${id}`)
+}
+
 export function voidCharge(client: ApiClient, id: Uuid): Promise<Charge> {
   return client.post<Charge>(`/charges/${id}/void`, {})
 }
 
+/**
+ * Rinuncia all'incasso.
+ *
+ * Ammesso anche su un addebito **parzialmente pagato**, a differenza
+ * dell'annullamento: l'incassato resta incassato e si rinuncia al residuo. Su uno
+ * `paid`, `void` o già stornato risponde `409 charge.invalid_transition`.
+ */
 export function writeOffCharge(client: ApiClient, id: Uuid): Promise<Charge> {
   return client.post<Charge>(`/charges/${id}/write-off`, {})
+}
+
+// ---------------------------------------------------------------------------
+// Pagamenti
+
+export interface PaymentFilters {
+  status?: PaymentStatus | undefined
+  lease_id?: Uuid | undefined
+  after?: Uuid | undefined
+}
+
+/**
+ * La collezione dei pagamenti dell'organizzazione.
+ *
+ * **Con `status: 'pending'` è la coda delle dichiarazioni**, ed è la ragione per
+ * cui questa rotta esiste: senza, una dichiarazione si troverebbe solo aprendo gli
+ * addebiti a uno a uno.
+ *
+ * A restringere le righe è la policy e non un ruolo: un inquilino che la chiami
+ * riceve `200` con i **propri** pagamenti. Nessuno di questi stati è derivato,
+ * quindi nessun filtro risponde `422` — è la differenza con gli addebiti, dove
+ * `?status=overdue` è rifiutato.
+ */
+export function listPayments(
+  client: ApiClient,
+  filters: PaymentFilters = {},
+): Promise<Page<Payment>> {
+  return client.get<Page<Payment>>(
+    `/payments${query({
+      limit: LIMIT,
+      status: filters.status,
+      lease_id: filters.lease_id,
+      after: filters.after,
+    })}`,
+  )
+}
+
+/** I pagamenti di un addebito. Su un addebito che non si vede risponde `404`. */
+export function listChargePayments(
+  client: ApiClient,
+  chargeId: Uuid,
+  after?: Uuid,
+): Promise<Page<Payment>> {
+  return client.get<Page<Payment>>(
+    `/charges/${chargeId}/payments${query({ limit: LIMIT, after })}`,
+  )
+}
+
+export function getPayment(client: ApiClient, id: Uuid): Promise<Payment> {
+  return client.get<Payment>(`/payments/${id}`)
+}
+
+export interface RecordPaymentInput {
+  amount: string
+  method: PaymentMethod
+  /** Assente significa «adesso». */
+  paid_at?: string
+  reference?: string
+  /**
+   * A chi attribuire l'incasso.
+   *
+   * **Non è anagrafica, ed è una scelta esplicita.** Ometterlo lascia il pagamento
+   * visibile allo staff soltanto: chi ha pagato non lo vedrà nel proprio elenco,
+   * pur vedendone l'effetto sul saldo. È lecito — un bonifico da un conto che non
+   * si sa a chi ricondurre esiste — ma va scelto, non dimenticato.
+   */
+  payer_user_id?: string
+}
+
+/**
+ * Registra un incasso: nasce **`succeeded`** e muove il saldo.
+ *
+ * `201` se è stato scritto adesso, `200` se la chiave era già stata usata e si sta
+ * restituendo quello di prima. **Per il client i due sono lo stesso esito
+ * riuscito**, ed è la ragione per cui `ApiClient` non li distingue: costringere a
+ * distinguerli inviterebbe a trattare il secondo come un errore, che è
+ * precisamente ciò che l'idempotenza esiste per evitare.
+ *
+ * La chiave si genera **all'intento** e si riusa a ogni tentativo: vedi
+ * `@/api/idempotency`.
+ */
+export function recordPayment(
+  client: ApiClient,
+  chargeId: Uuid,
+  input: RecordPaymentInput,
+  idempotencyKey: string,
+): Promise<Payment> {
+  return client.post<Payment>(`/charges/${chargeId}/payments`, input, {
+    headers: { 'idempotency-key': idempotencyKey },
+  })
+}
+
+export interface DeclarePaymentInput {
+  amount: string
+  method: PaymentMethod
+  paid_at?: string
+  reference?: string
+}
+
+/**
+ * L'inquilino dichiara di aver pagato: nasce **`pending`** e **non muove il
+ * saldo**.
+ *
+ * **Non c'è `payer_user_id`**: chi dichiara è sempre chi chiama, perché
+ * `payments_insert` lo esige a chi non è staff. Passarlo produrrebbe zero righe
+ * inserite, cioè `auth.denied_by_policy`.
+ */
+export function declarePayment(
+  client: ApiClient,
+  chargeId: Uuid,
+  input: DeclarePaymentInput,
+  idempotencyKey: string,
+): Promise<Payment> {
+  return client.post<Payment>(`/charges/${chargeId}/payment-declarations`, input, {
+    headers: { 'idempotency-key': idempotencyKey },
+  })
+}
+
+/** Conferma: da qui il saldo si muove e lo stato dell'addebito si ricalcola. */
+export function confirmPayment(client: ApiClient, id: Uuid): Promise<Payment> {
+  return client.post<Payment>(`/payments/${id}/confirm`, {})
+}
+
+/**
+ * Rifiuta: passa a `cancelled` e **il saldo resta dov'era**, perché una
+ * dichiarazione `pending` non lo aveva mosso. Azzera anche `paid_at`.
+ */
+export function rejectPayment(client: ApiClient, id: Uuid): Promise<Payment> {
+  return client.post<Payment>(`/payments/${id}/reject`, {})
 }

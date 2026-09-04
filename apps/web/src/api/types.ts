@@ -43,6 +43,15 @@ export interface Dashboard {
   open_tickets: number
   leases_expiring_90d: number
   bills_pending_review: number
+  /**
+   * Quanto si è rinunciato a incassare: la somma dei **residui** degli addebiti
+   * stornati.
+   *
+   * Non compensa `total_outstanding` e non gli si sottrae: quello dice quanto è
+   * ancora dovuto, questo quanto non lo sarà mai. Un addebito **annullato** non
+   * compare qui, perché non doveva essere chiesto e quindi non è una perdita.
+   */
+  written_off_total: Amount
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +374,70 @@ export interface Charge {
 export interface RechargeResult {
   charge: Charge
   utility_bill: UtilityBill
+}
+
+// ---------------------------------------------------------------------------
+// Pagamenti
+// ---------------------------------------------------------------------------
+
+export type PaymentMethod =
+  | 'bank_transfer'
+  | 'sepa_direct_debit'
+  | 'card'
+  | 'cash'
+  | 'check'
+  | 'other'
+
+/**
+ * Lo stato di un pagamento.
+ *
+ * **Quattro valori su sette l'API non li scrive mai**: `authorized` e `failed`
+ * descrivono ciò che accade presso un provider, e con `manual` un provider non
+ * c'è; `refunded` e `partially_refunded` appartengono ai rimborsi, che sono fuori
+ * perimetro. Compaiono qui perché una riga letta potrebbe portarli, e un valore
+ * sconosciuto deve rompere il typecheck invece di ricadere su un default.
+ *
+ * A differenza degli addebiti e dei contratti **nessuno di questi è derivato**:
+ * si filtrano tutti, e nessuno risponde `422`.
+ */
+export type PaymentStatus =
+  | 'pending'
+  | 'authorized'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'refunded'
+  | 'partially_refunded'
+
+export interface Payment {
+  id: Uuid
+  organization_id: Uuid
+  /** L'addebito che il pagamento salda: **sempre un addebito**, in questa fetta. */
+  charge_id: Uuid
+  status: PaymentStatus
+  amount: Amount
+  currency: string
+  method: PaymentMethod
+  /**
+   * Chi ha pagato, se l'incasso è stato **attribuito**.
+   *
+   * Assente non vuol dire «anonimo»: vuol dire che la riga non è visibile a chi
+   * ha pagato, perché `payments_select` la mostra a `payer_user_id`. Il totale
+   * incassato gli resta comunque visibile nel saldo dell'addebito.
+   */
+  payer_user_id?: Uuid
+  reference?: string
+  /**
+   * Quando il denaro si è mosso. **Nullo su una dichiarazione rifiutata**: un
+   * pagamento che non è avvenuto non ha una data in cui è avvenuto.
+   */
+  paid_at: IsoDateTime | null
+  /** Quando una persona ha riconosciuto il movimento. */
+  reconciled_at: IsoDateTime | null
+  /** Sempre `"0.00"`: i rimborsi sono fuori perimetro. */
+  refunded_amount: Amount
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
 }
 
 // ---------------------------------------------------------------------------
