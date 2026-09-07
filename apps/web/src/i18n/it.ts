@@ -688,6 +688,23 @@ export const it = {
     payerNoCandidates:
       'Nessun inquilino ha ancora accettato l’invito: finché non lo fa, l’incasso può solo restare non attribuito.',
     recorded: 'Incasso registrato.',
+    declare: 'Ho pagato',
+    declareTitle: 'Dichiara di aver pagato',
+    /** Nasce `pending` e **non muove il saldo**: renderlo visibile senza renderlo
+     *  vero è tutto il punto della rotta. */
+    declareExplain:
+      'Dichiari un pagamento che hai già fatto. Il residuo non cambia finché chi amministra non lo conferma.',
+    declaredAmount: 'Quanto hai pagato',
+    declaredAmountHint: 'Puoi dichiarare anche un acconto: il residuo scenderà di quello.',
+    declaredReferenceHint: 'La causale del bonifico, o come si ritrova il movimento.',
+    /** `payments_update` è staff soltanto: un ritiro otterrebbe zero righe
+     *  aggiornate, cioè `auth.denied_by_policy`. Va detto prima, non scoperto
+     *  cercando un bottone che non c'è. */
+    declareNoWithdraw:
+      'Una volta inviata non la puoi ritirare: se ti accorgi di un errore, scrivilo a chi amministra — può rifiutarla.',
+    /** Il residuo non è ancora sceso, e dirlo dove si guarda il numero evita due
+     *  persone convinte di due cose diverse sullo stesso importo. */
+    declaredWaiting: 'Hai una dichiarazione in attesa di conferma su questo addebito.',
     status: 'Stato',
     /** Quando la riga è arrivata: `created_at`, che c'è **sempre**. È la data che
      *  ordina una coda di lavoro. */

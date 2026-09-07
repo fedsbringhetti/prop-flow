@@ -15,6 +15,7 @@ import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { isNegative } from '@/lib/decimal'
 import { formatAmount, formatDate, formatDateTime } from '@/lib/format'
+import { DeclarePaymentDialog } from '../payments/DeclarePaymentDialog'
 import { RecordPaymentDialog } from '../payments/RecordPaymentDialog'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { ChargeStatusBadge, PaymentStatusBadge } from '../shared/status'
@@ -81,9 +82,19 @@ export function ChargeDetailPage() {
               }
               actions={
                 <>
+                  {/* Due vie di ingresso, e a distinguerle è chi chiama: lo staff
+                      registra un incasso che ha già visto sull'estratto conto e
+                      nasce `succeeded`; chi abita **dichiara** di aver pagato, e
+                      nasce `pending` senza muovere il saldo. Non è un ramo di
+                      comodo: sono due rotte diverse, perché `payments_insert`
+                      ammette `is_org_staff(org_id) OR payer_user_id =
+                      current_user_id()` e quelle due condizioni sono le due
+                      rotte. */}
                   {settled || data.status === 'paid' ? null : isStaff ? (
                     <RecordPaymentDialog charge={data} />
-                  ) : null}
+                  ) : (
+                    <DeclarePaymentDialog charge={data} />
+                  )}
                   {!isStaff || settled || data.status === 'paid' ? null : (
                     <ConfirmAction
                       trigger={
@@ -203,24 +214,35 @@ function ChargePayments({ charge }: { charge: Charge }) {
         empty={<Empty title={t.payment.empty} />}
       >
         {(items) => (
-          <TableFrame>
-            <TableCaption>{t.payment.chargePayments}</TableCaption>
-            <thead>
-              <tr>
-                <Th>{t.payment.declaredAt}</Th>
-                <Th>{t.payment.movedAt}</Th>
-                <Th>{t.payment.status}</Th>
-                <Th>{t.payment.method}</Th>
-                <Th>{t.payment.reference}</Th>
-                <ThNumeric>{t.payment.amount}</ThNumeric>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((payment) => (
-                <PaymentRow key={payment.id} payment={payment} />
-              ))}
-            </tbody>
-          </TableFrame>
+          <>
+            {/* Una dichiarazione in attesa **non ha mosso il residuo**. Dirlo qui,
+                accanto ai movimenti e sotto il numero, evita che chi ha appena
+                dichiarato e chi guarda il saldo siano convinti di due cose diverse
+                sullo stesso importo. */}
+            {items.some((payment) => payment.status === 'pending') ? (
+              <p className="border-b border-border-subtle bg-warning-soft px-4 py-2 text-xs text-warning">
+                {t.payment.declaredWaiting}
+              </p>
+            ) : null}
+            <TableFrame>
+              <TableCaption>{t.payment.chargePayments}</TableCaption>
+              <thead>
+                <tr>
+                  <Th>{t.payment.declaredAt}</Th>
+                  <Th>{t.payment.movedAt}</Th>
+                  <Th>{t.payment.status}</Th>
+                  <Th>{t.payment.method}</Th>
+                  <Th>{t.payment.reference}</Th>
+                  <ThNumeric>{t.payment.amount}</ThNumeric>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((payment) => (
+                  <PaymentRow key={payment.id} payment={payment} />
+                ))}
+              </tbody>
+            </TableFrame>
+          </>
         )}
       </Async>
 
