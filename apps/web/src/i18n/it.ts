@@ -95,6 +95,8 @@ export const it = {
     bills: 'Bollette',
     charges: 'Addebiti',
     payments: 'Pagamenti',
+    /** Solo per chi abita: il denaro fra coinquilini non riguarda chi amministra. */
+    expenses: 'Spese',
     main: 'Navigazione principale',
   },
 
@@ -760,6 +762,238 @@ export const it = {
     },
   },
 
+  expense: {
+    title: 'Spese condivise',
+    subtitle: 'Il conto fra coinquilini: chi ha anticipato, chi deve, e a che punto sono i rimborsi.',
+
+    /** Il netto complessivo in cima, che è **come si scopre di dovere qualcosa**.
+     *  Non un contatore in navigazione: quello costerebbe una richiesta per gruppo
+     *  a ogni caricamento del guscio, e non esiste una rotta che dia questo numero
+     *  in una volta sola. */
+    netTitle: 'Il tuo saldo complessivo',
+    netCredit: 'Ti devono',
+    netDebt: 'Devi',
+    netEven: 'Sei in pari.',
+    /** Sono due tasche diverse, con due rimedi diversi: uno si paga al
+     *  proprietario e lo conferma lui, l'altro a un coinquilino e lo conferma lui.
+     *  Affiancarli inviterebbe a sommarli. */
+    netHint: 'Somma dei tuoi saldi in tutti i gruppi. Non c’entra con quello che devi al proprietario: sono due conti separati.',
+    netLoading: 'Sto leggendo i saldi dei tuoi gruppi…',
+    /** Un totale calcolato su una lettura incompleta è peggio di nessun totale:
+     *  sembra vero. */
+    netFailed: 'Non riesco a leggere i saldi di tutti i gruppi: un totale parziale direbbe il falso.',
+
+    groupsEmpty: 'Non sei in nessun gruppo di spesa.',
+    groupsEmptyHint: 'Un gruppo è il conto di una casa: chi anticipa una spesa, e come si divide fra chi ci abita.',
+    create: 'Crea un gruppo',
+    createTitle: 'Nuovo gruppo di spesa',
+    createExplain: 'Ci sei già dentro tu. Gli altri si aggiungono dopo, scegliendoli fra i residenti della casa.',
+    name: 'Nome del gruppo',
+    nameHint: 'Come lo chiamate fra voi: «Casa di via Roma».',
+    kind: 'Tipo',
+    kinds: {
+      coliving: 'Co-living',
+      household: 'Casa',
+      property: 'Immobile',
+    },
+    property: 'Immobile',
+    propertyHint: 'Da qui arrivano i residenti che potrai aggiungere al gruppo.',
+    /** `property_id` è facoltativo per l'API, e un gruppo creato senza immobile
+     *  non ha un elenco di residenti da cui pescare. Il form lo chiede sempre; il
+     *  ramo senza serve a non rompersi sui gruppi creati altrimenti. */
+    propertyMissing: 'Questo gruppo non è legato a un immobile, quindi non c’è un elenco di residenti da cui scegliere.',
+    propertiesEmpty: 'Non risulti in nessun immobile: senza una casa non c’è un conto da tenere.',
+    defaultSplit: 'Come dividete di solito',
+    defaultSplitHint: 'È la consuetudine del gruppo, non una regola: ogni spesa può dividersi in un altro modo.',
+    /** Il menù ha **due** voci scritte a mano. `percentage`, `exact` e `by_usage`
+     *  sono nell'enum e l'API li rifiuta con `422`. */
+    splitMethods: {
+      equal: 'In parti uguali',
+      weighted: 'In proporzione al peso',
+    },
+    displayName: 'Come compari nel gruppo',
+    /** È l'unico nome che questo modulo conservi: saldi, quote e rimborsi portano
+     *  solo l'identificatore. Chi lascia la casa non è più fra i residenti, quindi
+     *  dopo non c'è da nessuna parte da recuperarlo. */
+    displayNameHint: 'Gli altri vedranno questo nome accanto ai tuoi saldi. È l’unico nome che il gruppo conserva.',
+    weight: 'Il tuo peso',
+    memberWeight: 'Il suo peso',
+    /** `weight` sta in `NUMERIC(6,3)`: un quarto decimale dà `422` sul campo. */
+    weightHint: 'Conta solo per la divisione in proporzione: chi sta in doppia scrive 2. Fino a tre decimali.',
+
+    archived: 'Archiviato',
+    archive: 'Archivia',
+    archiveConfirm: 'Chiudere il conto di questo gruppo?',
+    /** «Archivia» in questo progetto ha già due significati, e questo è il terzo:
+     *  qui non nasconde niente, chiude le scritture. */
+    archiveExplain:
+      'Non accetterà più spese né rimborsi. Non è una cancellazione: saldi e spese restano leggibili a tutti. Si chiude anche con dei conti aperti, e quelli restano aperti.',
+    archivedNote: 'Il conto è chiuso: niente più spese né rimborsi. I saldi restano leggibili.',
+
+    members: 'Chi c’è dentro',
+    /** L'intestazione della colonna dei nomi, dove «Chi c'è dentro» sarebbe falsa:
+     *  nei saldi compare anche chi è uscito. */
+    person: 'Persona',
+    membersCount: 'Membri attivi',
+    memberLeft: 'Uscito',
+    memberSince: 'Dentro dal',
+    memberLeftOn: 'Uscito il',
+    /** Quando `display_name` manca — un gruppo creato da `curl`, o da una versione
+     *  che dimentica la regola — e la persona non è più fra i residenti. Mai
+     *  l'UUID: un identificatore in faccia a chi legge non è informazione. */
+    memberUnknown: 'Membro del gruppo',
+    you: 'tu',
+    addMember: 'Aggiungi qualcuno',
+    addMemberTitle: 'Aggiungi al gruppo',
+    addMemberExplain:
+      'Scegli chi, fra i residenti della casa. Il nome che ha lì è quello che tutti vedranno accanto ai suoi saldi, anche fra un anno.',
+    addMemberWho: 'Chi',
+    residentNoAccount: 'non ha ancora accettato l’invito',
+    residentAlreadyIn: 'è già nel gruppo',
+    residentRejoins: 'era uscito: rientra',
+    /** Un residente senza `user_id` si mostra **non selezionabile con la
+     *  ragione**, non si nasconde: nasconderlo farebbe cercare una persona che
+     *  sullo schermo c'è. */
+    addMemberNoCandidates:
+      'Non c’è nessun altro da aggiungere: gli altri residenti sono già nel gruppo o non hanno ancora accettato l’invito.',
+    addMemberOutsider:
+      'Si può aggiungere anche chi non abita più qui: chi se n’è andato lasciando un conto aperto va tenuto nel gruppo, non tolto.',
+
+    leave: 'Esci dal gruppo',
+    leaveConfirm: 'Uscire da questo gruppo?',
+    /** `can_access_expense_group` esige `left_at IS NULL`: chi esce perde di vista
+     *  anche i propri saldi, e rientrare richiede che lo riaggiunga qualcun altro.
+     *  Va detto **prima**, non scoperto dopo. */
+    leaveExplain:
+      'Da quel momento non vedrai più il gruppo: né le spese, né i tuoi saldi. Quello che devi resta e continua a comparire agli altri. Per rientrare dovrà riaggiungerti uno di loro: da solo non puoi.',
+    /** `403 expense_group.membership_not_yours`, e dalla `0029` lo dice anche la
+     *  RLS. Il client offre l'uscita solo per sé. */
+    leaveOnlyYourself: 'Si esce per sé stessi: togliere qualcun altro spetta a chi amministra.',
+
+    balances: 'Saldi',
+    balancesHint: 'Positivo vuol dire che ti devono, negativo che devi.',
+    /** L'API dà i netti per persona e non una minimizzazione dei bonifici. Il
+     *  client non la calcola nemmeno: due client con euristiche diverse
+     *  proporrebbero giri diversi sugli stessi saldi. */
+    whoPaysWhom: 'Chi paga chi lo decidete voi: qui ci sono i saldi, non un giro di bonifici da seguire.',
+    balancesEmpty: 'Nessun saldo: non c’è ancora nessuna spesa.',
+    netBalance: 'Saldo',
+    totalPaid: 'Anticipato',
+    totalOwed: 'Dovuto',
+    settledOut: 'Versato',
+    settledIn: 'Ricevuto',
+    inCredit: 'in credito',
+    inDebt: 'in debito',
+    even: 'in pari',
+    /** Chi è uscito con un conto aperto resta nei saldi (migration `0027`): senza
+     *  di lui la somma smetterebbe di fare zero. Un nome che non è fra i membri
+     *  attivi è la prima domanda che chi guarda si fa. */
+    balanceLeft: 'uscito, conto ancora aperto',
+    /** Verificata con `@/lib/decimal`: l'aritmetica nativa produrrebbe uno zero
+     *  che a volte non è zero. */
+    balancesSumZero: 'La somma dei saldi fa zero, come deve.',
+    balancesSumBroken: 'La somma dei saldi non fa zero: questa lettura è incompleta.',
+
+    expenses: 'Spese',
+    expensesEmpty: 'Nessuna spesa in questo gruppo.',
+    expensesEmptyHint: 'La prima spesa fa comparire i saldi.',
+    record: 'Registra una spesa',
+    recordTitle: 'Nuova spesa',
+    recordExplain: 'Quello che qualcuno ha anticipato per la casa. Si divide subito fra i membri attivi.',
+    description: 'Che cos’era',
+    amount: 'Importo',
+    category: 'Categoria',
+    categories: {
+      utilities: 'Utenze',
+      groceries: 'Spesa',
+      cleaning: 'Pulizie',
+      connectivity: 'Internet e telefono',
+      maintenance: 'Manutenzione',
+      rent: 'Affitto',
+      furniture: 'Arredamento',
+      other: 'Altro',
+    },
+    paidBy: 'Chi ha anticipato',
+    /** `409 expense.payer_not_in_group` a chi non è membro attivo: il menù si
+     *  costruisce da chi ha `left_at` nullo. */
+    paidByHint: 'Solo i membri attivi: chi è uscito dal gruppo non può risultare come chi ha anticipato.',
+    paidByMe: 'Io',
+    expenseDate: 'Quando',
+    expenseDateHint: 'Vuoto significa oggi.',
+    splitMethod: 'Come si divide',
+    notes: 'Note',
+    expenseDetail: 'Dettaglio della spesa',
+    shares: 'Come si è divisa',
+    share: 'Quota',
+    shareWeight: 'Peso',
+    /** Le quote le calcola il server e il client non le ricalcola: il trigger
+     *  `expense_shares_balanced` non ammette che sommino a un altro numero, e il
+     *  centesimo di resto va ai primi in ordine di identificatore. */
+    sharesSum: 'Le quote sommano esattamente all’importo: le calcola il server, e il centesimo di resto va ai primi.',
+
+    settlements: 'Rimborsi',
+    settlementsEmpty: 'Nessun rimborso dichiarato.',
+    settlementsEmptyHint: 'Quando qualcuno dice di aver pagato un altro, lo trovi qui.',
+    declare: 'Ho rimborsato qualcuno',
+    declareTitle: 'Dichiara un rimborso',
+    /** Nasce `pending` e **non muove i saldi**: a muoverli è la conferma di chi
+     *  riceve, che è l'unico a sapere se il denaro è arrivato. */
+    declareExplain:
+      'Un pagamento che hai già fatto a un coinquilino. I saldi non si muovono finché non lo conferma lui.',
+    declareTo: 'A chi hai pagato',
+    /** L'importo proposto è il minimo fra il proprio debito e il credito di quella
+     *  persona: un suggerimento visibile nel campo, non un algoritmo nascosto. */
+    declareToHint: 'Chi è in credito. L’importo proposto è il minore fra quello che devi e quello che gli devono.',
+    declareAmount: 'Quanto hai pagato',
+    declareNoCreditors: 'Nessuno è in credito in questo gruppo: non c’è nessuno da rimborsare.',
+    /** L'asimmetria con le dichiarazioni di pagamento va detta al contrario: là il
+     *  ritiro non c'è perché `payments_update` è staff soltanto, qui c'è perché
+     *  `settlements_update` nomina anche chi ha dichiarato. */
+    declareCanWithdraw:
+      'Finché nessuno l’ha confermata puoi ritirarla — qui il ritiro c’è, a differenza delle dichiarazioni di pagamento al proprietario.',
+    settledAt: 'Data del pagamento',
+    /** `settled_at` resta **nullo** finché non si conferma, e allora ricade sul
+     *  momento della conferma: dire «vuoto significa adesso» sarebbe falso, perché
+     *  «adesso» è quando l'altro guarderà. Una data dichiarata invece resta. */
+    settledAtHint:
+      'Vuoto: varrà il momento in cui l’altro conferma. Se scrivi una data, la conferma non la riscrive.',
+    /** Due colonne e non una, per la ragione già trovata sui pagamenti: finché è
+     *  in attesa la data del movimento non c'è, e una colonna sola sarebbe vuota
+     *  proprio nel caso comune. */
+    declaredAt: 'Dichiarato il',
+    settledAtColumn: 'Pagato il',
+    note: 'Nota',
+    noteHint: 'La causale del bonifico, o come si ritrova il movimento.',
+    from: 'Da',
+    to: 'A',
+    settlementStatuses: {
+      pending: 'In attesa',
+      confirmed: 'Confermato',
+      rejected: 'Rifiutato',
+      cancelled: 'Ritirato',
+    },
+    pendingDoesNotMove: 'In attesa: non muove i saldi finché chi riceve non conferma.',
+    waitingYou: 'Aspetta la tua conferma.',
+    onlyReceiverDecides: 'A confermare o rifiutare è chi riceve; a ritirare chi ha dichiarato.',
+    confirm: 'Conferma',
+    confirmTitle: 'Confermare di aver ricevuto?',
+    /** Confermare **non ricalcola niente**, a differenza della conferma di un
+     *  pagamento: il saldo non è memorizzato da nessuna parte, si legge da una
+     *  vista. */
+    confirmExplain:
+      'Da qui i saldi si muovono. Confermi tu perché sei l’unico a sapere se il denaro è arrivato davvero.',
+    reject: 'Rifiuta',
+    rejectTitle: 'Dire che non è arrivato?',
+    rejectExplain:
+      'La dichiarazione passa a rifiutata. I saldi restano dov’erano: una dichiarazione in attesa non li aveva mossi.',
+    withdraw: 'Ritira',
+    withdrawTitle: 'Ritirare la tua dichiarazione?',
+    withdrawExplain:
+      'Sparisce dalle cose da confermare. I saldi non cambiano, perché non li aveva mai mossi.',
+
+    backToGroups: 'Torna alle spese',
+  },
+
   errors: {
     /** Si instrada sul `code`, che è il contratto: `title` e `detail` sono per
      *  chi legge i log e possono essere riscritti in qualunque momento. */
@@ -806,6 +1040,22 @@ export const it = {
     'payment.idempotency_key_reused':
       'Questa operazione era già stata inviata per un altro addebito. Ricarica e riprova.',
     'request.idempotency_key_missing': 'Manca la chiave dell’operazione. Ricarica la pagina.',
+    'expense_group.not_found': 'Gruppo di spesa non trovato.',
+    'expense_group.archived': 'Il gruppo è archiviato: non accetta più spese né rimborsi.',
+    /** Si esce per sé stessi, e dalla `0029` lo dice anche la Row Level
+     *  Security: il codice è la versione parlante di un rifiuto che la policy
+     *  darebbe comunque. */
+    'expense_group.membership_not_yours': 'Da un gruppo si esce per sé stessi.',
+    'expense_group.membership_exists': 'Questa persona è già nel gruppo.',
+    'expense_group.membership_unchanged': 'Non c’è niente da cambiare: è già così.',
+    'expense.not_found': 'Spesa non trovata.',
+    'expense.payer_not_in_group': 'Chi ha anticipato non è un membro attivo del gruppo.',
+    'settlement.not_found': 'Rimborso non trovato.',
+    'settlement.invalid_transition': 'Questo rimborso non è più in attesa.',
+    /** Confermare e rifiutare spettano a chi riceve, ritirare a chi ha
+     *  dichiarato: due rifiuti diversi, due rimedi diversi. */
+    'settlement.not_addressed_to_you': 'A confermare o rifiutare è chi doveva ricevere il denaro.',
+    'settlement.not_declared_by_you': 'A ritirare una dichiarazione è chi l’ha fatta.',
     'document.not_found': 'Documento non trovato.',
     'request.payload_too_large': 'Il file è troppo grande.',
     'endpoint.not_found': 'Questa pagina non esiste.',

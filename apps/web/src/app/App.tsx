@@ -8,6 +8,8 @@ import { NewBillPage } from '@/features/bills/NewBillPage'
 import { ChargeDetailPage } from '@/features/charges/ChargeDetailPage'
 import { ChargesPage } from '@/features/charges/ChargesPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
+import { ExpenseGroupDetailPage } from '@/features/expenses/ExpenseGroupDetailPage'
+import { ExpenseGroupsPage } from '@/features/expenses/ExpenseGroupsPage'
 import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
 import { LeasesPage } from '@/features/leases/LeasesPage'
 import { NewLeasePage } from '@/features/leases/NewLeasePage'
@@ -82,6 +84,12 @@ export function App() {
           <Route path="/addebiti" element={<ChargesPage />} />
           <Route path="/addebiti/:id" element={<ChargeDetailPage />} />
           <Route path="/pagamenti" element={<PaymentsPage />} />
+          {/* Fuori dalla navigazione di chi amministra e raggiungibili lo stesso:
+              un proprietario che abiti in una delle proprie case è in un gruppo
+              come chiunque altro, e per lui `/spese` risponde. È la stessa scelta
+              di `PaymentsPage`. */}
+          <Route path="/spese" element={<ExpenseGroupsPage />} />
+          <Route path="/spese/:id" element={<ExpenseGroupDetailPage />} />
         </Route>
         {/* Chi è già entrato non deve poter tornare al login da un segnalibro:
             vedrebbe un form che non serve a niente. */}
