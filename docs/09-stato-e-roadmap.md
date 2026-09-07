@@ -261,25 +261,28 @@ cambia il contesto.
 | ~~L'anagrafica è visibile per **organizzazione**, non per immobile~~ — **chiuso** dalla migration `0030` | `users_select` passava da `app.shares_org_with`, quindi un inquilino leggeva nome, email e telefono di ogni persona dell'organizzazione. Ora passa da `app.shares_home_with`, più i due rami sullo staff. Il timore registrato qui — che restringerlo fosse un filtro applicativo e non un confine del database — non si è avverato: è un `ALTER POLICY`, quindi il confine è dove doveva stare. Vedi [ADR-036](08-decisioni.md#adr-036) | Chiuso |
 | Un job dell'OCR abbandonato resta `running` per sempre | Non c'è scadenza e il ritentativo è fuori perimetro: `attempts` sale alla presa in carico ma nessuno riporta a `queued` un job che il processo ha lasciato a metà. **Il sintomo è muto** — una bolletta che non arriva mai a `pending_review` senza che nulla sia in errore — e finché il ritentativo non esiste il rimedio è guardare `app.ai_jobs` per gli `running` vecchi | Insieme al ritentativo, che è la stessa conversazione del primo fornitore vero: quali errori produce, quali si riprovano, e cosa significa un terminale senza `finished_at` — che è anche la domanda che tiene `cancelled` fuori dall'enum scritto |
 | Il worker legge la configurazione dello storage con `std::env::var` | Sei variabili senza una struct che le valida, a differenza dell'API che passa da `AppConfig`. È la stessa scelta del migratore e la stessa ragione — `AppConfig` gli chiederebbe un bind e delle chiavi di firma che non usa — ma vuol dire che il test di guardia `docs_config_reference.rs` **non copre le impostazioni del worker**: la tabella in `docs/07-operazioni.md` può restare indietro senza che nulla fallisca | Se il worker acquisisce altra configurazione. Con sei variabili il rischio è basso; con dodici la guardia va estesa, ed è un parser in più nello stesso test |
-| Il refresh non è coordinato **fra schede** | Il singolo volo è una promessa in memoria, e due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve `BroadcastChannel` o un lock su `localStorage`. **Non è più un'ipotesi**: nella fetta B-bis è accaduto senza cercarlo, con due schede aperte sulla stessa origine — `riuso di un refresh token già ruotato: revocate tutte le sessioni` nei log, e la sessione fuori senza che nessuno avesse fatto niente. «Raro» resta vero solo finché si tiene una scheda sola | `B10` della [fetta di manutenzione](#manutenzione-del-client-b9-e-b10), insieme alla divisione del bundle. È la sola parte della decisione 5 del piano del client che resta aperta, ed è deliberatamente accettata |
+| Il refresh non è coordinato **fra schede** | Il singolo volo è una promessa in memoria, e due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve `BroadcastChannel` o un lock su `localStorage`. **Non è più un'ipotesi**: nella fetta B-bis è accaduto senza cercarlo, con due schede aperte sulla stessa origine — `riuso di un refresh token già ruotato: revocate tutte le sessioni` nei log, e la sessione fuori senza che nessuno avesse fatto niente. «Raro» resta vero solo finché si tiene una scheda sola | `C2` della [fetta C](#fetta-c), ed è il primo dei due passi che riguardano il refresh: nel collaudo con due finestre non è più un caso limite. È la sola parte della decisione 5 del piano del client che resta aperta, ed è deliberatamente accettata |
 | ~~Non esiste un endpoint che elenchi le **organizzazioni** di un utente~~ — **chiuso** dalla fetta B | `GET /api/v1/organizations` restituisce `id`, `name`, `slug` e `role`, ed è **l'unica rotta che risponde senza un'organizzazione attiva**: chiederne una per sapere quali si hanno sarebbe circolare. La previsione era «un `GET /memberships` di poche righe, e la domanda vera è quali colonne esporre»: il percorso è `/organizations` senza prefisso `me` — la Row Level Security restringe già alle proprie — e le colonne sono quattro. Il `localStorage` si è ridotto a ricordare *quale* era attiva. Vedi [ADR-041](08-decisioni.md#adr-041) | Chiuso |
-| Il bundle del client è un pezzo solo, **690 kB (202 kB compressi)** | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette e delle segnalazioni. Era 597 kB alla fetta 1, 614 alla A, 648 alla B, 690 ora — sei schermate in più sono sei schermate in più. Su desktop non si nota, e il proprietario è su desktop; **l'inquilino è su rete mobile**, e ora esiste davvero — la fetta B lo ha portato dentro senza affrontare questo. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | `B10` della [fetta di manutenzione](#manutenzione-del-client-b9-e-b10), che è uscita dalle spese co-living apposta: il suo criterio di completamento non ha niente in comune con «i saldi sommano a zero», e una fetta con due criteri scollegati si taglia a metà mentre la si esegue |
+| Il bundle del client è un pezzo solo, **690 kB (202 kB compressi)** | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette e delle segnalazioni. Era 597 kB alla fetta 1, 614 alla A, 648 alla B, 690 ora — sei schermate in più sono sei schermate in più. Su desktop non si nota, e il proprietario è su desktop; **l'inquilino è su rete mobile**, e ora esiste davvero — la fetta B lo ha portato dentro senza affrontare questo. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | `C5` della [fetta C](#fetta-c), messo per ultimo perché tocca ogni rotta: è il passo che più facilmente rompe qualcos'altro, e lo si vuole avere davanti quando tutto il resto è già verde |
 | Gli allegati si scaricano da un link senza `Authorization` | `GET /documents/{id}/content` risponde `307` verso un URL pre-firmato, e il client ci arriva con un `<a href>` — che è ciò che permette al browser di scaricare invece di tenere i byte in memoria. Il link però non porta il token, quindi funziona solo finché la rotta accetta la richiesta dal contesto della scheda. Oggi funziona; il giorno in cui l'API pretendesse l'header su quella rotta, il download smetterebbe di funzionare **senza che nulla in questo repository cambi** | Se il download smette di funzionare, o quando si decida come firmare i link lato client. L'alternativa è un `fetch` con il token seguito da un `blob:` URL, che tiene il file in memoria — accettabile per un PDF, non per una scansione da 25 MB |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 | La coda delle dichiarazioni non si filtra per immobile | `GET /api/v1/payments` ha `status` e `lease_id`, e non `property_id`: `app.payments` non ha quella colonna e il legame passerebbe da due salti (`payment → charge → lease → property`). Con pochi immobili la coda sta in una pagina e il filtro non compra niente; con decine diventa lunga | Quando gli immobili per organizzazione passano la decina, o se qualcuno chiede «i pagamenti di questa casa» |
 | Un filtro parametrico su un enum non usa un indice parziale | Misurato, non dedotto: `($1::text IS NULL OR status = $1::app.payment_status)` **non** tocca `payments_pending_ix`, perché il cast `text → enum` passa da `enum_in`, che PostgreSQL dichiara `STABLE` e non `IMMUTABLE`, e non viene quindi ridotto a una costante. Il rimedio è nel repository dei pagamenti — una condizione ridondante che nomina il letterale — ed è **locale a quella query**. Ogni altro elenco del progetto usa lo stesso pattern parametrico su uno stato, e nessuno di quelli ha oggi un indice parziale da mancare | Quando un altro elenco filtrato per stato acquisisce un indice parziale. La misura e il rimedio stanno in [ADR-040](08-decisioni.md#adr-040) |
-| Un `.env` più vecchio dello storage impedisce l'avvio dell'API | `.env.example` ha quattro variabili `PROPFLOW__STORAGE__*` che un file copiato prima della fetta dei documenti non ha, e l'API si ferma all'avvio con `missing field access_key_id for key "default.storage"`. È la validazione della configurazione che fa il suo mestiere, ma il messaggio non dice **da dove** debba arrivare la variabile né che `.env.example` la porti | **Incontrato una terza volta** nella fetta B-bis, di nuovo avviando l'API per il giro a mano: si aggira passando le quattro variabili sulla riga di comando. Tre occorrenze in tre fette sono la misura: il messaggio va corretto. Il rimedio non è un default — uno storage configurato a caso è peggio di un avvio fallito — ma un messaggio che nomini `.env.example` |
+| Un `.env` più vecchio dello storage impedisce l'avvio dell'API | `.env.example` ha quattro variabili `PROPFLOW__STORAGE__*` che un file copiato prima della fetta dei documenti non ha, e l'API si ferma all'avvio con `missing field access_key_id for key "default.storage"`. È la validazione della configurazione che fa il suo mestiere, ma il messaggio non dice **da dove** debba arrivare la variabile né che `.env.example` la porti | **Incontrato una terza volta** nella fetta B-bis, di nuovo avviando l'API per il giro a mano: si aggira passando le quattro variabili sulla riga di comando. Tre occorrenze in tre fette sono la misura, ed è `C6` della [fetta C](#fetta-c). Il rimedio non è un default — uno storage configurato a caso è peggio di un avvio fallito — ma un messaggio che nomini `.env.example` |
 
 ## Prossimo passo suggerito
 
-**Nessuna capacità dell'MVP manca più**, ed è la prima volta. La prossima cosa da fare
-è quindi una scelta e non una conseguenza: la
-[manutenzione del client](#manutenzione-del-client-b9-e-b10) — `B9`, gli allegati sugli
-owner rimasti, e `B10`, il bundle diviso per rotta e il refresh coordinato fra schede —
-oppure direttamente [ciò che serve agli utenti veri](#prima-degli-utenti-veri), se
-qualcuno che non sia chi sviluppa sta per aprire il prodotto. **Non c'è fretta su
-nessuna delle due**, e questo è il segnale che il criterio d'ordine qui sotto aveva
-previsto.
+**La [fetta C](#fetta-c)**, e il passo che la apre è `C1`: l'invitato non ha una
+schermata in cui usare il codice che riceve, quindi **oggi il giro del prodotto non si
+chiude senza `curl`**. È il primo di cinque buchi fra l'API e le schermate che nessuna
+fetta aveva cercato, e sono venuti fuori facendo l'audit di quali funzioni del livello
+dati non le chiama nessuno.
+
+Nessuna capacità dell'MVP manca più — ed è la prima volta da sei fette — quindi la C non
+aggiunge niente al prodotto: **lo rende percorribile per intero da due persone con un
+browser**, e finisce con il collaudo completo fatto a mano da chi non ha scritto il
+codice. È la condizione della fase successiva e non un abbellimento: finché il giro si
+chiude solo con `curl`, «funziona» è un'affermazione su cui nessuno può essere smentito.
 
 **Le fette A, B e B-bis sono concluse.** Il giro del denaro dal lato del proprietario è
 chiuso e l'insoluto scende; l'altra metà del prodotto esiste, e l'inquilino entra,
@@ -532,12 +535,13 @@ Restano quindi **due fette**:
 
 | | Fetta | Stato |
 |---|---|---|
-| 1 | [Manutenzione del client](#manutenzione-del-client-b9-e-b10) — `B9` e `B10`, allegati e i due debiti | la prossima, e non urgente |
-| 2 | [Prima degli utenti veri](#prima-degli-utenti-veri) — notifiche, poi il resto | quando il prodotto lo apre qualcun altro |
+| 1 | [C](#fetta-c) — `C1`–`C6`, i buchi che un collaudo completo incontrerebbe, `B9` e `B10` compresi | la prossima |
+| 2 | [Prima degli utenti veri](#prima-degli-utenti-veri) — notifiche, poi il resto | dopo il collaudo, e non prima |
 
-**Con B-bis l'MVP non ha più moduli con lo schema e senza interfaccia.** Quello che
-resta è manutenzione e ciò che serve a utenti veri, ed è la prima volta da sei fette che
-la domanda «cosa manca» non ha per risposta una capacità.
+**Con B-bis l'MVP non ha più moduli con lo schema e senza interfaccia.** Quello che resta
+non è una capacità, ed è la prima volta da sei fette: la C chiude i buchi che restano fra
+l'API e le schermate — **uno dei quali rompe il giro del prodotto** — e finisce con il
+collaudo completo, che è la condizione per aprire a chi non ha scritto il codice.
 
 ### Fetta B-bis — le spese co-living · **conclusa**
 
@@ -551,40 +555,352 @@ backend non è stato toccato — **424 test Rust prima e dopo** — e la decisio
 fetta esisteva per prendere è diventata [ADR-043](08-decisioni.md#adr-043): il nome di un
 membro si scrive all'ingresso, perché dopo non esiste più da nessuna parte.
 
-`B9` e `B10` non sono entrati, ed è la decisione 7 di quel piano applicata: sono la fetta
-di manutenzione qui sotto.
+`B9` e `B10` non sono entrati, ed è la decisione 7 di quel piano applicata: sono `C3` e
+`C5` della fetta qui sotto, che li ha assorbiti insieme alle altre cose minime.
 
 <a id="manutenzione-del-client-b9-e-b10"></a>
+<a id="fetta-c"></a>
 
-### Manutenzione del client — `B9` e `B10`
+### Fetta C — chiudere i buchi che un collaudo completo incontrerebbe
 
-Usciti dalla fetta B-bis con la decisione 7: sono manutenzione e non una capacità, e il
-loro criterio non ha niente in comune con quello delle spese. Restano numerati come nel
-piano della fetta B perché è così che l'archivio vi rimanda.
+Pianificata il **7 settembre 2026**, dopo la B-bis e **facendo l'audit che nessuna fetta
+aveva fatto**: quali operazioni dell'API non si raggiungono da nessuna schermata. Ne sono
+uscite cinque, e **una di esse rompe il giro del prodotto**: nessuna schermata chiama
+`POST /auth/accept-invitation`, quindi un invitato non può entrare senza `curl`.
 
-#### `B9` — Gli allegati sugli owner rimasti
+Assorbe `B9` e `B10` della fetta B — restano nominati così dove l'archivio vi rimanda —
+e li mette accanto alle altre cose minime, perché hanno lo stesso criterio: **che il
+prodotto si possa percorrere per intero da due persone con un browser**, senza che chi
+prova debba conoscere l'API. È la condizione per la fase successiva, non un abbellimento:
+finché il giro si chiude solo con `curl`, «funziona» è un'affermazione su cui nessuno può
+essere smentito.
 
-Immobile, stanza, contratto, segnalazione, addebito — e l'archiviazione di un documento,
-che è l'unica rotta dei documenti che nessuno chiama. Il caricamento sulle bollette
-esiste dalla fetta 1 e ne è il modello, `ScansCard` compreso: il controllo della
-dimensione **prima** di inviare, perché oltre il limite la risposta è un `413` che non
-dice quale limite né su quale file.
+**Sei passi**, `C1`–`C6`, e il **punto di taglio è dopo `C6`**. Il criterio è il
+[collaudo completo](#il-collaudo-completo-che-chiude-la-fetta), che si fa **dopo**, si fa
+**a mano** e lo fa **chi non ha scritto il codice**.
 
-Vale la trappola già registrata fra i debiti: **il link di download non porta
-l'`Authorization`**, e funziona perché il browser lo segue nel contesto della scheda.
+#### L'audit, che è il fatto da cui la fetta nasce
 
-#### `B10` — I due debiti che l'inquilino incontra
+Cinque funzioni del livello dati esistono e **nessuna schermata le chiama**, più una rotta
+che il livello dati non ha affatto:
 
-**La divisione del bundle per rotta**, con i `Suspense` progettati: i tre stati esistono
-già come componenti, e i confini vanno messi dove quelli sono, non dove capita — un
-confine senza il suo stato produce una pagina bianca dove prima c'era uno scheletro. Il
-bundle era 597 kB alla fetta 1, 614 alla A, 648 alla B, e crescerà ancora con le spese.
+| Cosa | Conseguenza | Dove va |
+|---|---|---|
+| `acceptInvitation` | **un invitato non può accettare**: l'unico modo è `curl`. Il proprietario genera il codice e lo consegna, e lì il giro si ferma | `C1` |
+| `revokeInvitation` | un invito mandato all'indirizzo sbagliato non si ritira | `C1` |
+| `updateRoom`, `archiveRoom` | una stanza si crea e poi **non si corregge**: un nome sbagliato resta, e il nome è unico per immobile | `C4` |
+| `DELETE /documents/{id}` — **non c'è nemmeno la funzione** | un allegato caricato per sbaglio non si toglie | `C3` |
+| `getPayment` | nessuna, **ed è voluto**: vedi sotto | in nessun passo |
 
-**Il coordinamento del refresh fra schede.** Il singolo volo è una promessa in memoria e
-due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso
-istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve
-`BroadcastChannel` o un lock su `localStorage`. È rimandato tre volte, ogni volta con la
-sua ragione, e il sintomo resta raro.
+**`getPayment` resta non chiamata apposta.** Il dettaglio di un pagamento non porta niente
+che la riga del suo elenco non abbia già, e una schermata in più che ripete gli stessi sei
+campi è lavoro che si paga due volte — a scriverla e a tenerla allineata. Sta scritto qui
+perché la prossima persona che rifà questo audit la troverà di nuovo, e senza questa riga
+la «completerebbe».
+
+**L'audit va rifatto**, ed è la parte riusabile di questa fetta: si fa confrontando le
+funzioni esportate da `@/api/endpoints` con chi le importa. Trovare una funzione mai
+chiamata non è di per sé un difetto — `getPayment` lo dimostra — ma è **sempre** una
+domanda da porsi, e per due fette non se l'era posta nessuno.
+
+#### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Il codice d'invito | si **incolla in un campo**, e non sta nell'URL | un link `/invito/<token>` da mandare |
+| Dopo l'accettazione | l'organizzazione appena accettata **diventa quella attiva** | lasciare che il default la scelga come sempre |
+| Il refresh fra schede | si **serializza**, non si condivide il token | trasmettere la sessione con `BroadcastChannel` |
+| L'ordine dei passi | il buco dell'invito **per primo**, il bundle per ultimo | il più facile per primo |
+| Il collaudo | **a mano, da chi non ha scritto il codice**, con un percorso scritto | una suite end-to-end automatica |
+| Il perimetro | sei passi, e la fase «utenti veri» **resta fuori** | portarsi dietro le notifiche, che sono lì accanto |
+
+#### Decisioni prese, con il perché
+
+##### 1. Il codice d'invito si incolla, e non viaggia in un URL
+
+`accept_token` è **una credenziale**: chi ce l'ha entra in un'organizzazione. Un link
+`/invito/<token>` sarebbe più comodo e lo scriverebbe in tre posti che nessuno ripulisce —
+la cronologia del browser, il `Referer` verso qualunque risorsa esterna, e i log di
+qualunque proxy davanti al client. Il catalogo lo chiama già «codice», e la modale che lo
+consegna dice che vale sette giorni e si vede una volta sola: la schermata che lo riceve
+resta coerente con quella, ed è **un campo in cui incollare**.
+
+*Alternativa scartata: il link con il token nel percorso.* Comprerebbe un clic e
+venderebbe la credenziale a tre archivi che nessuno considera parte del prodotto.
+
+**Ne segue una conseguenza da progettare, non da subire**: accettare richiede una
+sessione, perché la rotta è autenticata. L'invitato deve quindi **prima avere un
+account**. La schermata lo dice e lo indirizza, invece di rispondere `401` a chi ha
+appena incollato un codice giusto.
+
+##### 2. Accettare sceglie l'organizzazione, ed è l'unico momento in cui si può sapere quale
+
+C'è un debito registrato da due fette: `pick_default_membership` preferisce il ruolo più
+alto — owner, poi manager, poi tenant — e la registrazione crea sempre un'organizzazione
+personale di cui si è owner. Un inquilino che si registra da sé atterra quindi **sempre**
+nella propria organizzazione vuota, e deve cambiare a mano. Lo si è visto durante il
+collaudo della B-bis: la prima schermata di un inquilino appena registrato è «Comincia
+registrando il tuo primo immobile».
+
+**Accettare un invito è il momento in cui l'ambiguità non c'è**: quella persona ha appena
+detto in quale organizzazione vuole entrare. La risposta porta `organization_id` e `role`,
+e il client chiama `selectOrganization` con quelli.
+
+*Alternativa scartata: cambiare `pick_default_membership` nel backend.* Vorrebbe dire
+decidere **per tutti** quale appartenenza vinca, e il caso legittimo esiste — chi affitta
+una casa e ne abita un'altra è owner della propria e tenant di un'altra, e nessuna delle
+due è ovvia. La scelta del client è locale, è reversibile dal selettore, e non richiede
+una migration.
+
+**Il debito non si chiude del tutto**, e va detto: chi entra da un browser nuovo, mesi
+dopo, riparte dal default di sempre. Si chiude a metà, e la metà che si chiude è la prima
+volta — che è quella che fa dire «non funziona».
+
+##### 3. Il refresh fra schede si **serializza**, e il token non lascia la memoria
+
+Il difetto è documentato da tre fette e nella B-bis **è accaduto**: due schede aperte, il
+rinnovo tentato da entrambe, `riuso di un refresh token già ruotato: revocate tutte le
+sessioni`, e la sessione fuori senza che nessuno avesse fatto niente. Con due account e
+due finestre — cioè il collaudo che questa fetta prepara — non è raro: è certo.
+
+La via che viene in mente per prima è **trasmettere la sessione**: la scheda che vince
+rinnova e manda l'access token alle altre con `BroadcastChannel`. Funziona, e **rompe una
+proprietà che il progetto ha scelto apposta**: l'access token vive in memoria e non è
+leggibile da uno script che arrivi dopo il caricamento della pagina. Metterlo su un canale
+o, peggio, in `localStorage` come ripiego, lo espone esattamente a ciò da cui era stato
+tenuto fuori.
+
+**Non serve condividerlo.** Ciò che le schede condividono è **il cookie**, e l'API ruota a
+ogni uso: il riuso lo rileva solo su *due usi dello stesso token*. Se la seconda scheda
+**aspetta** che la prima abbia finito e poi rinnova a sua volta, presenta il cookie
+**nuovo**, che è una rotazione legittima. Serve quindi una coda, non una trasmissione:
+`navigator.locks` — che è esattamente un mutex fra contesti della stessa origine — con
+ripiego su un lock in `localStorage` con scadenza, dove **si scrive un marcatore e non un
+segreto**.
+
+Costa `N` rinnovi per `N` schede invece di uno. È il prezzo giusto: succede una volta ogni
+quindici minuti per scheda, e compra il fatto che il token non esce dalla memoria.
+
+*Alternativa scartata: un `SharedWorker` che tenga la sessione.* È il disegno corretto per
+un'applicazione che ne avesse bisogno, e qui sarebbe un terzo contesto da far vivere,
+morire e ricollegare per risolvere un problema che un lock risolve in venti righe.
+
+##### 4. L'ordine: il buco dell'invito per primo, il bundle per ultimo
+
+`C1` è l'unico passo senza il quale **il collaudo non può cominciare**: il secondo account
+non esiste finché qualcuno non lo può far entrare. `C2` è il secondo perché è ciò che
+interrompe il collaudo a metà, e scoprirlo mentre si prova costa il doppio — si perde la
+sessione **e** si dubita di ciò che si stava guardando.
+
+`C5`, la divisione del bundle, va per ultimo e non perché sia difficile: **tocca ogni
+rotta**, quindi è il passo che più facilmente rompe qualcosa d'altro, ed è quello che si
+vuole avere davanti quando tutto il resto è già verde.
+
+##### 5. Il collaudo è a mano, e non una suite automatica
+
+La tentazione è scrivere Playwright e chiamarlo collaudo. Sono due cose diverse, e questa
+fetta vuole la prima: **una persona che non ha scritto il codice attraversa il prodotto e
+dice se sta in piedi**. Una suite end-to-end verifica che ciò che qualcuno ha già capito
+continui a valere; non trova la schermata che risponde a una domanda che nessuno si era
+posto, che è precisamente ciò che il collaudo deve trovare adesso.
+
+*Alternativa scartata: Playwright ora.* Va bene **dopo**, quando i percorsi sono stabili e
+il valore è la regressione. Prima, congela ipotesi.
+
+##### 6. Il perimetro si ferma qui, e le notifiche restano fuori
+
+Sono lì accanto — sono la fase successiva, e sono già pianificate — e prenderle dentro
+cambierebbe il criterio della fetta: «il prodotto si percorre per intero» non ha niente a
+che vedere con «un utente vero riceve un'email». Vale la ragione della decisione 7 della
+B-bis: due criteri scollegati in una fetta sola sono una fetta che si taglia a metà mentre
+la si esegue.
+
+#### Decomposizione
+
+##### `C1` — L'invitato entra dall'interfaccia
+
+**È il passo per cui la fetta esiste.** Oggi il proprietario genera il codice, lo
+consegna, e lì il prodotto finisce: chi lo riceve non ha una schermata in cui usarlo.
+
+**Schermata `/invito`**, un campo e un bottone. Raggiungibile **con la sessione**, perché
+`POST /auth/accept-invitation` è autenticata: chi arriva senza account trova scritto che
+deve prima registrarsi, con il link, e che poi torna qui — non un `401`.
+
+**La chiamata va senza `X-Org-Id`**, ed è già così in `acceptInvitation`: è l'operazione
+che **crea** l'appartenenza, e dichiarare un'organizzazione di cui non si è ancora membri
+fa rispondere `403` a una richiesta legittima. Chi tocca quel codice non deve
+«uniformarlo» agli altri.
+
+**Alla riuscita si sceglie l'organizzazione appena accettata** (decisione 2) e si va alla
+pagina iniziale del ruolo che la risposta dichiara — che per un inquilino è `/addebiti` e
+non la radice.
+
+**I tre codici che questa rotta produce si traducono in tre messaggi diversi**:
+`invitation.not_found` (codice sbagliato o scaduto), `invitation.already_accepted` (qualcuno
+l'ha già usato, e non è un errore di chi legge), e `auth.required` se la sessione è caduta
+mentre si compilava.
+
+**La revoca sta nella modale che ha creato l'invito**, e non altrove: `revokeInvitation`
+vuole l'id, e **non esiste una rotta che elenchi gli inviti** — quindi l'unico momento in
+cui il client ha quell'id è subito dopo averlo creato. Serve al caso vero — «ho sbagliato
+indirizzo, lo rifaccio» — e va offerto lì, dicendo che dopo si potrà solo lasciarlo
+scadere. **Non inventare un elenco**: sarebbe una rotta nuova, cioè backend dentro una
+fetta di client.
+
+##### `C2` — Il refresh smette di buttare fuori chi ha due schede
+
+`SessionStore.refresh` ha già il singolo volo **dentro** una scheda. Si aggiunge il lock
+**fra** schede (decisione 3): chi entra mentre un'altra sta rinnovando aspetta, e poi
+rinnova a sua volta con il cookie ruotato.
+
+`navigator.locks.request` con un nome per origine, e ripiego su `localStorage` con un
+marcatore e una scadenza — mai il token. Il ripiego serve dove i Web Locks non ci sono, e
+deve **scadere**: una scheda chiusa a metà rinnovo non può bloccare le altre per sempre.
+
+**Il test si scrive al contrario**, come quello del singolo volo: due `SessionStore` che
+condividono il finto cookie, e la prova che senza il lock il secondo presenta il token già
+ruotato. È il modo in cui il singolo volo è stato verificato nella fetta 1, e vale la
+stessa condizione — un test che non fallisce quando il codice è sbagliato è un verde che
+non prova nulla.
+
+##### `C3` — Gli allegati sugli owner rimasti
+
+Immobile, stanza, contratto, segnalazione, addebito. `ScansCard` di `BillDetailPage` è il
+modello, e va estratto in un componente condiviso invece di essere copiato cinque volte.
+
+**`tickets` manca dall'unione degli owner** in `uploadDocument` e `listDocuments`, e la
+rotta esiste: va aggiunto, altrimenti il typecheck rifiuta la segnalazione.
+
+**L'archiviazione di un documento non ha nemmeno la funzione**: `DELETE /documents/{id}`.
+Il codice che restituisce a chi non può è `org.staff_role_required`, ed è **vero solo a
+metà** — la policy ammette lo staff *oppure* chi ha caricato — quindi il messaggio non deve
+promettere che serva un ruolo. È un debito registrato, e qui si evita di ripeterlo
+all'utente.
+
+**Il controllo della dimensione sta prima dell'invio** (`UPLOAD_LIMIT_BYTES`, 25 MiB):
+oltre il limite la risposta è un `413` che non dice quale limite né su quale file.
+
+Vale la trappola registrata: **il link di download non porta l'`Authorization`**, e
+funziona perché il browser lo segue nel contesto della scheda.
+
+##### `C4` — Le stanze si correggono e si archiviano
+
+`updateRoom` e `archiveRoom` esistono nel livello dati e non le chiama nessuno: una stanza
+si crea e resta com'è. Il nome è **unico per immobile**, quindi un refuso non è cosmetico —
+occupa un nome che poi non si può riusare.
+
+Il `PATCH` è parziale con la semantica di sempre: assente = invariato, `null` = azzerato.
+L'archiviazione **libera il nome**, e la conferma lo dice — la stringa esiste già nel
+catalogo (`t.room.archiveExplain`) ed è stata scritta per questo momento.
+
+##### `C5` — Il bundle diviso per rotta ← *passo che tocca tutto*
+
+`React.lazy` per rotta, con i confini di `Suspense` messi **dove stanno i tre stati**: un
+confine senza il suo stato produce una pagina bianca dove prima c'era uno scheletro.
+
+Il bundle è a **690 kB (202 compressi)**: 597 alla fetta 1, 614 alla A, 648 alla B, 690
+alla B-bis. Su desktop non si nota, e il proprietario è su desktop; **l'inquilino è su rete
+mobile**, e adesso esiste davvero.
+
+**La misura si scrive nell'esito**, prima e dopo, per rotta iniziale. Un «abbiamo diviso il
+bundle» senza numeri non è verificabile da chi legge fra un anno.
+
+##### `C6` — Il messaggio che ha morso tre volte
+
+L'unico passo che tocca il backend, ed è di dieci righe: un `.env` copiato prima della
+fetta dei documenti non ha le quattro `PROPFLOW__STORAGE__*`, e l'API si ferma con
+`missing field access_key_id for key "default.storage"` — che non dice **da dove** debba
+arrivare quella variabile né che `.env.example` la porti.
+
+Tre occorrenze in tre fette, sempre allo stesso punto: avviare l'API per il giro a mano.
+**Il rimedio non è un default** — uno storage configurato a caso è peggio di un avvio
+fallito — ma un messaggio che nomini il file da cui copiare.
+
+#### Trappole
+
+Le prime tre vengono dall'audit e dalla lettura del codice; le altre sono note e sono qui
+perché il piano che le ha prodotte è archiviato e nessuno lo apre mentre esegue.
+
+**Accettare un invito va fatto senza `X-Org-Id`.** È l'operazione che crea
+l'appartenenza: dichiarare l'organizzazione di cui non si è ancora membri fa rispondere
+`403` a una richiesta legittima. `acceptInvitation` lo fa già, e va **non toccato**.
+
+**Non esiste una rotta che elenchi gli inviti.** La revoca è possibile solo con l'id che
+la creazione ha restituito, cioè nella stessa modale. Costruire un elenco vorrebbe dire
+aggiungere una rotta, cioè backend in una fetta di client.
+
+**`getPayment` resta non chiamata apposta**, e non è un pezzo mancante.
+
+**Il token dell'invito è una credenziale**: non nell'URL, non nei log, non conservato. Il
+client lo mostra una volta perché il proprietario lo consegni, e lo dimentica.
+
+**Il link di download non porta l'`Authorization`**, e funziona perché il browser lo segue
+nel contesto della scheda.
+
+**Il limite del corpo sulle rotte di caricamento è 25 MiB** e va controllato prima:
+oltre, la risposta è un `413` che non dice né quale limite né su quale file.
+
+**`org.staff_role_required` sull'archiviazione di un documento è vero a metà**: la policy
+ammette anche chi ha caricato. Il messaggio non deve promettere un ruolo.
+
+**Il nome di una stanza è unico per immobile**, e l'archiviazione lo libera.
+
+**Un confine di `Suspense` senza il suo stato è una pagina bianca** dove prima c'era uno
+scheletro.
+
+**Il lock fra schede non deve trasmettere il token**, e il ripiego su `localStorage` scrive
+un marcatore con una scadenza. Una scheda chiusa a metà rinnovo non può bloccare le altre.
+
+**Le azioni di una schermata avvolgono**, e `PageHeader` lo sa fare dalla fetta B: chi
+aggiunge azioni non reintroduca lo `shrink-0`.
+
+<a id="il-collaudo-completo-che-chiude-la-fetta"></a>
+
+#### Il collaudo completo, che chiude la fetta
+
+`./ops/ci/test-integration.sh` verde e il job del client verde sono il minimo, non il
+criterio. **Il criterio è che una persona attraversi il prodotto per intero da un browser,
+con due account, senza mai aprire `curl`.**
+
+Va fatto **dopo `C6`**, sul percorso nativo (`cargo run -p propflow-api`, `npm run dev`) e
+in quest'ordine, perché ogni passo prepara il successivo:
+
+1. **il proprietario si registra**, e atterra sul riepilogo vuoto che dice da dove
+   cominciare;
+2. **registra un immobile**, ci aggiunge **due stanze**, e ne **corregge una** — che è `C4`
+   e che oggi non si può;
+3. **redige due contratti per stanza**, ci mette le parti, li attiva;
+4. **invita i due inquilini**, e consegna i due codici. Ne **revoca uno** e lo rifà, che è
+   l'altra metà di `C1`;
+5. **i due inquilini si registrano e accettano** — `C1`, il passo senza il quale il
+   collaudo si ferma qui — e si ritrovano **nell'organizzazione giusta**, non nella
+   propria vuota;
+6. **il proprietario registra una bolletta**, ne carica la scansione, ne rivede la lettura
+   della macchina se il fornitore è configurato, la valida e la **riaddebita** a un
+   contratto;
+7. **un inquilino apre una segnalazione** con una **foto allegata** — `C3` — e il
+   proprietario la porta per il ciclo: triage, presa in carico, sospensione, ripresa,
+   chiusura;
+8. **l'inquilino dichiara di aver pagato** un addebito; il proprietario la trova nella coda
+   e la conferma; il residuo scende;
+9. **i due inquilini creano un gruppo di spesa**, ci mettono una spesa a testa, uno rimborsa
+   l'altro, il creditore conferma, e i saldi tornano a zero;
+10. **da due finestre contemporaneamente** — il proprietario in una, un inquilino
+    nell'altra — si lascia scadere l'access token e si ricarica: nessuno dei due deve
+    ritrovarsi fuori. È `C2`, e prima di questa fetta è **certo** che succeda;
+11. **a 375 px**, il percorso dell'inquilino per intero.
+
+Ciò che il collaudo trova si scrive nell'esito **anche se non si corregge**: una fetta che
+chiude con «tutto bene» dopo un giro come questo è una fetta che il giro non l'ha fatto.
+
+#### Che cosa **non** entra, e con quale ragione
+
+- **le notifiche**, che sono la fase successiva e hanno un criterio diverso (decisione 6);
+- **una suite end-to-end**, che va scritta quando i percorsi sono stabili (decisione 5);
+- **un elenco degli inviti**, che è una rotta nuova;
+- **il dettaglio di un pagamento**, che non porta niente in più della sua riga;
+- **il resto del debito sull'organizzazione predefinita**: si chiude la prima volta, non
+  ogni volta (decisione 2).
 
 <a id="prima-degli-utenti-veri"></a>
 
