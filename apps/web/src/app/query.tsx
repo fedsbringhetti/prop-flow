@@ -97,4 +97,20 @@ export const keys = {
   /** I movimenti di un addebito. Chiave distinta dalla collezione, perché
    *  un'invalidazione dell'una non deve rileggere l'altra. */
   chargePayments: (chargeId: string) => ['charge-payments', chargeId] as const,
+  /** I gruppi di spesa di cui si è membri attivi. */
+  expenseGroups: (filters?: unknown) => ['expense-groups', filters ?? null] as const,
+  /** Il dettaglio, che è **l'unico** a portare la composizione. */
+  expenseGroup: (id: string) => ['expense-group', id] as const,
+  /**
+   * I saldi di un gruppo.
+   *
+   * Chiave a sé, e non un pezzo del dettaglio: una spesa nuova o un regolamento
+   * confermato cambiano i saldi e non la composizione, e il netto complessivo di
+   * `/spese` li legge per ogni gruppo dell'elenco senza volerne i membri.
+   */
+  groupBalances: (groupId: string) => ['group-balances', groupId] as const,
+  expenses: (groupId: string) => ['expenses', groupId] as const,
+  /** Il dettaglio di una spesa, che è dove stanno le quote. */
+  expense: (id: string) => ['expense', id] as const,
+  settlements: (groupId: string) => ['settlements', groupId] as const,
 }

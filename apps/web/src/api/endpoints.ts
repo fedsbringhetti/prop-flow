@@ -5,6 +5,12 @@ import type {
   Charge,
   ChargeType,
   Dashboard,
+  Expense,
+  ExpenseCategory,
+  ExpenseGroup,
+  ExpenseGroupKind,
+  ExpenseGroupMember,
+  GroupBalance,
   Invitation,
   Items,
   Lease,
@@ -22,6 +28,9 @@ import type {
   PropertyType,
   RechargeResult,
   Room,
+  Settlement,
+  SettlementStatus,
+  SplitMethod,
   StoredDocument,
   Ticket,
   TicketCategory,
@@ -809,4 +818,291 @@ export function confirmPayment(client: ApiClient, id: Uuid): Promise<Payment> {
  */
 export function rejectPayment(client: ApiClient, id: Uuid): Promise<Payment> {
   return client.post<Payment>(`/payments/${id}/reject`, {})
+}
+
+// ---------------------------------------------------------------------------
+// Spese co-living
+
+export interface ExpenseGroupFilters {
+  property_id?: Uuid | undefined
+  is_archived?: boolean | undefined
+  after?: Uuid | undefined
+}
+
+/**
+ * I gruppi di cui si è **membri attivi**.
+ *
+ * A restringere le righe è `can_access_expense_group`, che esige `left_at IS NULL`:
+ * chi è uscito da un gruppo non lo vede più, nemmeno con un conto aperto. Non è un
+ * filtro che il client possa togliere.
+ *
+ * **Le risposte non portano i membri.** `members` è assente qui e presente sul
+ * dettaglio: un elenco che provasse a mostrare chi c'è dentro mostrerebbe
+ * `undefined`.
+ */
+export function listExpenseGroups(
+  client: ApiClient,
+  filters: ExpenseGroupFilters = {},
+): Promise<Page<ExpenseGroup>> {
+  return client.get<Page<ExpenseGroup>>(
+    `/expense-groups${query({
+      limit: LIMIT,
+      property_id: filters.property_id,
+      is_archived: filters.is_archived,
+      after: filters.after,
+    })}`,
+  )
+}
+
+/** Il dettaglio, **con la composizione**: chi è uscito compreso. */
+export function getExpenseGroup(client: ApiClient, id: Uuid): Promise<ExpenseGroup> {
+  return client.get<ExpenseGroup>(`/expense-groups/${id}`)
+}
+
+export interface CreateExpenseGroupInput {
+  name: string
+  kind?: ExpenseGroupKind
+  /** Facoltativo per l'API. Il form lo chiede sempre: senza, non c'è un elenco di
+   *  residenti da cui pescare i membri. */
+  property_id?: Uuid
+  default_split_method?: SplitMethod
+  /** Il peso di chi crea, con tre decimali. La doppia si esprime con `"2"`. */
+  weight?: string
+  /**
+   * **Il proprio nome, e va mandato sempre.**
+   *
+   * È l'unico momento in cui si può: nessuna risposta di questo modulo porta un
+   * nome, e la membership è l'unico posto in cui vive. Vedi
+   * `@/features/expenses/names`.
+   */
+  display_name?: string
+}
+
+/**
+ * Crea un gruppo, **con chi lo crea già dentro**.
+ *
+ * Le due scritture stanno nella stessa transazione. Non è una comodità: un
+ * inquilino soddisfa `expense_groups_insert` ma non
+ * `expense_group_members_insert`, perché appena creato il gruppo non ne è membro e
+ * quindi non potrebbe iscrivere nemmeno sé stesso.
+ */
+export function createExpenseGroup(
+  client: ApiClient,
+  input: CreateExpenseGroupInput,
+): Promise<ExpenseGroup> {
+  return client.post<ExpenseGroup>('/expense-groups', input)
+}
+
+/**
+ * Chiude il conto: niente più spese né regolamenti, `409
+ * expense_group.archived` a chi ci prova.
+ *
+ * **Non è una cancellazione** — saldi e spese restano leggibili — e si può anche
+ * con dei conti aperti: chi se n'è andato senza pagare non deve poter tenere il
+ * gruppo in ostaggio. Risponde `200` con il gruppo, non `204`.
+ */
+export function archiveExpenseGroup(client: ApiClient, id: Uuid): Promise<ExpenseGroup> {
+  return client.post<ExpenseGroup>(`/expense-groups/${id}/archive`, {})
+}
+
+export interface AddGroupMemberInput {
+  user_id: Uuid
+  room_id?: Uuid
+  /**
+   * **Sempre valorizzato dal client**, con il `full_name` del residente scelto.
+   *
+   * L'API lo accetta assente e allora il nome non esiste più da nessuna parte: i
+   * saldi di quella persona sarebbero un UUID, e per chi ha lasciato la casa non
+   * c'è modo di recuperarlo.
+   */
+  display_name?: string
+  /** Tre decimali. Chi **rientra** lo ridichiara: la stanza può essere cambiata. */
+  weight?: string
+}
+
+/**
+ * Iscrive **o fa rientrare**: è la stessa rotta.
+ *
+ * `expense_group_members_group_user_uk` è unico su `(group_id, user_id)` e non è
+ * parziale, quindi una seconda riga non può esistere e il rientro è un
+ * aggiornamento. Su un membro **già attivo** risponde `409
+ * expense_group.membership_exists`.
+ *
+ * **Non verifica che la persona abiti lì**, ed è voluto: `property_id` è
+ * facoltativo, e chi ha lasciato la casa il mese scorso e sta ancora saldando è un
+ * caso legittimo. Il client non deve reintrodurre quel controllo.
+ */
+export function addGroupMember(
+  client: ApiClient,
+  groupId: Uuid,
+  input: AddGroupMemberInput,
+): Promise<ExpenseGroupMember> {
+  return client.post<ExpenseGroupMember>(`/expense-groups/${groupId}/members`, input)
+}
+
+/**
+ * Esce dal gruppo: `200` **con la membership aggiornata**, non `204`.
+ *
+ * La riga resta con `left_at` valorizzato, perché le quote a suo nome restano e i
+ * saldi partono da lì. **Si esce per sé stessi**: togliere qualcun altro richiede
+ * lo staff, e a un membro l'API risponde `403
+ * expense_group.membership_not_yours` — dalla migration `0029` è la RLS a dirlo,
+ * non solo l'API.
+ */
+export function leaveGroup(
+  client: ApiClient,
+  groupId: Uuid,
+  userId: Uuid,
+): Promise<ExpenseGroupMember> {
+  return client.request<ExpenseGroupMember>(`/expense-groups/${groupId}/members/${userId}`, {
+    method: 'DELETE',
+  })
+}
+
+/**
+ * I saldi: quanto ognuno ha anticipato, quanto gli è stato imputato, e il netto.
+ *
+ * **Comprende chi è uscito con un conto aperto** (migration `0027`), ed è ciò che
+ * fa sommare i netti a zero. I creditori arrivano per primi e il client **non
+ * riordina**. Nessun cursore: sono i membri di un gruppo.
+ */
+export function getGroupBalances(client: ApiClient, groupId: Uuid): Promise<Items<GroupBalance>> {
+  return client.get<Items<GroupBalance>>(`/expense-groups/${groupId}/balances`)
+}
+
+export interface ExpenseFilters {
+  category?: ExpenseCategory | undefined
+  after?: Uuid | undefined
+}
+
+/** L'elenco **senza le quote**: quelle si leggono dal dettaglio. */
+export function listExpenses(
+  client: ApiClient,
+  groupId: Uuid,
+  filters: ExpenseFilters = {},
+): Promise<Page<Expense>> {
+  return client.get<Page<Expense>>(
+    `/expense-groups/${groupId}/expenses${query({
+      limit: LIMIT,
+      category: filters.category,
+      after: filters.after,
+    })}`,
+  )
+}
+
+/** Il dettaglio **con le quote**, la cui somma è esattamente l'importo. */
+export function getExpense(client: ApiClient, id: Uuid): Promise<Expense> {
+  return client.get<Expense>(`/expenses/${id}`)
+}
+
+export interface RecordExpenseInput {
+  description: string
+  amount: string
+  category?: ExpenseCategory
+  /**
+   * Chi ha anticipato. **Assente significa «io»**, e deve essere un membro
+   * **attivo**: un estraneo dà `409 expense.payer_not_in_group`. Lo schema non lo
+   * impone, e senza il controllo quel credito non comparirebbe in nessun saldo.
+   */
+  paid_by_user_id?: Uuid
+  /** Assente significa «oggi». È una **data**, non un istante: nessun fuso. */
+  expense_date?: string
+  /** `equal` o `weighted`. Gli altri tre dell'enum danno `422`. */
+  split_method?: SplitMethod
+  notes?: string
+}
+
+/**
+ * Registra una spesa e la ripartisce: risponde `201` **con le quote**.
+ *
+ * **Nessuna chiave di idempotenza**, a differenza delle due rotte che creano un
+ * pagamento: questa non la richiede, e aggiungerla per simmetria manderebbe un
+ * header che nessuno legge.
+ */
+export function recordExpense(
+  client: ApiClient,
+  groupId: Uuid,
+  input: RecordExpenseInput,
+): Promise<Expense> {
+  return client.post<Expense>(`/expense-groups/${groupId}/expenses`, input)
+}
+
+export interface SettlementFilters {
+  status?: SettlementStatus | undefined
+  after?: Uuid | undefined
+}
+
+/** I regolamenti del gruppo. `?status=pending` è la coda di chi deve confermare. */
+export function listSettlements(
+  client: ApiClient,
+  groupId: Uuid,
+  filters: SettlementFilters = {},
+): Promise<Page<Settlement>> {
+  return client.get<Page<Settlement>>(
+    `/expense-groups/${groupId}/settlements${query({
+      limit: LIMIT,
+      status: filters.status,
+      after: filters.after,
+    })}`,
+  )
+}
+
+export interface DeclareSettlementInput {
+  /** A chi si è pagato: si sceglie dall'elenco dei **creditori**. */
+  to_user_id: Uuid
+  amount: string
+  method?: PaymentMethod
+  /** Assente significa «adesso». La conferma **non la riscrive**. */
+  settled_at?: string
+  note?: string
+}
+
+/**
+ * Dichiara di aver pagato un coinquilino: nasce `pending` e **non muove i saldi**.
+ *
+ * **Non c'è `from_user_id`**: chi dichiara è sempre chi chiama, perché
+ * `settlements_insert` lo esige a chi non è staff.
+ *
+ * **Nessuna chiave di idempotenza**: questa rotta non la richiede, a differenza
+ * delle due che creano un pagamento. Non è una svista dell'API ed è da non
+ * replicare per simmetria.
+ */
+export function declareSettlement(
+  client: ApiClient,
+  groupId: Uuid,
+  input: DeclareSettlementInput,
+): Promise<Settlement> {
+  return client.post<Settlement>(`/expense-groups/${groupId}/settlements`, input)
+}
+
+/**
+ * Conferma: da qui i saldi si muovono.
+ *
+ * **Non ricalcola niente**, a differenza di `ConfirmPayment`: il saldo del gruppo
+ * non è memorizzato da nessuna parte, si legge dalla vista. Il client invalida la
+ * chiave dei saldi e basta.
+ *
+ * A confermare è **chi riceve** — è l'unico che sa se il bonifico è arrivato — e a
+ * chiunque altro l'API risponde `403 settlement.not_addressed_to_you`.
+ */
+export function confirmSettlement(client: ApiClient, id: Uuid): Promise<Settlement> {
+  return client.post<Settlement>(`/settlements/${id}/confirm`, {})
+}
+
+/** Rifiuta: il denaro non è arrivato. È di **chi riceve**, e azzera `settled_at`. */
+export function rejectSettlement(client: ApiClient, id: Uuid): Promise<Settlement> {
+  return client.post<Settlement>(`/settlements/${id}/reject`, {})
+}
+
+/**
+ * Ritira la propria dichiarazione. È di **chi ha dichiarato**, e a chi riceve
+ * l'API risponde `403 settlement.not_declared_by_you`.
+ *
+ * **Esiste qui e non fra i pagamenti**: `settlements_update` nomina anche
+ * `from_user_id`, `payments_update` è staff soltanto. Fra pari il ritiro è lecito,
+ * verso il proprietario no — e chi ha letto l'altra schermata si aspetta il
+ * contrario.
+ */
+export function cancelSettlement(client: ApiClient, id: Uuid): Promise<Settlement> {
+  return client.post<Settlement>(`/settlements/${id}/cancel`, {})
 }
