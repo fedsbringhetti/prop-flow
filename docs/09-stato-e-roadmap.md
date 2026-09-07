@@ -53,6 +53,7 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Telemetria: log strutturati, OTLP | completo |
 | Bordo HTTP: Problem Details, estrattori, OpenAPI | completo |
 | Registrazione, login, refresh, logout | completo |
+| Organizzazioni: `GET /organizations` con il **nome**, `ensure_authenticated`, risponde anche senza `X-Org-Id` | completo per la fetta B |
 | CRUD immobili con PATCH parziale e archiviazione | completo |
 | CRUD stanze annidate sull'immobile | completo |
 | Contratti: bozza, parti, attivazione, disdetta, stati derivati | completo |
@@ -72,11 +73,11 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-423 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+424 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
 del bordo HTTP, 76 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 81 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+MinIO, 82 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
-### Client web — il percorso del proprietario
+### Client web — le due metà
 
 `apps/web/`, React e TypeScript in `strict`, servito dalla **stessa origine**
 dell'API dietro un reverse proxy.
@@ -87,6 +88,10 @@ dell'API dietro un reverse proxy.
 | Aritmetica decimale su interi: `parseFloat` non compare | completo |
 | Client dell'API con il **refresh a singolo volo** e la traduzione di `ProblemDetails` | completo |
 | Guscio: registrazione, accesso, uscita, organizzazione attiva, navigazione | completo |
+| **Il selettore delle organizzazioni letto dall'API**, con i nomi al posto degli UUID; il `localStorage` ridotto a ricordare *quale* era attiva | completo per la fetta B |
+| **La navigazione e la rotta iniziale sono funzioni del ruolo**: `useIsStaff()` in un posto solo, e le azioni di scrittura non si offrono a chi riceverebbe `403` | completo per la fetta B |
+| Segnalazioni: apertura sull'immobile, elenco con `?open=true`, dettaglio con lo storico, thread paginato a parte, le **sette** transizioni e il `PATCH` dei soli costi | completo per la fetta B |
+| **Dichiarazione di pagamento** dell'inquilino, con la chiave di idempotenza della fetta A riusata e non riscritta | completo per la fetta B |
 | I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
 | Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
 | Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
@@ -98,14 +103,18 @@ dell'API dietro un reverse proxy.
 | Pagamenti: registrazione di un incasso con l'attribuzione come scelta esplicita, **coda delle dichiarazioni** con conferma e rifiuto, chiave di idempotenza generata una volta per intento | completo per la fetta A |
 | Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
 
-37 test: 12 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+48 test: 12 sulla sessione e sul client dell'API — fra cui il refresh a singolo
 volo **riprodotto anche al contrario** — 11 sui decimali e sulla formattazione, 5
 sulla chiave di idempotenza, 9 sui percorsi da sola tastiera e sui form che non
-perdono ciò che è stato digitato.
+perdono ciò che è stato digitato, 6 sulla dichiarazione di pagamento e 5 sul guscio —
+la navigazione per ruolo, il selettore che mostra i nomi, e l'organizzazione
+ricordata che l'elenco vero corregge.
 
-Il test sulla chiave di idempotenza è stato **verificato contro il difetto**:
-sostituendo `intent.current()` con un `randomUUID()` dentro `mutationFn` fallisce. Un
-test che non fallisce quando il codice è sbagliato è un verde che non prova nulla.
+I test sulla chiave di idempotenza sono stati **verificati contro il difetto**, e non
+una volta sola: sostituendo `intent.current()` con un `randomUUID()` dentro
+`mutationFn` falliscono, sia sulla registrazione di un incasso (fetta A) sia sulla
+dichiarazione di pagamento (fetta B). Un test che non fallisce quando il codice è
+sbagliato è un verde che non prova nulla.
 
 ## Non implementato
 
@@ -210,7 +219,7 @@ messaggi e le note di risoluzione. Il resoconto è in fondo:
 | Sicurezza | rate limiting per IP; verifica email bloccante; MFA (colonna presente); `kid` nei token per la rotazione delle chiavi. **CORS non è più in questo elenco**: non montarlo è una scelta, non un debito — vedi [ADR-038](08-decisioni.md#adr-038) |
 | Operazioni | manifest Kubernetes; backup e restore; metriche; alerting; cron per le partizioni di audit |
 | Qualità | gate sulle licenze delle dipendenze; test di carico; benchmark |
-| Prodotto | il percorso dell'**inquilino** nel client, che è la fetta 2. Il client esiste e copre il proprietario: [ADR-039](08-decisioni.md#adr-039) rivede l'ipotesi «mobile nativo» che questa riga conteneva |
+| Prodotto | le **spese co-living** nel client, che sono la fetta B-bis. Il percorso dell'inquilino non è più in questa riga: entra, vede che cosa deve, dichiara di aver pagato e segnala un guasto. [ADR-039](08-decisioni.md#adr-039) rivede l'ipotesi «mobile nativo» che questa riga conteneva |
 
 ## Debiti tecnici noti
 
@@ -240,38 +249,51 @@ cambia il contesto.
 | ~~L'anagrafica è visibile per **organizzazione**, non per immobile~~ — **chiuso** dalla migration `0030` | `users_select` passava da `app.shares_org_with`, quindi un inquilino leggeva nome, email e telefono di ogni persona dell'organizzazione. Ora passa da `app.shares_home_with`, più i due rami sullo staff. Il timore registrato qui — che restringerlo fosse un filtro applicativo e non un confine del database — non si è avverato: è un `ALTER POLICY`, quindi il confine è dove doveva stare. Vedi [ADR-036](08-decisioni.md#adr-036) | Chiuso |
 | Un job dell'OCR abbandonato resta `running` per sempre | Non c'è scadenza e il ritentativo è fuori perimetro: `attempts` sale alla presa in carico ma nessuno riporta a `queued` un job che il processo ha lasciato a metà. **Il sintomo è muto** — una bolletta che non arriva mai a `pending_review` senza che nulla sia in errore — e finché il ritentativo non esiste il rimedio è guardare `app.ai_jobs` per gli `running` vecchi | Insieme al ritentativo, che è la stessa conversazione del primo fornitore vero: quali errori produce, quali si riprovano, e cosa significa un terminale senza `finished_at` — che è anche la domanda che tiene `cancelled` fuori dall'enum scritto |
 | Il worker legge la configurazione dello storage con `std::env::var` | Sei variabili senza una struct che le valida, a differenza dell'API che passa da `AppConfig`. È la stessa scelta del migratore e la stessa ragione — `AppConfig` gli chiederebbe un bind e delle chiavi di firma che non usa — ma vuol dire che il test di guardia `docs_config_reference.rs` **non copre le impostazioni del worker**: la tabella in `docs/07-operazioni.md` può restare indietro senza che nulla fallisca | Se il worker acquisisce altra configurazione. Con sei variabili il rischio è basso; con dodici la guardia va estesa, ed è un parser in più nello stesso test |
-| Il refresh non è coordinato **fra schede** | Il singolo volo è una promessa in memoria, e due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve `BroadcastChannel` o un lock su `localStorage`. Il sintomo è raro e il rimedio è ricaricare | Se qualcuno lo incontra davvero. È la sola parte della decisione 5 del piano del client che resta aperta, ed è deliberatamente accettata |
-| Non esiste un endpoint che elenchi le **organizzazioni** di un utente | Il selettore dell'organizzazione mostra quelle che *questo browser* ha conosciuto — dal login e dall'accettazione di un invito — e le tiene in `localStorage`. Per il proprietario, che ne ha una, è indistinguibile da un elenco vero; per l'inquilino della fetta 2, che ne ha almeno due, non lo sarà: entrando su un browser nuovo non vedrebbe l'organizzazione del proprietario finché non riaccetta un invito. È il gemello del debito «non esiste un endpoint che elenchi le **persone** di un'organizzazione», ed è emerso allo stesso modo — costruendo il client | Con la fetta 2. È un `GET /api/v1/memberships` di poche righe, e la domanda vera è quali colonne esporre: il nome dell'organizzazione è un dato che oggi nessun endpoint restituisce a chi non ne è staff |
-| Il bundle del client è un pezzo solo, 597 kB (181 kB compressi) | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette. Su desktop non si nota, e il proprietario è su desktop; l'inquilino della fetta 2 è su rete mobile e lo noterà. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | Con la fetta 2, insieme al percorso dell'inquilino |
+| Il refresh non è coordinato **fra schede** | Il singolo volo è una promessa in memoria, e due schede sono due contesti JavaScript: se l'access token di entrambe scade nello stesso istante, la seconda presenta un refresh token già ruotato e l'API revoca la catena. Serve `BroadcastChannel` o un lock su `localStorage`. Il sintomo è raro e il rimedio è ricaricare | `B10` della fetta B-bis, insieme alla divisione del bundle. È la sola parte della decisione 5 del piano del client che resta aperta, ed è deliberatamente accettata |
+| ~~Non esiste un endpoint che elenchi le **organizzazioni** di un utente~~ — **chiuso** dalla fetta B | `GET /api/v1/organizations` restituisce `id`, `name`, `slug` e `role`, ed è **l'unica rotta che risponde senza un'organizzazione attiva**: chiederne una per sapere quali si hanno sarebbe circolare. La previsione era «un `GET /memberships` di poche righe, e la domanda vera è quali colonne esporre»: il percorso è `/organizations` senza prefisso `me` — la Row Level Security restringe già alle proprie — e le colonne sono quattro. Il `localStorage` si è ridotto a ricordare *quale* era attiva. Vedi [ADR-041](08-decisioni.md#adr-041) | Chiuso |
+| Il bundle del client è un pezzo solo, **648 kB (193 kB compressi)** | Nessuna divisione per rotta: chi apre il riepilogo scarica anche le schermate delle bollette e delle segnalazioni. Era 597 kB alla fetta 1, 614 alla A, 648 ora. Su desktop non si nota, e il proprietario è su desktop; **l'inquilino è su rete mobile**, e ora esiste davvero — la fetta B lo ha portato dentro senza affrontare questo. `React.lazy` per rotta è la via, e costa dei confini di `Suspense` che vanno progettati insieme agli stati di caricamento che già esistono | `B10` della fetta B-bis. Rinviato due volte, e la seconda con la sua ragione: dividere il bundle mentre si aggiungono sei schermate avrebbe mescolato due lavori |
 | Gli allegati si scaricano da un link senza `Authorization` | `GET /documents/{id}/content` risponde `307` verso un URL pre-firmato, e il client ci arriva con un `<a href>` — che è ciò che permette al browser di scaricare invece di tenere i byte in memoria. Il link però non porta il token, quindi funziona solo finché la rotta accetta la richiesta dal contesto della scheda. Oggi funziona; il giorno in cui l'API pretendesse l'header su quella rotta, il download smetterebbe di funzionare **senza che nulla in questo repository cambi** | Se il download smette di funzionare, o quando si decida come firmare i link lato client. L'alternativa è un `fetch` con il token seguito da un `blob:` URL, che tiene il file in memoria — accettabile per un PDF, non per una scansione da 25 MB |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 | La coda delle dichiarazioni non si filtra per immobile | `GET /api/v1/payments` ha `status` e `lease_id`, e non `property_id`: `app.payments` non ha quella colonna e il legame passerebbe da due salti (`payment → charge → lease → property`). Con pochi immobili la coda sta in una pagina e il filtro non compra niente; con decine diventa lunga | Quando gli immobili per organizzazione passano la decina, o se qualcuno chiede «i pagamenti di questa casa» |
 | Un filtro parametrico su un enum non usa un indice parziale | Misurato, non dedotto: `($1::text IS NULL OR status = $1::app.payment_status)` **non** tocca `payments_pending_ix`, perché il cast `text → enum` passa da `enum_in`, che PostgreSQL dichiara `STABLE` e non `IMMUTABLE`, e non viene quindi ridotto a una costante. Il rimedio è nel repository dei pagamenti — una condizione ridondante che nomina il letterale — ed è **locale a quella query**. Ogni altro elenco del progetto usa lo stesso pattern parametrico su uno stato, e nessuno di quelli ha oggi un indice parziale da mancare | Quando un altro elenco filtrato per stato acquisisce un indice parziale. La misura e il rimedio stanno in [ADR-040](08-decisioni.md#adr-040) |
-| Un `.env` più vecchio dello storage impedisce l'avvio dell'API | `.env.example` ha quattro variabili `PROPFLOW__STORAGE__*` che un file copiato prima della fetta dei documenti non ha, e l'API si ferma all'avvio con `missing field access_key_id for key "default.storage"`. È la validazione della configurazione che fa il suo mestiere, ma il messaggio non dice **da dove** debba arrivare la variabile né che `.env.example` la porti | Quando qualcuno lo incontra. Il rimedio non è un default — uno storage configurato a caso è peggio di un avvio fallito — ma un messaggio che nomini `.env.example` |
+| Un `.env` più vecchio dello storage impedisce l'avvio dell'API | `.env.example` ha quattro variabili `PROPFLOW__STORAGE__*` che un file copiato prima della fetta dei documenti non ha, e l'API si ferma all'avvio con `missing field access_key_id for key "default.storage"`. È la validazione della configurazione che fa il suo mestiere, ma il messaggio non dice **da dove** debba arrivare la variabile né che `.env.example` la porti | **Incontrato una seconda volta** nella fetta B, avviando l'API per il giro a mano: si aggira passando le quattro variabili sulla riga di comando. Due occorrenze sono abbastanza per dire che il messaggio va corretto. Il rimedio non è un default — uno storage configurato a caso è peggio di un avvio fallito — ma un messaggio che nomini `.env.example` |
 
 ## Prossimo passo suggerito
 
-**La fetta B: l'inquilino** — il piano è più sotto, e il passo che lo apre è `B0`,
-l'endpoint delle organizzazioni.
+**La fetta B-bis: le spese co-living** — il piano è più sotto, e il passo che lo apre
+è `B6`, i gruppi.
 
-**La fetta A è conclusa**: il giro del denaro dal lato del proprietario è chiuso, e
-l'insoluto adesso scende. Il resoconto è in fondo all'archivio:
-[Piano — Completare il prodotto, fetta A](11-piani-conclusi.md#piano-completare-il-prodotto)
-· [esito](11-piani-conclusi.md#esito-completare-il-prodotto-fetta-a).
+**Le fette A e B sono concluse.** Il giro del denaro dal lato del proprietario è
+chiuso e l'insoluto scende; l'altra metà del prodotto esiste, e l'inquilino entra,
+vede che cosa deve, **dichiara di aver pagato**, segnala un guasto e ne segue il
+corso. I resoconti sono in fondo all'archivio:
+[fetta A](11-piani-conclusi.md#piano-completare-il-prodotto)
+· [esito](11-piani-conclusi.md#esito-completare-il-prodotto-fetta-a) ·
+[fetta B](11-piani-conclusi.md#piano-inquilino-fetta-b)
+· [esito](11-piani-conclusi.md#esito-inquilino-fetta-b).
 
 **Le notifiche vanno in fondo, e non sono più una fetta A-bis.** Erano i passi 9 e
 10 del piano archiviato, e la scelta era «prima o dopo la B». È stata sciolta: *dopo*,
 insieme a tutto il resto che serve solo a utenti veri. La ragione è nel criterio qui
 sotto.
 
-Il percorso dell'inquilino è **provabile con dati veri per la prima volta**, perché un
-inquilino non esiste finché un proprietario non lo invita — e ora c'è anche un
-proprietario che sa incassare.
+**Il co-living è ora provabile con dati veri**, e non lo era prima: un gruppo di spesa
+ha senso fra coinquilini, e finché l'inquilino non aveva un'interfaccia si potevano
+creare gruppi con `curl` e guardarli con `curl`. Ora ci sono due account che entrano
+da un browser e vedono cose diverse, che è la condizione per accorgersi che un saldo è
+sbagliato.
 
 Le **due semantiche della dashboard** che erano rimaste aperte **sono state decise**:
 `written_off_total` è il nono numero, ed è il residuo e non l'importo; il credito da
 sovrapagamento resta fuori dal riepilogo e si evidenzia per addebito. Vedi
 [ADR-040](08-decisioni.md#adr-040).
+
+Il debito «nessun endpoint elenca le organizzazioni di un utente» — quello che la
+sezione [Cosa un client incontrerà per prime](#cosa-un-client-incontrerà-per-prime)
+dava come primo — **è chiuso**: vedi [ADR-041](08-decisioni.md#adr-041). Resta aperto
+il suo gemello sulle **persone** di un'organizzazione, e resta aperto apposta: la
+fetta B ha verificato che quel menù sarebbe **vuoto**, perché un'organizzazione ha
+esattamente uno staff.
 
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
@@ -359,6 +381,23 @@ job abbandonato resta `running` per sempre**. La prima si vede appena si costrui
 l'interfaccia di un gruppo di spesa; le altre due no, ed è la ragione per cui stanno
 scritte.
 
+**La prima si è già presentata due volte, e nessuna delle due chiedeva un endpoint.**
+La fetta A l'ha incontrata su `payer_user_id` e l'ha risolta nel form, senza toccare la
+colonna ([ADR-040](08-decisioni.md#adr-040)). La fetta B l'ha incontrata
+sull'assegnazione di una segnalazione, e verificando ha scoperto che **quel menù
+sarebbe vuoto**: `InviteTenant` scrive `role: OrgRole::Tenant` fisso e `OrgRole::Manager`
+non lo scrive nessuno, quindi un'organizzazione ha esattamente uno staff. L'azione è
+diventata «prendi in carico» ([ADR-042](08-decisioni.md#adr-042)).
+
+Ne segue una cosa che vale la pena scrivere, perché è la lezione e non l'aneddoto: **il
+debito è reale ma il suo rimedio non è quello che sembra**. Le prime due occorrenze
+chiedevano un elenco di persone e nessuna delle due lo voleva davvero — una voleva un
+form che non ammettesse un vuoto, l'altra voleva sapere che non c'è nessuno da
+elencare. La terza occorrenza, la composizione di un gruppo di spesa in `B6`, ha già la
+sua risposta e non è `GET /members`: è
+`GET /properties/{id}/residents`, che esiste dalla migration `0030`. Chi partirà a
+scrivere `GET /members` costruirà la cosa sbagliata prima di accorgersi che non serviva.
+
 ### Perché la dashboard doveva restare ultima
 
 **Scritta quando la dashboard non c'era, e tenuta perché la sua conclusione è
@@ -441,18 +480,19 @@ chi lo costruisce, guardare la coda è esattamente ciò che si fa comunque.
 
 ## Piano — Completare il prodotto: che cosa resta
 
-La fetta A è conclusa. Il piano che l'aveva prodotta è archiviato per intero in
-[11 — Piani conclusi](11-piani-conclusi.md#piano-completare-il-prodotto), con il suo
-esito, e **le sue otto decisioni valgono ancora**: quel documento resta la fonte del
-*perché*, e questo del *cosa*.
+Le fette A e B sono concluse. I piani che le hanno prodotte sono archiviati per intero
+in [11 — Piani conclusi](11-piani-conclusi.md), ognuno con il suo esito
+([fetta A](11-piani-conclusi.md#piano-completare-il-prodotto),
+[fetta B](11-piani-conclusi.md#piano-inquilino-fetta-b)), e **le loro decisioni valgono
+ancora**: quel documento resta la fonte del *perché*, e questo del *cosa*.
 
 Le due liste si sovrappongono di proposito. L'archivio non si riscrive mai, quindi
-contiene anche le fette B e C **come erano state pensate**, comprese le notifiche
-nella posizione che avevano allora; questo file si riscrive a ogni fetta, e contiene
-ciò che resta con il dettaglio per eseguirlo. Chi legge solo questo può eseguire; chi
-vuole sapere perché va di là.
+contiene le fette **come erano state pensate** — comprese le notifiche nella posizione
+che avevano allora, e i dodici passi della fetta B di cui se ne sono eseguiti sei;
+questo file si riscrive a ogni fetta, e contiene ciò che resta con il dettaglio per
+eseguirlo. Chi legge solo questo può eseguire; chi vuole sapere perché va di là.
 
-**L'ordine qui è cambiato rispetto al piano archiviato, ed è la sola differenza di
+**L'ordine qui è cambiato rispetto ai piani archiviati, ed è la sola differenza di
 sostanza.** Là le notifiche erano una «fetta A-bis» da fare prima o dopo la B a
 scelta, e la fetta C si chiamava così. Qui sono confluite in un'unica fase finale —
 [Prima degli utenti veri](#prima-degli-utenti-veri) — per il
@@ -460,383 +500,134 @@ scelta, e la fetta C si chiamava così. Qui sono confluite in un'unica fase fina
 La scomposizione dei due passi delle notifiche non è cambiata di una riga: è cambiato
 soltanto **quando**.
 
+**La fetta B si è fermata al suo punto di taglio dichiarato**, `B5`, e non per
+stanchezza: il taglio era scritto nel piano prima di cominciare, e lì l'inquilino ha
+un prodotto che sta in piedi. Ciò che restava — le spese co-living e gli ultimi due
+passi del client — riprende qui **con la numerazione originale**, perché è quella con
+cui è stato pensato e perché l'archivio vi rimanda.
+
 Restano quindi **due fette**:
 
 | | Fetta | Stato |
 |---|---|---|
-| 1 | [L'inquilino](#fetta-b--linquilino) — dodici passi, punto di taglio dopo `B5` | la prossima |
+| 1 | [B-bis](#fetta-b-bis--le-spese-co-living-e-ciò-che-resta-del-client) — `B6`–`B11`, le spese co-living e gli ultimi due debiti del client | la prossima |
 | 2 | [Prima degli utenti veri](#prima-degli-utenti-veri) — notifiche, poi il resto | quando il prodotto lo apre qualcun altro |
 
-### Fetta B — l'inquilino
-
-Pianificata il **4 settembre 2026**, dopo la fetta A e leggendo il codice che tocca.
-**Dodici passi**, `B0`–`B11`. Il **punto di taglio è dopo `B5`**: lì l'inquilino ha un
-prodotto che sta in piedi — entra, vede che cosa deve, **dichiara di aver pagato**,
-segnala un guasto e ne segue il corso — e le spese co-living sono una fetta B-bis.
-
-#### Obiettivo
-
-L'altra metà del prodotto. Oggi il client copre il proprietario e basta: un inquilino
-che entrasse **atterrerebbe su un errore**, perché la pagina iniziale è la dashboard e
-la dashboard è staff soltanto.
-
-Il perimetro è la differenza fra le due metà, non il modulo: le segnalazioni sono
-dell'inquilino *e* del proprietario, e vanno costruite per entrambi in una volta —
-sono la stessa schermata vista da due ruoli, e farne due sarebbe farne due da tenere
-allineate.
-
-#### Che cosa è stato deciso prima di pianificare
-
-Sei scelte. Le prime tre sono nate **leggendo il codice**, e due di esse hanno tolto
-lavoro dal piano invece di aggiungerne.
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| Autorizzazione di `B0` | `ensure_authenticated`, non `ensure_member` | chiedere un'organizzazione attiva per sapere quali si hanno |
-| Guscio | un passo suo, **prima** delle segnalazioni | adattare il guscio strada facendo, schermata per schermata |
-| Assegnazione | **solo a sé stessi**, nessun endpoint delle persone | `GET /members` dentro questa fetta |
-| Pagina iniziale dell'inquilino | lo scadenzario, nessuna rotta nuova | una dashboard dell'inquilino |
-| Composizione dei gruppi di spesa | dai residenti dell'immobile, che esistono già | un elenco di persone dell'organizzazione |
-| Navigazione dell'inquilino | addebiti, segnalazioni, contratto, bollette | tutto ciò che l'API gli concede, o il solo minimo |
-| Punto di taglio | dopo `B5`, **dichiarazione di pagamento compresa** | dopo le sole segnalazioni, lasciando il giro del denaro a metà |
-
-#### Decisioni prese, con il perché
-
-##### 1. `B0` è `ensure_authenticated`, e non `ensure_member`
-
-«Quali organizzazioni sono mie» **non appartiene a nessuna organizzazione**: chiederne
-una attiva per poterlo domandare è circolare, e rompe proprio il caso che l'endpoint
-esiste per servire — chi non ne ha una selezionata, o non ne ha più.
-
-**Verificato prima di deciderlo, perché è ciò che lo rende possibile:**
-`app.member_role(p_org_id)` interroga `app.org_members` filtrando su
-`app.current_user_id()` e sull'organizzazione **passata come argomento**;
-`app.current_org_id()` non compare. `organizations_select` è `is_org_member(id)` e
-`org_members_select` è `user_id = current_user_id() OR is_org_member(org_id)`: **la
-query funziona con il contesto RLS privo di organizzazione**, e
-`app.set_request_context` accetta già un `org_id` nullo.
-
-*Alternativa scartata: `ensure_member`.* Funzionerebbe quasi sempre — il token porta
-l'organizzazione predefinita — e fallirebbe esattamente quando serve.
-
-##### 2. La risposta porta il **nome**, ed è il punto dell'endpoint
-
-Non è una comodità. Oggi il selettore mostra `t.org.role[...]` e **l'UUID grezzo**,
-perché nessun endpoint restituisce il nome di un'organizzazione a chi non ne è staff.
-Per il proprietario, che ne ha una, è indistinguibile da un elenco vero. **Per
-l'inquilino sono due UUID fra cui indovinare.**
-
-`organizations_select` è già `is_org_member(id)`, quindi il nome è leggibile da un
-membro: non serve né una migration né un allargamento di policy. Il debito «nessun
-endpoint elenca le organizzazioni» si chiude qui.
-
-La forma: `GET /api/v1/organizations` → `{ items: [{ id, name, slug, role }] }`.
-Nessun cursore — le organizzazioni di una persona sono poche per costruzione, e una
-paginazione su un elenco che sta in una riga è cerimonia.
-
-**Senza prefisso `me`**: la Row Level Security restringe già alle proprie, e il
-percorso dice il vero senza aggiungere una parola.
-
-##### 3. L'assegnazione è **solo a sé stessi**, e non è una semplificazione
-
-`AssignTicketCommand` vuole un `UserId`, e non esiste un endpoint che elenchi le
-persone di un'organizzazione — è il debito che la roadmap dice che «un client
-incontrerà per primo». Sembra quindi che `B4` sia bloccato.
-
-**Non lo è, e la ragione è che quel menù non avrebbe nessuno dentro.** Verificato:
-l'unico modo di diventare staff di un'organizzazione è `RegisterOwner`, che crea
-l'organizzazione personale con ruolo `Owner`; `InviteTenant` scrive
-`role: OrgRole::Tenant` fisso, e non esiste altra via per creare una membership.
-**`OrgRole::Manager` è nell'enum e nessuno lo scrive mai.** Un'organizzazione ha
-quindi esattamente uno staff, il suo owner.
-
-L'azione è dunque «**prendi in carico**», che assegna a chi chiama, ed è la verità
-completa del modello e non un ripiego. Il giorno in cui esisterà un invito che crea un
-gestore, quell'azione diventa un menù — e sarà quella fetta a doverne discutere.
-
-*Alternativa scartata: `GET /api/v1/members` dentro questa fetta.* Non è una rotta in
-più: è decidere **quali colonne** un membro possa vedere di un'altra persona, cioè la
-stessa domanda di [ADR-036](08-decisioni.md#adr-036), presa senza un caso d'uso che la
-guidi. Costruirla ora significa costruire quella sbagliata.
-
-##### 4. L'inquilino atterra sullo scadenzario, e non su una dashboard sua
-
-Serve una pagina iniziale, e la dashboard attuale gli risponde
-`403 org.staff_role_required` — non per la Row Level Security ma per `ensure_staff`,
-che la **stringe** apposta: la vista passa da `organizations_select`, che è
-`is_org_member`, quindi senza quel controllo un inquilino leggerebbe i numeri
-dell'intera organizzazione.
-
-Atterra su `/addebiti`, che è la domanda che si fa davvero — *quanto devo* — e che
-`ensure_member` gli concede già, ristretta dalle policy ai suoi.
-
-*Alternativa scartata: una dashboard dell'inquilino.* È una proiezione nuova, quindi
-un endpoint nuovo, quindi backend dentro una fetta di client — e soprattutto è una
-domanda di prodotto che nessuno ha ancora posto: *quali* numeri. È **rinviata con la
-sua ragione**, ed è già annotata nel tipo `GetOwnerDashboard` («il suo è un altro
-elenco, e sarà un'altra proiezione con la sua rotta»).
-
-**Le voci che vede sono quattro**: *Addebiti*, *Segnalazioni*, *Contratto*, *Bollette*
-— più *Spese* da `B6`. **Riepilogo esce** perché gli risponde `403`.
-
-**Immobili esce**, e la ragione non è la sicurezza: `ListProperties` è `ensure_member` e
-gliene mostrerebbe uno. Una voce di navigazione che porta a un elenco di un elemento è
-rumore, e la scheda dell'immobile resta raggiungibile dal contratto — che è anche il
-modo in cui ci si arriva pensando.
-
-**Le bollette restano**, ed è la voce su cui si esita: sono lette e non agite. Ma sono
-la ragione di metà dei suoi addebiti, e un riaddebito che non si può risalire a un
-documento è una cifra da accettare sulla fiducia.
-
-##### 5. Il guscio si adatta al ruolo, ed è un passo suo
-
-È la cosa che l'abbozzo precedente di questa fetta non nominava, e che si vede
-provando: **oggi un inquilino non incontra una schermata mancante, ne incontra sei
-sbagliate.**
-
-Le letture in gran parte funzionano — `ListProperties`, `ListLeases`, `ListCharges`,
-`ListUtilityBills` sono tutte `ensure_member`, e le policy restringono ai suoi — ma la
-navigazione è quella di chi amministra, e ogni azione di scrittura che gli si mostra
-risponde `403`: «Registra un immobile», «Emetti un addebito», «Registra un incasso».
-
-Farlo **prima** delle segnalazioni e non strada facendo è deliberato: è il passo che
-rende l'inquilino una cosa provabile: finché atterra su un errore, ogni schermata
-successiva si collauda solo con l'account del proprietario.
-
-*Alternativa scartata: nascondere le azioni schermata per schermata mentre si
-costruisce.* Il ramo sul ruolo finirebbe scritto dodici volte, e la tredicesima
-verrebbe dimenticata — che è precisamente come si costruisce un bottone che risponde
-sempre `403`.
-
-##### 6. La composizione dei gruppi passa dai **residenti dell'immobile**
-
-`AddGroupMemberCommand` vuole un `UserId`, e questa volta l'elenco esiste:
-`GET /api/v1/properties/{id}/residents` restituisce `user_id` e `full_name` per la
-**casa**, ed è esattamente ciò per cui la fetta «i coinquilini si vedono» e la
-migration `0030` esistono. È il ritorno di un investimento fatto due fette fa.
-
-Ne segue la sua trappola, ed è la stessa forma di `payer_user_id` nella fetta A: un
-residente **senza `user_id` non ha ancora accettato l'invito**, e non è aggiungibile a
-un gruppo — la policy confronterebbe un identificatore che non esiste. Va mostrato
-come non selezionabile con la ragione, non nascosto: nasconderlo farebbe cercare una
-persona che sullo schermo c'è.
-
-#### Decomposizione
-
-##### `B0` — Backend: `GET /api/v1/organizations`
-
-Use case di lettura (`ensure_authenticated`, decisione 1), DTO con `id`, `name`,
-`slug` e `role`, rotta, registrazione in `openapi.rs`, riga in
-[05 — API](05-api.md).
-
-`OrgMemberRepository::list_for_user` **esiste già** ed è usata da `Login`; là gira sul
-pool privilegiato perché il login è pre-autenticazione, qui gira sotto la Row Level
-Security del chiamante. Serve in più una lettura delle organizzazioni per nome:
-`OrganizationRepository` ha `find_by_id` e `insert`, quindi o un `find_many` o un join
-nel repository delle membership — la seconda evita `N+1` ed è una query sola.
-
-Test di contratto: due organizzazioni per lo stesso utente, un'organizzazione altrui
-che non compare, e **la chiamata senza `X-Org-Id` che risponde `200`** — che è la
-decisione 1 verificata invece che dichiarata.
-
-##### `B1` — Client: il selettore letto dall'API
-
-`getOrganizations` nel livello dati, la query nel guscio, i nomi al posto degli UUID.
-
-Il `localStorage` **resta**, ma per una cosa sola: ricordare **quale** era attiva. È
-una preferenza di quel browser, non un elenco — e la distinzione è ciò che il commento
-in `session.tsx` già dichiara e che questo passo rende vera.
-
-I tre stati vanno progettati anche qui: un selettore che sta caricando non deve
-mostrare un elenco vuoto, perché un elenco vuoto è indistinguibile da «non appartieni
-a niente».
-
-##### `B2` — Client: il guscio si adatta al ruolo
-
-La navigazione diventa una funzione del ruolo, e la pagina iniziale con essa
-(decisioni 4 e 5). Per l'inquilino: *Addebiti*, *Segnalazioni*, *Contratto*,
-*Bollette*, e atterraggio su `/addebiti`. Le azioni di scrittura riservate allo staff
-spariscono per chi non lo è.
-
-**Il ramo sta in un posto solo.** Un `useIsStaff()` letto dalla sessione, e i punti in
-cui si usa contati sulle dita: la navigazione, la rotta iniziale, e i bottoni delle
-schermate esistenti. Non un `if` per componente.
-
-**Non è un confine di sicurezza e non va scambiato per tale**: a negare è l'API, e la
-policy dietro. Qui si evita di *offrire* ciò che verrebbe rifiutato — che è
-un'altra cosa, e va scritto perché la differenza si perde.
-
-##### `B3` — Client: segnalazioni, la lettura
-
-Apertura su un immobile (`POST /properties/{id}/tickets`, `ensure_member` — è **il**
-punto in cui l'inquilino prende la parola), elenco con `?open=true`, dettaglio con lo
-storico degli stati, thread dei messaggi **paginato a parte** dal dettaglio.
-
-##### `B4` — Client: segnalazioni, le transizioni
-
-Le sette sotto-risorse, con i percorsi esatti perché uno di essi non si chiama come il
-suo use case:
-
-`/triage` · `/assign` · `/start` · **`/wait`** · `/close` · `/reopen` · `/cancel`
-
-Più il `PATCH /tickets/{id}`, che è **solo i costi** ed è staff.
-
-L'instradamento è **sui codici e non sul ruolo** — vedi le trappole.
-
-##### `B5` — Client: la dichiarazione di pagamento ← *punto di taglio*
-
-`POST /charges/{id}/payment-declarations`, dal dettaglio dell'addebito che **esiste
-già** dalla fetta A.
-
-**Sta prima del taglio e non dopo**, ed è un cambiamento rispetto alla prima stesura di
-questo piano: è il passo che chiude il giro che la fetta A ha aperto. Là la coda delle
-dichiarazioni è stata costruita e collaudata **da `curl`**, perché un inquilino non
-aveva un'interfaccia; qui quella coda diventa una cosa che accade da sé. Lasciarlo
-dopo il taglio avrebbe reso il criterio di completamento incoerente con la
-decomposizione — la verifica 3 lo richiede.
-
-**La chiave di idempotenza c'è già**: `@/api/idempotency` dalla fetta A, con i suoi
-cinque test. Va **riusata e non riscritta**, e la condizione è la stessa: si genera
-all'intento e si riusa a ogni tentativo.
-
-Il corpo **non ha `payer_user_id`**: chi dichiara è sempre chi chiama, perché
-`payments_insert` lo esige a chi non è staff. E **non c'è un bottone per ritirarla**:
-vedi le trappole.
-
-##### `B6` — Client: spese co-living, i gruppi
-
-Creazione, composizione dai residenti (decisione 6), ingresso e uscita,
-archiviazione. Da qui compare la voce *Spese* nella navigazione.
-
-##### `B7` — Client: spese e saldi
+### Fetta B-bis — le spese co-living, e ciò che resta del client
+
+La [fetta B](11-piani-conclusi.md#piano-inquilino-fetta-b) è stata eseguita fino al suo
+**punto di taglio dichiarato**, `B0`–`B5`: l'inquilino entra, vede che cosa deve,
+dichiara di aver pagato, segnala un guasto e ne segue il corso. Il piano e il suo
+[esito](11-piani-conclusi.md#esito-inquilino-fetta-b) sono archiviati, e **le sue sei
+decisioni valgono ancora** — in particolare che il ramo sul ruolo non è un confine di
+sicurezza ([ADR-042](08-decisioni.md#adr-042)).
+
+Restano i suoi ultimi passi, che qui riprendono la numerazione originale perché è
+quella con cui sono stati pensati e perché l'archivio vi rimanda.
+
+#### `B6` — Client: spese co-living, i gruppi
+
+Creazione, composizione dai residenti, ingresso e uscita, archiviazione. Da qui compare
+la voce *Spese* nella navigazione — di **entrambi** i ruoli: le spese co-living sono il
+denaro che i coinquilini si devono fra loro, e il proprietario ne è estraneo per
+costruzione, ma un `owner` che sia anche membro di un gruppo lo vede come chiunque
+altro.
+
+**La composizione passa dai residenti dell'immobile**, e non da un elenco di persone
+dell'organizzazione: `GET /api/v1/properties/{id}/residents` restituisce `user_id` e
+`full_name` per la **casa**, ed è esattamente ciò per cui la fetta «i coinquilini si
+vedono» e la migration `0030` esistono. È il ritorno di un investimento fatto tre fette
+fa, e resta la decisione presa: costruire `GET /members` significherebbe decidere
+**quali colonne** un membro possa vedere di un'altra persona senza un caso d'uso che lo
+guidi ([ADR-036](08-decisioni.md#adr-036), [ADR-042](08-decisioni.md#adr-042)).
+
+#### `B7` — Client: spese e saldi
 
 Ripartizione `equal` e `weighted`, quote mostrate, saldi con il netto.
 
-##### `B8` — Client: i regolamenti a due tempi
+#### `B8` — Client: i regolamenti a due tempi
 
 Dichiarazione, conferma di **chi riceve**, rifiuto, e il **ritiro di chi ha
-dichiarato** — che fra i pagamenti non esiste. Vedi le trappole: le due cose si
-somigliano e non sono la stessa.
+dichiarato** — che fra i pagamenti non esiste. Le due cose si somigliano e non sono la
+stessa: vedi le trappole.
 
-##### `B9` — Client: gli allegati sugli owner rimasti
+#### `B9` — Client: gli allegati sugli owner rimasti
 
-Immobile, stanza, contratto, segnalazione, addebito — e l'archiviazione di un
-documento, che è l'unica rotta dei documenti che nessuno chiama.
+Immobile, stanza, contratto, segnalazione, addebito — e l'archiviazione di un documento,
+che è l'unica rotta dei documenti che nessuno chiama. Il caricamento sulle bollette
+esiste già dalla fetta 1 e ne è il modello.
 
-##### `B10` — Client: i due debiti che l'inquilino incontra
+#### `B10` — Client: i due debiti che l'inquilino incontra
 
 Divisione del bundle per rotta con i `Suspense` progettati, e il coordinamento del
-refresh fra schede. Entrambi registrati fra i debiti noti con il loro perché.
+refresh fra schede. Entrambi registrati fra i debiti noti con il loro perché, ed
+entrambi **cresciuti** con la fetta B: il bundle porta ora anche le segnalazioni.
 
-##### `B11` — Documentazione ed esito
+#### `B11` — Documentazione ed esito
 
-ADR per ciò che sopravvive alla fetta, aggiornamento di [05 — API](05-api.md), esito,
-e **il piano si sposta in [11 — Piani conclusi](11-piani-conclusi.md) nello stesso
-commit**.
+ADR per ciò che sopravvive, aggiornamento di [05 — API](05-api.md) se l'API cambia,
+esito, e **il piano si sposta in [11 — Piani conclusi](11-piani-conclusi.md) nello
+stesso commit**.
 
 #### Trappole
 
-Le prime tre sono state trovate leggendo il codice per scrivere questo piano; le
-altre erano già note e sono qui perché il piano che le ha prodotte è archiviato e
-nessuno lo aprirà mentre esegue.
+Quelle delle spese co-living, che erano già nel piano della fetta B e che nessuno
+riaprirà mentre esegue. Sono qui e non nell'archivio perché è qui che si lavora.
 
-**Un inquilino non trova schermate mancanti, ne trova sbagliate.** È la decisione 5
-vista dal lato del difetto, ed è la ragione per cui `B2` viene prima: le letture
-funzionano già, quindi il sintomo non è una pagina vuota ma sei pagine che sembrano
-funzionare finché non si preme qualcosa.
+**Un residente senza `user_id` non è aggiungibile a un gruppo.** Non ha accettato
+l'invito, e la policy confronterebbe un identificatore che non esiste. Va mostrato come
+**non selezionabile con la ragione**, non nascosto: nasconderlo farebbe cercare una
+persona che sullo schermo c'è. È la stessa forma della trappola di `payer_user_id` nella
+fetta A, dove il rimedio è stato non offrire un vuoto inviabile
+([ADR-040](08-decisioni.md#adr-040)).
 
-**Il menù delle persone non esiste, e non serve.** `AssignTicketCommand` vuole un
-`UserId` e sembra chiedere un endpoint nuovo. Un'organizzazione ha un solo staff:
-l'azione è «prendi in carico». Chi parte a scrivere `GET /members` costruisce la cosa
-sbagliata prima di accorgersi che sarebbe vuota.
-
-**Un residente senza `user_id` non è aggiungibile a un gruppo di spesa.** Non ha
-accettato l'invito, e la policy confronterebbe un identificatore che non esiste. Va
-mostrato non selezionabile **con la ragione**: è la stessa forma della trappola di
-`payer_user_id` nella fetta A, dove il rimedio è stato non offrire un vuoto inviabile.
-
-**La transizione si chiama `/wait` e lo use case `SuspendTicket`.** Cercare
-`/suspend` non trova niente.
-
-**`?open=true` non è zucchero per `status <> 'closed'`.** L'indice parziale
-`tickets_open_ix` è definito su esattamente sei valori, e una disuguaglianza non lo
-userebbe. **La fetta A ha aggiunto una ragione in più per crederci**: lì si è misurato
-che perfino un filtro parametrico su un enum non usa un indice parziale, perché il
-cast `text → enum` passa da `enum_in`, che è `STABLE` e non si riduce a costante. Vedi
-[ADR-040](08-decisioni.md#adr-040).
-
-**`resolved` esiste nell'enum e l'API non lo produce mai.** Un client che costruisse i
-filtri dai valori dell'enum offrirebbe uno stato che non esiste. La fetta A ci è
-passata una terza volta, e il rimedio è quello: il menù si scrive a mano.
-
-**La riapertura è di chi ha segnalato, e il codice lo dice.** A un coinquilino che ci
-provi l'API risponde `403 ticket.not_yours` e **non** `org.staff_role_required`: non
-gli manca un ruolo — nessun ruolo gli darebbe quell'operazione. Il client instrada sul
-codice e mostra due messaggi diversi. Vale anche per l'annullamento, che chi ha
-segnalato può fare **finché nessuno ci ha messo mano**.
-
-**`estimated_cost` è `null` per chi non è staff anche quando un valore c'è.** Mostrare
-`0,00 €` sarebbe una bugia; mostrare `—` è la verità. E **non è un confine di
-sicurezza** ma una regola del contratto dell'API, dichiarata in
-`authorization::discloses_estimated_cost`: la Row Level Security lascia comunque
-leggere la riga.
-
-**Le note interne non arrivano proprio.** Le filtra la policy di `SELECT`, non un
-campo della risposta: il client non deve nasconderle, **non le riceve**. E a un
-inquilino che le chieda esplicitamente l'API risponde `403`.
-
-**Tre metodi di ripartizione su cinque danno `422`.** `percentage`, `exact` e
-`by_usage` compaiono nella specifica e sono rifiutati.
+**Tre metodi di ripartizione su cinque danno `422`.** `percentage`, `exact` e `by_usage`
+compaiono nella specifica e sono rifiutati.
 
 **Il peso ha tre decimali, gli importi due.** Un quarto decimale su `weight` dà `422`
 sul campo. La doppia si esprime con `"2"`.
 
 **Chi è uscito da un gruppo non vede i propri saldi.** La vista è `security_invoker` e
-passa da una policy che chiede una membership **attiva**: il debitore uscito compare
-nei saldi che leggono gli altri e non nei propri. È corretto rispetto all'isolamento
-ed è deliberatamente fuori perimetro — il client non deve presentarlo come un errore.
+passa da una policy che chiede una membership **attiva**: il debitore uscito compare nei
+saldi che leggono gli altri e non nei propri. È corretto rispetto all'isolamento ed è
+deliberatamente fuori perimetro — il client non deve presentarlo come un errore.
 
 **La somma dei `net_balance` fa zero, e va verificata con il modulo decimale.**
 Sommarli con l'aritmetica nativa produrrebbe uno zero che a volte non è zero.
 
-**Confermare un regolamento non ricalcola niente**, a differenza di `ConfirmPayment`:
-il saldo del gruppo non è memorizzato da nessuna parte, si legge dalla vista. Chi
-arriva dal modulo dei pagamenti si aspetta un `recalculate_*` che qui non serve e non
-deve esistere.
+**Confermare un regolamento non ricalcola niente**, a differenza di `ConfirmPayment`: il
+saldo del gruppo non è memorizzato da nessuna parte, si legge dalla vista. Chi arriva
+dal modulo dei pagamenti si aspetta un `recalculate_*` che qui non serve e non deve
+esistere.
 
 **Il ritiro esiste fra i regolamenti e non fra i pagamenti.** `settlements_update`
-ammette `from_user_id`, `payments_update` è staff soltanto. Le due cose si somigliano,
-e offrire il ritiro di una dichiarazione di pagamento darebbe `auth.denied_by_policy`
-— il codice riservato ai nostri difetti.
+ammette `from_user_id`, `payments_update` è staff soltanto. Offrire il ritiro di una
+dichiarazione di pagamento darebbe `auth.denied_by_policy` — il codice riservato ai
+nostri difetti. La fetta B lo ha risolto **dicendolo nel form** prima dell'invio, e la
+stessa asimmetria va spiegata al contrario qui, dove il ritiro invece c'è.
 
-**Il bundle diviso per rotta senza `Suspense` progettati produce una pagina bianca**
-dove prima c'era uno scheletro. I tre stati esistono già come componenti: i confini
-vanno messi dove quelli sono, non dove capita.
+**Il bundle diviso per rotta senza `Suspense` progettati produce una pagina bianca** dove
+prima c'era uno scheletro. I tre stati esistono già come componenti: i confini vanno
+messi dove quelli sono, non dove capita.
+
+**Le azioni di una schermata avvolgono, e `PageHeader` ora lo sa fare.** La fetta B ha
+corretto un `shrink-0` che a 375 px faceva scorrere la pagina in orizzontale. Chi
+aggiunge una schermata con molte azioni non deve reintrodurlo.
 
 #### Come si saprà che è finita
 
 `./ops/ci/test-integration.sh` verde e il job del client verde sono il minimo, non il
-criterio. Le quattro verifiche che contano, tutte da fare **a mano e con due account**:
+criterio. La verifica che conta è quella che la fetta B non ha potuto fare perché fuori
+dal suo taglio:
 
-1. **Un inquilino entra da un browser mai usato e vede l'organizzazione del
-   proprietario per nome**, senza incollare niente e senza atterrare su un errore. È
-   il debito `B0` e la decisione 4 visti dal lato di chi li subiva;
-2. **Una segnalazione fa il giro completo**: l'inquilino la apre, il proprietario la
-   classifica, la prende in carico, la mette in attesa, la chiude; l'inquilino la
-   riapre. E `open_tickets` in dashboard cambia di conseguenza — che è anche il
-   momento in cui quel riquadro smette di portare ai contratti per mancanza di una
-   destinazione propria;
-3. **L'inquilino dichiara di aver pagato dall'interfaccia**, e il proprietario la
-   conferma dalla coda della fetta A: il residuo dell'addebito scende. È il giro che
-   nella fetta A si era potuto provare solo da `curl`, ed è la ragione per cui `B5`
-   sta **dentro** il punto di taglio;
-4. **I saldi di un gruppo di spesa sommano a zero**, con un membro uscito che ha
-   ancora un conto aperto — il caso per cui la migration `0027` esiste.
+**I saldi di un gruppo di spesa sommano a zero**, con un membro uscito che ha ancora un
+conto aperto — il caso per cui la migration `0027` esiste. Da fare a mano, **con due
+account**, perché è un fatto fra due persone e con un account solo non si distingue chi
+deve da chi riceve.
 
 Più le due prove di qualità che il criterio «prodotto reale» rende obbligatorie:
-**navigazione da sola tastiera** su un percorso completo dell'inquilino, e **375 px**
-sulle schermate nuove — che per l'inquilino non è un di più, perché è il ruolo che sta
-davvero su un telefono ([ADR-039](08-decisioni.md#adr-039)).
+**navigazione da sola tastiera** e **375 px** sulle schermate nuove
+([ADR-039](08-decisioni.md#adr-039)).
 
 <a id="prima-degli-utenti-veri"></a>
 

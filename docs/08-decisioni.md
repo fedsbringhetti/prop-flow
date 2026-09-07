@@ -2230,3 +2230,181 @@ il client lo dice invece di offrire un menù di nomi che darebbero tutti lo stes
 esito.
 
 Il debito è quindi **chiuso**, e la colonna resta com'è.
+
+---
+
+<a id="adr-041"></a>
+
+## ADR-041 — «Quali organizzazioni sono mie» non appartiene a nessuna organizzazione
+
+**4 settembre 2026.** Chiude il debito «nessun endpoint elenca le organizzazioni di
+un utente», che la roadmap indicava come la prima cosa che un client avrebbe
+incontrato. La fetta dell'inquilino ci è arrivata sopra al primo passo.
+
+### Il difetto: un selettore che mostra due UUID
+
+Il guscio aveva un menù dell'organizzazione attiva, ed è deliberato che ci sia — senza
+`X-Org-Id` corretto gli elenchi rispondono `200` con zero elementi, cioè una schermata
+vuota senza errore, e avere l'organizzazione scritta in alto rende quel caso
+diagnosticabile in due secondi invece che in mezz'ora.
+
+Ma **quel menù non poteva mostrare un nome**, perché nessun endpoint restituiva il
+nome di un'organizzazione a chi non ne fosse staff: mostrava il ruolo e
+l'identificatore grezzo. Per un proprietario, che ne ha una, era indistinguibile da un
+elenco vero. **Per un inquilino sono due UUID fra cui indovinare**, ed è la differenza
+fra un prodotto e una cosa che si sa usare solo se la si è scritta.
+
+### La decisione
+
+`GET /api/v1/organizations` → `{ items: [{ id, name, slug, role }] }`, autorizzata con
+`ensure_authenticated`.
+
+**`ensure_authenticated` e non `ensure_member`, ed è la parte che conta.** Chiedere
+un'organizzazione attiva per poter domandare quali si hanno è **circolare**, e rompe
+esattamente il caso che l'endpoint esiste per servire: chi non ne ha una selezionata,
+o non ne ha più.
+
+Non è una speranza, ed è stato verificato **prima** di deciderlo, perché è ciò che lo
+rende possibile:
+
+- `app.member_role(p_org_id)` interroga `app.org_members` filtrando su
+  `app.current_user_id()` e sull'organizzazione **passata come argomento**;
+  `app.current_org_id()` non vi compare;
+- `organizations_select` è `app.is_org_member(id)`;
+- `org_members_select` è `user_id = app.current_user_id() OR app.is_org_member(org_id)`;
+- `app.set_request_context` accetta già un `p_org_id` nullo.
+
+La query gira quindi sotto la Row Level Security del chiamante **con un contesto privo
+di organizzazione**, e restituisce le proprie. `ensure_member` avrebbe funzionato quasi
+sempre — il token porta l'organizzazione predefinita — e sarebbe fallito esattamente
+quando serve. Il test di contratto verifica la chiamata **senza `X-Org-Id`**: è la
+decisione verificata invece che dichiarata.
+
+### Conseguenze e forma
+
+**Nessun cursore.** Le organizzazioni di una persona sono poche per costruzione — la
+propria, più quelle di chi le affitta casa — e una paginazione su un elenco che sta in
+una riga è cerimonia. È la stessa scelta di `GET /properties/{id}/residents`.
+
+**Senza prefisso `me`.** La Row Level Security restringe già alle proprie, e il
+percorso dice il vero senza aggiungere una parola.
+
+**Un join e non un ciclo di letture.** `OrgMemberRepository::list_organizations_for_user`
+unisce `app.org_members` e `app.organizations` in una query sola: comporre la coppia
+`(Organization, OrgMember)` avrebbe richiesto una `find_by_id` per appartenenza, cioè
+un `N+1` su una domanda che una query risolve. La proiezione
+`identity::OrganizationMembership` sta accanto agli aggregati come `PropertyResident`
+sta accanto all'immobile, e per la stessa ragione: non ha invarianti da difendere.
+
+**Solo le appartenenze attive**, e non per prudenza: `app.member_role` esige
+`status = 'active'`, quindi un'appartenenza sospesa o lasciata comparirebbe nel menù e
+poi non concederebbe una sola riga — di nuovo la schermata vuota senza errore.
+
+**Il `localStorage` del client si restringe a una cosa sola:** *quale* organizzazione
+era attiva. Era un elenco perché non c'era un endpoint; ora è una preferenza di quel
+browser, ed è la distinzione che il commento in `session.tsx` già dichiarava e che
+questo endpoint rende vera. Il ruolo si memorizza accanto perché serve **prima** che la
+rete risponda — il guscio decide su di esso che cosa mostrare — e non è autorevole:
+l'elenco vero lo corregge appena arriva, e corregge anche l'organizzazione attiva
+quando non è più fra le proprie. Senza quella correzione ogni richiesta successiva
+porterebbe un `X-Org-Id` che l'API rifiuta, cioè un'applicazione intera che risponde
+`403`.
+
+**Alternativa scartata: allargare `SessionResponse`.** Il login avrebbe potuto
+restituire le appartenenze con i nomi. Non risolve il caso in cui l'elenco cambia
+mentre la sessione vive — si accetta un invito e il menù resta vecchio fino al
+prossimo login — e lega un dato che si rilegge a un'operazione che si fa una volta.
+
+---
+
+<a id="adr-042"></a>
+
+## ADR-042 — Il ramo sul ruolo sta in un posto solo, e non è un confine di sicurezza
+
+**4 settembre 2026.** Nasce da un difetto che si vede **provando** e non leggendo: prima
+di questa fetta un inquilino che fosse entrato nel client non avrebbe incontrato una
+schermata mancante, **ne avrebbe incontrate sei sbagliate**.
+
+### Il difetto: le letture funzionano, le azioni no
+
+`ListProperties`, `ListLeases`, `ListCharges`, `ListUtilityBills` sono tutte
+`ensure_member`, e le policy restringono ai propri: un inquilino le chiama e riceve
+`200` con i suoi dati. Il sintomo non era quindi una pagina vuota, ma sei pagine che
+sembravano funzionare finché non si premeva qualcosa — «Registra un immobile», «Emetti
+un addebito», «Registra un incasso» rispondevano tutte `403`. E la pagina iniziale era
+la dashboard, che è `ensure_staff`: si atterrava su un errore.
+
+### La decisione
+
+La navigazione e la rotta iniziale sono **funzioni del ruolo**, e il ramo vive in un
+posto solo: `useIsStaff()`, letto dalla sessione. I punti in cui si usa si contano
+sulle dita — la navigazione, la rotta iniziale, e i bottoni di scrittura delle
+schermate esistenti — e non c'è un `if` per componente.
+
+**Non è un confine di sicurezza, e non va scambiato per tale.** A negare sono l'API e
+la policy di riga dietro; qui si evita di *offrire* ciò che verrebbe rifiutato, che è
+un'altra cosa. La differenza si perde facilmente, ed è scritta nel codice accanto al
+ramo per questo.
+
+**Alternativa scartata: nascondere le azioni schermata per schermata mentre si
+costruisce.** Il ramo sul ruolo sarebbe finito scritto dodici volte, e la tredicesima
+sarebbe stata dimenticata — che è precisamente come si costruisce un bottone che
+risponde sempre `403`.
+
+### Che cosa vede chi abita, e perché quelle quattro voci
+
+*Addebiti*, *Segnalazioni*, *Contratto*, *Bollette*. Ognuna è una scelta:
+
+- **il riepilogo esce** perché gli risponde `403 org.staff_role_required`, e non per la
+  Row Level Security: `GetOwnerDashboard` usa `ensure_staff`, che **stringe** la policy
+  invece di ripeterla — la vista passa da `organizations_select`, che è
+  `is_org_member`, quindi senza quel controllo un inquilino leggerebbe i numeri
+  dell'organizzazione intera. Una voce che porta a un errore è peggio di una che manca;
+- **gli immobili escono, e la ragione non è la sicurezza**: `ListProperties` è
+  `ensure_member` e gliene mostrerebbe uno. Una voce di navigazione che porta a un
+  elenco di un elemento è rumore, e la scheda dell'immobile resta raggiungibile dal
+  contratto — che è anche il modo in cui ci si arriva pensando;
+- **il contratto è al singolare**, perché per chi abita è uno;
+- **le bollette restano**, ed è la voce su cui si esita: sono lette e non agite. Ma sono
+  la ragione di metà dei suoi addebiti, e un riaddebito che non si può risalire a un
+  documento è una cifra da accettare sulla fiducia.
+
+**Atterra su `/addebiti`, e non su una dashboard sua.** È la domanda che si fa davvero —
+*quanto devo* — ed è una rotta che esiste già, ristretta dalle policy ai suoi. Una
+dashboard dell'inquilino sarebbe una proiezione nuova, quindi un endpoint nuovo, quindi
+backend dentro una fetta di client; e soprattutto è una domanda di prodotto che nessuno
+ha ancora posto: *quali* numeri. È rinviata con la sua ragione, e la nota è già nel tipo
+`GetOwnerDashboard`.
+
+### L'assegnazione è «prendi in carico», e non è una semplificazione
+
+`AssignTicketCommand` vuole un `UserId`, e sembra chiedere un endpoint che elenchi le
+persone dell'organizzazione. **Non lo è, perché quel menù non avrebbe nessuno dentro.**
+Verificato: l'unico modo di diventare staff è `RegisterOwner`, che crea
+l'organizzazione personale con ruolo `Owner`; `InviteTenant` scrive
+`role: OrgRole::Tenant` **fisso**, e non esiste altra via per creare una membership.
+`OrgRole::Manager` è nell'enum e nessuno lo scrive mai. Un'organizzazione ha quindi
+esattamente uno staff, il suo owner.
+
+L'azione è dunque «prendi in carico», che assegna a chi chiama, ed è la verità completa
+del modello e non un ripiego. Il giorno in cui esisterà un invito che crea un gestore,
+quell'azione diventa un menù — e sarà quella fetta a doverne discutere.
+
+**Alternativa scartata: `GET /api/v1/members` dentro questa fetta.** Non è una rotta in
+più: è decidere **quali colonne** un membro possa vedere di un'altra persona, cioè la
+stessa domanda di [ADR-036](#adr-036), presa senza un caso d'uso che la guidi.
+Costruirla ora significa costruire quella sbagliata.
+
+### Il corollario: si instrada sui codici, non sul ruolo
+
+Riapertura e annullamento di una segnalazione **non** sono staff-only, e il client non
+può derivarli dal ruolo. A un coinquilino che provi a riaprire l'API risponde
+`403 ticket.not_yours` e non `org.staff_role_required`: non gli manca un ruolo — nessun
+ruolo gli darebbe quell'operazione — gli manca l'essere stato lui a segnalare, e i due
+rimedi sono diversi. Per l'annullamento vale il contrario in un caso preciso: chi ha
+segnalato può annullare **finché nessuno ci ha messo mano**, e da lì in poi
+`org.staff_role_required` è il codice vero, perché annullare una segnalazione in
+lavorazione butterebbe via il lavoro di qualcun altro.
+
+Il client mostra quindi quelle due azioni a chi ha segnalato, e traduce i due codici in
+due messaggi diversi.
