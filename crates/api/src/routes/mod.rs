@@ -10,6 +10,7 @@ pub mod expenses;
 pub mod health;
 pub mod invitations;
 pub mod leases;
+pub mod organizations;
 pub mod payments;
 pub mod properties;
 pub mod rooms;
