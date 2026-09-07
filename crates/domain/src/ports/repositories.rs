@@ -10,7 +10,9 @@ use crate::expense::{
     Expense, ExpenseGroup, ExpenseGroupMember, ExpenseShare, GroupBalance, Settlement,
     SettlementStatus,
 };
-use crate::identity::{Invitation, OrgMember, Organization, RefreshSession, TokenHash, User};
+use crate::identity::{
+    Invitation, OrgMember, Organization, OrganizationMembership, RefreshSession, TokenHash, User,
+};
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
 use crate::property::{Property, PropertyResident, PropertyStatus, Room};
@@ -96,6 +98,20 @@ pub trait OrgMemberRepository: Send {
     async fn find(&mut self, org_id: OrgId, user_id: UserId)
     -> RepositoryResult<Option<OrgMember>>;
     async fn list_for_user(&mut self, user_id: UserId) -> RepositoryResult<Vec<OrgMember>>;
+    /// Le organizzazioni dell'utente **con il loro nome**.
+    ///
+    /// Distinta da [`OrgMemberRepository::list_for_user`], che restituisce le sole
+    /// appartenenze e serve al login: là il nome non serve, qui è tutto il punto —
+    /// senza, un elenco di organizzazioni è un elenco di UUID.
+    ///
+    /// È un join e non un ciclo di `find_by_id` sulle organizzazioni: la seconda
+    /// forma sarebbe un `N+1` su una domanda che una query sola risolve, e
+    /// `organizations_select` è già `is_org_member(id)`, quindi la Row Level
+    /// Security restringe il join alle proprie senza che il `WHERE` debba dirlo.
+    async fn list_organizations_for_user(
+        &mut self,
+        user_id: UserId,
+    ) -> RepositoryResult<Vec<OrganizationMembership>>;
     async fn insert(&mut self, member: &OrgMember) -> RepositoryResult<()>;
 }
 

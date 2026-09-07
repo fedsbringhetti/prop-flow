@@ -19,6 +19,9 @@ export type IsoDateTime = string
 /** Stringa decimale, `"184.20"`. Mai un `number`. */
 export type Amount = string
 
+/** Il ruolo dentro un'organizzazione, come lo manda l'API. */
+export type OrgRole = 'owner' | 'manager' | 'tenant'
+
 export interface Page<T> {
   items: T[]
   /** Assente a fine risultati. Da rimandare come `after`. */
@@ -27,6 +30,28 @@ export interface Page<T> {
 
 export interface Items<T> {
   items: T[]
+}
+
+// ---------------------------------------------------------------------------
+// Organizzazioni
+// ---------------------------------------------------------------------------
+
+/**
+ * Un'organizzazione di cui si è membri, **con il nome**.
+ *
+ * È l'unica risposta dell'API che porti il nome di un'organizzazione a chi non ne
+ * è staff, ed è la ragione per cui la rotta esiste: senza, un selettore può
+ * mostrare soltanto l'identificatore. Per chi ne ha una è indistinguibile da un
+ * elenco vero; per un inquilino sono due UUID fra cui indovinare.
+ *
+ * `role` è il ruolo **in questa** organizzazione: la stessa persona è proprietario
+ * della propria e inquilino in quella di chi le affitta casa.
+ */
+export interface Organization {
+  id: Uuid
+  name: string
+  slug: string
+  role: OrgRole
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +229,131 @@ export interface LeaseParty {
 }
 
 export type LeaseDetail = Lease & { parties: LeaseParty[] }
+
+// ---------------------------------------------------------------------------
+// Segnalazioni
+// ---------------------------------------------------------------------------
+
+export type TicketCategory =
+  | 'plumbing'
+  | 'electrical'
+  | 'heating_cooling'
+  | 'appliance'
+  | 'structural'
+  | 'pest'
+  | 'cleaning'
+  | 'connectivity'
+  | 'security'
+  | 'other'
+
+export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent'
+
+/**
+ * Lo stato di una segnalazione.
+ *
+ * **`resolved` c'è e l'API non lo scrive mai**: il flusso con conferma
+ * dell'inquilino è stato scartato, perché senza scheduler un ticket risolto e mai
+ * confermato resterebbe appeso per sempre. Compare qui perché una riga letta
+ * potrebbe portarlo, e un valore sconosciuto deve rompere il typecheck invece di
+ * ricadere su un default — ma un menù di filtri costruito da questa unione
+ * offrirebbe uno stato che non esiste. I filtri si scrivono a mano.
+ */
+export type TicketStatus =
+  | 'open'
+  | 'triaged'
+  | 'assigned'
+  | 'in_progress'
+  | 'waiting_tenant'
+  | 'waiting_owner'
+  | 'resolved'
+  | 'closed'
+  | 'cancelled'
+
+/** Chi ha agito. `system` e `ai` sono del triage automatico, che non c'è ancora. */
+export type TicketActor = 'tenant' | 'owner' | 'manager' | 'system' | 'ai'
+
+/** Su chi si sta aspettando. È il corpo di `/wait`, non uno stato a sé. */
+export type WaitingOn = 'tenant' | 'owner'
+
+export interface Ticket {
+  id: Uuid
+  organization_id: Uuid
+  /**
+   * Riferimento leggibile assegnato dal **database**, `TK-000042`.
+   *
+   * È **per organizzazione**: due organizzazioni diverse hanno legittimamente lo
+   * stesso riferimento, quindi non è un identificatore globale e non si indicizza
+   * per lui. Per raggiungere una segnalazione serve `id`.
+   */
+  reference: string | null
+  property_id: Uuid
+  room_id?: Uuid
+  /** Senza, non la vede nessun inquilino: `can_access_ticket` passa da qui. */
+  lease_id?: Uuid
+  title: string
+  description: string
+  category: TicketCategory
+  priority: TicketPriority
+  status: TicketStatus
+  reported_by: Uuid | null
+  reported_by_kind: TicketActor
+  assigned_to: Uuid | null
+  assigned_at: IsoDateTime | null
+  /**
+   * **`null` per chi non è staff, anche quando un valore c'è.**
+   *
+   * È la cifra di una trattativa con un fornitore e non riguarda chi abita la
+   * casa. Non è un confine di sicurezza — la Row Level Security lascia comunque
+   * leggere la riga — ma una regola del contratto dell'API, decisa in
+   * `authorization::discloses_estimated_cost`. Mostrare `0,00 €` sarebbe una
+   * bugia: il trattino è la verità.
+   */
+  estimated_cost: Amount | null
+  /** Lo vede **chiunque veda la segnalazione**: chi ha subìto il guasto sa quanto
+   *  è costato ripararlo. */
+  actual_cost: Amount | null
+  currency: string
+  closed_at: IsoDateTime | null
+  /** Come è andata a finire. Una riapertura la **cancella**. */
+  resolution_notes?: string
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}
+
+/**
+ * Una transizione dello storico.
+ *
+ * Lo scrive un **trigger** del database, non l'API: la prima riga è sempre
+ * `null → open` e la produce l'inserimento. Per questo `changed_by` può essere
+ * `null` — fuori da un contesto di richiesta non c'è un utente corrente.
+ */
+export interface TicketStatusChange {
+  from_status: TicketStatus | null
+  to_status: TicketStatus
+  changed_by: Uuid | null
+  reason?: string
+  changed_at: IsoDateTime
+}
+
+/** Il dettaglio: l'aggregato più lo storico. **I messaggi no**, hanno il loro
+ *  cursore — una conversazione non ha un tetto. */
+export type TicketDetail = Ticket & { history: TicketStatusChange[] }
+
+export interface TicketMessage {
+  id: Uuid
+  ticket_id: Uuid
+  author_id: Uuid | null
+  author_kind: TicketActor
+  body: string
+  /**
+   * Nota interna, visibile al solo staff.
+   *
+   * **A un inquilino non arrivano affatto**: le filtra `ticket_messages_select`,
+   * non questo campo. Il client non deve nasconderle — non le riceve.
+   */
+  is_internal: boolean
+  created_at: IsoDateTime
+}
 
 // ---------------------------------------------------------------------------
 // Bollette, OCR e addebiti

@@ -1120,6 +1120,92 @@ async fn a_tenant_becomes_real_and_sees_only_what_is_theirs() {
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {body}");
 }
 
+/// L'elenco delle proprie organizzazioni, che è la sola rotta che risponde
+/// **senza un'organizzazione attiva**.
+///
+/// Le tre asserzioni sono le tre ragioni per cui esiste: il **nome** — senza cui
+/// un selettore mostra due UUID fra cui indovinare — l'isolamento, e la risposta
+/// a chi non ha dichiarato `X-Org-Id`. La terza è la decisione «`B0` è
+/// `ensure_authenticated` e non `ensure_member`» verificata invece che dichiarata:
+/// con `ensure_member` questa chiamata darebbe `403 org.not_selected` quando il
+/// token non porta un'organizzazione, cioè proprio nel caso che l'endpoint serve.
+#[tokio::test]
+async fn the_organizations_of_a_user_come_back_with_their_names() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario").await;
+    // Un secondo proprietario, del tutto estraneo: la sua organizzazione non deve
+    // comparire nell'elenco di nessun altro.
+    let (stranger, stranger_org) = common::register_and_login(&app, "estraneo").await;
+
+    let property = create_property(&app, &owner, "Immobile affittato").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("inquilino");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    let (status, body) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    // **Senza `X-Org-Id`**: è la condizione che la decisione dichiara possibile.
+    let (status, page) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+
+    let items = page["items"].as_array().expect("elenco");
+    assert_eq!(items.len(), 2, "due organizzazioni attese: {page}");
+
+    let personal = items
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(tenant_org.clone()))
+        .expect("l'organizzazione personale dell'inquilino");
+    assert_eq!(personal["role"], "owner");
+
+    let rented = items
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .expect("l'organizzazione del proprietario");
+    assert_eq!(rented["role"], "tenant");
+    // Il nome, che è il punto: prima di questa rotta nessun endpoint lo dava a
+    // chi non fosse staff dell'organizzazione.
+    assert_eq!(
+        rented["name"], "Proprietario Test",
+        "il nome dell'organizzazione manca: {rented}"
+    );
+    assert!(
+        rented["slug"].as_str().is_some_and(|slug| !slug.is_empty()),
+        "lo slug manca: {rented}"
+    );
+
+    // L'organizzazione dell'estraneo non compare, e non perché la si filtri: la
+    // policy `organizations_select` è `app.is_org_member(id)`.
+    assert!(
+        !items
+            .iter()
+            .any(|item| item["id"] == serde_json::Value::String(stranger_org.clone())),
+        "un'organizzazione altrui è finita nell'elenco: {page}"
+    );
+
+    // E la simmetria: l'estraneo vede la propria e nient'altro.
+    let (status, page) = app
+        .send("GET", "/api/v1/organizations", Some(&stranger), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let ids: Vec<&str> = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec![stranger_org.as_str()], "corpo: {page}");
+}
+
 #[tokio::test]
 async fn an_unknown_token_is_indistinguishable_from_someone_elses() {
     let app = require_app!();

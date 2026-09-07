@@ -74,12 +74,24 @@ export const it = {
     /** L'organizzazione attiva è stato esplicito, non un default implicito:
      *  senza `X-Org-Id` gli elenchi rispondono `200` con zero elementi. */
     missing: 'Nessuna organizzazione selezionata.',
+    /** Un elenco che sta caricando non deve sembrare vuoto: «non ce ne sono» e
+     *  «non le ho ancora lette» sono due cose diverse, e mostrarle uguali fa
+     *  cercare un problema che non c'è. */
+    loading: 'Cerco le tue organizzazioni…',
+    empty: 'Non appartieni a nessuna organizzazione.',
+    loadFailed: 'Non riesco a leggere le tue organizzazioni.',
+    /** Il nome non è ancora arrivato: si mostra questo e non l'UUID, che è
+     *  esattamente ciò da cui questo passo libera. */
+    unknownName: 'Organizzazione',
   },
 
   nav: {
     dashboard: 'Riepilogo',
     properties: 'Immobili',
     leases: 'Contratti',
+    /** Al singolare, e solo per l'inquilino: per chi abita il contratto è uno. */
+    lease: 'Contratto',
+    tickets: 'Segnalazioni',
     bills: 'Bollette',
     charges: 'Addebiti',
     payments: 'Pagamenti',
@@ -107,6 +119,7 @@ export const it = {
     goToOverdue: 'Vedi lo scadenzario',
     goToBills: 'Vedi le bollette',
     goToLeases: 'Vedi i contratti',
+    goToTickets: 'Vedi le segnalazioni',
     goToProperties: 'Vedi gli immobili',
     empty: 'Comincia registrando il tuo primo immobile.',
   },
@@ -228,6 +241,10 @@ export const it = {
     created: 'Contratto redatto.',
     empty: 'Nessun contratto.',
     emptyHint: 'Un contratto nasce in bozza: si aggiungono le parti e poi si attiva.',
+    /** Il vuoto di chi abita non è lo stesso di chi amministra: lui non ha un
+     *  gesto per riempirlo, e dirgli «creane uno» sarebbe indicargli una porta
+     *  che l'API gli chiude. */
+    emptyForTenant: 'Non risulta nessun contratto a tuo nome in questa organizzazione.',
     noTenantParty: 'Il contratto non ha inquilini fra le parti.',
     sharesNotHundred: 'Le quote degli inquilini non sommano a 100.',
     periodOverlap: 'Il periodo si sovrappone a una locazione già attiva.',
@@ -281,6 +298,167 @@ export const it = {
     expired: 'Scaduto',
   },
 
+  ticket: {
+    title: 'Segnalazioni',
+    /** L'inquilino apre un guasto; il proprietario lo lavora. La stessa schermata
+     *  vista da due ruoli, e non due schermate da tenere allineate. */
+    tenantSubtitle: 'I guasti che hai segnalato, e a che punto sono.',
+    staffSubtitle: 'I guasti segnalati, e chi li sta lavorando.',
+    create: 'Segnala un guasto',
+    newTitle: 'Segnala un guasto',
+    detailTitle: 'Segnalazione',
+    backToList: 'Torna alle segnalazioni',
+    reference: 'Riferimento',
+    /** Il numero è **per organizzazione**: dice quante segnalazioni ha aperto
+     *  quel proprietario, non quante ne esistono sulla piattaforma. */
+    referenceHint: 'Il numero è progressivo dentro l’organizzazione.',
+    ticketTitle: 'Che cosa succede',
+    ticketTitleHint: 'Una riga: «Il boiler perde», «La serratura non chiude».',
+    description: 'Raccontalo per esteso',
+    descriptionHint: 'Da quando, dove, che cosa hai già provato. Quello che scrivi ora resta.',
+    property: 'Immobile',
+    room: 'Stanza',
+    lease: 'Contratto',
+    /** Senza `lease_id` la segnalazione non la vede nessun inquilino:
+     *  `app.can_access_ticket` passa dal contratto. Stessa forma di
+     *  `payer_user_id` nella fetta A — il difetto non è che il campo sia
+     *  facoltativo, è che ometterlo sia il default. */
+    leaseHint: 'È ciò che rende la segnalazione visibile a chi abita.',
+    leaseNone: 'Nessun contratto',
+    leaseNoneHint:
+      'La vedrai tu e chi amministra, e nessun altro: senza contratto indicato nessun inquilino la trova, nemmeno chi abita quella casa.',
+    wholeProperty: 'Tutto l’immobile',
+    category: 'Categoria',
+    priority: 'Priorità',
+    status: 'Stato',
+    openedAt: 'Aperta il',
+    openedBy: 'Aperta da',
+    closedAt: 'Chiusa il',
+    assignedTo: 'In carico a',
+    assignedToNobody: 'Nessuno l’ha ancora presa in carico',
+    /** `estimated_cost` è `null` per chi non è staff **anche quando un valore
+     *  c'è**: mostrare `0,00 €` sarebbe una bugia, il trattino è la verità. */
+    estimatedCost: 'Costo stimato',
+    estimatedCostHint: 'È la trattativa con il fornitore: la vede solo chi amministra.',
+    actualCost: 'Costo sostenuto',
+    actualCostHint: 'Lo vede chiunque veda la segnalazione: chi ha subìto il guasto sa quanto è costato ripararlo.',
+    costs: 'Costi',
+    editCosts: 'Modifica i costi',
+    /** L'unico `PATCH` del modulo, ed è solo questo: titolo e descrizione sono il
+     *  testo con cui una persona ha descritto un guasto in un momento preciso. */
+    onlyCostsArePatchable:
+      'Di una segnalazione si modificano solo i costi. Il testo resta com’è stato scritto: per correggere il tiro c’è il thread.',
+    resolutionNotes: 'Com’è andata a finire',
+    resolutionNotesHint: 'Facoltativo. Una riapertura la cancella, perché fa parte della chiusura.',
+    history: 'Storico degli stati',
+    /** La prima riga la scrive il trigger all'inserimento, fuori da un contesto
+     *  di richiesta: `changed_by` può quindi mancare, e non è un difetto. */
+    historyOpened: 'Aperta',
+    thread: 'Conversazione',
+    threadEmpty: 'Nessun messaggio.',
+    threadEmptyHint: 'Scrivi qui per aggiungere qualcosa: il thread non si riscrive mai.',
+    message: 'Messaggio',
+    messagePlaceholder: 'Scrivi un aggiornamento…',
+    send: 'Invia',
+    sent: 'Messaggio inviato.',
+    /** Non si modifica e non si cancella, nemmeno in modo soft: due sole policy,
+     *  `_select` e `_insert`. Va detto prima di inviare, non dopo. */
+    messageIsFinal: 'Un messaggio inviato non si modifica e non si cancella.',
+    internalNote: 'Nota interna',
+    internalNoteHint: 'La vede solo chi amministra: all’inquilino non arriva affatto.',
+    triage: 'Classifica',
+    triageTitle: 'Classifica la segnalazione',
+    triageExplain:
+      'Categoria e priorità si impostano qui, ed è ciò che «classificata» significa: dopo non si cambiano più altrove.',
+    take: 'Prendi in carico',
+    takeTitle: 'Prendere in carico questa segnalazione?',
+    /** L'assegnazione è solo a sé stessi, e non è una semplificazione:
+     *  un'organizzazione ha esattamente uno staff, perché gli inviti scrivono
+     *  `role: tenant` fisso e `manager` non lo scrive nessuno. */
+    takeExplain: 'Risulterai tu come responsabile della lavorazione.',
+    start: 'Avvia la lavorazione',
+    resume: 'Riprendi la lavorazione',
+    wait: 'Metti in attesa',
+    waitTitle: 'Su chi stai aspettando?',
+    /** Non è una fase a sé ma una sospensione: serve a dire perché una
+     *  segnalazione è ferma. Senza un nome resta una che sembra abbandonata. */
+    waitExplain:
+      'La lavorazione resta ferma e si vede perché. Si riprende con «riprendi la lavorazione».',
+    waitOn: 'Aspetto',
+    waitOnTenant: 'L’inquilino',
+    waitOnOwner: 'Il proprietario',
+    close: 'Chiudi',
+    closeTitle: 'Chiudere questa segnalazione?',
+    closeExplain:
+      'Puoi scrivere com’è andata a finire: la legge anche chi ha segnalato. Se il guasto torna, la segnalazione si riapre.',
+    reopen: 'Riapri',
+    reopenTitle: 'Riaprire questa segnalazione?',
+    /** Riaprire disfa la chiusura, e la nota di risoluzione fa parte della
+     *  chiusura: una `open` che dichiara come è stata risolta direbbe il falso
+     *  sul proprio stato. */
+    reopenExplain:
+      'Torna aperta, e la nota su com’era andata a finire viene cancellata: fa parte della chiusura. Quello che deve restare va scritto nel thread.',
+    cancel: 'Annulla la segnalazione',
+    cancelTitle: 'Annullare questa segnalazione?',
+    cancelExplain:
+      'Vuol dire «non serve più». Resta visibile con la sua storia, e non si modifica più.',
+    /** L'API risponde `ticket.not_yours` e non `org.staff_role_required`: non
+     *  manca un ruolo, manca l'essere stati noi a segnalare. Il messaggio del
+     *  primo caso sta fra gli `errors`, dove si instrada sul codice; questo
+     *  spiega **prima** il caso in cui il bottone non compare affatto. */
+    onlyOpenCancelledByReporter:
+      'Puoi annullarla finché nessuno ci ha messo mano. Da qui in poi la annulla chi amministra.',
+    onlyOpen: 'Solo quelle aperte',
+    /** `?open=true` non è `status <> 'closed'`: l'indice parziale
+     *  `tickets_open_ix` è definito su esattamente sei valori. */
+    onlyOpenHint: 'Le sei fasi di lavorazione, chiuse e annullate escluse.',
+    empty: 'Nessuna segnalazione.',
+    emptyOpen: 'Nessuna segnalazione aperta.',
+    emptyHintTenant: 'Se qualcosa non funziona in casa, segnalalo: resta scritto, con la sua data.',
+    emptyHintStaff: 'Quando un inquilino segnala un guasto, lo trovi qui.',
+    /** Nessun immobile su cui aprire: senza un contratto in essere non c'è una
+     *  casa di cui segnalare i guasti. */
+    noProperty: 'Non risulta nessun immobile a te collegato: non c’è nulla su cui aprire una segnalazione.',
+    categories: {
+      plumbing: 'Idraulica',
+      electrical: 'Elettrico',
+      heating_cooling: 'Riscaldamento e clima',
+      appliance: 'Elettrodomestici',
+      structural: 'Struttura',
+      pest: 'Infestazioni',
+      cleaning: 'Pulizie',
+      connectivity: 'Rete e connettività',
+      security: 'Sicurezza',
+      other: 'Altro',
+    },
+    priorities: {
+      low: 'Bassa',
+      medium: 'Media',
+      high: 'Alta',
+      urgent: 'Urgente',
+    },
+    statuses: {
+      open: 'Aperta',
+      triaged: 'Classificata',
+      assigned: 'Assegnata',
+      in_progress: 'In lavorazione',
+      waiting_tenant: 'In attesa dell’inquilino',
+      waiting_owner: 'In attesa del proprietario',
+      /** Nell'enum e mai scritto dall'API: compare qui perché una riga letta
+       *  potrebbe portarlo, non perché qualcuno debba poterlo scegliere. */
+      resolved: 'Risolta',
+      closed: 'Chiusa',
+      cancelled: 'Annullata',
+    },
+    actors: {
+      tenant: 'Inquilino',
+      owner: 'Proprietario',
+      manager: 'Gestore',
+      system: 'Sistema',
+      ai: 'Assistente automatico',
+    },
+  },
+
   bill: {
     title: 'Bollette',
     newTitle: 'Nuova bolletta',
@@ -328,6 +506,8 @@ export const it = {
     duplicate: 'Questa fattura di questo fornitore è già registrata.',
     empty: 'Nessuna bolletta registrata.',
     emptyHint: 'Registra una bolletta e allega la scansione: la lettura automatica parte da lì.',
+    emptyForTenant:
+      'Nessuna bolletta imputata al tuo contratto. Le registra chi amministra, e le vedi qui quando ti riguardano.',
     scan: 'Scansione',
     uploadScan: 'Carica la scansione',
     uploadHint: 'PDF o immagine, fino a 25 MB.',
@@ -449,6 +629,8 @@ export const it = {
     noPatch: 'Un addebito emesso non si modifica: si annulla e si riemette.',
     /** `?status=overdue` risponde 422: lo stato è derivato dalla scadenza. */
     derivedStatusNote: 'Scaduto è derivato dalla scadenza: si vede, e si filtra con «solo insoluti».',
+    /** La pagina iniziale di chi abita: la domanda che si fa davvero. */
+    tenantSubtitle: 'Quanto devi, e a che punto sta ogni richiesta.',
     fromBill: 'Da bolletta',
     detailTitle: 'Addebito',
     /** Un residuo negativo è un credito verso l'inquilino: non compensa gli altri
@@ -506,6 +688,23 @@ export const it = {
     payerNoCandidates:
       'Nessun inquilino ha ancora accettato l’invito: finché non lo fa, l’incasso può solo restare non attribuito.',
     recorded: 'Incasso registrato.',
+    declare: 'Ho pagato',
+    declareTitle: 'Dichiara di aver pagato',
+    /** Nasce `pending` e **non muove il saldo**: renderlo visibile senza renderlo
+     *  vero è tutto il punto della rotta. */
+    declareExplain:
+      'Dichiari un pagamento che hai già fatto. Il residuo non cambia finché chi amministra non lo conferma.',
+    declaredAmount: 'Quanto hai pagato',
+    declaredAmountHint: 'Puoi dichiarare anche un acconto: il residuo scenderà di quello.',
+    declaredReferenceHint: 'La causale del bonifico, o come si ritrova il movimento.',
+    /** `payments_update` è staff soltanto: un ritiro otterrebbe zero righe
+     *  aggiornate, cioè `auth.denied_by_policy`. Va detto prima, non scoperto
+     *  cercando un bottone che non c'è. */
+    declareNoWithdraw:
+      'Una volta inviata non la puoi ritirare: se ti accorgi di un errore, scrivilo a chi amministra — può rifiutarla.',
+    /** Il residuo non è ancora sceso, e dirlo dove si guarda il numero evita due
+     *  persone convinte di due cose diverse sullo stesso importo. */
+    declaredWaiting: 'Hai una dichiarazione in attesa di conferma su questo addebito.',
     status: 'Stato',
     /** Quando la riga è arrivata: `created_at`, che c'è **sempre**. È la data che
      *  ordina una coda di lavoro. */
@@ -534,6 +733,13 @@ export const it = {
     pendingDoesNotMove: 'In attesa: non muove il saldo finché non la confermi.',
     onlyStaffDecides:
       'A confermare o rifiutare è chi amministra: chi ha dichiarato non può ritirare.',
+    /** La stessa rotta, letta da chi abita: le righe le sceglie `payments_select`,
+     *  non un ramo sul ruolo. */
+    mineSubtitle: 'I tuoi movimenti su questa organizzazione.',
+    /** `payments_update` è staff soltanto: un ritiro otterrebbe zero righe
+     *  aggiornate, cioè `auth.denied_by_policy`. Meglio dirlo che offrirlo. */
+    mineCannotWithdraw:
+      'Una dichiarazione in attesa la conferma o la rifiuta chi amministra: non si ritira.',
     goToCharge: 'Vai all’addebito',
     methods: {
       bank_transfer: 'Bonifico',
@@ -568,6 +774,10 @@ export const it = {
     'auth.denied_by_policy': 'Operazione non consentita.',
     'org.not_selected': 'Seleziona un’organizzazione.',
     'org.not_a_member': 'Non fai parte di questa organizzazione.',
+    'ticket.not_yours': 'Questa operazione spetta a chi ha aperto la segnalazione.',
+    'ticket.not_found': 'Segnalazione non trovata.',
+    'ticket.invalid_transition': 'Non si può fare da questo stato.',
+    'ticket.cancelled': 'La segnalazione è annullata e non si modifica più.',
     'org.staff_role_required': 'Serve il ruolo di proprietario o gestore.',
     'validation.failed': 'Controlla i campi segnalati.',
     'property.not_found': 'Immobile non trovato.',

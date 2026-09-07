@@ -7,6 +7,8 @@ import type {
   PaymentStatus,
   PropertyStatus,
   RoomStatus,
+  TicketPriority,
+  TicketStatus,
 } from '@/api/types'
 
 /**
@@ -147,4 +149,50 @@ const paymentTone: Record<PaymentStatus, BadgeTone> = {
 
 export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
   return <Badge tone={paymentTone[status]}>{t.payment.statuses[status]}</Badge>
+}
+
+/**
+ * Lo stato di una segnalazione.
+ *
+ * **Nessuno è derivato**: è sempre quello memorizzato, quindi non c'è una coppia
+ * da mostrare come per contratti e addebiti.
+ *
+ * I due `waiting_*` sono `warning` perché **aspettano una persona** — sono una
+ * sospensione della lavorazione, non una fase a sé, e servono a dire perché una
+ * segnalazione è ferma: senza un nome resterebbe una segnalazione che sembra
+ * abbandonata. `resolved` ha comunque il suo tono, anche se l'API non lo scrive
+ * mai: una riga che lo portasse va mostrata, non nascosta dietro un ripiego.
+ */
+const ticketTone: Record<TicketStatus, BadgeTone> = {
+  open: 'info',
+  triaged: 'info',
+  assigned: 'info',
+  in_progress: 'info',
+  waiting_tenant: 'warning',
+  waiting_owner: 'warning',
+  resolved: 'success',
+  closed: 'muted',
+  cancelled: 'muted',
+}
+
+export function TicketStatusBadge({ status }: { status: TicketStatus }) {
+  return <Badge tone={ticketTone[status]}>{t.ticket.statuses[status]}</Badge>
+}
+
+/**
+ * La priorità.
+ *
+ * `medium` è `neutral` e non `info`: è il default di ogni segnalazione aperta
+ * senza dichiararla, e colorare il caso normale toglie significato al colore
+ * proprio dove serve.
+ */
+const priorityTone: Record<TicketPriority, BadgeTone> = {
+  low: 'muted',
+  medium: 'neutral',
+  high: 'warning',
+  urgent: 'danger',
+}
+
+export function TicketPriorityBadge({ priority }: { priority: TicketPriority }) {
+  return <Badge tone={priorityTone[priority]}>{t.ticket.priorities[priority]}</Badge>
 }

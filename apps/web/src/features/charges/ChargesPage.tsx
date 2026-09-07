@@ -11,7 +11,7 @@ import { ConfirmAction } from '@/components/ui/confirm'
 import { PageHeader } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { isNegative } from '@/lib/decimal'
 import { formatAmount, formatDate } from '@/lib/format'
@@ -61,6 +61,8 @@ export function ChargesPage() {
     ...(status ? { status } : {}),
   }
 
+  const isStaff = useIsStaff()
+
   const query = usePagedQuery({
     queryKey: keys.charges({ outstanding, status: status ?? null }),
     fetchPage: (after) => listCharges(client, { ...filters, after }),
@@ -68,7 +70,13 @@ export function ChargesPage() {
 
   return (
     <>
-      <PageHeader title={t.charge.title} description={t.charge.derivedStatusNote} />
+      {/* Per chi abita questa è la **pagina iniziale**, ed è la domanda che si
+          fa davvero: quanto devo. La nota sugli stati derivati riguarda il
+          filtro, che serve a entrambi. */}
+      <PageHeader
+        title={t.charge.title}
+        description={isStaff ? t.charge.derivedStatusNote : t.charge.tenantSubtitle}
+      />
 
       <Card>
         <div className="flex flex-wrap items-center gap-4 border-b border-border-subtle px-4 py-3">
@@ -153,6 +161,7 @@ export function ChargesPage() {
 
 function ChargeRow({ charge }: { charge: Charge }) {
   const client = useApi()
+  const isStaff = useIsStaff()
   const queryClient = useQueryClient()
 
   async function refresh() {
@@ -166,7 +175,13 @@ function ChargeRow({ charge }: { charge: Charge }) {
     onSuccess: refresh,
   })
 
-  const closed = charge.status === 'void' || charge.status === 'written_off' || charge.status === 'paid'
+  // Annullare e stornare sono dello staff: sono le due uscite della **pretesa**,
+  // e chi la subisce non le ha. La sua uscita è dichiarare di aver pagato, ed è
+  // sulla scheda dell'addebito — non in questo elenco, dove una riga per riga
+  // moltiplicherebbe un gesto che si fa una volta e con l'importo davanti.
+  const settled =
+    charge.status === 'void' || charge.status === 'written_off' || charge.status === 'paid'
+  const noActions = !isStaff || settled
   // `void` è ammesso dal solo `issued`: su un addebito con del denaro dentro
   // direbbe che la richiesta non è mai esistita, e l'API risponde `409`. Un
   // bottone che produce sempre un errore è peggio di un bottone assente — la via
@@ -212,7 +227,7 @@ function ChargeRow({ charge }: { charge: Charge }) {
         ) : null}
       </TdNumeric>
       <Td className="text-right whitespace-nowrap">
-        {closed ? null : (
+        {noActions ? null : (
           <span className="inline-flex gap-1">
             {voidable ? (
               <ConfirmAction

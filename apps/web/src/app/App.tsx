@@ -12,12 +12,14 @@ import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
 import { LeasesPage } from '@/features/leases/LeasesPage'
 import { NewLeasePage } from '@/features/leases/NewLeasePage'
 import { PaymentsPage } from '@/features/payments/PaymentsPage'
+import { TicketDetailPage } from '@/features/tickets/TicketDetailPage'
+import { TicketsPage } from '@/features/tickets/TicketsPage'
 import { NewPropertyPage } from '@/features/properties/NewPropertyPage'
 import { PropertiesPage } from '@/features/properties/PropertiesPage'
 import { PropertyDetailPage } from '@/features/properties/PropertyDetailPage'
 import { QueryProvider } from './query'
-import { useSession } from './session'
-import { AppShell } from './shell'
+import { useIsStaff, useSession } from './session'
+import { AppShell, TENANT_HOME } from './shell'
 
 /**
  * I percorsi sono **in italiano**, come l'interfaccia.
@@ -29,6 +31,7 @@ import { AppShell } from './shell'
  */
 export function App() {
   const { session, restoring } = useSession()
+  const isStaff = useIsStaff()
   const location = useLocation()
 
   if (restoring) {
@@ -55,13 +58,24 @@ export function App() {
     <QueryProvider>
       <Routes>
         <Route element={<AppShell />}>
-          <Route path="/" element={<DashboardPage />} />
+          {/* La radice è del ruolo, non della schermata. Per lo staff è il
+              riepilogo; per chi abita è lo scadenzario, perché la dashboard gli
+              risponde `403 org.staff_role_required` — `ensure_staff` *stringe* la
+              policy invece di ripeterla, e senza quel controllo leggerebbe i
+              numeri dell'organizzazione intera. È anche la domanda che si fa
+              davvero: quanto devo. */}
+          <Route
+            path="/"
+            element={isStaff ? <DashboardPage /> : <Navigate to={TENANT_HOME} replace />}
+          />
           <Route path="/immobili" element={<PropertiesPage />} />
           <Route path="/immobili/nuovo" element={<NewPropertyPage />} />
           <Route path="/immobili/:id" element={<PropertyDetailPage />} />
           <Route path="/contratti" element={<LeasesPage />} />
           <Route path="/contratti/nuovo" element={<NewLeasePage />} />
           <Route path="/contratti/:id" element={<LeaseDetailPage />} />
+          <Route path="/segnalazioni" element={<TicketsPage />} />
+          <Route path="/segnalazioni/:id" element={<TicketDetailPage />} />
           <Route path="/bollette" element={<BillsPage />} />
           <Route path="/bollette/nuova" element={<NewBillPage />} />
           <Route path="/bollette/:id" element={<BillDetailPage />} />

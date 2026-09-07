@@ -69,6 +69,7 @@ pub fn router(
     let limited = Router::new()
         .merge(routes::health::router())
         .merge(routes::auth::router())
+        .merge(routes::organizations::router())
         .merge(routes::dashboard::router())
         .merge(routes::properties::router())
         .merge(routes::rooms::router())

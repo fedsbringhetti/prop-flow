@@ -24,6 +24,7 @@ use propflow_application::use_cases::invitation::{
 use propflow_application::use_cases::lease::{
     ActivateLease, AddLeaseParty, DraftLease, GetLease, ListLeases, TerminateLease,
 };
+use propflow_application::use_cases::organization::ListOrganizations;
 use propflow_application::use_cases::payment::{
     ConfirmPayment, DeclarePayment, GetPayment, ListPayments, RecordPayment, RejectPayment,
 };
@@ -52,6 +53,10 @@ pub struct AppState {
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
+
+    /// L'unica rotta che risponde **senza un'organizzazione attiva**: dire quali
+    /// si hanno non appartiene a nessuna di esse.
+    pub list_organizations: Arc<ListOrganizations>,
 
     /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
     /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
@@ -256,6 +261,7 @@ impl AppState {
                 refresh_tokens,
                 Arc::clone(&clock),
             )),
+            list_organizations: Arc::new(ListOrganizations::new(Arc::clone(&unit_of_work))),
             owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),
             create_property: Arc::new(CreateProperty::new(
                 Arc::clone(&unit_of_work),

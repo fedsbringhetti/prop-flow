@@ -1,12 +1,7 @@
 import { ApiError, apiErrorFrom, offlineError } from './problem'
+import type { OrgRole } from './types'
 
-export type OrgRole = 'owner' | 'manager' | 'tenant'
-
-/** Un'organizzazione di cui l'utente è membro, come il client l'ha conosciuta. */
-export interface Membership {
-  organizationId: string
-  role: OrgRole
-}
+export type { OrgRole }
 
 /**
  * La sessione viva, **in memoria e solo in memoria**.

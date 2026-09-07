@@ -1,9 +1,11 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { useQuery } from '@tanstack/react-query'
 import {
   Building2,
   ChevronDown,
   FileText,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Menu,
   Banknote,
@@ -11,23 +13,79 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 
+import { getOrganizations } from '@/api/endpoints'
+import type { Organization } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Loading } from '@/components/state'
 import { t } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { useSession } from './session'
+import { keys } from './query'
+import { useApi, useIsStaff, useSession } from './session'
 
-const navigation = [
+/**
+ * La navigazione di chi **amministra**.
+ *
+ * Il riepilogo per primo perché è la sua pagina iniziale, e i moduli poi
+ * nell'ordine in cui il lavoro li attraversa: il patrimonio, i contratti, i
+ * guasti, le bollette, gli addebiti che ne derivano, il denaro che entra.
+ */
+const staffNavigation = [
   { to: '/', label: t.nav.dashboard, icon: LayoutDashboard, end: true },
   { to: '/immobili', label: t.nav.properties, icon: Building2, end: false },
   { to: '/contratti', label: t.nav.leases, icon: FileText, end: false },
+  { to: '/segnalazioni', label: t.nav.tickets, icon: LifeBuoy, end: false },
   { to: '/bollette', label: t.nav.bills, icon: Receipt, end: false },
   { to: '/addebiti', label: t.nav.charges, icon: Wallet, end: false },
   { to: '/pagamenti', label: t.nav.payments, icon: Banknote, end: false },
 ] as const
+
+/**
+ * La navigazione di chi **abita**, e ognuna delle quattro voci è una scelta.
+ *
+ * **Il riepilogo esce** perché gli risponderebbe `403 org.staff_role_required`:
+ * `GetOwnerDashboard` usa `ensure_staff`, che *stringe* la Row Level Security
+ * invece di ripeterla — la vista passa da `organizations_select`, che è
+ * `is_org_member`, quindi senza quel controllo un inquilino leggerebbe i numeri
+ * dell'intera organizzazione. Una voce che porta a un errore è peggio di una voce
+ * che manca.
+ *
+ * **Gli immobili escono, e non per sicurezza**: `ListProperties` è `ensure_member`
+ * e gliene mostrerebbe uno. Una voce di navigazione che porta a un elenco di un
+ * elemento è rumore, e la scheda dell'immobile resta raggiungibile dal contratto —
+ * che è anche il modo in cui ci si arriva pensando.
+ *
+ * **Il contratto è al singolare** perché per chi abita è uno.
+ *
+ * **Le bollette restano**, ed è la voce su cui si esita: sono lette e non agite.
+ * Ma sono la ragione di metà dei suoi addebiti, e un riaddebito che non si può
+ * risalire a un documento è una cifra da accettare sulla fiducia.
+ *
+ * Gli addebiti stanno per primi perché sono la sua pagina iniziale: la domanda che
+ * si fa davvero è *quanto devo*.
+ */
+const tenantNavigation = [
+  { to: '/addebiti', label: t.nav.charges, icon: Wallet, end: false },
+  { to: '/segnalazioni', label: t.nav.tickets, icon: LifeBuoy, end: false },
+  { to: '/contratti', label: t.nav.lease, icon: FileText, end: false },
+  { to: '/bollette', label: t.nav.bills, icon: Receipt, end: false },
+] as const
+
+/**
+ * Dove atterra chi non amministra.
+ *
+ * Vive qui accanto alla navigazione e non dentro il router perché è la stessa
+ * decisione — la prima voce del suo elenco è la sua pagina iniziale — e tenerle in
+ * due file diversi è il modo in cui finiscono per non coincidere più.
+ *
+ * **Non è una rotta nuova**: è lo scadenzario, che `ensure_member` gli concede già
+ * ristretto dalle policy ai suoi. Una dashboard dell'inquilino sarebbe una
+ * proiezione nuova, quindi un endpoint nuovo, quindi backend dentro una fetta di
+ * client — ed è rinviata con la sua ragione.
+ */
+export const TENANT_HOME = '/addebiti'
 
 /**
  * Il guscio: navigazione, organizzazione attiva, uscita.
@@ -45,11 +103,18 @@ const navigation = [
  */
 export function AppShell() {
   const { session, restoring } = useSession()
+  const isStaff = useIsStaff()
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
 
   if (restoring) return <Loading className="min-h-screen justify-center" />
   if (!session) return null
+
+  // Il ramo sul ruolo, e questo è **uno** dei tre posti in cui compare: qui, la
+  // rotta iniziale in `App`, e i bottoni di scrittura delle schermate. Non un
+  // `if` per componente — quello finirebbe scritto dodici volte, e la
+  // tredicesima verrebbe dimenticata.
+  const navigation = isStaff ? staffNavigation : tenantNavigation
 
   return (
     <div className="min-h-screen">
@@ -139,6 +204,62 @@ export function AppShell() {
 }
 
 /**
+ * Le organizzazioni di chi guarda, **lette dall'API**.
+ *
+ * Prima di questo passo l'elenco era ciò che questo browser aveva conosciuto, e
+ * il menù mostrava un ruolo e un UUID: per un proprietario, che ne ha una, era
+ * indistinguibile da un elenco vero; per un inquilino sarebbero stati due UUID fra
+ * cui indovinare. `GET /organizations` è la sola rotta che dia il **nome** a chi
+ * non è staff, ed è la ragione per cui esiste.
+ */
+function useOrganizations() {
+  const client = useApi()
+  const { session, selectOrganization } = useSession()
+
+  const query = useQuery({
+    queryKey: keys.organizations,
+    queryFn: () => getOrganizations(client),
+    // Le proprie organizzazioni non cambiano mentre si lavora: cambiano quando si
+    // accetta un invito, e quello invalida la chiave da sé.
+    staleTime: 5 * 60_000,
+  })
+
+  const items = query.data?.items
+  const activeId = session?.organizationId ?? null
+  const activeRole = session?.role ?? null
+
+  /**
+   * L'elenco vero **corregge il ricordo**, e non il contrario.
+   *
+   * Due casi reali, e nessuno dei due è teorico. Il primo: l'organizzazione
+   * ricordata non è più fra le proprie — un invito revocato, un'appartenenza
+   * chiusa — e da quel momento **ogni** richiesta porta un `X-Org-Id` che l'API
+   * rifiuta, cioè un'applicazione intera che risponde `403`. Il secondo: non ce
+   * n'è nessuna attiva, e allora gli elenchi rispondono `200` con zero elementi,
+   * che è il modo peggiore di sbagliare perché non somiglia a un errore.
+   *
+   * Il ruolo si riallinea per la stessa ragione: quello ricordato serve a non far
+   * lampeggiare la navigazione al ricaricamento, ma è l'API a dire qual è.
+   */
+  useEffect(() => {
+    if (!items || items.length === 0) return
+    const active = items.find((organization) => organization.id === activeId)
+    if (!active) {
+      const fallback = items[0]
+      if (fallback) selectOrganization(fallback.id, fallback.role)
+      return
+    }
+    if (active.role !== activeRole) selectOrganization(active.id, active.role)
+  }, [items, activeId, activeRole, selectOrganization])
+
+  const active: Organization | undefined = items?.find(
+    (organization) => organization.id === activeId,
+  )
+
+  return { query, items, active }
+}
+
+/**
  * L'organizzazione attiva, e da qui si cambia.
  *
  * **Si mostra sempre, anche quando ce n'è una sola.** Non è ridondanza: senza
@@ -146,18 +267,23 @@ export function AppShell() {
  * schermata vuota senza errore. Avere l'organizzazione scritta in alto è ciò che
  * rende quel caso diagnosticabile in due secondi invece che in mezz'ora.
  *
- * **L'elenco è quello che questo client ha conosciuto**, non uno letto dall'API:
- * un endpoint che elenchi le organizzazioni di un utente non esiste. Per il
- * proprietario, che ne ha una, è indistinguibile; per l'inquilino della fetta 2
- * non lo sarà, ed è registrato fra i debiti.
+ * # I tre stati valgono anche per un menù
+ *
+ * Un selettore che sta caricando **non deve mostrare un elenco vuoto**: un elenco
+ * vuoto è indistinguibile da «non appartieni a niente», e chi lo legge va a
+ * cercare un problema che non esiste. Caricamento, vuoto ed errore sono quindi tre
+ * risposte diverse anche qui, dove costerebbe poco confonderle.
  */
 function OrganizationMenu() {
-  const { session, memberships, rememberMembership, store } = useSession()
+  const { session, store } = useSession()
+  const { query, items, active } = useOrganizations()
+
   if (!session) return null
 
-  const active = session.organizationId
-  const role = session.role
-  const label = role ? t.org.role[role] : t.org.missing
+  // Il nome quando c'è; altrimenti si dice che si sta cercando, e mai l'UUID —
+  // che è precisamente ciò da cui questo passo libera.
+  const label = active?.name ?? (query.isPending ? t.state.loadingTitle : t.org.unknownName)
+  const role = active?.role ?? session.role
 
   return (
     <DropdownMenu.Root>
@@ -169,6 +295,9 @@ function OrganizationMenu() {
           <span className="min-w-0">
             <span className="block text-xs text-ink-muted">{t.org.label}</span>
             <span className="block truncate font-medium">{label}</span>
+            <span className="block truncate text-xs text-ink-muted">
+              {role ? t.org.role[role] : t.org.missing}
+            </span>
           </span>
           <ChevronDown className="size-4 shrink-0 text-ink-muted" aria-hidden />
         </button>
@@ -177,27 +306,32 @@ function OrganizationMenu() {
         <DropdownMenu.Content
           align="start"
           sideOffset={4}
-          className="z-50 min-w-56 rounded-lg border border-border-subtle bg-surface p-1 shadow-lg"
+          className="z-50 max-w-[calc(100vw-2rem)] min-w-56 rounded-lg border border-border-subtle bg-surface p-1 shadow-lg"
         >
           <DropdownMenu.Label className="px-2 py-1.5 text-xs text-ink-muted">
             {t.org.switch}
           </DropdownMenu.Label>
-          {memberships.map((membership) => (
-            <DropdownMenu.Item
-              key={membership.organizationId}
-              onSelect={() => rememberMembership(membership)}
-              className={cn(
-                'cursor-pointer rounded-md px-2 py-1.5 text-sm outline-none select-none',
-                'data-highlighted:bg-surface-muted',
-                membership.organizationId === active && 'font-medium text-accent',
-              )}
-            >
-              <span className="block">{t.org.role[membership.role]}</span>
-              <span className="block font-numeric text-xs text-ink-muted">
-                {membership.organizationId}
-              </span>
-            </DropdownMenu.Item>
+
+          {query.isPending ? (
+            <p className="px-2 py-1.5 text-sm text-ink-muted">{t.org.loading}</p>
+          ) : null}
+          {query.error ? (
+            <p role="alert" className="px-2 py-1.5 text-sm text-danger">
+              {t.org.loadFailed}
+            </p>
+          ) : null}
+          {items && items.length === 0 ? (
+            <p className="px-2 py-1.5 text-sm text-ink-muted">{t.org.empty}</p>
+          ) : null}
+
+          {(items ?? []).map((organization) => (
+            <OrganizationItem
+              key={organization.id}
+              organization={organization}
+              current={organization.id === session.organizationId}
+            />
           ))}
+
           <DropdownMenu.Separator className="my-1 h-px bg-border-subtle" />
           <DropdownMenu.Item
             onSelect={() => {
@@ -211,5 +345,34 @@ function OrganizationMenu() {
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  )
+}
+
+function OrganizationItem({
+  organization,
+  current,
+}: {
+  organization: Organization
+  current: boolean
+}) {
+  const { selectOrganization } = useSession()
+
+  return (
+    <DropdownMenu.Item
+      onSelect={() => selectOrganization(organization.id, organization.role)}
+      className={cn(
+        'cursor-pointer rounded-md px-2 py-1.5 text-sm outline-none select-none',
+        'data-highlighted:bg-surface-muted',
+        current && 'font-medium text-accent',
+      )}
+    >
+      <span className="block truncate">{organization.name}</span>
+      <span className="block text-xs text-ink-muted">
+        {t.org.role[organization.role]}
+        {/* Quale sia attiva non è **solo** un colore: chi non distingue i colori
+            deve poterlo sapere lo stesso. */}
+        {current ? <span className="sr-only"> (attiva)</span> : null}
+      </span>
+    </DropdownMenu.Item>
   )
 }

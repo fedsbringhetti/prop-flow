@@ -290,6 +290,52 @@ Il **logout senza cookie resta `204`**. Non c'è nulla da revocare, il cookie si
 cancella comunque, e costringere un client che l'ha già perso a distinguere due
 esiti che per lui sono lo stesso non lo aiuterebbe.
 
+### Organizzazioni
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| GET | `/api/v1/organizations` | **autenticato** | `200` con le organizzazioni di cui si è membro attivo, ognuna con `id`, `name`, `slug` e il proprio `role` |
+
+```json
+{
+  "items": [
+    { "id": "019fce39-0e43-7011-84bf-1d03f6764daf", "name": "Immobili di Mario Rossi",
+      "slug": "immobili-di-mario-rossi-4f21ab", "role": "owner" },
+    { "id": "019fce41-8a02-7c19-9d33-2b7cc9107ef1", "name": "Case Bianchi",
+      "slug": "case-bianchi-91cd02", "role": "tenant" }
+  ]
+}
+```
+
+**È l'unica rotta che risponde senza un'organizzazione attiva**, e non è una
+deroga: «quali organizzazioni sono mie» non appartiene a nessuna di esse, e
+pretendere un `X-Org-Id` per poterlo domandare sarebbe circolare — romperebbe
+proprio il caso che l'endpoint serve, cioè chi non ne ha una selezionata. Il
+service layer usa quindi `ensure_authenticated` e non `ensure_member`.
+
+Funziona perché la Row Level Security lo permette: `app.member_role(p_org_id)`
+filtra su `app.current_user_id()` e sull'organizzazione **passata come argomento**,
+e `app.current_org_id()` non vi compare; `organizations_select` è
+`app.is_org_member(id)`. Mandare comunque `X-Org-Id` non cambia la risposta.
+
+**Il `name` è il punto della rotta.** Nessun altro endpoint restituisce il nome di
+un'organizzazione a chi non ne è staff, quindi senza questo un client può mostrare
+solo l'identificatore: per un proprietario, che ne ha una, è indistinguibile da un
+elenco vero; per un inquilino sono due UUID fra cui indovinare.
+
+**Nessun cursore.** Le organizzazioni di una persona sono poche per costruzione — la
+propria, più quelle di chi le affitta casa — e una paginazione su un elenco che sta
+in una riga è cerimonia. È la stessa scelta di
+[`/properties/{id}/residents`](#chi-abita-la-casa).
+
+**Senza prefisso `me`**: la Row Level Security restringe già alle proprie, e il
+percorso dice il vero senza aggiungere una parola.
+
+Compaiono le sole appartenenze **attive**. Non è prudenza: `app.member_role` esige
+`status = 'active'`, quindi un'appartenenza sospesa o lasciata comparirebbe nel
+menù e poi non concederebbe una sola riga — una schermata vuota senza errore, che è
+il modo peggiore di sbagliare.
+
 ### Dashboard
 
 | Metodo | Percorso | Ruolo minimo | Esito |

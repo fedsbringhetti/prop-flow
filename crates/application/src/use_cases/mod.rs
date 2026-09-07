@@ -5,6 +5,7 @@ pub mod document;
 pub mod expense;
 pub mod invitation;
 pub mod lease;
+pub mod organization;
 pub mod payment;
 pub mod property;
 pub mod reporting;

@@ -11,6 +11,7 @@ import type {
   LeaseDetail,
   LeaseParty,
   LeasePartyRole,
+  Organization,
   Page,
   Payment,
   PaymentMethod,
@@ -22,6 +23,13 @@ import type {
   RechargeResult,
   Room,
   StoredDocument,
+  Ticket,
+  TicketCategory,
+  TicketDetail,
+  TicketMessage,
+  TicketPriority,
+  TicketStatus,
+  WaitingOn,
   UtilityBill,
   UtilityType,
   Uuid,
@@ -45,6 +53,25 @@ function query(params: Record<string, string | number | boolean | undefined>): s
   }
   const rendered = search.toString()
   return rendered ? `?${rendered}` : ''
+}
+
+// ---------------------------------------------------------------------------
+// Organizzazioni
+
+/**
+ * Le organizzazioni di chi chiama, **con il nome**.
+ *
+ * È la sola rotta dell'API che risponda anche senza un'organizzazione attiva, e
+ * non è una deroga: «quali organizzazioni sono mie» non appartiene a nessuna di
+ * esse. `ApiClient` manda comunque `X-Org-Id` quando ce n'è una — la risposta non
+ * cambia — perché l'eccezione sta nell'endpoint e non nel client, e un secondo
+ * modo di non mandare l'header sarebbe un secondo modo di sbagliarlo.
+ *
+ * **Nessun cursore**: le organizzazioni di una persona sono la propria più quelle
+ * di chi le affitta casa.
+ */
+export function getOrganizations(client: ApiClient): Promise<Items<Organization>> {
+  return client.get<Items<Organization>>('/organizations')
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +274,208 @@ export function acceptInvitation(
   token: string,
 ): Promise<{ organization_id: Uuid; role: string; lease_id?: Uuid }> {
   return client.post('/auth/accept-invitation', { token }, { withoutOrganization: true })
+}
+
+// ---------------------------------------------------------------------------
+// Segnalazioni
+
+export interface OpenTicketInput {
+  title: string
+  description: string
+  /** La stanza, se il guasto è lì. Deve appartenere all'immobile del percorso. */
+  room_id?: Uuid
+  /**
+   * Il contratto a cui la segnalazione si riferisce.
+   *
+   * **Da valorizzare sempre che si possa**, anche quando è lo staff ad aprirla per
+   * conto di qualcuno: `app.can_access_ticket` concede l'accesso a chi è parte del
+   * contratto solo se `lease_id` non è nullo. Senza, la segnalazione non la vede
+   * nessun inquilino — nemmeno quello che ci abita.
+   */
+  lease_id?: Uuid
+  /** Assente vale `other`: classificare è il lavoro del triage. */
+  category?: TicketCategory
+  /** Assente vale `medium`. */
+  priority?: TicketPriority
+}
+
+/**
+ * Apre una segnalazione, **annidata sull'immobile**.
+ *
+ * Una segnalazione nasce sempre su un immobile; tutto il resto va per id. È
+ * `ensure_member`, ed è **il** punto in cui l'inquilino prende la parola: fino a
+ * qui poteva solo leggere.
+ */
+export function openTicket(
+  client: ApiClient,
+  propertyId: Uuid,
+  input: OpenTicketInput,
+): Promise<Ticket> {
+  return client.post<Ticket>(`/properties/${propertyId}/tickets`, input)
+}
+
+export interface TicketFilters {
+  property_id?: Uuid | undefined
+  /**
+   * Uno stato **memorizzato**. Nessuno è derivato, quindi nessuno dà `422` — ma
+   * `resolved` l'API non lo scrive mai, e un menù costruito dall'unione dei
+   * valori offrirebbe uno stato che non esiste.
+   */
+  status?: TicketStatus | undefined
+  /**
+   * La coda di lavorazione: i **sei** stati non terminali.
+   *
+   * **Non è zucchero per `status <> 'closed'`.** L'indice parziale
+   * `tickets_open_ix` è definito su esattamente quei sei valori, e una
+   * disuguaglianza non lo userebbe. `false` dà le chiuse, annullate e risolte.
+   */
+  open?: boolean | undefined
+  after?: Uuid | undefined
+}
+
+export function listTickets(client: ApiClient, filters: TicketFilters = {}): Promise<Page<Ticket>> {
+  return client.get<Page<Ticket>>(
+    `/tickets${query({
+      limit: LIMIT,
+      property_id: filters.property_id,
+      status: filters.status,
+      open: filters.open,
+      after: filters.after,
+    })}`,
+  )
+}
+
+/** Il dettaglio con lo **storico degli stati**. I messaggi stanno a parte. */
+export function getTicket(client: ApiClient, id: Uuid): Promise<TicketDetail> {
+  return client.get<TicketDetail>(`/tickets/${id}`)
+}
+
+/**
+ * Il thread, **con il proprio cursore**.
+ *
+ * Separato dal dettaglio perché una conversazione non ha un tetto: incorporarla
+ * significherebbe che il giorno in cui qualcuno scrive duecento messaggi il
+ * dettaglio smette di rispondere.
+ */
+export function listTicketMessages(
+  client: ApiClient,
+  ticketId: Uuid,
+  after?: Uuid,
+): Promise<Page<TicketMessage>> {
+  return client.get<Page<TicketMessage>>(`/tickets/${ticketId}/messages${query({ limit: LIMIT, after })}`)
+}
+
+/**
+ * Scrive nel thread.
+ *
+ * `is_internal` lo può chiedere **solo lo staff**: a un inquilino l'API risponde
+ * `403 org.staff_role_required` invece di scrivere la nota in chiaro nel thread.
+ * Un messaggio poi **non si modifica e non si cancella**, nemmeno in modo soft:
+ * `app.ticket_messages` ha due sole policy, `_select` e `_insert`.
+ */
+export function postTicketMessage(
+  client: ApiClient,
+  ticketId: Uuid,
+  input: { body: string; is_internal?: boolean },
+): Promise<TicketMessage> {
+  return client.post<TicketMessage>(`/tickets/${ticketId}/messages`, input)
+}
+
+/**
+ * Le **sette** transizioni, ognuna una sotto-risorsa.
+ *
+ * Non un `PATCH` sullo stato, e la ragione è che ognuna ha effetti propri —
+ * `closed_at`, una riga di storico, un evento — che un `PATCH` produrrebbe di
+ * soppiatto, rendendo invisibile che siano avvenuti. È la stessa scelta di
+ * attivazione e disdetta dei contratti.
+ *
+ * **Una si chiama `/wait` e lo use case `SuspendTicket`**: cercare `/suspend` non
+ * trova niente.
+ */
+export function triageTicket(
+  client: ApiClient,
+  id: Uuid,
+  input: { category: TicketCategory; priority: TicketPriority },
+): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/triage`, input)
+}
+
+/**
+ * Assegna la lavorazione.
+ *
+ * Il corpo vuole un `assignee_id`, e il client passa **sempre chi chiama**:
+ * l'azione è «prendi in carico». Non è una semplificazione — un'organizzazione ha
+ * esattamente uno staff, perché l'unico modo di diventarlo è `RegisterOwner` e
+ * `InviteTenant` scrive `role: tenant` fisso: `OrgRole::Manager` è nell'enum e
+ * nessuno lo scrive mai. Un menù delle persone sarebbe vuoto. Il giorno in cui
+ * esisterà un invito che crea un gestore, quell'azione diventa un menù.
+ */
+export function assignTicket(client: ApiClient, id: Uuid, assigneeId: Uuid): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/assign`, { assignee_id: assigneeId })
+}
+
+/** Avvia la lavorazione, **o la riprende** dopo una sospensione: un verbo solo. */
+export function startTicket(client: ApiClient, id: Uuid): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/start`, {})
+}
+
+/**
+ * Sospende dichiarando su chi si aspetta. **Il percorso è `/wait`.**
+ *
+ * `waiting_tenant` e `waiting_owner` non sono una fase a sé ma una sospensione
+ * della lavorazione: si entra da qui e si esce con `/start`.
+ */
+export function waitTicket(client: ApiClient, id: Uuid, waitingOn: WaitingOn): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/wait`, { waiting_on: waitingOn })
+}
+
+/** Chiude. `resolution_notes` è facoltativo, ma il corpo va inviato. */
+export function closeTicket(client: ApiClient, id: Uuid, resolutionNotes?: string): Promise<Ticket> {
+  return client.post<Ticket>(
+    `/tickets/${id}/close`,
+    resolutionNotes ? { resolution_notes: resolutionNotes } : {},
+  )
+}
+
+/**
+ * Riapre: torna a `open` e **azzera `closed_at` e `resolution_notes`**.
+ *
+ * Spetta a **chi ha segnalato**, oltre che allo staff, e a un coinquilino l'API
+ * risponde `403 ticket.not_yours` — non `org.staff_role_required`: non gli manca
+ * un ruolo, gli manca l'essere stato lui a segnalare, e i due rimedi sono diversi.
+ */
+export function reopenTicket(client: ApiClient, id: Uuid): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/reopen`, {})
+}
+
+/**
+ * Annulla.
+ *
+ * Lo staff sempre; chi ha segnalato **solo finché è `open`**, cioè finché nessuno
+ * ci ha messo mano — e da lì in poi l'API gli risponde `org.staff_role_required`,
+ * che qui è il codice vero: la segnalazione è sua, ma annullarne una già in
+ * lavorazione butterebbe via il lavoro di qualcun altro.
+ */
+export function cancelTicket(client: ApiClient, id: Uuid): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/cancel`, {})
+}
+
+/**
+ * L'**unico** `PATCH` del modulo, e sono solo i costi.
+ *
+ * Titolo e descrizione sono il testo con cui una persona ha descritto un guasto in
+ * un momento preciso, e il thread esiste per correggere il tiro; categoria e
+ * priorità si impostano con il triage, perché sono ciò che `triaged` significa;
+ * immobile, stanza e contratto non sono più scrivibili nemmeno dal ruolo
+ * applicativo (ADR-026). Vale la semantica generale del `PATCH`: assente =
+ * invariato, `null` = azzerato.
+ */
+export function updateTicketCosts(
+  client: ApiClient,
+  id: Uuid,
+  patch: Record<string, unknown>,
+): Promise<Ticket> {
+  return client.patch<Ticket>(`/tickets/${id}`, patch)
 }
 
 // ---------------------------------------------------------------------------

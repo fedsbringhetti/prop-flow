@@ -22,7 +22,7 @@ import { ConfirmAction, FormDialog } from '@/components/ui/confirm'
 import { Field, Input, Select } from '@/components/ui/field'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
 import { BillStatusBadge } from '../shared/status'
@@ -32,6 +32,8 @@ export function BillDetailPage() {
   const { id = '' } = useParams()
   const client = useApi()
   const queryClient = useQueryClient()
+
+  const isStaff = useIsStaff()
 
   const bill = useQuery({ queryKey: keys.bill(id), queryFn: () => getBill(client, id) })
 
@@ -61,8 +63,13 @@ export function BillDetailPage() {
               </Link>
             }
             actions={
-              <>
-                {data.status === 'draft' || data.status === 'pending_review' ? (
+              /* Validare, riaddebitare e annullare sono dello staff. L'inquilino
+                 la **legge**: è la ragione di metà dei suoi addebiti, e un
+                 riaddebito che non si può risalire a un documento è una cifra da
+                 accettare sulla fiducia. */
+              !isStaff ? null : (
+                <>
+                  {data.status === 'draft' || data.status === 'pending_review' ? (
                   <ConfirmAction
                     trigger={
                       <Button variant="primary">
@@ -94,7 +101,8 @@ export function BillDetailPage() {
                     onConfirm={() => discard.mutateAsync()}
                   />
                 )}
-              </>
+                </>
+              )
             }
           />
 
@@ -146,12 +154,17 @@ export function BillDetailPage() {
           </PageSection>
 
           <PageSection>
-            <ScansCard billId={id} draft={data.status === 'draft'} />
+            <ScansCard billId={id} draft={data.status === 'draft'} canUpload={isStaff} />
           </PageSection>
 
-          <PageSection>
-            <OcrReviewCard bill={data} />
-          </PageSection>
+          {/* La revisione dell'OCR è un lavoro di chi valida: propone valori da
+              scrivere sulla bolletta, e `UpdateUtilityBill` è `ensure_staff`.
+              Mostrarla a chi abita sarebbe un modulo intero di bottoni inerti. */}
+          {isStaff ? (
+            <PageSection>
+              <OcrReviewCard bill={data} />
+            </PageSection>
+          ) : null}
         </>
       )}
     </Async>
@@ -166,7 +179,17 @@ export function BillDetailPage() {
  * da un telefono ci finisce dentro senza fatica: controllare prima costa una riga
  * e trasforma un errore muto in una frase che si capisce.
  */
-function ScansCard({ billId, draft }: { billId: string; draft: boolean }) {
+function ScansCard({
+  billId,
+  draft,
+  canUpload,
+}: {
+  billId: string
+  draft: boolean
+  /** Caricare è dello staff; **scaricare no**: un allegato è la prova di ciò che
+   *  si è riaddebitato, e chi paga deve poterlo aprire. */
+  canUpload: boolean
+}) {
   const client = useApi()
   const queryClient = useQueryClient()
   const input = useRef<HTMLInputElement>(null)
@@ -196,30 +219,34 @@ function ScansCard({ billId, draft }: { billId: string; draft: boolean }) {
       <CardHeader>
         <div>
           <CardTitle>{t.bill.scan}</CardTitle>
-          {draft ? <p className="mt-0.5 text-xs text-ink-muted">{t.bill.uploadHint}</p> : null}
+          {draft && canUpload ? (
+            <p className="mt-0.5 text-xs text-ink-muted">{t.bill.uploadHint}</p>
+          ) : null}
         </div>
-        <div>
-          <input
-            ref={input}
-            type="file"
-            className="sr-only"
-            accept="application/pdf,image/*"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              event.target.value = ''
-              if (!file) return
-              if (file.size > UPLOAD_LIMIT_BYTES) {
-                setError(new ApiError({ status: 413, code: 'request.payload_too_large' }))
-                return
-              }
-              upload.mutate(file)
-            }}
-          />
-          <Button size="sm" onClick={() => input.current?.click()} disabled={upload.isPending}>
-            <Upload aria-hidden />
-            {upload.isPending ? t.common.saving : t.bill.uploadScan}
-          </Button>
-        </div>
+        {canUpload ? (
+          <div>
+            <input
+              ref={input}
+              type="file"
+              className="sr-only"
+              accept="application/pdf,image/*"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (!file) return
+                if (file.size > UPLOAD_LIMIT_BYTES) {
+                  setError(new ApiError({ status: 413, code: 'request.payload_too_large' }))
+                  return
+                }
+                upload.mutate(file)
+              }}
+            />
+            <Button size="sm" onClick={() => input.current?.click()} disabled={upload.isPending}>
+              <Upload aria-hidden />
+              {upload.isPending ? t.common.saving : t.bill.uploadScan}
+            </Button>
+          </div>
+        ) : null}
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
         <InlineError error={error} />

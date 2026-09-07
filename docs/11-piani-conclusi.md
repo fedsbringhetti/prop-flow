@@ -5345,3 +5345,528 @@ BuildKit mostra come un singolo passo fermo per molti minuti senza output. Verif
 `docker compose build api` completa, e lo stack intero sale e serve il nono numero
 dal reverse proxy su `http://localhost:8081`. Non c'è niente da correggere; c'è da
 saperlo, e ora è scritto.
+
+
+---
+
+<a id="piano-inquilino-fetta-b"></a>
+
+## Piano — L'inquilino (fetta B)
+
+Pianificata il **4 settembre 2026**, dopo la fetta A e leggendo il codice che tocca.
+**Dodici passi**, `B0`–`B11`. Il **punto di taglio è dopo `B5`**: lì l'inquilino ha un
+prodotto che sta in piedi — entra, vede che cosa deve, **dichiara di aver pagato**,
+segnala un guasto e ne segue il corso — e le spese co-living sono una fetta B-bis.
+
+### Obiettivo
+
+L'altra metà del prodotto. Oggi il client copre il proprietario e basta: un inquilino
+che entrasse **atterrerebbe su un errore**, perché la pagina iniziale è la dashboard e
+la dashboard è staff soltanto.
+
+Il perimetro è la differenza fra le due metà, non il modulo: le segnalazioni sono
+dell'inquilino *e* del proprietario, e vanno costruite per entrambi in una volta —
+sono la stessa schermata vista da due ruoli, e farne due sarebbe farne due da tenere
+allineate.
+
+### Che cosa è stato deciso prima di pianificare
+
+Sei scelte. Le prime tre sono nate **leggendo il codice**, e due di esse hanno tolto
+lavoro dal piano invece di aggiungerne.
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Autorizzazione di `B0` | `ensure_authenticated`, non `ensure_member` | chiedere un'organizzazione attiva per sapere quali si hanno |
+| Guscio | un passo suo, **prima** delle segnalazioni | adattare il guscio strada facendo, schermata per schermata |
+| Assegnazione | **solo a sé stessi**, nessun endpoint delle persone | `GET /members` dentro questa fetta |
+| Pagina iniziale dell'inquilino | lo scadenzario, nessuna rotta nuova | una dashboard dell'inquilino |
+| Composizione dei gruppi di spesa | dai residenti dell'immobile, che esistono già | un elenco di persone dell'organizzazione |
+| Navigazione dell'inquilino | addebiti, segnalazioni, contratto, bollette | tutto ciò che l'API gli concede, o il solo minimo |
+| Punto di taglio | dopo `B5`, **dichiarazione di pagamento compresa** | dopo le sole segnalazioni, lasciando il giro del denaro a metà |
+
+### Decisioni prese, con il perché
+
+#### 1. `B0` è `ensure_authenticated`, e non `ensure_member`
+
+«Quali organizzazioni sono mie» **non appartiene a nessuna organizzazione**: chiederne
+una attiva per poterlo domandare è circolare, e rompe proprio il caso che l'endpoint
+esiste per servire — chi non ne ha una selezionata, o non ne ha più.
+
+**Verificato prima di deciderlo, perché è ciò che lo rende possibile:**
+`app.member_role(p_org_id)` interroga `app.org_members` filtrando su
+`app.current_user_id()` e sull'organizzazione **passata come argomento**;
+`app.current_org_id()` non compare. `organizations_select` è `is_org_member(id)` e
+`org_members_select` è `user_id = current_user_id() OR is_org_member(org_id)`: **la
+query funziona con il contesto RLS privo di organizzazione**, e
+`app.set_request_context` accetta già un `org_id` nullo.
+
+*Alternativa scartata: `ensure_member`.* Funzionerebbe quasi sempre — il token porta
+l'organizzazione predefinita — e fallirebbe esattamente quando serve.
+
+#### 2. La risposta porta il **nome**, ed è il punto dell'endpoint
+
+Non è una comodità. Oggi il selettore mostra `t.org.role[...]` e **l'UUID grezzo**,
+perché nessun endpoint restituisce il nome di un'organizzazione a chi non ne è staff.
+Per il proprietario, che ne ha una, è indistinguibile da un elenco vero. **Per
+l'inquilino sono due UUID fra cui indovinare.**
+
+`organizations_select` è già `is_org_member(id)`, quindi il nome è leggibile da un
+membro: non serve né una migration né un allargamento di policy. Il debito «nessun
+endpoint elenca le organizzazioni» si chiude qui.
+
+La forma: `GET /api/v1/organizations` → `{ items: [{ id, name, slug, role }] }`.
+Nessun cursore — le organizzazioni di una persona sono poche per costruzione, e una
+paginazione su un elenco che sta in una riga è cerimonia.
+
+**Senza prefisso `me`**: la Row Level Security restringe già alle proprie, e il
+percorso dice il vero senza aggiungere una parola.
+
+#### 3. L'assegnazione è **solo a sé stessi**, e non è una semplificazione
+
+`AssignTicketCommand` vuole un `UserId`, e non esiste un endpoint che elenchi le
+persone di un'organizzazione — è il debito che la roadmap dice che «un client
+incontrerà per primo». Sembra quindi che `B4` sia bloccato.
+
+**Non lo è, e la ragione è che quel menù non avrebbe nessuno dentro.** Verificato:
+l'unico modo di diventare staff di un'organizzazione è `RegisterOwner`, che crea
+l'organizzazione personale con ruolo `Owner`; `InviteTenant` scrive
+`role: OrgRole::Tenant` fisso, e non esiste altra via per creare una membership.
+**`OrgRole::Manager` è nell'enum e nessuno lo scrive mai.** Un'organizzazione ha
+quindi esattamente uno staff, il suo owner.
+
+L'azione è dunque «**prendi in carico**», che assegna a chi chiama, ed è la verità
+completa del modello e non un ripiego. Il giorno in cui esisterà un invito che crea un
+gestore, quell'azione diventa un menù — e sarà quella fetta a doverne discutere.
+
+*Alternativa scartata: `GET /api/v1/members` dentro questa fetta.* Non è una rotta in
+più: è decidere **quali colonne** un membro possa vedere di un'altra persona, cioè la
+stessa domanda di [ADR-036](08-decisioni.md#adr-036), presa senza un caso d'uso che la
+guidi. Costruirla ora significa costruire quella sbagliata.
+
+#### 4. L'inquilino atterra sullo scadenzario, e non su una dashboard sua
+
+Serve una pagina iniziale, e la dashboard attuale gli risponde
+`403 org.staff_role_required` — non per la Row Level Security ma per `ensure_staff`,
+che la **stringe** apposta: la vista passa da `organizations_select`, che è
+`is_org_member`, quindi senza quel controllo un inquilino leggerebbe i numeri
+dell'intera organizzazione.
+
+Atterra su `/addebiti`, che è la domanda che si fa davvero — *quanto devo* — e che
+`ensure_member` gli concede già, ristretta dalle policy ai suoi.
+
+*Alternativa scartata: una dashboard dell'inquilino.* È una proiezione nuova, quindi
+un endpoint nuovo, quindi backend dentro una fetta di client — e soprattutto è una
+domanda di prodotto che nessuno ha ancora posto: *quali* numeri. È **rinviata con la
+sua ragione**, ed è già annotata nel tipo `GetOwnerDashboard` («il suo è un altro
+elenco, e sarà un'altra proiezione con la sua rotta»).
+
+**Le voci che vede sono quattro**: *Addebiti*, *Segnalazioni*, *Contratto*, *Bollette*
+— più *Spese* da `B6`. **Riepilogo esce** perché gli risponde `403`.
+
+**Immobili esce**, e la ragione non è la sicurezza: `ListProperties` è `ensure_member` e
+gliene mostrerebbe uno. Una voce di navigazione che porta a un elenco di un elemento è
+rumore, e la scheda dell'immobile resta raggiungibile dal contratto — che è anche il
+modo in cui ci si arriva pensando.
+
+**Le bollette restano**, ed è la voce su cui si esita: sono lette e non agite. Ma sono
+la ragione di metà dei suoi addebiti, e un riaddebito che non si può risalire a un
+documento è una cifra da accettare sulla fiducia.
+
+#### 5. Il guscio si adatta al ruolo, ed è un passo suo
+
+È la cosa che l'abbozzo precedente di questa fetta non nominava, e che si vede
+provando: **oggi un inquilino non incontra una schermata mancante, ne incontra sei
+sbagliate.**
+
+Le letture in gran parte funzionano — `ListProperties`, `ListLeases`, `ListCharges`,
+`ListUtilityBills` sono tutte `ensure_member`, e le policy restringono ai suoi — ma la
+navigazione è quella di chi amministra, e ogni azione di scrittura che gli si mostra
+risponde `403`: «Registra un immobile», «Emetti un addebito», «Registra un incasso».
+
+Farlo **prima** delle segnalazioni e non strada facendo è deliberato: è il passo che
+rende l'inquilino una cosa provabile: finché atterra su un errore, ogni schermata
+successiva si collauda solo con l'account del proprietario.
+
+*Alternativa scartata: nascondere le azioni schermata per schermata mentre si
+costruisce.* Il ramo sul ruolo finirebbe scritto dodici volte, e la tredicesima
+verrebbe dimenticata — che è precisamente come si costruisce un bottone che risponde
+sempre `403`.
+
+#### 6. La composizione dei gruppi passa dai **residenti dell'immobile**
+
+`AddGroupMemberCommand` vuole un `UserId`, e questa volta l'elenco esiste:
+`GET /api/v1/properties/{id}/residents` restituisce `user_id` e `full_name` per la
+**casa**, ed è esattamente ciò per cui la fetta «i coinquilini si vedono» e la
+migration `0030` esistono. È il ritorno di un investimento fatto due fette fa.
+
+Ne segue la sua trappola, ed è la stessa forma di `payer_user_id` nella fetta A: un
+residente **senza `user_id` non ha ancora accettato l'invito**, e non è aggiungibile a
+un gruppo — la policy confronterebbe un identificatore che non esiste. Va mostrato
+come non selezionabile con la ragione, non nascosto: nasconderlo farebbe cercare una
+persona che sullo schermo c'è.
+
+### Decomposizione
+
+#### `B0` — Backend: `GET /api/v1/organizations`
+
+Use case di lettura (`ensure_authenticated`, decisione 1), DTO con `id`, `name`,
+`slug` e `role`, rotta, registrazione in `openapi.rs`, riga in
+[05 — API](05-api.md).
+
+`OrgMemberRepository::list_for_user` **esiste già** ed è usata da `Login`; là gira sul
+pool privilegiato perché il login è pre-autenticazione, qui gira sotto la Row Level
+Security del chiamante. Serve in più una lettura delle organizzazioni per nome:
+`OrganizationRepository` ha `find_by_id` e `insert`, quindi o un `find_many` o un join
+nel repository delle membership — la seconda evita `N+1` ed è una query sola.
+
+Test di contratto: due organizzazioni per lo stesso utente, un'organizzazione altrui
+che non compare, e **la chiamata senza `X-Org-Id` che risponde `200`** — che è la
+decisione 1 verificata invece che dichiarata.
+
+#### `B1` — Client: il selettore letto dall'API
+
+`getOrganizations` nel livello dati, la query nel guscio, i nomi al posto degli UUID.
+
+Il `localStorage` **resta**, ma per una cosa sola: ricordare **quale** era attiva. È
+una preferenza di quel browser, non un elenco — e la distinzione è ciò che il commento
+in `session.tsx` già dichiara e che questo passo rende vera.
+
+I tre stati vanno progettati anche qui: un selettore che sta caricando non deve
+mostrare un elenco vuoto, perché un elenco vuoto è indistinguibile da «non appartieni
+a niente».
+
+#### `B2` — Client: il guscio si adatta al ruolo
+
+La navigazione diventa una funzione del ruolo, e la pagina iniziale con essa
+(decisioni 4 e 5). Per l'inquilino: *Addebiti*, *Segnalazioni*, *Contratto*,
+*Bollette*, e atterraggio su `/addebiti`. Le azioni di scrittura riservate allo staff
+spariscono per chi non lo è.
+
+**Il ramo sta in un posto solo.** Un `useIsStaff()` letto dalla sessione, e i punti in
+cui si usa contati sulle dita: la navigazione, la rotta iniziale, e i bottoni delle
+schermate esistenti. Non un `if` per componente.
+
+**Non è un confine di sicurezza e non va scambiato per tale**: a negare è l'API, e la
+policy dietro. Qui si evita di *offrire* ciò che verrebbe rifiutato — che è
+un'altra cosa, e va scritto perché la differenza si perde.
+
+#### `B3` — Client: segnalazioni, la lettura
+
+Apertura su un immobile (`POST /properties/{id}/tickets`, `ensure_member` — è **il**
+punto in cui l'inquilino prende la parola), elenco con `?open=true`, dettaglio con lo
+storico degli stati, thread dei messaggi **paginato a parte** dal dettaglio.
+
+#### `B4` — Client: segnalazioni, le transizioni
+
+Le sette sotto-risorse, con i percorsi esatti perché uno di essi non si chiama come il
+suo use case:
+
+`/triage` · `/assign` · `/start` · **`/wait`** · `/close` · `/reopen` · `/cancel`
+
+Più il `PATCH /tickets/{id}`, che è **solo i costi** ed è staff.
+
+L'instradamento è **sui codici e non sul ruolo** — vedi le trappole.
+
+#### `B5` — Client: la dichiarazione di pagamento ← *punto di taglio*
+
+`POST /charges/{id}/payment-declarations`, dal dettaglio dell'addebito che **esiste
+già** dalla fetta A.
+
+**Sta prima del taglio e non dopo**, ed è un cambiamento rispetto alla prima stesura di
+questo piano: è il passo che chiude il giro che la fetta A ha aperto. Là la coda delle
+dichiarazioni è stata costruita e collaudata **da `curl`**, perché un inquilino non
+aveva un'interfaccia; qui quella coda diventa una cosa che accade da sé. Lasciarlo
+dopo il taglio avrebbe reso il criterio di completamento incoerente con la
+decomposizione — la verifica 3 lo richiede.
+
+**La chiave di idempotenza c'è già**: `@/api/idempotency` dalla fetta A, con i suoi
+cinque test. Va **riusata e non riscritta**, e la condizione è la stessa: si genera
+all'intento e si riusa a ogni tentativo.
+
+Il corpo **non ha `payer_user_id`**: chi dichiara è sempre chi chiama, perché
+`payments_insert` lo esige a chi non è staff. E **non c'è un bottone per ritirarla**:
+vedi le trappole.
+
+#### `B6` — Client: spese co-living, i gruppi
+
+Creazione, composizione dai residenti (decisione 6), ingresso e uscita,
+archiviazione. Da qui compare la voce *Spese* nella navigazione.
+
+#### `B7` — Client: spese e saldi
+
+Ripartizione `equal` e `weighted`, quote mostrate, saldi con il netto.
+
+#### `B8` — Client: i regolamenti a due tempi
+
+Dichiarazione, conferma di **chi riceve**, rifiuto, e il **ritiro di chi ha
+dichiarato** — che fra i pagamenti non esiste. Vedi le trappole: le due cose si
+somigliano e non sono la stessa.
+
+#### `B9` — Client: gli allegati sugli owner rimasti
+
+Immobile, stanza, contratto, segnalazione, addebito — e l'archiviazione di un
+documento, che è l'unica rotta dei documenti che nessuno chiama.
+
+#### `B10` — Client: i due debiti che l'inquilino incontra
+
+Divisione del bundle per rotta con i `Suspense` progettati, e il coordinamento del
+refresh fra schede. Entrambi registrati fra i debiti noti con il loro perché.
+
+#### `B11` — Documentazione ed esito
+
+ADR per ciò che sopravvive alla fetta, aggiornamento di [05 — API](05-api.md), esito,
+e **il piano si sposta in [11 — Piani conclusi](11-piani-conclusi.md) nello stesso
+commit**.
+
+### Trappole
+
+Le prime tre sono state trovate leggendo il codice per scrivere questo piano; le
+altre erano già note e sono qui perché il piano che le ha prodotte è archiviato e
+nessuno lo aprirà mentre esegue.
+
+**Un inquilino non trova schermate mancanti, ne trova sbagliate.** È la decisione 5
+vista dal lato del difetto, ed è la ragione per cui `B2` viene prima: le letture
+funzionano già, quindi il sintomo non è una pagina vuota ma sei pagine che sembrano
+funzionare finché non si preme qualcosa.
+
+**Il menù delle persone non esiste, e non serve.** `AssignTicketCommand` vuole un
+`UserId` e sembra chiedere un endpoint nuovo. Un'organizzazione ha un solo staff:
+l'azione è «prendi in carico». Chi parte a scrivere `GET /members` costruisce la cosa
+sbagliata prima di accorgersi che sarebbe vuota.
+
+**Un residente senza `user_id` non è aggiungibile a un gruppo di spesa.** Non ha
+accettato l'invito, e la policy confronterebbe un identificatore che non esiste. Va
+mostrato non selezionabile **con la ragione**: è la stessa forma della trappola di
+`payer_user_id` nella fetta A, dove il rimedio è stato non offrire un vuoto inviabile.
+
+**La transizione si chiama `/wait` e lo use case `SuspendTicket`.** Cercare
+`/suspend` non trova niente.
+
+**`?open=true` non è zucchero per `status <> 'closed'`.** L'indice parziale
+`tickets_open_ix` è definito su esattamente sei valori, e una disuguaglianza non lo
+userebbe. **La fetta A ha aggiunto una ragione in più per crederci**: lì si è misurato
+che perfino un filtro parametrico su un enum non usa un indice parziale, perché il
+cast `text → enum` passa da `enum_in`, che è `STABLE` e non si riduce a costante. Vedi
+[ADR-040](08-decisioni.md#adr-040).
+
+**`resolved` esiste nell'enum e l'API non lo produce mai.** Un client che costruisse i
+filtri dai valori dell'enum offrirebbe uno stato che non esiste. La fetta A ci è
+passata una terza volta, e il rimedio è quello: il menù si scrive a mano.
+
+**La riapertura è di chi ha segnalato, e il codice lo dice.** A un coinquilino che ci
+provi l'API risponde `403 ticket.not_yours` e **non** `org.staff_role_required`: non
+gli manca un ruolo — nessun ruolo gli darebbe quell'operazione. Il client instrada sul
+codice e mostra due messaggi diversi. Vale anche per l'annullamento, che chi ha
+segnalato può fare **finché nessuno ci ha messo mano**.
+
+**`estimated_cost` è `null` per chi non è staff anche quando un valore c'è.** Mostrare
+`0,00 €` sarebbe una bugia; mostrare `—` è la verità. E **non è un confine di
+sicurezza** ma una regola del contratto dell'API, dichiarata in
+`authorization::discloses_estimated_cost`: la Row Level Security lascia comunque
+leggere la riga.
+
+**Le note interne non arrivano proprio.** Le filtra la policy di `SELECT`, non un
+campo della risposta: il client non deve nasconderle, **non le riceve**. E a un
+inquilino che le chieda esplicitamente l'API risponde `403`.
+
+**Tre metodi di ripartizione su cinque danno `422`.** `percentage`, `exact` e
+`by_usage` compaiono nella specifica e sono rifiutati.
+
+**Il peso ha tre decimali, gli importi due.** Un quarto decimale su `weight` dà `422`
+sul campo. La doppia si esprime con `"2"`.
+
+**Chi è uscito da un gruppo non vede i propri saldi.** La vista è `security_invoker` e
+passa da una policy che chiede una membership **attiva**: il debitore uscito compare
+nei saldi che leggono gli altri e non nei propri. È corretto rispetto all'isolamento
+ed è deliberatamente fuori perimetro — il client non deve presentarlo come un errore.
+
+**La somma dei `net_balance` fa zero, e va verificata con il modulo decimale.**
+Sommarli con l'aritmetica nativa produrrebbe uno zero che a volte non è zero.
+
+**Confermare un regolamento non ricalcola niente**, a differenza di `ConfirmPayment`:
+il saldo del gruppo non è memorizzato da nessuna parte, si legge dalla vista. Chi
+arriva dal modulo dei pagamenti si aspetta un `recalculate_*` che qui non serve e non
+deve esistere.
+
+**Il ritiro esiste fra i regolamenti e non fra i pagamenti.** `settlements_update`
+ammette `from_user_id`, `payments_update` è staff soltanto. Le due cose si somigliano,
+e offrire il ritiro di una dichiarazione di pagamento darebbe `auth.denied_by_policy`
+— il codice riservato ai nostri difetti.
+
+**Il bundle diviso per rotta senza `Suspense` progettati produce una pagina bianca**
+dove prima c'era uno scheletro. I tre stati esistono già come componenti: i confini
+vanno messi dove quelli sono, non dove capita.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde e il job del client verde sono il minimo, non il
+criterio. Le quattro verifiche che contano, tutte da fare **a mano e con due account**:
+
+1. **Un inquilino entra da un browser mai usato e vede l'organizzazione del
+   proprietario per nome**, senza incollare niente e senza atterrare su un errore. È
+   il debito `B0` e la decisione 4 visti dal lato di chi li subiva;
+2. **Una segnalazione fa il giro completo**: l'inquilino la apre, il proprietario la
+   classifica, la prende in carico, la mette in attesa, la chiude; l'inquilino la
+   riapre. E `open_tickets` in dashboard cambia di conseguenza — che è anche il
+   momento in cui quel riquadro smette di portare ai contratti per mancanza di una
+   destinazione propria;
+3. **L'inquilino dichiara di aver pagato dall'interfaccia**, e il proprietario la
+   conferma dalla coda della fetta A: il residuo dell'addebito scende. È il giro che
+   nella fetta A si era potuto provare solo da `curl`, ed è la ragione per cui `B5`
+   sta **dentro** il punto di taglio;
+4. **I saldi di un gruppo di spesa sommano a zero**, con un membro uscito che ha
+   ancora un conto aperto — il caso per cui la migration `0027` esiste.
+
+Più le due prove di qualità che il criterio «prodotto reale» rende obbligatorie:
+**navigazione da sola tastiera** su un percorso completo dell'inquilino, e **375 px**
+sulle schermate nuove — che per l'inquilino non è un di più, perché è il ruolo che sta
+davvero su un telefono ([ADR-039](08-decisioni.md#adr-039)).
+
+<a id="esito-inquilino-fetta-b"></a>
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+**Eseguita il 4 settembre 2026**, fino al **punto di taglio dichiarato**: `B0`–`B5`.
+`B6`–`B8` (spese co-living), `B9` (allegati sugli owner rimasti) e `B10` (i due
+debiti) **non** sono stati eseguiti e restano in
+[09 — Stato e roadmap](09-stato-e-roadmap.md) come la fetta successiva. Il piano si
+sposta qui perché la parte che dichiarava di eseguire è eseguita; ciò che resta è
+ripreso di là con il suo dettaglio, non cancellato.
+
+#### Il piano ha retto, e le tre trappole trovate leggendo il codice erano vere
+
+Le sei decisioni prese prima di pianificare sono state tutte confermate
+dall'esecuzione, e nessuna è stata rivista. Le tre trappole nate dalla lettura del
+codice si sono presentate **esattamente nella forma prevista**:
+
+1. **«Un inquilino non trova schermate mancanti, ne trova sei sbagliate»** è la
+   ragione per cui `B2` stava prima delle segnalazioni, e provandolo si è visto che
+   era la decisione giusta: accedendo come inquilino **prima** di `B2`, il client
+   atterrava sul riepilogo — `403` — e mostrava «Registra un immobile», «Emetti un
+   addebito», «Registra un incasso». Dopo `B2` la stessa sessione atterra su
+   `/addebiti` con quattro voci, e ogni schermata successiva si è potuta collaudare
+   **con l'account dell'inquilino** invece che con quello del proprietario. Se `B2`
+   fosse stato fatto per ultimo, `B3`–`B5` sarebbero stati costruiti alla cieca;
+2. **il menù delle persone non serviva**, e non è stato costruito. «Prendi in carico»
+   assegna a chi chiama, e nella prova a mano è l'unica azione sensata: l'unico staff
+   dell'organizzazione è il proprietario che l'ha creata;
+3. **`estimated_cost` è `null` per chi non è staff anche quando un valore c'è**,
+   verificato a mano e non solo per lettura: il proprietario ha scritto `120,00 €`,
+   e la stessa segnalazione aperta dall'inquilino mostra `—` sul costo stimato e
+   `95,50 €` su quello sostenuto. Mostrare `0,00 €` sarebbe stata una bugia.
+
+Anche le trappole ereditate hanno tenuto: la transizione si chiama `/wait` mentre lo
+use case è `SuspendTicket` (cercare `/suspend` non trova niente, ed è stato scritto nel
+livello dei dati perché il prossimo non lo ricerchi); `resolved` è nell'enum e il menù
+dei filtri è scritto a mano; la riapertura è di chi ha segnalato e l'instradamento è
+sui codici.
+
+#### Che cosa è cambiato rispetto al piano
+
+**Tre aggiunte, tutte piccole e tutte trovate provando.**
+
+**Il riquadro «Segnalazioni aperte» ora porta alle segnalazioni.** Il piano lo
+prevedeva come conseguenza della verifica 2 e così è stato: fino a questa fetta quel
+riquadro portava ai **contratti** per mancanza di una destinazione propria — il numero
+era vero e non c'era una schermata dove agire. Ora c'è.
+
+**La correzione dell'organizzazione ricordata non era nel piano, e serve.** `B1`
+diceva «il `localStorage` resta, ma per ricordare *quale* era attiva». Costruendolo si
+è visto che manca un pezzo: se l'organizzazione ricordata **non è più fra le proprie**
+— un invito revocato, un'appartenenza chiusa — il client continua a mandare quell'
+`X-Org-Id` e **ogni** richiesta risponde `403 org.not_a_member`. Non è un caso di
+laboratorio: è ciò che accade a chiunque smetta di essere inquilino di qualcuno. Il
+rimedio è che l'elenco vero **corregge il ricordo** quando arriva, e c'è un test che lo
+riproduce. Lo stesso vale per il ruolo, che si memorizza per non far lampeggiare la
+navigazione al ricaricamento e non è autorevole.
+
+**`PageHeader` non sapeva andare a capo, e si è visto solo a 375 px.** Le azioni
+stavano in un contenitore `shrink-0`: prendeva la propria larghezza a contenuto pieno e
+usciva dallo schermo, e il suo `flex-wrap` non poteva farci niente perché non aveva un
+limite entro cui avvolgere. Nessuna schermata lo aveva mostrato prima perché nessuna
+aveva più di tre azioni; **una segnalazione in stato `open` ne ha cinque**, e a 375 px
+faceva scorrere in orizzontale la *pagina* — che è precisamente ciò che la regola sulle
+tabelle vieta. Corretto in `page.tsx`, e il rimedio migliora anche le schermate della
+fetta A.
+
+#### Quello che il punto di taglio ha comprato
+
+`B5` era stato spostato **dentro** il taglio in una revisione del piano, e
+l'esecuzione dice che era la decisione giusta. Nella fetta A la coda delle
+dichiarazioni era stata costruita e collaudata **da `curl`**, perché un inquilino non
+aveva un'interfaccia. Qui il giro si è chiuso da sé: l'inquilino ha dichiarato
+`500,00 €` di acconto su un canone da `800,00 €`, il residuo è **rimasto** a
+`800,00 €` — una dichiarazione `pending` non muove il saldo, ed è tutto il suo punto —
+il proprietario l'ha confermata dalla coda della fetta A, e il residuo è sceso a
+`300,00 €` con lo stato passato a `partially_paid`. Nessun `curl`.
+
+Lasciare `B5` fuori avrebbe reso il criterio di completamento incoerente con la
+decomposizione, e avrebbe consegnato una fetta in cui l'inquilino vede quanto deve e
+non ha modo di dire che l'ha pagato.
+
+#### Le quattro verifiche a mano
+
+Tutte con **due account veri**, in un browser senza sessione, con l'API e il client
+sul percorso nativo.
+
+1. **Passata.** L'inquilino entra e vede due organizzazioni **per nome** — la propria
+   («Giulia Bianchi», *Proprietario*) e quella di chi gli affitta casa («Immobili di
+   Mario Rossi», *Inquilino*) — senza incollare niente. Scegliendo la seconda, la
+   navigazione diventa *Addebiti · Segnalazioni · Contratto · Bollette* e atterra
+   sullo scadenzario. Prima di questa fetta avrebbe visto due UUID e un `403`;
+2. **Passata.** La segnalazione ha fatto il giro completo: l'inquilino l'ha aperta
+   (`TK-000001`), il proprietario l'ha classificata, presa in carico, avviata, messa in
+   attesa dell'inquilino, ripresa e chiusa con la nota; l'inquilino l'ha riaperta. Lo
+   storico porta **otto** righe, dalla prima scritta dal trigger (`Aperta`) fino a
+   `Chiusa → Aperta`. `open_tickets` in riepilogo è andato `1 → 0 → 1`. La riapertura
+   ha **cancellato** `closed_at` e la nota di risoluzione, come il dominio prescrive:
+   una `open` che dichiara come è stata risolta direbbe il falso sul proprio stato;
+3. **Passata.** Vedi sopra: dichiarazione, conferma, residuo che scende;
+4. **Non eseguita, ed è fuori dal punto di taglio.** I saldi dei gruppi di spesa sono
+   `B6`–`B8`, cioè la fetta successiva. Il criterio del piano elencava quattro
+   verifiche perché copriva dodici passi; le prime tre sono quelle dei passi eseguiti.
+
+Le due prove di qualità: **navigazione da sola tastiera** verificata sul percorso
+dell'inquilino — accesso, apertura di una segnalazione, invio — con l'ordine di
+tabulazione che parte dal salto al contenuto, attraversa le azioni nell'ordine in cui
+compaiono e finisce sul thread, senza trappole e senza `tabindex` positivi; **375 px**
+verificata su tutte le schermate nuove, con `documentElement.scrollWidth` uguale a
+`clientWidth` — cioè nessuno scorrimento orizzontale della pagina — dopo la correzione
+di `PageHeader`.
+
+#### Numeri
+
+Il bundle del client è passato da **614 kB a 648** (185 → 193 compressi): sei
+schermate nuove in un pezzo solo, e il debito della divisione per rotta è `B10`, che è
+oltre il taglio. È la terza fetta che lo rimanda, e la terza volta è annotata.
+
+**424 test Rust** (erano 423: uno di contratto in più, `GET /organizations` con le tre
+condizioni che la decisione 1 dichiarava) e **48 del client** (erano 37: sei sulla
+dichiarazione di pagamento, cinque sul guscio). Suite completa verde, nessun test
+dichiarato `SALTATO`.
+
+Il test sull'idempotenza della dichiarazione è stato **verificato contro il difetto**,
+come quello della fetta A: sostituendo `intent.current()` con `crypto.randomUUID()`
+dentro `mutationFn`, fallisce. È la seconda volta che quella verifica si fa, ed è
+diventata la condizione con cui si accetta un test sull'idempotenza.
+
+#### Debiti tecnici
+
+**Nessuno nuovo di rilievo**, e due dei tre già registrati **restano**: la divisione
+del bundle per rotta e il coordinamento del refresh fra schede erano `B10`, che è oltre
+il taglio.
+
+Due cose da sapere, trovate eseguendo:
+
+- **il ramo sul ruolo non è un confine di sicurezza**, ed è scritto tre volte — nel
+  codice, nell'ADR e qui — perché è la cosa più facile da fraintendere di questa fetta.
+  A negare sono l'API e la policy di riga; il client evita di *offrire* ciò che
+  verrebbe rifiutato. Chi in futuro togliesse un controllo dall'API perché «tanto il
+  client non mostra il bottone» avrebbe capito il contrario;
+- **`PaymentsPage` risponde a due domande diverse sulla stessa rotta.** Per lo staff è
+  la coda delle dichiarazioni; per chi abita sono i **propri** movimenti, perché a
+  scegliere le righe è `payments_select` e non un ramo sul ruolo. La schermata lo dice
+  con titolo e sottotitolo diversi: chiamare «dichiarazioni da verificare» l'elenco di
+  chi non può verificare niente sarebbe stata una schermata che dice il falso. Non è in
+  navigazione per l'inquilino — l'ha già sull'addebito — ma è raggiungibile per URL, e
+  una schermata raggiungibile va progettata.
