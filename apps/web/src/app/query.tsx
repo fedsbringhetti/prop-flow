@@ -85,6 +85,11 @@ export const keys = {
   bill: (id: string) => ['bill', id] as const,
   billOcr: (id: string) => ['bill-ocr', id] as const,
   documents: (ownerType: string, ownerId: string) => ['documents', ownerType, ownerId] as const,
+  tickets: (filters?: unknown) => ['tickets', filters ?? null] as const,
+  ticket: (id: string) => ['ticket', id] as const,
+  /** Il thread ha una chiave propria: ha il **suo** cursore, e invalidare il
+   *  dettaglio non deve rileggere duecento messaggi. */
+  ticketMessages: (ticketId: string) => ['ticket-messages', ticketId] as const,
   charges: (filters?: unknown) => ['charges', filters ?? null] as const,
   charge: (id: string) => ['charge', id] as const,
   /** La collezione: la coda delle dichiarazioni ne è il filtro `pending`. */

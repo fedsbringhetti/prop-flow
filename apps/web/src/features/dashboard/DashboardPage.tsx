@@ -144,11 +144,13 @@ function Tiles({ data }: { data: Dashboard }) {
     {
       label: t.dashboard.openTickets,
       value: formatCount(data.open_tickets),
-      // Le segnalazioni sono della fetta 2: il numero si mostra perché è vero, e
-      // porta dove si potrà agire quando quella schermata esisterà. Fingere che
-      // non esista sarebbe peggio che mostrarlo senza destinazione.
-      to: '/contratti',
-      action: t.dashboard.goToLeases,
+      // Fino alla fetta dell'inquilino questo riquadro portava ai **contratti**,
+      // per mancanza di una destinazione propria: il numero era vero e non
+      // c'era una schermata dove agire. Ora c'è, e la coda che conta è la
+      // stessa che il numero conta — i sei stati non terminali, cioè
+      // `?open=true`, che è anche l'elenco da cui la vista lo legge.
+      to: '/segnalazioni',
+      action: t.dashboard.goToTickets,
       tone: 'warning',
       alertWhen: data.open_tickets > 0,
     },

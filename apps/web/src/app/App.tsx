@@ -12,6 +12,8 @@ import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
 import { LeasesPage } from '@/features/leases/LeasesPage'
 import { NewLeasePage } from '@/features/leases/NewLeasePage'
 import { PaymentsPage } from '@/features/payments/PaymentsPage'
+import { TicketDetailPage } from '@/features/tickets/TicketDetailPage'
+import { TicketsPage } from '@/features/tickets/TicketsPage'
 import { NewPropertyPage } from '@/features/properties/NewPropertyPage'
 import { PropertiesPage } from '@/features/properties/PropertiesPage'
 import { PropertyDetailPage } from '@/features/properties/PropertyDetailPage'
@@ -72,6 +74,8 @@ export function App() {
           <Route path="/contratti" element={<LeasesPage />} />
           <Route path="/contratti/nuovo" element={<NewLeasePage />} />
           <Route path="/contratti/:id" element={<LeaseDetailPage />} />
+          <Route path="/segnalazioni" element={<TicketsPage />} />
+          <Route path="/segnalazioni/:id" element={<TicketDetailPage />} />
           <Route path="/bollette" element={<BillsPage />} />
           <Route path="/bollette/nuova" element={<NewBillPage />} />
           <Route path="/bollette/:id" element={<BillDetailPage />} />
