@@ -9,15 +9,20 @@ import {
 } from 'react'
 
 import { ApiClient } from '@/api/client'
-import { SessionStore, type Membership, type OrgRole, type Session } from '@/api/session'
+import { SessionStore, type OrgRole, type Session } from '@/api/session'
 
 interface SessionContextValue {
   session: Session | null
   store: SessionStore
   client: ApiClient
-  /** Le organizzazioni che questo client ha conosciuto per questo utente. */
-  memberships: readonly Membership[]
-  rememberMembership: (membership: Membership) => void
+  /**
+   * Rende attiva un'organizzazione e la **ricorda per questo browser**.
+   *
+   * Il ruolo va passato insieme all'identificatore perché è ciò che decide che
+   * cosa il guscio offre: la stessa persona è proprietario della propria
+   * organizzazione e inquilino in quella di chi le affitta casa.
+   */
+  selectOrganization: (organizationId: string, role: OrgRole) => void
   /** Vero finché il tentativo di ripristino dal cookie è in corso. */
   restoring: boolean
 }
@@ -28,39 +33,47 @@ const SessionContext = createContext<SessionContextValue | null>(null)
  * Che cosa il client ricorda fra un caricamento e l'altro, e che cosa no.
  *
  * **Non il token**: l'access token vive in memoria e il refresh in un cookie che
- * JavaScript non legge. Qui restano due cose che token non sono — quale
- * organizzazione era attiva, e quali il client ha conosciuto — perché
- * l'organizzazione attiva è **stato esplicito** e ricominciare ogni volta da
- * quella del token la renderebbe un default implicito: esattamente la condizione
- * in cui un elenco risponde `200` con zero elementi e nessun errore.
+ * JavaScript non legge.
  *
- * Sono dati non sensibili — due UUID e un ruolo — e chi legge il `localStorage`
- * di quel browser è già dentro la sessione.
+ * Resta **una cosa sola**, e la distinzione è il punto di questo passo: *quale*
+ * organizzazione era attiva. È una preferenza di questo browser — non un elenco,
+ * che ora lo dà `GET /organizations` — e ricominciare ogni volta da quella del
+ * token la renderebbe un default implicito: esattamente la condizione in cui un
+ * elenco risponde `200` con zero elementi e nessun errore.
+ *
+ * Il ruolo si memorizza insieme perché serve **prima** che la rete risponda: il
+ * guscio decide su di esso che cosa mostrare, e aspettare una richiesta per
+ * saperlo farebbe lampeggiare la navigazione di un ruolo al ricaricamento. Non è
+ * autorevole e non deve esserlo — a negare sono l'API e la policy dietro — e
+ * l'elenco vero lo corregge appena arriva.
+ *
+ * Sono dati non sensibili — un UUID e un ruolo — e chi legge il `localStorage` di
+ * quel browser è già dentro la sessione.
  */
-const STORAGE_KEY = 'propflow.memberships.v1'
+const STORAGE_KEY = 'propflow.active-org.v1'
 
-interface StoredState {
+interface StoredPreference {
   active: string | null
-  known: Membership[]
+  role: OrgRole | null
 }
 
-function readStored(userId: string): StoredState {
+function readStored(userId: string): StoredPreference {
   try {
     const raw = localStorage.getItem(`${STORAGE_KEY}:${userId}`)
-    if (!raw) return { active: null, known: [] }
-    const parsed = JSON.parse(raw) as Partial<StoredState>
-    return { active: parsed.active ?? null, known: parsed.known ?? [] }
+    if (!raw) return { active: null, role: null }
+    const parsed = JSON.parse(raw) as Partial<StoredPreference>
+    return { active: parsed.active ?? null, role: parsed.role ?? null }
   } catch {
     // Un `localStorage` non disponibile — navigazione privata, impostazioni del
     // browser — non deve impedire di usare l'applicazione: si perde la memoria
     // dell'organizzazione, non la sessione.
-    return { active: null, known: [] }
+    return { active: null, role: null }
   }
 }
 
-function writeStored(userId: string, state: StoredState): void {
+function writeStored(userId: string, preference: StoredPreference): void {
   try {
-    localStorage.setItem(`${STORAGE_KEY}:${userId}`, JSON.stringify(state))
+    localStorage.setItem(`${STORAGE_KEY}:${userId}`, JSON.stringify(preference))
   } catch {
     // Vedi sopra.
   }
@@ -97,33 +110,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [store])
 
   const userId = session?.userId ?? null
-  const sessionOrg = session?.organizationId
-  const sessionRole = session?.role
-
-  /**
-   * Le appartenenze conosciute, ricaricate **quando cambia l'utente**.
-   *
-   * L'aggiustamento avviene durante il render e non dentro un effetto: un
-   * `setState` in un effetto produce un secondo render con lo stato vecchio già
-   * disegnato, che qui significherebbe un menù dell'organizzazione che compare
-   * vuoto per un fotogramma. È il caso in cui React prescrive di correggere lo
-   * stato durante il render, confrontando la chiave da cui dipende.
-   */
-  const [cache, setCache] = useState<{ userId: string | null; known: Membership[] }>({
-    userId: null,
-    known: [],
-  })
-  if (cache.userId !== userId) {
-    setCache({ userId, known: userId ? readStored(userId).known : [] })
-  }
-
-  const memberships = useMemo<readonly Membership[]>(() => {
-    const known = [...cache.known]
-    if (sessionOrg && sessionRole && !known.some((m) => m.organizationId === sessionOrg)) {
-      known.push({ organizationId: sessionOrg, role: sessionRole })
-    }
-    return known
-  }, [cache, sessionOrg, sessionRole])
+  const sessionOrg = session?.organizationId ?? null
 
   /**
    * Ripristina l'organizzazione scelta prima del ricaricamento.
@@ -131,47 +118,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
    * Questo effetto **non tocca lo stato di React**: parla con due sistemi esterni,
    * lo store della sessione e il `localStorage`. È il caso per cui un effetto
    * esiste.
+   *
+   * Il ripristino avviene **prima** e non dopo `GET /organizations`: fra il
+   * caricamento e la risposta di quella query passano richieste — la prima
+   * schermata le fa subito — e mandarle con l'organizzazione del token invece che
+   * con quella scelta darebbe elenchi vuoti per un istante. Se poi l'elenco vero
+   * smentisce il ricordo, a correggerlo è il guscio.
    */
   useEffect(() => {
     if (!userId) return
     const stored = readStored(userId)
-    const restored = stored.active
-      ? memberships.find((m) => m.organizationId === stored.active)
-      : undefined
-    if (restored && restored.organizationId !== sessionOrg) {
-      store.selectOrganization(restored.organizationId, restored.role)
+    if (stored.active && stored.role && stored.active !== sessionOrg) {
+      store.selectOrganization(stored.active, stored.role)
     }
-    writeStored(userId, {
-      active: restored?.organizationId ?? sessionOrg ?? null,
-      known: [...memberships],
-    })
-  }, [userId, sessionOrg, memberships, store])
+  }, [userId, sessionOrg, store])
 
   const value = useMemo<SessionContextValue>(
     () => ({
       session,
       store,
       client,
-      memberships,
       restoring,
-      rememberMembership: (membership) => {
-        setCache((current) => ({
-          userId: current.userId,
-          known: [
-            ...current.known.filter((m) => m.organizationId !== membership.organizationId),
-            membership,
-          ],
-        }))
-        if (userId) {
-          const known = readStored(userId).known.filter(
-            (m) => m.organizationId !== membership.organizationId,
-          )
-          writeStored(userId, { active: membership.organizationId, known: [...known, membership] })
-        }
-        store.selectOrganization(membership.organizationId, membership.role)
+      selectOrganization: (organizationId, role) => {
+        if (userId) writeStored(userId, { active: organizationId, role })
+        store.selectOrganization(organizationId, role)
       },
     }),
-    [session, store, client, memberships, restoring, userId],
+    [session, store, client, restoring, userId],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
@@ -193,6 +166,22 @@ export function useSession(): SessionContextValue {
  */
 export function useApi(): ApiClient {
   return useSession().client
+}
+
+/**
+ * Se chi guarda **amministra**, o se abita e basta.
+ *
+ * Il ramo sul ruolo sta qui e in nessun altro posto: scritto schermata per
+ * schermata finirebbe scritto dodici volte, e la tredicesima verrebbe dimenticata
+ * — che è precisamente come si costruisce un bottone che risponde sempre `403`.
+ *
+ * **Non è un confine di sicurezza, e non va scambiato per tale.** A negare sono
+ * l'API e la policy di riga dietro; qui si evita soltanto di *offrire* ciò che
+ * verrebbe rifiutato. La differenza si perde facilmente, e per questo è scritta.
+ */
+export function useIsStaff(): boolean {
+  const role = useSession().session?.role
+  return role === 'owner' || role === 'manager'
 }
 
 export type { OrgRole }

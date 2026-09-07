@@ -20,7 +20,7 @@ import { Field, Input, Select } from '@/components/ui/field'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDecimal } from '@/lib/format'
 import { RoomStatusBadge } from '../shared/status'
@@ -31,6 +31,7 @@ const ENERGY_CLASSES: EnergyClass[] = ['A4', 'A3', 'A2', 'A1', 'A', 'B', 'C', 'D
 export function PropertyDetailPage() {
   const { id = '' } = useParams()
   const client = useApi()
+  const isStaff = useIsStaff()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -61,6 +62,10 @@ export function PropertyDetailPage() {
               </Link>
             }
             actions={
+              /* Modificare e archiviare sono dello staff. L'inquilino arriva qui
+                 dal proprio contratto e legge: `GetProperty` è `ensure_member`,
+                 `UpdateProperty` e `ArchiveProperty` no. */
+              !isStaff ? null : (
               <>
                 <EditPropertyDialog property={data} />
                 {data.status === 'archived' ? null : (
@@ -78,6 +83,7 @@ export function PropertyDetailPage() {
                   />
                 )}
               </>
+              )
             }
           />
 
@@ -118,7 +124,10 @@ export function PropertyDetailPage() {
           </PageSection>
 
           <PageSection>
-            <RoomsCard propertyId={id} archived={data.status === 'archived'} />
+            <RoomsCard
+              propertyId={id}
+              archived={data.status === 'archived' || !isStaff}
+            />
           </PageSection>
 
           <PageSection>
@@ -269,6 +278,13 @@ function EditPropertyDialog({ property }: { property: Property }) {
   )
 }
 
+/**
+ * Le stanze dell'immobile.
+ *
+ * `archived` copre due condizioni che qui hanno lo **stesso** effetto — un
+ * immobile archiviato non accetta stanze nuove, e chi non amministra non ne
+ * aggiunge — e nessun'altra: l'elenco si legge in entrambi i casi.
+ */
 function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boolean }) {
   const client = useApi()
   const rooms = useQuery({

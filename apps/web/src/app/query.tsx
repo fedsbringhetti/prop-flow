@@ -71,6 +71,9 @@ export function QueryProvider({ children }: { children: ReactNode }) {
  * l'errore più difficile da vedere.
  */
 export const keys = {
+  /** Le proprie organizzazioni. **Non dipende da quella attiva**: è l'unica
+   *  lettura che non appartenga a nessuna di esse. */
+  organizations: ['organizations'] as const,
   dashboard: ['dashboard'] as const,
   properties: (filters?: unknown) => ['properties', filters ?? null] as const,
   property: (id: string) => ['property', id] as const,

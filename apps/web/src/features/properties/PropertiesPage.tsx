@@ -18,7 +18,7 @@ import {
   Tr,
 } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatDecimal } from '@/lib/format'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
@@ -35,6 +35,7 @@ const STATUSES: PropertyStatus[] = [
 
 export function PropertiesPage() {
   const client = useApi()
+  const isStaff = useIsStaff()
   // Il filtro sta nell'URL e non in uno stato locale: un elenco filtrato è un
   // indirizzo condivisibile, e il tasto «indietro» torna al filtro precedente
   // invece di uscire dalla schermata.
@@ -52,12 +53,17 @@ export function PropertiesPage() {
       <PageHeader
         title={t.property.title}
         actions={
-          <Button asChild variant="primary">
-            <Link to="/immobili/nuovo">
-              <Plus aria-hidden />
-              {t.property.create}
-            </Link>
-          </Button>
+          /* Registrare un immobile è dello staff: `CreateProperty` è
+             `ensure_staff`, e offrirlo a chi abita sarebbe un bottone che
+             risponde sempre `403`. */
+          isStaff ? (
+            <Button asChild variant="primary">
+              <Link to="/immobili/nuovo">
+                <Plus aria-hidden />
+                {t.property.create}
+              </Link>
+            </Button>
+          ) : null
         }
       />
 
@@ -93,11 +99,15 @@ export function PropertiesPage() {
             <Empty
               title={t.property.empty}
               hint={t.property.emptyHint}
-              action={
-                <Button asChild variant="primary">
-                  <Link to="/immobili/nuovo">{t.property.create}</Link>
-                </Button>
-              }
+              {...(isStaff
+                ? {
+                    action: (
+                      <Button asChild variant="primary">
+                        <Link to="/immobili/nuovo">{t.property.create}</Link>
+                      </Button>
+                    ),
+                  }
+                : {})}
             />
           }
         >

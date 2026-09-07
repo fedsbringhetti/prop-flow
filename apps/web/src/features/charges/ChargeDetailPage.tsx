@@ -11,7 +11,7 @@ import { ConfirmAction } from '@/components/ui/confirm'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { isNegative } from '@/lib/decimal'
 import { formatAmount, formatDate, formatDateTime } from '@/lib/format'
@@ -41,6 +41,7 @@ import { ChargeStatusBadge, PaymentStatusBadge } from '../shared/status'
 export function ChargeDetailPage() {
   const { id = '' } = useParams()
   const client = useApi()
+  const isStaff = useIsStaff()
   const queryClient = useQueryClient()
 
   const charge = useQuery({ queryKey: keys.charge(id), queryFn: () => getCharge(client, id) })
@@ -80,10 +81,10 @@ export function ChargeDetailPage() {
               }
               actions={
                 <>
-                  {settled || data.status === 'paid' ? null : (
+                  {settled || data.status === 'paid' ? null : isStaff ? (
                     <RecordPaymentDialog charge={data} />
-                  )}
-                  {settled || data.status === 'paid' ? null : (
+                  ) : null}
+                  {!isStaff || settled || data.status === 'paid' ? null : (
                     <ConfirmAction
                       trigger={
                         <Button variant="dangerGhost">
@@ -97,7 +98,7 @@ export function ChargeDetailPage() {
                       onConfirm={() => writeOff.mutateAsync()}
                     />
                   )}
-                  {settled || partlyPaid || data.status === 'paid' ? null : (
+                  {!isStaff || settled || partlyPaid || data.status === 'paid' ? null : (
                     <ConfirmAction
                       trigger={
                         <Button variant="dangerGhost">
@@ -162,7 +163,7 @@ export function ChargeDetailPage() {
                     </p>
                   ) : null}
 
-                  {partlyPaid ? (
+                  {isStaff && partlyPaid ? (
                     <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">
                       {t.charge.voidNotWhenPartlyPaid}
                     </p>

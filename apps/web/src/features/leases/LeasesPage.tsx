@@ -9,7 +9,7 @@ import { Select } from '@/components/ui/field'
 import { PageHeader } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate } from '@/lib/format'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
@@ -27,6 +27,7 @@ const STATUSES = ['draft', 'pending_signature', 'active', 'terminated', 'cancell
 
 export function LeasesPage() {
   const client = useApi()
+  const isStaff = useIsStaff()
   const [params, setParams] = useSearchParams()
   const status = params.get('stato') ?? ''
   const inForce = params.get('inEssere') === '1'
@@ -54,12 +55,15 @@ export function LeasesPage() {
         title={t.lease.title}
         description={t.lease.derivedStatusNote}
         actions={
-          <Button asChild variant="primary">
-            <Link to="/contratti/nuovo">
-              <Plus aria-hidden />
-              {t.lease.create}
-            </Link>
-          </Button>
+          /* Redigere un contratto è dello staff: `DraftLease` è `ensure_staff`. */
+          isStaff ? (
+            <Button asChild variant="primary">
+              <Link to="/contratti/nuovo">
+                <Plus aria-hidden />
+                {t.lease.create}
+              </Link>
+            </Button>
+          ) : null
         }
       />
 
@@ -100,12 +104,16 @@ export function LeasesPage() {
           empty={
             <Empty
               title={t.lease.empty}
-              hint={t.lease.emptyHint}
-              action={
-                <Button asChild variant="primary">
-                  <Link to="/contratti/nuovo">{t.lease.create}</Link>
-                </Button>
-              }
+              hint={isStaff ? t.lease.emptyHint : t.lease.emptyForTenant}
+              {...(isStaff
+                ? {
+                    action: (
+                      <Button asChild variant="primary">
+                        <Link to="/contratti/nuovo">{t.lease.create}</Link>
+                      </Button>
+                    ),
+                  }
+                : {})}
             />
           }
         >

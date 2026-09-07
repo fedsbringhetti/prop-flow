@@ -74,12 +74,24 @@ export const it = {
     /** L'organizzazione attiva è stato esplicito, non un default implicito:
      *  senza `X-Org-Id` gli elenchi rispondono `200` con zero elementi. */
     missing: 'Nessuna organizzazione selezionata.',
+    /** Un elenco che sta caricando non deve sembrare vuoto: «non ce ne sono» e
+     *  «non le ho ancora lette» sono due cose diverse, e mostrarle uguali fa
+     *  cercare un problema che non c'è. */
+    loading: 'Cerco le tue organizzazioni…',
+    empty: 'Non appartieni a nessuna organizzazione.',
+    loadFailed: 'Non riesco a leggere le tue organizzazioni.',
+    /** Il nome non è ancora arrivato: si mostra questo e non l'UUID, che è
+     *  esattamente ciò da cui questo passo libera. */
+    unknownName: 'Organizzazione',
   },
 
   nav: {
     dashboard: 'Riepilogo',
     properties: 'Immobili',
     leases: 'Contratti',
+    /** Al singolare, e solo per l'inquilino: per chi abita il contratto è uno. */
+    lease: 'Contratto',
+    tickets: 'Segnalazioni',
     bills: 'Bollette',
     charges: 'Addebiti',
     payments: 'Pagamenti',
@@ -228,6 +240,10 @@ export const it = {
     created: 'Contratto redatto.',
     empty: 'Nessun contratto.',
     emptyHint: 'Un contratto nasce in bozza: si aggiungono le parti e poi si attiva.',
+    /** Il vuoto di chi abita non è lo stesso di chi amministra: lui non ha un
+     *  gesto per riempirlo, e dirgli «creane uno» sarebbe indicargli una porta
+     *  che l'API gli chiude. */
+    emptyForTenant: 'Non risulta nessun contratto a tuo nome in questa organizzazione.',
     noTenantParty: 'Il contratto non ha inquilini fra le parti.',
     sharesNotHundred: 'Le quote degli inquilini non sommano a 100.',
     periodOverlap: 'Il periodo si sovrappone a una locazione già attiva.',
@@ -281,6 +297,7 @@ export const it = {
     expired: 'Scaduto',
   },
 
+
   bill: {
     title: 'Bollette',
     newTitle: 'Nuova bolletta',
@@ -328,6 +345,8 @@ export const it = {
     duplicate: 'Questa fattura di questo fornitore è già registrata.',
     empty: 'Nessuna bolletta registrata.',
     emptyHint: 'Registra una bolletta e allega la scansione: la lettura automatica parte da lì.',
+    emptyForTenant:
+      'Nessuna bolletta imputata al tuo contratto. Le registra chi amministra, e le vedi qui quando ti riguardano.',
     scan: 'Scansione',
     uploadScan: 'Carica la scansione',
     uploadHint: 'PDF o immagine, fino a 25 MB.',
@@ -449,6 +468,8 @@ export const it = {
     noPatch: 'Un addebito emesso non si modifica: si annulla e si riemette.',
     /** `?status=overdue` risponde 422: lo stato è derivato dalla scadenza. */
     derivedStatusNote: 'Scaduto è derivato dalla scadenza: si vede, e si filtra con «solo insoluti».',
+    /** La pagina iniziale di chi abita: la domanda che si fa davvero. */
+    tenantSubtitle: 'Quanto devi, e a che punto sta ogni richiesta.',
     fromBill: 'Da bolletta',
     detailTitle: 'Addebito',
     /** Un residuo negativo è un credito verso l'inquilino: non compensa gli altri
@@ -534,6 +555,13 @@ export const it = {
     pendingDoesNotMove: 'In attesa: non muove il saldo finché non la confermi.',
     onlyStaffDecides:
       'A confermare o rifiutare è chi amministra: chi ha dichiarato non può ritirare.',
+    /** La stessa rotta, letta da chi abita: le righe le sceglie `payments_select`,
+     *  non un ramo sul ruolo. */
+    mineSubtitle: 'I tuoi movimenti su questa organizzazione.',
+    /** `payments_update` è staff soltanto: un ritiro otterrebbe zero righe
+     *  aggiornate, cioè `auth.denied_by_policy`. Meglio dirlo che offrirlo. */
+    mineCannotWithdraw:
+      'Una dichiarazione in attesa la conferma o la rifiuta chi amministra: non si ritira.',
     goToCharge: 'Vai all’addebito',
     methods: {
       bank_transfer: 'Bonifico',

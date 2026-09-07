@@ -11,6 +11,7 @@ import type {
   LeaseDetail,
   LeaseParty,
   LeasePartyRole,
+  Organization,
   Page,
   Payment,
   PaymentMethod,
@@ -45,6 +46,25 @@ function query(params: Record<string, string | number | boolean | undefined>): s
   }
   const rendered = search.toString()
   return rendered ? `?${rendered}` : ''
+}
+
+// ---------------------------------------------------------------------------
+// Organizzazioni
+
+/**
+ * Le organizzazioni di chi chiama, **con il nome**.
+ *
+ * È la sola rotta dell'API che risponda anche senza un'organizzazione attiva, e
+ * non è una deroga: «quali organizzazioni sono mie» non appartiene a nessuna di
+ * esse. `ApiClient` manda comunque `X-Org-Id` quando ce n'è una — la risposta non
+ * cambia — perché l'eccezione sta nell'endpoint e non nel client, e un secondo
+ * modo di non mandare l'header sarebbe un secondo modo di sbagliarlo.
+ *
+ * **Nessun cursore**: le organizzazioni di una persona sono la propria più quelle
+ * di chi le affitta casa.
+ */
+export function getOrganizations(client: ApiClient): Promise<Items<Organization>> {
+  return client.get<Items<Organization>>('/organizations')
 }
 
 // ---------------------------------------------------------------------------

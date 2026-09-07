@@ -10,7 +10,7 @@ import { Select } from '@/components/ui/field'
 import { PageHeader } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate } from '@/lib/format'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
@@ -38,6 +38,7 @@ const TYPES: UtilityType[] = [
 
 export function BillsPage() {
   const client = useApi()
+  const isStaff = useIsStaff()
   const [params, setParams] = useSearchParams()
   const status = (params.get('stato') ?? '') as BillStatus | ''
   const utilityType = (params.get('utenza') ?? '') as UtilityType | ''
@@ -64,12 +65,17 @@ export function BillsPage() {
       <PageHeader
         title={t.bill.title}
         actions={
-          <Button asChild variant="primary">
-            <Link to="/bollette/nuova">
-              <Plus aria-hidden />
-              {t.bill.create}
-            </Link>
-          </Button>
+          /* Registrare una bolletta è dello staff. L'inquilino le **legge**, ed è
+             la ragione per cui la voce resta nella sua navigazione: sono la
+             ragione di metà dei suoi addebiti. */
+          isStaff ? (
+            <Button asChild variant="primary">
+              <Link to="/bollette/nuova">
+                <Plus aria-hidden />
+                {t.bill.create}
+              </Link>
+            </Button>
+          ) : null
         }
       />
 
@@ -119,12 +125,16 @@ export function BillsPage() {
           empty={
             <Empty
               title={t.bill.empty}
-              hint={t.bill.emptyHint}
-              action={
-                <Button asChild variant="primary">
-                  <Link to="/bollette/nuova">{t.bill.create}</Link>
-                </Button>
-              }
+              hint={isStaff ? t.bill.emptyHint : t.bill.emptyForTenant}
+              {...(isStaff
+                ? {
+                    action: (
+                      <Button asChild variant="primary">
+                        <Link to="/bollette/nuova">{t.bill.create}</Link>
+                      </Button>
+                    ),
+                  }
+                : {})}
             />
           }
         >

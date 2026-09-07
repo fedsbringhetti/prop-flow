@@ -19,6 +19,9 @@ export type IsoDateTime = string
 /** Stringa decimale, `"184.20"`. Mai un `number`. */
 export type Amount = string
 
+/** Il ruolo dentro un'organizzazione, come lo manda l'API. */
+export type OrgRole = 'owner' | 'manager' | 'tenant'
+
 export interface Page<T> {
   items: T[]
   /** Assente a fine risultati. Da rimandare come `after`. */
@@ -27,6 +30,28 @@ export interface Page<T> {
 
 export interface Items<T> {
   items: T[]
+}
+
+// ---------------------------------------------------------------------------
+// Organizzazioni
+// ---------------------------------------------------------------------------
+
+/**
+ * Un'organizzazione di cui si è membri, **con il nome**.
+ *
+ * È l'unica risposta dell'API che porti il nome di un'organizzazione a chi non ne
+ * è staff, ed è la ragione per cui la rotta esiste: senza, un selettore può
+ * mostrare soltanto l'identificatore. Per chi ne ha una è indistinguibile da un
+ * elenco vero; per un inquilino sono due UUID fra cui indovinare.
+ *
+ * `role` è il ruolo **in questa** organizzazione: la stessa persona è proprietario
+ * della propria e inquilino in quella di chi le affitta casa.
+ */
+export interface Organization {
+  id: Uuid
+  name: string
+  slug: string
+  role: OrgRole
 }
 
 // ---------------------------------------------------------------------------

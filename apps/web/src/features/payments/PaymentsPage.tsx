@@ -11,7 +11,7 @@ import { ConfirmAction } from '@/components/ui/confirm'
 import { PageHeader } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDateTime } from '@/lib/format'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
@@ -51,6 +51,12 @@ import { PaymentStatusBadge } from '../shared/status'
  */
 export function PaymentsPage() {
   const client = useApi()
+  // La stessa rotta risponde a due domande diverse. Per lo staff è **la coda**:
+  // chi dice di aver pagato, in tutta l'organizzazione. Per chi abita sono i
+  // **propri** movimenti, perché a scegliere le righe è `payments_select` e non un
+  // ramo sul ruolo. Chiamare «dichiarazioni da verificare» l'elenco di chi non può
+  // verificare niente sarebbe una schermata che dice il falso.
+  const isStaff = useIsStaff()
   const [params, setParams] = useSearchParams()
   // Assente significa la coda: è il default della schermata, non l'elenco intero.
   const showAll = params.get('tutti') === '1'
@@ -64,8 +70,8 @@ export function PaymentsPage() {
   return (
     <>
       <PageHeader
-        title={showAll ? t.payment.title : t.payment.queueTitle}
-        description={t.payment.queueSubtitle}
+        title={!isStaff || showAll ? t.payment.title : t.payment.queueTitle}
+        description={isStaff ? t.payment.queueSubtitle : t.payment.mineSubtitle}
       />
 
       <Card>
@@ -84,7 +90,9 @@ export function PaymentsPage() {
             />
             {t.common.all}
           </label>
-          <p className="text-xs text-ink-muted">{t.payment.onlyStaffDecides}</p>
+          <p className="text-xs text-ink-muted">
+            {isStaff ? t.payment.onlyStaffDecides : t.payment.mineCannotWithdraw}
+          </p>
         </div>
 
         <Async
@@ -92,14 +100,16 @@ export function PaymentsPage() {
           isEmpty={(items) => items.length === 0}
           empty={
             <Empty
-              title={showAll ? t.payment.empty : t.payment.queueEmpty}
-              {...(showAll ? {} : { hint: t.payment.queueEmptyHint })}
+              title={!isStaff || showAll ? t.payment.empty : t.payment.queueEmpty}
+              {...(isStaff && !showAll ? { hint: t.payment.queueEmptyHint } : {})}
             />
           }
         >
           {(items) => (
             <TableFrame>
-              <TableCaption>{showAll ? t.payment.title : t.payment.queueTitle}</TableCaption>
+              <TableCaption>
+                {!isStaff || showAll ? t.payment.title : t.payment.queueTitle}
+              </TableCaption>
               <thead>
                 <tr>
                   <Th>{t.payment.declaredAt}</Th>
@@ -134,6 +144,7 @@ export function PaymentsPage() {
 
 function PaymentRow({ payment }: { payment: Payment }) {
   const client = useApi()
+  const isStaff = useIsStaff()
   const queryClient = useQueryClient()
 
   async function refresh() {
@@ -153,7 +164,11 @@ function PaymentRow({ payment }: { payment: Payment }) {
     onSuccess: refresh,
   })
 
-  const waiting = payment.status === 'pending'
+  // Confermare e rifiutare sono dello staff, e l'API lo dice due volte: gli use
+  // case sono `ensure_staff` e `payments_update` è staff soltanto. A chi ha
+  // dichiarato non si offre nemmeno il ritiro — non esiste, e chiederlo darebbe
+  // `auth.denied_by_policy`, il codice riservato ai nostri difetti.
+  const waiting = payment.status === 'pending' && isStaff
 
   return (
     <Tr>

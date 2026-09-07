@@ -21,7 +21,7 @@ import { Field, Input, Select } from '@/components/ui/field'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
 import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi } from '@/app/session'
+import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
 import { ChargeStatusBadge, LeaseStatusBadge } from '../shared/status'
@@ -31,6 +31,7 @@ const PARTY_ROLES: LeasePartyRole[] = ['tenant', 'cotenant', 'guarantor']
 export function LeaseDetailPage() {
   const { id = '' } = useParams()
   const client = useApi()
+  const isStaff = useIsStaff()
   const queryClient = useQueryClient()
 
   const lease = useQuery({
@@ -66,6 +67,12 @@ export function LeaseDetailPage() {
               </Link>
             }
             actions={
+              /* Invitare, attivare e disdire sono dello staff. Per chi abita
+                 questa è la scheda del **proprio** contratto — `GetLease` è
+                 `ensure_member` e la policy la restringe al suo — ed è la sola
+                 pagina da cui si arriva all'immobile, che dalla sua navigazione
+                 esce. */
+              !isStaff ? null : (
               <>
                 <InviteTenantDialog leaseId={id} />
                 {data.status === 'draft' || data.status === 'pending_signature' ? (
@@ -80,6 +87,7 @@ export function LeaseDetailPage() {
                 ) : null}
                 {data.status === 'active' ? <TerminateAction onConfirm={terminate.mutateAsync} /> : null}
               </>
+              )
             }
           />
 
@@ -123,7 +131,7 @@ export function LeaseDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{t.lease.parties}</CardTitle>
-                {data.status === 'draft' || data.status === 'pending_signature' ? (
+                {isStaff && (data.status === 'draft' || data.status === 'pending_signature') ? (
                   <AddPartyDialog leaseId={id} />
                 ) : null}
               </CardHeader>
@@ -163,7 +171,7 @@ export function LeaseDetailPage() {
           </PageSection>
 
           <PageSection>
-            <LeaseChargesCard leaseId={id} currency={data.currency} />
+            <LeaseChargesCard leaseId={id} currency={data.currency} canIssue={isStaff} />
           </PageSection>
         </>
       )}
@@ -428,7 +436,16 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
   )
 }
 
-function LeaseChargesCard({ leaseId, currency }: { leaseId: string; currency: string }) {
+function LeaseChargesCard({
+  leaseId,
+  currency,
+  canIssue,
+}: {
+  leaseId: string
+  currency: string
+  /** Emettere un addebito è dello staff; leggerli è di chi li deve pagare. */
+  canIssue: boolean
+}) {
   const client = useApi()
   const charges = useQuery({
     queryKey: keys.charges({ leaseId }),
@@ -439,7 +456,7 @@ function LeaseChargesCard({ leaseId, currency }: { leaseId: string; currency: st
     <Card>
       <CardHeader>
         <CardTitle>{t.lease.charges}</CardTitle>
-        <IssueChargeDialog leaseId={leaseId} />
+        {canIssue ? <IssueChargeDialog leaseId={leaseId} /> : null}
       </CardHeader>
       <Async
         query={charges}
