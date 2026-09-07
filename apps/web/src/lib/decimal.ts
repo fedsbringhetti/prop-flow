@@ -93,6 +93,22 @@ export function isNegative(value: string): boolean {
   return compareDecimals(value, '0') < 0
 }
 
+/**
+ * Il valore assoluto, **senza passare da un float**.
+ *
+ * Serve dove un debito va detto come quantità invece che come segno: `net_balance`
+ * negativo è quanto una persona deve, e il campo in cui lo si sta per bonificare
+ * chiede quel numero, non il suo opposto.
+ */
+export function absDecimal(raw: string): string {
+  const value = parseDecimal(raw)
+  if (!value) return raw
+  return toFixedString(
+    { units: value.units < 0n ? -value.units : value.units, scale: value.scale },
+    value.scale,
+  )
+}
+
 /** Se il valore è zero, con qualunque scala: `"0"`, `"0.00"` e `"0.0000"`. */
 export function isZero(value: string): boolean {
   return compareDecimals(value, '0') === 0

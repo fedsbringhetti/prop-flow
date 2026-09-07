@@ -638,3 +638,176 @@ export interface Invitation {
    */
   accept_token: string
 }
+
+// ---------------------------------------------------------------------------
+// Spese co-living
+// ---------------------------------------------------------------------------
+
+/**
+ * Che cosa il gruppo tiene insieme. Il co-living è il caso per cui il modulo
+ * esiste; gli altri due sono lo stesso conto con un nome diverso.
+ */
+export type ExpenseGroupKind = 'coliving' | 'household' | 'property'
+
+/**
+ * Come una spesa si divide.
+ *
+ * **Tre valori su cinque l'API li rifiuta con `422`**: `percentage` ed `exact`
+ * chiedono un input per membro che non esiste, `by_usage` letture di contatori che
+ * non esistono. Compaiono qui perché una riga letta potrebbe portarli — un enum
+ * sconosciuto deve rompere il typecheck invece di ricadere su un default — ma un
+ * menù costruito da questa unione offrirebbe tre metodi che danno errore. Il menù
+ * si scrive a mano con due voci, come i filtri di stato delle segnalazioni.
+ */
+export type SplitMethod = 'equal' | 'weighted' | 'percentage' | 'exact' | 'by_usage'
+
+export type ExpenseCategory =
+  | 'utilities'
+  | 'groceries'
+  | 'cleaning'
+  | 'connectivity'
+  | 'maintenance'
+  | 'rent'
+  | 'furniture'
+  | 'other'
+
+/**
+ * Lo stato di un regolamento.
+ *
+ * **Tutti e quattro l'API li scrive**, a differenza degli stati di un pagamento:
+ * `pending` ha **tre** uscite, perché oltre alla conferma e al rifiuto di chi
+ * riceve c'è il ritiro di chi ha dichiarato — `settlements_update` nomina anche
+ * `from_user_id`, mentre `payments_update` è staff soltanto.
+ */
+export type SettlementStatus = 'pending' | 'confirmed' | 'rejected' | 'cancelled'
+
+/**
+ * Una persona dentro un gruppo.
+ *
+ * **`display_name` è l'unico nome che questo modulo conosca**, ed è facoltativo:
+ * lo scrive chi iscrive la persona, o resta assente per sempre. Saldi, quote,
+ * spese e regolamenti identificano le persone con il solo `user_id`, e per chi ha
+ * lasciato la casa non c'è nessun altro endpoint da cui recuperarlo — l'elenco dei
+ * residenti copre chi abita **ora**. Vedi `@/features/expenses/names`.
+ */
+export interface ExpenseGroupMember {
+  user_id: Uuid
+  room_id?: Uuid
+  display_name?: string
+  /** Il peso della ripartizione `weighted`: **tre** decimali, non due. */
+  weight: Amount
+  joined_at: IsoDateTime
+  /**
+   * Quando è uscito. **La riga resta**: le quote a suo nome restano, e finché il
+   * suo netto non è zero compare ancora fra i saldi del gruppo — ma il gruppo a
+   * lui è invisibile, perché `can_access_expense_group` esige `left_at IS NULL`.
+   */
+  left_at: IsoDateTime | null
+}
+
+export interface ExpenseGroup {
+  id: Uuid
+  organization_id: Uuid
+  /** **Facoltativo**: un gruppo può non avere un immobile, e allora non c'è un
+   *  elenco di residenti da cui pescare i membri. */
+  property_id?: Uuid
+  kind: ExpenseGroupKind
+  name: string
+  currency: string
+  /** Una **consuetudine**, non una regola: ogni spesa può dichiararne un'altra. */
+  default_split_method: SplitMethod
+  created_by?: Uuid
+  /** Il conto è chiuso: niente più spese né regolamenti. **Non** è una
+   *  cancellazione — saldi e spese restano leggibili. */
+  is_archived: boolean
+  /**
+   * La composizione, chi è uscito compreso.
+   *
+   * **Assente nell'elenco, presente nel dettaglio**: `GET /expense-groups`
+   * risponde senza, `GET /expense-groups/{id}` con. Un elenco che provasse a
+   * mostrare chi c'è dentro mostrerebbe `undefined`.
+   */
+  members?: ExpenseGroupMember[]
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}
+
+export interface ExpenseShare {
+  user_id: Uuid
+  share_amount: Amount
+  /** **Nullo su una divisione in parti uguali**, dove il peso non ha partecipato
+   *  al calcolo: mostrarlo come `1` sarebbe inventare un dato. */
+  share_weight?: Amount
+}
+
+export interface Expense {
+  id: Uuid
+  organization_id: Uuid
+  group_id: Uuid
+  /** Chi ha anticipato: è il verso del credito. Sempre un **membro attivo**. */
+  paid_by_user_id: Uuid
+  category: ExpenseCategory
+  description: string
+  amount: Amount
+  currency: string
+  /** Una **data**, non un istante: nessun fuso da cui sbagliare di un giorno. */
+  expense_date: IsoDate
+  split_method: SplitMethod
+  notes?: string
+  /**
+   * Le quote. **Assenti nell'elenco, presenti nel dettaglio.**
+   *
+   * La loro somma è **esattamente** `amount`: lo garantisce il trigger
+   * `expense_shares_balanced`. Il client le mostra e non le ricalcola.
+   */
+  shares?: ExpenseShare[]
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}
+
+/**
+ * Il saldo di una persona nel gruppo.
+ *
+ * `net_balance` positivo è **in credito**, negativo in debito, e **la somma dei
+ * netti di un gruppo fa zero** — l'invariante che rende questi numeri leggibili.
+ * Va verificata con `@/lib/decimal`: sommarli con l'aritmetica nativa produce uno
+ * zero che a volte non è zero.
+ */
+export interface GroupBalance {
+  user_id: Uuid
+  total_paid: Amount
+  total_owed: Amount
+  total_settled_out: Amount
+  total_settled_in: Amount
+  net_balance: Amount
+}
+
+/**
+ * Un trasferimento dichiarato fra due membri.
+ *
+ * Nasce `pending` e **non muove i saldi**: solo `confirmed` conta, e lo decide la
+ * vista — `app.v_expense_group_balances` somma `WHERE st.status = 'confirmed'`.
+ */
+export interface Settlement {
+  id: Uuid
+  organization_id: Uuid
+  group_id: Uuid
+  /** Chi paga, cioè chi ha dichiarato. È **sempre chi chiama**: il corpo della
+   *  dichiarazione non ha un `from_user_id`. */
+  from_user_id: Uuid
+  /** Chi riceve, cioè chi deve confermare. */
+  to_user_id: Uuid
+  amount: Amount
+  currency: string
+  status: SettlementStatus
+  method: PaymentMethod
+  note?: string
+  /** Quando il denaro si è mosso. **Nullo su un rifiuto o un ritiro**, e la
+   *  conferma **non lo riscrive**: è il fatto dichiarato, non il momento in cui
+   *  qualcuno l'ha guardato. */
+  settled_at: IsoDateTime | null
+  confirmed_at: IsoDateTime | null
+  confirmed_by: Uuid | null
+  created_at: IsoDateTime
+  updated_at: IsoDateTime
+}

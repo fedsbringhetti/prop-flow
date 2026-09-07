@@ -10,6 +10,7 @@ import {
   Menu,
   Banknote,
   Receipt,
+  Users,
   Wallet,
   X,
 } from 'lucide-react'
@@ -43,7 +44,7 @@ const staffNavigation = [
 ] as const
 
 /**
- * La navigazione di chi **abita**, e ognuna delle quattro voci è una scelta.
+ * La navigazione di chi **abita**, e ognuna delle cinque voci è una scelta.
  *
  * **Il riepilogo esce** perché gli risponderebbe `403 org.staff_role_required`:
  * `GetOwnerDashboard` usa `ensure_staff`, che *stringe* la Row Level Security
@@ -63,11 +64,22 @@ const staffNavigation = [
  * Ma sono la ragione di metà dei suoi addebiti, e un riaddebito che non si può
  * risalire a un documento è una cifra da accettare sulla fiducia.
  *
+ * **Le spese condivise sono sue e di nessun altro**: sono il denaro che i
+ * coinquilini si devono **fra loro**, e il proprietario ne è estraneo per
+ * costruzione. L'API gliela concederebbe — quasi tutto quel modulo è
+ * `ensure_member`, e lui è staff dell'organizzazione — ma una voce che per lui è
+ * sempre vuota è il rumore che ADR-042 ha appena tolto dalla sua navigazione con
+ * *Immobili*. Le schermate restano
+ * progettate e raggiungibili per URL: un proprietario che abiti in una delle
+ * proprie case è in un gruppo come chiunque altro.
+ *
  * Gli addebiti stanno per primi perché sono la sua pagina iniziale: la domanda che
- * si fa davvero è *quanto devo*.
+ * si fa davvero è *quanto devo*. Le spese subito dopo, perché è la stessa domanda
+ * rivolta a chi abita con lui.
  */
 const tenantNavigation = [
   { to: '/addebiti', label: t.nav.charges, icon: Wallet, end: false },
+  { to: '/spese', label: t.nav.expenses, icon: Users, end: false },
   { to: '/segnalazioni', label: t.nav.tickets, icon: LifeBuoy, end: false },
   { to: '/contratti', label: t.nav.lease, icon: FileText, end: false },
   { to: '/bollette', label: t.nav.bills, icon: Receipt, end: false },

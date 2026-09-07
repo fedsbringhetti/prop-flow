@@ -5870,3 +5870,516 @@ Due cose da sapere, trovate eseguendo:
   chi non può verificare niente sarebbe stata una schermata che dice il falso. Non è in
   navigazione per l'inquilino — l'ha già sull'addebito — ma è raggiungibile per URL, e
   una schermata raggiungibile va progettata.
+
+---
+
+<a id="piano-spese-co-living-fetta-b-bis"></a>
+
+## Piano — Le spese co-living (fetta B-bis)
+
+Pianificata il **7 settembre 2026**, dopo la fetta B e **leggendo il codice che tocca**:
+`crates/api/src/routes/expenses.rs` (1179 righe, **quindici** operazioni), i suoi DTO, la vista
+`app.v_expense_group_balances` e la funzione `app.can_access_expense_group`. Due delle
+decisioni qui sotto sono nate da quella lettura, e sono le due che costano di più se le
+si scopre implementando.
+
+**Tre passi**, `B6`–`B8`. Il **punto di taglio è dopo `B8`**, ed è tutta la fetta: le
+spese co-living sono una capacità sola, e finisce quando i saldi di un gruppo sommano a
+zero con un membro uscito che ha ancora un conto aperto.
+
+`B9` (allegati sugli owner rimasti) e `B10` (bundle diviso per rotta, refresh fra
+schede) **escono da questa fetta** e diventano una fetta di manutenzione a sé — vedi
+[Manutenzione del client](09-stato-e-roadmap.md#manutenzione-del-client-b9-e-b10). Non è un rinvio per
+stanchezza: sono lavoro di manutenzione e non una capacità, il loro criterio di
+completamento non ha niente a che vedere con quello delle spese, e tenerli insieme
+rifarebbe l'errore che la fetta B ha dovuto correggere a metà dichiarando un taglio.
+
+### Obiettivo
+
+L'ultimo modulo dell'MVP che ha lo schema, l'API e nessuna interfaccia. È anche il primo
+in cui il denaro **non passa dal proprietario**: gli addebiti sono ciò che l'inquilino
+deve all'organizzazione, le spese co-living sono ciò che i coinquilini si devono fra
+loro. Il proprietario ne è estraneo per costruzione.
+
+Il backend è completo dalla fetta 1: gruppi con il creatore già dentro (migration
+`0026`), composizione con uscita e rientro, spese con ripartizione `equal` e `weighted`,
+saldi letti dalla vista, regolamenti a due tempi confermati da chi riceve, e chi esce
+con un conto aperto che resta nei saldi (migration `0027`). **Questa fetta non tocca il
+database e non aggiunge rotte**: è client, e se si scopre di aver bisogno di un endpoint
+nuovo è il segnale di aver capito male qualcosa — si rilegga prima questa sezione.
+
+### Che cosa è stato deciso prima di pianificare
+
+Sette scelte. Le prime due sono nate **leggendo il codice**, e sono quelle che il piano
+esiste per non far riscoprire.
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| I nomi | il client scrive **sempre** `display_name` all'ingresso | leggerli dai residenti quando servono |
+| Uscire dal gruppo | è **irreversibile dal client**, e va detto prima | trattarlo come un'archiviazione qualunque |
+| Voce *Spese* | **solo per l'inquilino** | anche per lo staff, che l'API gli concede |
+| Come si scopre un debito | il **netto in cima** a *Spese* | un contatore sulla voce di navigazione |
+| Chi paga chi | si mostrano i netti, **non si calcola una minimizzazione** | proporre il giro di bonifici più corto |
+| Ripartizione | si sceglie **per spesa**, con il default del gruppo proposto | fissarla sul gruppo |
+| Punto di taglio | dopo `B8`, le sole spese | fino a `B10`, portandosi dietro la manutenzione |
+
+### Decisioni prese, con il perché
+
+#### 1. I nomi si scrivono all'ingresso, perché dopo non si recuperano
+
+**È la decisione della fetta, ed è nata leggendo i DTO.** Nessuna risposta di questo
+modulo porta un nome: `GroupBalanceResponse`, `ExpenseShareResponse`,
+`SettlementResponse` e `ExpenseResponse.paid_by_user_id` identificano le persone con il
+solo `user_id`. L'unico nome che esiste è `display_name` su
+`ExpenseGroupMemberResponse`, ed è **facoltativo** — lo scrive chi chiama
+`POST /expense-groups/{id}/members`, o resta assente.
+
+Una schermata dei saldi è fatta di nomi e numeri e di nient'altro. Senza `display_name`
+mostrerebbe UUID, che è esattamente la condizione da cui `B0` ha liberato il selettore
+delle organizzazioni una fetta fa.
+
+**E non c'è un ripiego.** `GET /properties/{id}/residents` dà `user_id` e `full_name`,
+ma copre **chi abita ora**: la persona uscita di casa che sta ancora saldando il suo
+conto — cioè precisamente il caso per cui la migration `0027` esiste, e il soggetto
+della verifica che chiude questa fetta — non compare più fra i residenti. Nessun altro
+endpoint proietta un utente per identificatore, e non deve esistere
+([ADR-036](08-decisioni.md#adr-036)).
+
+Ne segue la regola, e vale **senza eccezioni**: ogni volta che il client aggiunge un
+membro manda `display_name`, preso dal `full_name` dei residenti; e alla creazione del
+gruppo manda il proprio. Il nome così vive nella riga della membership, che non sparisce
+mai — `left_at` valorizzato, riga conservata — ed è leggibile anche quando la persona
+non abita più lì.
+
+*Alternativa scartata: risolvere i nomi al momento di mostrarli, incrociando i
+`user_id` con i residenti dell'immobile.* Non funziona nel caso che conta, funziona in
+tutti gli altri, e quindi **si romperebbe solo sui gruppi vecchi con qualcuno uscito** —
+il difetto più difficile da notare fra quelli possibili qui. In più `property_id` sul
+gruppo è facoltativo: un gruppo creato senza immobile non ha nemmeno un elenco di
+residenti da interrogare.
+
+**Che cosa mostrare quando `display_name` manca lo stesso** — un gruppo creato da
+`curl`, o da una versione futura che dimentica la regola: il nome dei residenti se
+l'identificatore è ancora fra loro, altrimenti un'etichetta neutra dal catalogo
+(«Membro del gruppo»), **mai l'UUID**. Un identificatore in faccia a chi legge non è
+informazione, è una resa.
+
+#### 2. Uscire da un gruppo lo fa sparire, e va detto **prima**
+
+`app.can_access_expense_group` ammette lo staff, oppure un membro con
+**`left_at IS NULL`**. Verificato nella `0014`. Ne segue una cosa che nessun documento
+diceva e che l'interfaccia deve dire: **chi esce da un gruppo smette di vederlo**, saldi
+propri compresi, anche se ha ancora un conto aperto. Il suo debito continua a comparire
+nei saldi **che leggono gli altri** — è la migration `0027` — e non nei suoi.
+
+È corretto rispetto all'isolamento e resta fuori perimetro; ma è anche un'uscita da cui
+non si rientra da soli, perché rientrare richiede che **qualcun altro** ti riaggiunga.
+La conferma dell'uscita deve quindi dire che cosa accade, con la stessa forma delle
+altre conferme del progetto — che spiegano che cosa cambia invece di chiedere «sei
+sicuro?».
+
+*Alternativa scartata: trattarla come l'archiviazione di un immobile.* Là la risorsa
+resta visibile a chi l'ha archiviata; qui sparisce, e presentare le due cose allo stesso
+modo insegnerebbe una regola falsa.
+
+#### 3. La voce *Spese* è solo dell'inquilino
+
+L'API la concederebbe anche allo staff — quasi tutto il modulo è `ensure_member`, e il
+proprietario è staff dell'organizzazione — ma le spese co-living sono il denaro che i
+coinquilini si devono **fra loro**, e il proprietario ne è estraneo per costruzione. Una
+voce che per lui è sempre vuota è il rumore che [ADR-042](08-decisioni.md#adr-042) ha
+appena tolto dalla sua navigazione con *Immobili*.
+
+L'inquilino passa quindi a **cinque voci**: *Addebiti*, *Spese*, *Segnalazioni*,
+*Contratto*, *Bollette*. Lo staff resta a sette.
+
+**Le schermate restano progettate**, perché restano raggiungibili per URL e perché un
+`owner` che abiti in una delle proprie case può essere in un gruppo come chiunque altro:
+in quel caso `useIsStaff()` è vero e la voce non c'è, ma `/spese` risponde. È la stessa
+scelta di `PaymentsPage` nella fetta B — fuori dalla navigazione di un ruolo, e onesta
+per chiunque ci arrivi.
+
+*Alternativa scartata: una scheda dei gruppi dentro l'immobile, per il proprietario.*
+`property_id` sul gruppo è **facoltativo**, quindi un gruppo senza immobile non
+comparirebbe da nessuna parte per lui: una vista che ne mostra alcuni e tace sugli altri
+è peggio di una che non c'è.
+
+#### 4. Il netto in cima a *Spese*, e non un contatore in navigazione
+
+Oggi `/addebiti` risponde a «quanto devo al proprietario». Il debito verso i coinquilini
+è un'altra tasca, e nessuna schermata lo annuncia: senza un indicatore si scopre solo
+entrando.
+
+L'indicatore è il **proprio netto complessivo**, in cima all'elenco dei gruppi. Costa
+`1 + N` richieste — l'elenco dei gruppi, più i saldi di ognuno — e con uno o due gruppi
+è niente. Non servono i nomi: il netto è il proprio, e il proprio `user_id` il client ce
+l'ha già dalla sessione.
+
+*Alternativa scartata: un contatore sulla voce di navigazione.* Si vedrebbe da ogni
+schermata, e per calcolarlo servirebbe la stessa `1 + N` **a ogni caricamento del
+guscio**, non solo su *Spese* — perché non esiste una rotta che dia il netto complessivo
+di una persona. Un numero utile pagato con N richieste su ogni pagina è il tipo di costo
+che si nota quando è tardi.
+
+*Alternativa scartata: portarlo anche su `/addebiti`.* Sono debiti verso persone diverse
+con rimedi diversi — uno si paga al proprietario e lo conferma lui, l'altro si paga a un
+coinquilino e lo conferma lui — e affiancarli invita a sommarli.
+
+#### 5. Si mostrano i netti, e non si calcola chi paga chi
+
+`GET /expense-groups/{id}/balances` dà il netto **per persona**, i creditori per primi.
+Non dice chi debba pagare chi: quella è una minimizzazione dei trasferimenti, e l'API
+non la fa.
+
+**Il client non la fa nemmeno.** Non è pigrizia: due client che la calcolassero con
+euristiche diverse proporrebbero giri di bonifici diversi sugli stessi saldi, e il
+prodotto direbbe due cose. Chi dichiara un regolamento sceglie **a chi** dall'elenco dei
+creditori, e l'importo lo propone il minimo fra il proprio debito e il credito di quella
+persona — un suggerimento visibile nel campo, non un algoritmo nascosto.
+
+*Alternativa scartata: proporre il giro più corto.* È la funzione che rende un'app di
+spese piacevole, ed è anche una decisione di prodotto con più di una risposta ragionevole
+(minimizzare i bonifici? pagare prima chi ha anticipato di più?). Va presa quando
+qualcuno la chiede, e allora va presa **nell'API**, dove è una sola.
+
+#### 6. La ripartizione si sceglie per spesa
+
+`default_split_method` sul gruppo è **una consuetudine, non una regola**: il DTO lo dice,
+e ogni spesa può dichiararne una diversa. Il form della spesa propone quindi il default
+del gruppo e lo lascia cambiare, invece di fissarlo alla creazione.
+
+`equal` e `weighted` sono le due ammesse. **`percentage`, `exact` e `by_usage` compaiono
+nell'enum e danno `422`**: il menù si scrive a mano con due voci, come i filtri di stato
+delle segnalazioni si scrivono a mano per non offrire `resolved`.
+
+#### 7. Il punto di taglio è dopo `B8`
+
+Le spese sono una capacità e finiscono quando i saldi tornano a zero. `B9` e `B10` sono
+manutenzione: allegati su owner che già esistono, e due debiti registrati da tre fette.
+Il loro criterio di completamento — «un allegato si carica anche da qui», «il bundle è
+diviso» — non ha niente in comune con «i saldi sommano a zero», e una fetta con due
+criteri scollegati è una fetta che si taglia a metà mentre la si esegue. È successo
+nella fetta B ed è stato gestito dichiarando il taglio prima; qui il taglio è dichiarato
+non facendo entrare le due cose.
+
+### Decomposizione
+
+#### `B6` — Client: i gruppi, e i nomi che ci entrano dentro
+
+**Livello dati.** `listExpenseGroups`, `getExpenseGroup`, `createExpenseGroup`,
+`addGroupMember`, `leaveGroup`, `archiveExpenseGroup` in `@/api/endpoints`, più i tipi
+sul filo in `@/api/types` — `ExpenseGroup`, `ExpenseGroupMember`, `ExpenseGroupKind`,
+`SplitMethod` — trascritti a mano dai DTO come tutti gli altri.
+
+**Attenzione a una differenza fra elenco e dettaglio**, verificata nel codice:
+`GET /expense-groups` restituisce `members: None`, `GET /expense-groups/{id}` restituisce
+`members: Some(...)`. L'elenco **non ha i nomi**, quindi non può mostrare chi c'è
+dentro: mostra il nome del gruppo, e il resto sta nel dettaglio.
+
+**Schermate.** `/spese` — elenco dei gruppi con il netto complessivo in cima (decisione
+4) — e `/spese/:id`, la scheda del gruppo con la composizione. La creazione è una modale
+sull'elenco, come le stanze e non come gli immobili: un gruppo ha un nome e poco altro.
+
+**La composizione passa dai residenti** (`listResidents`, che esiste dalla fetta 1), e
+il form manda **sempre** `display_name` preso dal `full_name` del residente scelto
+(decisione 1). Un residente **senza `user_id`** non è aggiungibile — non ha accettato
+l'invito — e va mostrato **non selezionabile con la ragione**, non nascosto: è la terza
+volta che questa forma si presenta, dopo `payer_user_id` nella fetta A e `lease_id`
+nella fetta B.
+
+**Il gruppo può non avere un immobile.** `property_id` è facoltativo: quando manca non
+c'è un elenco di residenti da cui pescare, e il form deve dirlo invece di mostrare un
+menù vuoto. Chi crea il gruppo dall'interfaccia lo crea **con** l'immobile, perché è il
+caso reale; il ramo senza immobile serve a non rompersi sui gruppi creati altrimenti.
+
+**L'uscita** è `DELETE /expense-groups/{id}/members/{user_id}` e risponde `200` con la
+membership aggiornata, non `204`: la riga resta con `left_at`. La conferma dice che il
+gruppo sparirà dalla propria vista (decisione 2). Togliere **qualcun altro** richiede lo
+staff, e a un membro l'API risponde `403 expense_group.membership_not_yours`: il client
+offre l'uscita solo per sé.
+
+**L'archiviazione** chiude il conto — niente più spese né regolamenti — e **non è una
+cancellazione**: saldi e spese restano leggibili, e si può archiviare anche con dei conti
+aperti. Va scritto nella conferma, perché «archivia» in questo progetto ha già due
+significati diversi e questo è il terzo.
+
+Da qui compare la voce *Spese* nella navigazione dell'inquilino (decisione 3).
+
+#### `B7` — Client: le spese e i saldi
+
+**Livello dati.** `listExpenses`, `recordExpense`, `getExpense`, `getGroupBalances`.
+
+**La scheda del gruppo cresce di due sezioni**: le spese, paginate a cursore, e i saldi.
+
+**Le spese.** Il form ha descrizione, importo, categoria, chi ha anticipato (`assente
+significa «io»`, e il menù sono i membri attivi), la data (`assente significa «oggi»`, ed
+è una data e non un istante, quindi nessun fuso) e il metodo di ripartizione, proposto
+dal default del gruppo (decisione 6). Il peso ha **tre** decimali mentre gli importi ne
+hanno due: un quarto decimale su `weight` dà `422` sul campo, e la doppia si esprime con
+`"2"`.
+
+**Chi ha anticipato deve essere un membro attivo**, e l'API risponde `409
+expense.payer_not_in_group` a chi non lo è: il menù si costruisce dai membri con
+`left_at` nullo, e chi è uscito non ci compare — pur restando nei saldi.
+
+**Il dettaglio di una spesa porta le quote**, e la loro somma è **esattamente**
+l'importo: lo garantisce il trigger `expense_shares_balanced`. Il client le mostra e non
+le ricalcola. `share_weight` è **nullo su una divisione in parti uguali**, dove il peso
+non ha partecipato al calcolo — mostrarlo come `1` sarebbe inventare un dato.
+
+**I saldi.** `net_balance` positivo è **in credito**, negativo è in debito, e la somma
+del gruppo fa zero. Il client la verifica **con `@/lib/decimal`** e non con l'aritmetica
+nativa, che produrrebbe uno zero che a volte non è zero. I saldi arrivano già ordinati —
+i creditori per primi — e il client non li riordina.
+
+**Comprendono chi è uscito con un conto aperto**, e quelle righe vanno etichettate come
+tali: un nome nei saldi senza spiegazione, che non è fra i membri attivi, è la domanda
+che chi guarda si farà per primo.
+
+#### `B8` — Client: i regolamenti a due tempi ← *punto di taglio*
+
+**Livello dati.** `listSettlements`, `declareSettlement`, `confirmSettlement`,
+`rejectSettlement`, `cancelSettlement`.
+
+**Quattro stati e tre uscite da `pending`**, che è l'unico da cui si esce: `confirmed`,
+`rejected`, `cancelled`. È la differenza con i pagamenti, dove le uscite sono due.
+
+**Chi dichiara è sempre chi chiama**: `DeclareSettlementRequest` **non ha
+`from_user_id`**, perché `settlements_insert` esige
+`from_user_id = current_user_id()` a chi non è staff. Il corpo ha `to_user_id`, che si
+sceglie dall'elenco dei creditori (decisione 5).
+
+**A confermare e a rifiutare è chi riceve**, non lo staff e non chi ha dichiarato: è
+l'unico che sa se il bonifico è arrivato. A chiunque altro l'API risponde `403
+settlement.not_addressed_to_you`. **A ritirare è chi ha dichiarato**, e a chi riceve
+l'API risponde `403 settlement.not_declared_by_you`. Il client instrada sui codici e
+mostra i tre casi come tre cose diverse.
+
+**Il ritiro esiste qui e non fra i pagamenti**, e l'asimmetria va spiegata al contrario
+rispetto alla fetta B: là il form dice «una volta inviata non la puoi ritirare» perché
+`payments_update` è staff soltanto; qui `settlements_update` ammette `from_user_id`,
+quindi il ritiro c'è. Chi ha letto l'altra schermata si aspetta il contrario.
+
+**Confermare non ricalcola niente**, a differenza di `ConfirmPayment`: il saldo del
+gruppo non è memorizzato da nessuna parte, si legge dalla vista. Il client invalida la
+chiave dei saldi e basta — chi arriva dal modulo dei pagamenti cerca un
+`recalculate_*` che qui non serve e non deve esistere.
+
+**Nessuna chiave di idempotenza**: `POST /expense-groups/{id}/settlements` non la
+richiede, a differenza delle due rotte che creano un pagamento. Non è una svista
+dell'API ed è da non replicare per simmetria.
+
+### Trappole
+
+Le prime due sono state trovate leggendo il codice per scrivere questo piano; le altre
+erano già note e sono qui perché il piano che le ha prodotte è archiviato e nessuno lo
+aprirà mentre esegue.
+
+**Nessuna risposta di questo modulo porta un nome.** Saldi, quote, spese e regolamenti
+identificano le persone con il solo `user_id`, e `display_name` sulla membership è
+facoltativo. Chi non lo scrive all'ingresso costruisce una schermata di saldi fatta di
+UUID, e per la persona uscita di casa **non c'è modo di recuperarlo**. Vedi la
+decisione 1.
+
+**Chi esce da un gruppo smette di vederlo.** `can_access_expense_group` esige
+`left_at IS NULL`. Il suo debito resta nei saldi degli altri e sparisce dai suoi, e per
+rientrare serve che qualcun altro lo riaggiunga. Va detto nella conferma.
+
+**Un residente senza `user_id` non è aggiungibile a un gruppo.** Non ha accettato
+l'invito, e la policy confronterebbe un identificatore che non esiste. Va mostrato come
+**non selezionabile con la ragione**, non nascosto: nasconderlo farebbe cercare una
+persona che sullo schermo c'è. Terza occorrenza della stessa forma —
+[ADR-040](08-decisioni.md#adr-040) per la prima.
+
+**Tre metodi di ripartizione su cinque danno `422`.** `percentage`, `exact` e `by_usage`
+compaiono nella specifica e sono rifiutati.
+
+**Il peso ha tre decimali, gli importi due.** Un quarto decimale su `weight` dà `422` sul
+campo. La doppia si esprime con `"2"`.
+
+**La somma dei `net_balance` fa zero, e va verificata con il modulo decimale.** Sommarli
+con l'aritmetica nativa produrrebbe uno zero che a volte non è zero. `parseFloat` è
+vietato.
+
+**Confermare un regolamento non ricalcola niente**, a differenza di `ConfirmPayment`.
+
+**Il ritiro esiste fra i regolamenti e non fra i pagamenti.** Le due cose si somigliano
+e non sono la stessa, e la fetta B ha già scritto l'asimmetria nell'altro verso.
+
+**`GET /expense-groups` non porta i membri**, `GET /expense-groups/{id}` sì. Un elenco
+che provi a mostrare chi c'è dentro mostrerà `undefined`.
+
+**Aggiungere a un gruppo qualcuno che non abita lì è possibile ed è voluto.** L'API non
+verifica la residenza, perché `property_id` è facoltativo e una regola che si aggira
+omettendo un campo facoltativo si legge come una garanzia senza esserlo. Il client non
+deve reintrodurre quel controllo: chi ha lasciato la casa il mese scorso e sta ancora
+saldando è un caso legittimo.
+
+**Le azioni di una schermata avvolgono, e `PageHeader` ora lo sa fare.** La fetta B ha
+corretto un `shrink-0` che a 375 px faceva scorrere la pagina in orizzontale. Chi
+aggiunge una schermata con molte azioni non deve reintrodurlo.
+
+**Il bundle non è ancora diviso per rotta.** Sei schermate in più lo faranno crescere
+ancora, ed è `B10`, che è fuori da questa fetta. Va annotato nell'esito, non risolto qui.
+
+### Come si saprà che è finita
+
+`./ops/ci/test-integration.sh` verde e il job del client verde sono il minimo, non il
+criterio — e la suite Rust **non deve cambiare di un test**, perché questa fetta non
+tocca il backend: se cambia, qualcosa è stato capito male.
+
+La verifica che conta è la quarta del piano della fetta B, l'unica rimasta, e va fatta
+**a mano e con due account** perché è un fatto fra due persone e con un account solo non
+si distingue chi deve da chi riceve:
+
+**I saldi di un gruppo sommano a zero, con un membro uscito che ha ancora un conto
+aperto.** Il giro completo: due coinquilini creano un gruppo, uno anticipa una spesa
+divisa in parti uguali, il secondo esce dal gruppo **senza saldare**, e il suo debito
+continua a comparire nei saldi che legge il primo — con il suo **nome**, non con il suo
+identificatore, che è la decisione 1 vista dal lato di chi la subirebbe. Poi il primo
+verifica che la somma dei netti sia esattamente zero. È il caso per cui la migration
+`0027` esiste, e nessuno lo ha ancora visto da un'interfaccia.
+
+Più il giro del regolamento, che è la ragione per cui `B8` sta dentro il taglio: chi
+deve dichiara di aver pagato, **il saldo non si muove**, chi riceve conferma, e allora
+sì. E il ritiro, che qui esiste.
+
+Più le due prove di qualità che il criterio «prodotto reale» rende obbligatorie:
+**navigazione da sola tastiera** su un percorso completo, e **375 px** sulle schermate
+nuove ([ADR-039](08-decisioni.md#adr-039)).
+
+### Esito — che cosa l'esecuzione ha confermato, cambiato e trovato
+
+**Eseguita il 7 settembre 2026**, per intero e fino al punto di taglio dichiarato:
+`B6`–`B8`. `B9` e `B10` non sono entrati, ed è la decisione 7 applicata: restano in
+[09 — Stato e roadmap](09-stato-e-roadmap.md) come la fetta di manutenzione.
+
+**Il backend non è stato toccato**, come il piano prevedeva: nessuna migration, nessuna
+rotta, nessun DTO. La suite Rust è rimasta a **424 test esatti**, che era il modo
+dichiarato di accorgersi di aver capito male qualcosa.
+
+#### Le due decisioni nate leggendo il codice erano le due che contavano
+
+**La decisione 1 — il nome si scrive all'ingresso — è la fetta.** Non è stata rivista, ed
+è diventata [ADR-043](08-decisioni.md#adr-043) perché vale per chiunque tocchi quel
+modulo in futuro e non solo per queste schermate. Verificarla ha richiesto di costruire
+il caso apposta, e vale la pena di riportarlo: due coinquilini, un gruppo, una bolletta
+anticipata da una e divisa in parti uguali; poi il secondo esce dal gruppo senza saldare;
+poi **il proprietario disdice il suo contratto**, che è ciò che lo toglie dai residenti
+della casa. Da quel momento non esiste, in tutta l'API, nessuna risposta che leghi il suo
+identificatore al suo nome — tranne la riga della sua membership. La schermata dei saldi
+continua a dire «Marco Neri», e i netti continuano a sommare a zero.
+
+Senza la regola avrebbe detto `01a07c16-0044-70c1-9d96-beab10de6616`, e **solo lì**: in
+ogni altra schermata il ripiego dai residenti avrebbe funzionato. È il difetto che il
+piano prevedeva — «si romperebbe solo sui gruppi vecchi con qualcuno uscito» — visto per
+davvero.
+
+**La decisione 2 — uscire è irreversibile dal client — si è confermata nel modo più
+diretto.** Chi esce viene rimandato all'elenco, e da lì il gruppo non c'è più: nemmeno i
+propri saldi. La conferma lo dice prima, ed è servita: il gesto è a un clic da una
+schermata che mostra un debito aperto, e chi lo compie senza saperlo perderebbe di vista
+proprio il conto che stava guardando.
+
+#### Che cosa è cambiato rispetto al piano
+
+**Tre cose, tutte trovate guardando le schermate e nessuna nel codice.**
+
+1. **Le quote di una spesa non sono una tabella, sono un elenco.** `TableFrame` tiene
+   `min-w-[36rem]` perché regge gli elenchi del proprietario; dentro una modale larga la
+   metà, quella larghezza minima spinge fuori **la colonna degli importi** — cioè la sola
+   ragione per cui si apre quel dettaglio. Con due fatti per riga un `<ul>` li tiene
+   accanto a qualunque larghezza. Stessa correzione, e per la stessa ragione, sull'elenco
+   dei gruppi: là fuori usciva **il saldo**, sulla schermata che esiste per mostrarlo;
+2. **il netto complessivo si mostra senza il segno.** «Devi −61,40 €» è un doppio
+   negativo, e chi lo legge si ferma a chiedersi in che verso vada. La parola porta il
+   verso, il numero porta la quantità; nelle tabelle il segno resta, perché lì è la
+   colonna a dire che cosa significa e non una frase. `NetAmount` prende quindi un
+   `display` separato dal valore: il **tono** resta quello del valore vero;
+3. **i rimborsi hanno due colonne di data e non una.** È la stessa lezione della fetta A
+   sui pagamenti, ritrovata da capo: finché un rimborso è in attesa `settled_at` è nullo,
+   quindi una colonna sola sarebbe vuota **proprio nel caso comune**. Si mostrano
+   *Dichiarato il* (`created_at`, che c'è sempre) e *Pagato il* (`settled_at`).
+
+E una correzione al piano: il piano diceva che `settled_at` assente significa «adesso».
+**Non è così, ed è meglio.** `Settlement::confirm` lo fa ricadere sul momento della
+**conferma**, non su quello della dichiarazione — «confermare significa dire che il
+denaro si è mosso» — e una data dichiarata non viene riscritta. Il testo del form lo dice
+com'è.
+
+#### La verifica che chiude la fetta, fatta con due account
+
+Il percorso nativo — `cargo run -p propflow-api` con le quattro `PROPFLOW__STORAGE__*`
+sulla riga di comando, `npm run dev` — e due inquilini della stessa casa, ognuno con il
+proprio contratto per stanza. **Il co-living per stanza è l'unico modo di avere due
+residenti**: due contratti sull'immobile intero si sovrappongono e il secondo non si
+attiva, il che è anche la conferma pratica del perché la migration `0030` esisteva.
+
+Il giro completo, e ogni passaggio ha detto la verità:
+
+- **la spesa e le quote**: 122,80 € anticipati da Giulia, divisi in parti uguali;
+  61,40 € a testa, calcolati dal server e mostrati senza ricalcolarli. I saldi diventano
+  `+61,40` e `−61,40`, e la riga sotto la tabella dice che la somma fa zero;
+- **il rimborso non muove niente finché non lo conferma chi riceve**: Marco dichiara
+  61,40 €, e i saldi restano dov'erano. La riga è *In attesa* e per Giulia porta «Aspetta
+  la tua conferma»;
+- **il ritiro esiste, e qui sì**: Marco la ritira, la riga passa a *Ritirato*, i saldi non
+  si muovono — non li aveva mai mossi. È l'asimmetria con le dichiarazioni di pagamento,
+  vista dal lato in cui il bottone c'è;
+- **la conferma muove i saldi**: Marco dichiara 30,00 €, Giulia conferma, e i netti
+  diventano `+31,40` e `−31,40`. *Pagato il* si riempie con il momento della conferma,
+  come il dominio prescrive;
+- **l'uscita senza saldare**: Marco esce con 31,40 € di debito. Viene rimandato a
+  `/spese`, dove non ha più nessun gruppo. Giulia continua a vedere «Marco Neri», la sua
+  riga marcata *uscito, conto ancora aperto*, e la somma dei netti a zero;
+- **l'archiviazione**: chiude le scritture e non la lettura. Spariscono i due bottoni che
+  otterrebbero `409 expense_group.archived`; **resta quello che aggiunge un membro**, ed è
+  voluto — riportare dentro chi è uscito con un debito è il modo in cui quella persona
+  torna a vederlo, e su un conto chiuso è esattamente il caso che capita.
+
+Più le due prove di qualità: **375 px** su entrambe le schermate nuove, dove la pagina
+non scorre in orizzontale (le tabelle scorrono nel loro contenitore) e le azioni
+dell'intestazione avvolgono senza reintrodurre lo `shrink-0` che la fetta B ha tolto; e
+la **tastiera**, dove l'ordine di tabulazione va dal salto al contenuto alle voci alle
+azioni, il fuoco resta dentro una modale aperta, `Escape` la chiude e lo restituisce al
+bottone che l'ha aperta.
+
+#### Una cosa vista per caso, e che vale come misura
+
+**Il debito sul refresh non coordinato fra schede si è manifestato da sé**, e non
+cercandolo: due schede aperte sulla stessa origine, entrambe hanno tentato il rinnovo al
+caricamento, e l'API ha revocato la catena — `riuso di un refresh token già ruotato:
+revocate tutte le sessioni` nei log, e la sessione fuori senza che nessuno avesse fatto
+niente. Era registrato come «sintomo raro»; **non è così raro**, ed è la prima volta che
+lo si vede accadere invece di dedurlo. Resta `B10`, con una nota in più su quanto costa.
+
+#### Numeri
+
+**424 test Rust**, esattamente come prima: questa fetta non ha toccato il backend, e il
+numero è la prova. **61 del client**, erano 48: tredici nuovi, e ognuno copre una cosa che
+si romperebbe in silenzio — sei sulla risoluzione dei nomi (`display_name`, il ripiego dai
+residenti, l'etichetta neutra, **il caso di chi non è più residente**), quattro sulla
+somma dei netti verificata sugli interi — fra cui una bolletta di 122,80 € divisa fra
+quattro, dove l'aritmetica nativa **non** dà zero — e tre sulla scheda del gruppo, che
+rendono la verifica di chiusura ripetibile in CI: il nome di chi è uscito, la nota che
+spiega perché è nei saldi, e la riga che dice che i conti tornano.
+
+Il bundle è passato da **648 kB a 690 kB** (da 193 a 202 compressi). Sei schermate in più
+sono sei schermate in più, ed è `B10`: annotato, non risolto, com'era previsto.
+
+#### Debiti tecnici
+
+**Nessuno nuovo.** Tre note:
+
+- il `.env` più vecchio dello storage ha morso per la **terza** volta. Il rimedio resta
+  quello registrato — un messaggio che nomini `.env.example` — e la terza occorrenza dice
+  che vale la pena di farlo;
+- **il netto complessivo costa `1 + N` richieste**, ed è dichiarato: l'elenco dei gruppi,
+  più i saldi di ognuno. Con uno o due gruppi è niente; il costo è nel numero dei gruppi,
+  non nel numero degli utenti, quindi non cresce con l'adozione. Il totale si mostra
+  **solo quando tutte le letture sono arrivate**: un netto calcolato su una parte dei
+  gruppi non è un'approssimazione, è un numero sbagliato che sembra giusto;
+- **`can_access_expense_group` rende invisibile il proprio debito a chi esce**, e resta
+  fuori perimetro. È corretto rispetto all'isolamento e il client lo dice prima; farglielo
+  vedere sarebbe un allargamento della visibilità, cioè una decisione di prodotto con la
+  sua policy.

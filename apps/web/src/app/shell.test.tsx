@@ -124,14 +124,14 @@ afterEach(() => {
 })
 
 describe('il guscio si adatta al ruolo', () => {
-  it('mostra all’inquilino quattro voci, e non il riepilogo', async () => {
+  it('mostra all’inquilino cinque voci, e non il riepilogo', async () => {
     renderShell({ role: 'tenant', organizationId: OWNER_ORG })
 
     await screen.findByText('contenuto')
     const labels = navigationLinks()
 
     expect(labels).toEqual(
-      expect.arrayContaining(['Addebiti', 'Segnalazioni', 'Contratto', 'Bollette']),
+      expect.arrayContaining(['Addebiti', 'Spese', 'Segnalazioni', 'Contratto', 'Bollette']),
     )
     // Il riepilogo gli risponderebbe `403 org.staff_role_required`: `ensure_staff`
     // *stringe* la policy invece di ripeterla, e una voce che porta a un errore è
@@ -160,6 +160,12 @@ describe('il guscio si adatta al ruolo', () => {
         'Pagamenti',
       ]),
     )
+    // Le spese co-living sono il denaro che i coinquilini si devono **fra loro**,
+    // e il proprietario ne è estraneo per costruzione. L'API gliele concederebbe —
+    // quasi tutto quel modulo è `ensure_member` — ma una voce che per lui è sempre
+    // vuota è rumore. `/spese` resta raggiungibile per URL: un proprietario che
+    // abiti in una delle proprie case è in un gruppo come chiunque altro.
+    expect(labels).not.toContain('Spese')
   })
 })
 
