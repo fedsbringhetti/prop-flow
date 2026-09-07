@@ -2355,6 +2355,9 @@ risponde sempre `403`.
 
 *Addebiti*, *Segnalazioni*, *Contratto*, *Bollette*. Ognuna è una scelta:
 
+> **Dalla fetta B-bis le voci sono cinque**: si aggiunge *Spese*, e resta sua soltanto.
+> Il perché è in [ADR-043](#adr-043), che emenda questa sezione invece di riscriverla.
+
 - **il riepilogo esce** perché gli risponde `403 org.staff_role_required`, e non per la
   Row Level Security: `GetOwnerDashboard` usa `ensure_staff`, che **stringe** la policy
   invece di ripeterla — la vista passa da `organizations_select`, che è
@@ -2408,3 +2411,84 @@ lavorazione butterebbe via il lavoro di qualcun altro.
 
 Il client mostra quindi quelle due azioni a chi ha segnalato, e traduce i due codici in
 due messaggi diversi.
+
+---
+
+<a id="adr-043"></a>
+
+## ADR-043 — Il nome di un membro si scrive all'ingresso, perché dopo non esiste più
+
+**7 settembre 2026.** Nasce leggendo `crates/api/src/routes/expenses.rs` per pianificare
+le spese co-living nel client, e riguarda un modulo che era già completo: non cambia
+l'API, cambia **come un client deve usarla**.
+
+### Il fatto: nessuna risposta di quel modulo porta un nome
+
+`GroupBalanceResponse`, `ExpenseShareResponse`, `SettlementResponse` e
+`ExpenseResponse.paid_by_user_id` identificano le persone con il solo `user_id`. L'unico
+nome che esista in tutto il modulo è `display_name` su `ExpenseGroupMemberResponse`, ed è
+**facoltativo**: lo scrive chi chiama `POST /expense-groups/{id}/members`, oppure non
+esiste.
+
+Una schermata di saldi è fatta di nomi e numeri e di nient'altro. Senza `display_name`
+mostra UUID, che è la condizione da cui [ADR-041](#adr-041) ha appena liberato il
+selettore delle organizzazioni.
+
+### Perché non basta risolverli quando servono
+
+La via che viene in mente per prima è incrociare gli `user_id` con
+`GET /properties/{id}/residents`, che dà `user_id` e `full_name`. Funziona, e **non nel
+caso che conta**: quell'elenco copre chi abita **ora**, e la persona uscita di casa che
+sta ancora saldando il suo conto non ci compare più — cioè precisamente il caso per cui
+la migration `0027` tiene il suo debito nei saldi del gruppo. In più `property_id` sul
+gruppo è facoltativo: un gruppo creato senza immobile non ha nemmeno un elenco da
+interrogare, e nessun'altra rotta proietta un utente per identificatore, né deve
+esistere ([ADR-036](#adr-036)).
+
+Il difetto che ne verrebbe è il peggiore fra quelli possibili qui: **si romperebbe solo
+sui gruppi vecchi con qualcuno uscito**, cioè tardi, su pochi dati, e per chi ha meno
+modo di spiegare che cosa vede.
+
+### La decisione
+
+**Ogni volta che il client iscrive qualcuno a un gruppo manda `display_name`**, preso dal
+`full_name` del residente scelto; e alla creazione del gruppo manda il proprio. Senza
+eccezioni, perché è l'unica occasione: la riga della membership non sparisce mai —
+`left_at` valorizzato, riga conservata — e quel nome resta leggibile anche quando la
+persona non abita più lì.
+
+Il ripiego, per i gruppi creati altrimenti — da `curl`, o da una versione futura che
+dimentichi questa regola — è in `apps/web/src/features/expenses/names.ts`, in
+quest'ordine: il nome dichiarato sulla membership, poi il residente se l'identificatore è
+ancora fra quelli, poi un'etichetta neutra dal catalogo. **Mai l'UUID**: un
+identificatore in faccia a chi legge non è informazione, è una resa.
+
+### Conseguenze
+
+- il nome è **immutabile in pratica**: il client non offre di cambiarlo, perché
+  riscriverlo richiederebbe di ripassare dalla rotta che iscrive, e su un membro attivo
+  quella risponde `409 expense_group.membership_exists`. È scritto nel form, dove si
+  decide;
+- **l'API resta com'è.** `display_name` non diventa obbligatorio: renderlo tale
+  spezzerebbe i gruppi esistenti e toglierebbe all'API un default legittimo. La regola
+  vive nel client, che è dove il nome è disponibile;
+- chi aggiungerà un secondo punto d'ingresso ai gruppi — un'app, un import, una fetta
+  futura — deve rispettare la stessa regola, e questa voce esiste perché la trovi.
+
+*Alternativa scartata: un endpoint che proietti un utente per identificatore.* È la
+domanda di [ADR-036](#adr-036) — quali colonne un membro possa vedere di un'altra
+persona — riaperta per un problema di presentazione. Il perimetro è la casa, e resta.
+
+### La navigazione dell'inquilino passa a cinque voci
+
+Corollario di [ADR-042](#adr-042), che vale come emendamento alla sua sezione «Che cosa
+vede chi abita»: alle quattro voci si aggiunge ***Spese***, e resta **sua soltanto**.
+L'API la concederebbe anche allo staff — quasi tutto quel modulo è `ensure_member`, e il
+proprietario è staff dell'organizzazione — ma le spese co-living sono il denaro che i
+coinquilini si devono **fra loro**, e il proprietario ne è estraneo per costruzione. Una
+voce che per lui è sempre vuota è il rumore che ADR-042 ha appena tolto dalla sua
+navigazione con *Immobili*.
+
+**Le schermate restano progettate e raggiungibili per URL**, come `PaymentsPage`: un
+`owner` che abiti in una delle proprie case è in un gruppo come chiunque altro, e per lui
+`/spese` risponde.
