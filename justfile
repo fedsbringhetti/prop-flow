@@ -36,8 +36,8 @@ default:
 # ---------------------------------------------------------------------------
 # Preparare l'ambiente
 
-# Da zero a pronto: chiavi, `.env`, servizi, schema, dipendenze del client.
-setup: keys env up migrate install
+# Da zero a pronto: chiavi, `.env`, servizi, database, dipendenze del client.
+setup: keys env up db install
     @echo ""
     @echo "Pronto. 'just api', 'just worker' e 'just web' in tre terminali."
 
@@ -45,14 +45,19 @@ setup: keys env up migrate install
 keys:
     ./ops/dev/generate-jwt-keys.sh
 
-# Copia `.env.example` senza sovrascrivere, e dice quali impostazioni mancano.
+# Copia `.env.example` senza sovrascrivere, e **fallisce** se mancano impostazioni.
 #
 # Non sovrascrive di proposito: quel file contiene le scelte locali di chi lavora.
 # Ma un `.env` più vecchio di una fetta che ha aggiunto impostazioni non le ha —
 # è successo tre volte con le quattro `PROPFLOW__STORAGE__*`, ogni volta scoprendolo
-# all'avvio — quindi qui si confronta e si dice, invece di lasciarlo scoprire dopo.
+# all'avvio — quindi qui si confronta prima.
+#
+# **Esce diverso da zero quando qualcosa manca**, e non è pedanteria: la prima
+# stesura si limitava ad avvisare, `just setup` proseguiva, e l'errore vero
+# arrivava tre passi dopo sotto forma di un'autenticazione fallita — cioè lontano
+# dalla sua causa. Un avviso che non ferma niente è un avviso che si scorre.
 
-# Crea `.env` da `.env.example`, o dice che cosa manca a quello che c'è.
+# Crea `.env` da `.env.example`, o elenca che cosa manca a quello che c'è.
 env:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -66,15 +71,29 @@ env:
       <(grep -oE '^[A-Z][A-Z0-9_]*' .env | sort -u))"
     if [[ -z "$mancanti" ]]; then
       echo ".env c'è ed è allineato a .env.example."
-    else
-      echo "Il tuo .env non ha queste impostazioni, che .env.example porta:"
-      echo "$mancanti" | sed 's/^/  /'
-      echo "Quelle obbligatorie impediscono l'avvio dell'API."
+      exit 0
     fi
+    echo "Il tuo .env non ha queste impostazioni, che .env.example porta:" >&2
+    echo "$mancanti" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "Quelle obbligatorie impediscono l'avvio dell'API e del worker." >&2
+    echo "Copiale da .env.example, poi riesegui." >&2
+    exit 1
 
-# Avvia PostgreSQL, MinIO e il bucket creato una volta sola.
+# `--wait` non è un dettaglio: senza, `up` torna appena i container sono
+# *avviati*, e su un volume nuovo PostgreSQL sta ancora facendo `initdb`. Il passo
+# successivo trovava la porta aperta e il server non pronto.
+#
+# **`minio-setup` resta fuori dall'attesa**, ed è la seconda cosa che si scopre
+# provando: è un one-shot che crea il bucket ed esce `0`, e per `--wait` un
+# servizio che termina è un fallimento. Aspettarlo faceva fallire `up` con tutti i
+# container sani. Parte dopo, e `depends_on: service_healthy` gli garantisce
+# comunque il MinIO pronto.
+
+# Avvia PostgreSQL e MinIO aspettando che siano sani, poi crea il bucket.
 up:
-    docker compose up -d postgres minio minio-setup
+    docker compose up -d --wait postgres minio
+    docker compose up -d minio-setup
 
 # I volumi restano: i dati di un giro a mano non si buttano via per aver fermato
 # un container. Per cancellarli davvero c'è `down-hard`.
@@ -87,7 +106,18 @@ down:
 down-hard:
     docker compose down --volumes
 
-# Applica le migration allo schema.
+# **Il passo che a `setup` mancava.** Su un database vuoto i tre ruoli non
+# esistono, e il migratore si presenta come `propflow_migrator` con l'esito che si
+# vede: `password authentication failed`. `ops/ci/prepare-database.sh` è lo stesso
+# script che usa la CI — apposta, perché due procedure di preparazione divergono al
+# primo cambiamento e poi «in locale funziona» — e i suoi default combaciano con
+# gli URL di `.env.example`. Crea il database, i ruoli, e applica le migration.
+
+# Crea database e ruoli, poi applica le migration. Su un database vuoto è questo.
+db:
+    ./ops/ci/prepare-database.sh >/dev/null
+
+# Applica le sole migration, su un database che ha già i suoi ruoli.
 migrate:
     cargo run -p propflow-migrator
 
