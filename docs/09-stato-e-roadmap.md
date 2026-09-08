@@ -280,6 +280,78 @@ cambia il contesto.
 | Un filtro parametrico su un enum non usa un indice parziale | Misurato, non dedotto: `($1::text IS NULL OR status = $1::app.payment_status)` **non** tocca `payments_pending_ix`, perché il cast `text → enum` passa da `enum_in`, che PostgreSQL dichiara `STABLE` e non `IMMUTABLE`, e non viene quindi ridotto a una costante. Il rimedio è nel repository dei pagamenti — una condizione ridondante che nomina il letterale — ed è **locale a quella query**. Ogni altro elenco del progetto usa lo stesso pattern parametrico su uno stato, e nessuno di quelli ha oggi un indice parziale da mancare | Quando un altro elenco filtrato per stato acquisisce un indice parziale. La misura e il rimedio stanno in [ADR-040](08-decisioni.md#adr-040) |
 | ~~Un `.env` più vecchio dello storage impedisce l'avvio dell'API~~ — **chiuso** dalla fetta C, `C6` | L'avvio fallisce ancora, ed è giusto che fallisca: **il rimedio non era un default**, perché uno storage configurato a caso sposta il fallimento al primo caricamento e lo fa somigliare a un problema di rete. È cambiato ciò che si legge: `AppConfig::load` distingue un'impostazione **mancante** da una **sbagliata**, e sulla prima dice che le variabili hanno prefisso `PROPFLOW__`, che l'elenco completo è in `.env.example`, e che nessuno lo carica da solo. Il messaggio di figment — quale campo, sotto quale chiave — resta nella catena delle cause | Chiuso, dopo tre occorrenze in tre fette |
 
+## Raccolta da ordinare — **non è un piano**
+
+Cose emerse usando il prodotto e leggendo il codice, messe qui perché non si
+perdano. **Non sono decomposte, non sono ordinate e non sono decise**: diventano un
+piano quando si sceglie di farne una fetta, con il dettaglio che `CLAUDE.md` §3
+richiede. Tenerle qui in forma grezza è meglio che tenerle in una conversazione, ed
+è peggio che pianificarle: la differenza è dichiarata perché nessuno le prenda per
+lavoro istruito.
+
+Le note tecniche accanto a ciascuna sono **verificate**, non supposte: servono a chi
+pianificherà a non ripartire da zero.
+
+### Dal collaudo e dalla lettura del codice
+
+| # | Cosa | Quel che si sa già |
+|---|---|---|
+| R1 | **Un immobile non esce mai da `draft`** | `PATCH /properties/{id}` accetta `status` (`UpdatePropertyRequest`), e **nessuna schermata lo manda**: né la creazione né `EditPropertyDialog`. Niente lo deriva, quindi l'etichetta resta sbagliata per sempre. **Non blocca nulla** — nessun use case guarda lo stato dell'immobile. Da chiudere è un `<Select>` nel dialogo. Nota di metodo: l'audit della fetta C non poteva trovarlo, perché confronta quali *funzioni* nessuno chiama e `updateProperty` **è** chiamata, solo mai con quel campo |
+| R2 | **Il punto 10 del collaudo non prova `C2` come è scritto** | Dice «il proprietario in una finestra, un inquilino nell'altra», e due account richiedono due contenitori di cookie: senza cookie condiviso non c'è contesa, e il punto passerebbe anche con il lock rimosso. La versione che lo esercita è **due schede dello stesso account nello stesso profilo, ricaricate insieme**. Correzione al testo in `11-piani-conclusi.md` |
+| R3 | **Il messaggio di `C6` è invecchiato di un giorno** | Dice «nessuno lo carica da solo: lo fa la shell», e il `justfile` ora lo carica con `set dotenv-load`. Due righe in `crates/api/src/config.rs` |
+| R4 | **`zod` rende `/accesso` la rotta iniziale più pesante** | 543,4 kB (172,4 gz) contro i 438,7 (141,6) del riepilogo: un chunk da 107,9 kB che nessun'altra rotta iniziale tira, sulla prima schermata che vede un utente nuovo. Già in [Debiti tecnici noti](#debiti-tecnici-noti). Il rimedio è non usarlo **su quei due form**, dove le regole sono un'email, dodici caratteri e un campo obbligatorio |
+
+### Interfaccia e prodotto
+
+| # | Cosa | Quel che si sa già |
+|---|---|---|
+| R5 | **Mostrare la password**, in accesso e registrazione | `AuthPage.tsx`, i due `Input type="password"`. Il bottone va dentro il campo e deve restare raggiungibile da tastiera; l'etichetta cambia con lo stato e va nel catalogo, non nel JSX |
+| R6 | **La navigazione non si vede tutta**: su alcune schermate compare solo la metà superiore. Separatore e sezione dell'organizzazione vanno **in basso** | `#navigazione-principale` in `shell.tsx`. Oggi è un `<nav>` con la lista e, sotto, il selettore in un blocco `lg:block`: manca un'altezza piena con il selettore ancorato in fondo (`flex` in colonna, `min-h`, e la lista che scorre). Va guardato **anche a schermo stretto**, dove il menù è a scomparsa e il selettore sta già nella barra in alto |
+| R7 | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso |
+| R8 | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
+
+### Il perimetro dei ruoli — **la voce più grande della lista**
+
+| # | Cosa | Quel che si sa già |
+|---|---|---|
+| R9 | **Separare inquilini e proprietari**: accesso unico, **registrazione libera solo per gli inquilini**; un proprietario si fa verificare fuori dal prodotto e riceve un invito per registrarsi. Un inquilino non deve poter creare immobili | Vedi sotto: non è una fetta di client |
+
+**R9 non si chiude nascondendo un bottone**, e va detto prima che qualcuno ci provi.
+
+L'unico caso d'uso di registrazione che esiste si chiama `RegisterOwner`
+(`crates/application/src/use_cases/auth/register_owner.rs`) e crea **sempre**
+un'organizzazione personale con `OrgRole::Owner`: `Organization::personal(...)` e
+`OrgMember::active(..., OrgRole::Owner, ...)`. Ne segue che **ogni utente registrato
+è owner di una propria organizzazione**, quindi un inquilino che si iscrive da sé, in
+casa propria, è staff — e lì può creare immobili legittimamente, perché la Row Level
+Security e `ensure_staff` glielo concedono.
+
+Il client oggi fa la cosa giusta e non basta: `useIsStaff()` toglie *Immobili* dalla
+navigazione e nasconde «Registra un immobile» ([ADR-042](08-decisioni.md#adr-042)),
+ma è una scelta di **cosa offrire** e non un confine — ed è scritto proprio così
+nell'ADR. Nella propria organizzazione quel ramo dice `owner`, e il bottone ricompare
+a ragione.
+
+Quindi R9 tocca il **modello**, non la presentazione, e le domande da sciogliere sono
+almeno queste:
+
+- un utente che nasce inquilino **ha** un'organizzazione propria? Se no, che cosa
+  vede prima di accettare un invito, dato che oggi ogni elenco ha bisogno di
+  `X-Org-Id`? Se sì, in che ruolo?
+- l'invito che oggi esiste (`org_invitations`) porta l'appartenenza a
+  un'organizzazione **esistente** e conferisce solo `tenant` — vincolo nel dominio e
+  ripetuto nella policy. Un invito che *crea* un proprietario con la sua
+  organizzazione è un'altra cosa e non esiste;
+- come si verifica un proprietario, e dove vive quello stato: fuori dal prodotto —
+  una email, una decisione manuale — oppure dentro, con una colonna e una
+  transizione;
+- che cosa succede agli utenti già registrati, che sono tutti owner della propria
+  organizzazione.
+
+Tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di
+sicurezza: è la voce che merita un ADR **prima** del codice, non dopo.
+
+
 ## Prossimo passo suggerito
 
 **Il [collaudo della fetta C](11-piani-conclusi.md#esito-fetta-c)**, in undici punti, a
