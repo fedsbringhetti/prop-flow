@@ -369,6 +369,57 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 
 **Da decidere, e sono domande distinte:** se il form debba proporre 100 solo quando la parte è davvero l'unica; se una quota a zero vada segnalata al momento in cui si invita, invece che scoperta dopo; se l'attivazione debba pretendere qualcosa di più della somma — per esempio che nessun inquilino sia a zero, o che l'intestatario principale abbia accettato. **La correzione a posteriori (R17) serve comunque**, perché i contratti già rotti esistono già.
 
+### Segnalazioni
+
+| # | Cosa | Quel che si sa già |
+|---|---|---|
+| R19 | **Una segnalazione «tutto l'immobile» non la vedono gli altri inquilini** | **Non è un difetto: è la policy, e cambiarla è una decisione di visibilità.** `app.can_access_ticket` (migration `0014`) concede a: staff, chi l'ha aperta, chi l'ha in carico, e `t.lease_id IS NOT NULL AND can_access_lease(t.lease_id)`. Una segnalazione **senza contratto** — cioè quella sull'immobile intero — non ha l'ultimo ramo, quindi resta fra chi l'ha aperta e lo staff. Il guasto alla caldaia condominiale è però esattamente ciò che interessa a tutti. Il mattone per cambiarla **esiste già**: `app.shares_home_with` della `0030`, che è il perimetro «stessa casa» introdotto per i coinquilini. Resta da decidere se una segnalazione sull'immobile sia per costruzione condivisa fra chi ci abita, e serve una migration con un `ALTER POLICY`, non un filtro applicativo |
+| R20 | **Il bottone «Prendi in carico» resta dopo averla presa in carico** | `assignable = open \|\| triaged \|\| assigned` in `TicketActions.tsx`: `assigned` è nell'elenco, quindi il bottone sopravvive all'azione. Non è un errore di per sé — serve a **riassegnare** — ma con un solo staff in organizzazione è un bottone che ripete ciò che è appena stato fatto. Da decidere se nasconderlo quando è già in carico a chi guarda, o rinominarlo *Riassegna* quando lo è: sono due risposte diverse alla stessa osservazione |
+| R21 | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo di [R14](#raccolta-da-ordinare): i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
+| R22 | **Nel thread non si capisce chi scrive**: si vorrebbe ruolo e nome — *Proprietario · Mario Rossi* | Stesso ceppo di R21: i messaggi portano l'autore come identificatore. Il **ruolo** però è più economico del nome — si deduce da chi è staff — e da solo risolve gran parte della domanda («me lo dice il proprietario o un coinquilino?»). Vale la pena separare le due metà: il ruolo si può fare senza toccare l'API, il nome no |
+| R23 | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
+| R24 | **Riaprire dovrebbe chiedere il motivo** | `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un corpo. La chiusura invece ha già `resolution_notes`, quindi il precedente esiste e la simmetria è naturale. Se R23 si chiude vietando i messaggi dopo la chiusura, questa diventa **l'unica via** per dire «non è risolto», e allora il motivo non è un di più: è l'unica cosa che spiega perché la segnalazione è tornata viva |
+
+### Bollette
+
+| # | Cosa | Quel che si sa già |
+|---|---|---|
+| R25 | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#raccolta-da-ordinare) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
+
+#### La domanda: il thread può diventare «live»?
+
+Sì, e le due risposte hanno prezzi molto diversi. Va scelta sapendo qual è il problema
+che si vuole risolvere.
+
+**Ricaricare a intervalli** costa quasi niente: il thread ha già una chiave propria
+(`keys.ticketMessages`) proprio perché invalidarlo non rilegga il dettaglio, e basta un
+`refetchInterval` mentre la segnalazione è aperta. Non è «live» — c'è un ritardo pari
+all'intervallo — ma per una conversazione fra due persone che si scrivono a ore di
+distanza è indistinguibile, e non aggiunge nessun pezzo all'architettura.
+
+**Il tempo reale vero** vuole una connessione tenuta aperta. Fra le due vie, `SSE` è la
+più adatta di WebSocket: il flusso è a senso unico, server verso client, e passa dalla
+stessa origine dietro il reverse proxy senza aggiungere protocolli.
+
+Ha però **una complicazione che va vista prima di sceglierla, e non è tecnica**:
+`EventSource` non permette di aggiungere intestazioni, quindi non può portare
+l'`Authorization`. Restano due strade e una è da escludere: mettere il token
+**nell'URL** lo scriverebbe in cronologia, `Referer` e log dei proxy — esattamente
+l'argomento per cui in `C1` il codice d'invito non viaggia in un percorso
+([ADR-045](08-decisioni.md#adr-045)) — e per di più si tratterebbe dell'access token.
+L'altra è autenticare quel flusso **con il cookie**, che oggi esiste ma è il cookie del
+*refresh*, con il suo percorso e il suo scopo: usarlo per altro è una decisione di
+sicurezza a sé, non un dettaglio di trasporto.
+
+C'è un terzo fatto che gioca a favore, il giorno in cui si volesse: **l'outbox degli
+eventi esiste già** e il worker lo drena, quindi una sorgente di notifiche da spingere
+c'è, e non andrebbe inventata.
+
+**Suggerimento**: se la domanda è «non voglio ricaricare la pagina», l'intervallo la
+chiude oggi e per zero rischio. Se la domanda è «voglio una chat», allora è una fetta a
+sé con un ADR sull'autenticazione del flusso, e conviene affrontarla dopo
+[R9](#raccolta-da-ordinare), che ridisegna comunque chi vede che cosa.
+
 ### Cancellare, in generale
 
 | # | Cosa | Quel che si sa già |
