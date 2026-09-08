@@ -337,6 +337,12 @@ Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui que
 | R13 | **Un contratto creato per sbaglio non si elimina**: l'unica via è attivarlo e disdirlo | Le rotte dei contratti sono cinque — `POST /leases`, `GET /leases`, `GET /leases/{id}`, `POST .../parties`, `POST .../activate`, `POST .../terminate` — e **non c'è una `DELETE`**. La colonna `deleted_at` c'è, quindi il livello dati regge già la cancellazione soft: manca lo use case e la rotta. Da decidere **quali stati** siano archiviabili: una bozza certamente; un contratto attivo no, perché per quello la via è la disdetta, che è un fatto diverso e lascia traccia |
 | R14 | **Dare un nome ai contratti**, perché in tabella sono tutti uguali | `app.leases` **non ha una colonna nome**: ci sono `notes` e `registration_number`, e l'elenco mostra tipo più data, da cui le righe identiche. Ci sono due vie e vanno pesate insieme, non scelte per prima: (a) una colonna `label`, cioè migration, dominio, DTO e form; (b) comporre l'etichetta da ciò che il contratto già è — immobile e stanza — che **non è gratis**, perché il DTO `Lease` porta `property_id` e `room_id` e **nessun nome**, quindi vorrebbe dire allargare la risposta o fare una richiesta per riga. La (b) risolve «sono tutti uguali»; solo la (a) permette di chiamarlo *«Rossi, secondo piano»* |
 
+| R17 | **Le parti contrattuali non si modificano dopo**, nemmeno da chi amministra | C'è **solo** `POST /leases/{id}/parties`: nessuna `PATCH`, nessuna `DELETE`. Una parte si aggiunge e resta com'è — nome, email, telefono, ruolo, quota, intestatario principale. `app.lease_parties` ha però sia `left_at` sia `deleted_at`, quindi correggere e togliere sono **già rappresentabili** senza migration: mancano gli use case e le rotte |
+
+**R17 e R13 insieme fanno un vicolo cieco, e va visto prima di stimarli separatamente.** L'attivazione pretende che le quote degli inquilini sommino a 100 (`lease.shares_not_hundred`). Se una parte viene inserita con la quota sbagliata: non la si può correggere (R17), quindi il contratto non si attiva; e non lo si può eliminare (R13), perché la sola uscita sarebbe attivarlo e disdirlo — che è precisamente ciò che non riesce. **Il contratto resta lì per sempre**, non attivabile e non rimovibile, e l'unico rimedio è rifarlo daccapo lasciando in elenco quello rotto — che con R14 non ancora fatto è pure indistinguibile dal buono.
+
+È la ragione per cui queste due, se si sceglie di farle, conviene farle nella stessa fetta.
+
 ### Cancellare, in generale
 
 | # | Cosa | Quel che si sa già |
