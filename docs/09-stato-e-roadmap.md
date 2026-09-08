@@ -373,8 +373,9 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 
 | # | Cosa | Quel che si sa già |
 |---|---|---|
-| R19 | **Una segnalazione «tutto l'immobile» non la vedono gli altri inquilini** | **Non è un difetto: è la policy, e cambiarla è una decisione di visibilità.** `app.can_access_ticket` (migration `0014`) concede a: staff, chi l'ha aperta, chi l'ha in carico, e `t.lease_id IS NOT NULL AND can_access_lease(t.lease_id)`. Una segnalazione **senza contratto** — cioè quella sull'immobile intero — non ha l'ultimo ramo, quindi resta fra chi l'ha aperta e lo staff. Il guasto alla caldaia condominiale è però esattamente ciò che interessa a tutti. Il mattone per cambiarla **esiste già**: `app.shares_home_with` della `0030`, che è il perimetro «stessa casa» introdotto per i coinquilini. Resta da decidere se una segnalazione sull'immobile sia per costruzione condivisa fra chi ci abita, e serve una migration con un `ALTER POLICY`, non un filtro applicativo |
-| R20 | **Il bottone «Prendi in carico» resta dopo averla presa in carico** | `assignable = open \|\| triaged \|\| assigned` in `TicketActions.tsx`: `assigned` è nell'elenco, quindi il bottone sopravvive all'azione. Non è un errore di per sé — serve a **riassegnare** — ma con un solo staff in organizzazione è un bottone che ripete ciò che è appena stato fatto. Da decidere se nasconderlo quando è già in carico a chi guarda, o rinominarlo *Riassegna* quando lo è: sono due risposte diverse alla stessa osservazione |
+| R19 | **La visibilità di una segnalazione diventa una scelta di chi la apre** — casella *«visibile a tutti gli inquilini»* — e il comportamento di oggi resta il default | **Decisa.** Oggi non è un difetto ma la policy: `app.can_access_ticket` (`0014`) concede a staff, a chi l'ha aperta, a chi l'ha in carico, e a `t.lease_id IS NOT NULL AND can_access_lease(...)` — quindi una segnalazione sull'immobile intero, che non ha contratto, resta privata. **Quel default resta**, e si aggiunge una scelta esplicita per il caso vero: la caldaia condominiale interessa a tutti. Serve una colonna su `app.tickets`, un `ALTER POLICY` con un ramo in più, il campo nel DTO e la casella nel form — quindi **una migration**, e non un filtro applicativo: la visibilità è un confine del database. Il predicato «chi guarda abita in questo immobile» va scelto fra ciò che la `0030` ha già introdotto (`app.shares_home_with`, `app.property_residents`) invece di scriverne un terzo. Da decidere se la casella si possa cambiare dopo l'apertura, il che la lega a R19-bis |
+| R19-bis | **Chi ha aperto una segnalazione può modificarla finché nessuno l'ha presa in carico** | **Decisa.** La forma della regola **esiste già** ed è quella dell'annullamento: lo staff sempre, chi ha segnalato **solo finché è `open`** — «finché nessuno ci ha messo mano». Qui vale lo stesso confine, cioè fino ad `assigned`. La trappola sta nella rotta: **`PATCH /tickets/{id}` esiste già** ma è `update_costs`, ed è **solo staff** e sui soli campi di costo. Allargarla significherebbe una rotta con due autorizzazioni diverse a seconda dei campi presenti — costi allo staff, testo a chi ha segnalato — che è il genere di cosa che si sbaglia in silenzio. Da decidere: allargare con attenzione o una rotta a sé, e **quali campi** siano modificabili (titolo e descrizione sì; categoria e priorità sono il lavoro del triage, che è dello staff) |
+| R20 | **«Prendi in carico» si nasconde a chi l'ha già presa in carico** | **Decisa, ed è solo client.** Oggi `assignable = open \|\| triaged \|\| assigned` in `TicketActions.tsx`: `assigned` è nell'elenco perché il bottone serve anche a **riassegnare**, e per questo non si toglie del tutto — sparisce quando `ticket.assigned_to` è chi guarda. Chi la vede assegnata a un altro continua a poterla prendere |
 | R21 | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo di [R14](#raccolta-da-ordinare): i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
 | R22 | **Nel thread non si capisce chi scrive**: si vorrebbe ruolo e nome — *Proprietario · Mario Rossi* | Stesso ceppo di R21: i messaggi portano l'autore come identificatore. Il **ruolo** però è più economico del nome — si deduce da chi è staff — e da solo risolve gran parte della domanda («me lo dice il proprietario o un coinquilino?»). Vale la pena separare le due metà: il ruolo si può fare senza toccare l'API, il nome no |
 | R23 | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
@@ -386,39 +387,35 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 |---|---|---|
 | R25 | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#raccolta-da-ordinare) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
 
-#### La domanda: il thread può diventare «live»?
+#### Il thread non diventa live: un bottone «Aggiorna» — **deciso**
 
-Sì, e le due risposte hanno prezzi molto diversi. Va scelta sapendo qual è il problema
-che si vuole risolvere.
+La domanda era se si potesse rendere la conversazione in tempo reale. **Si è deciso di
+no**, e nemmeno con un intervallo automatico: nel riquadro del thread ci va un bottone
+che rilegge, premuto da chi vuole.
 
-**Ricaricare a intervalli** costa quasi niente: il thread ha già una chiave propria
-(`keys.ticketMessages`) proprio perché invalidarlo non rilegga il dettaglio, e basta un
-`refetchInterval` mentre la segnalazione è aperta. Non è «live» — c'è un ritardo pari
-all'intervallo — ma per una conversazione fra due persone che si scrivono a ore di
-distanza è indistinguibile, e non aggiunge nessun pezzo all'architettura.
+È **solo client** e non aggiunge niente all'architettura: il thread ha già una chiave
+propria (`keys.ticketMessages`), scelta perché invalidarlo non rilegga anche il
+dettaglio, quindi il bottone è la sua `refetch`. Va progettato come tutto il resto —
+lo stato di caricamento c'è già, e il bottone si disabilita mentre rilegge.
 
-**Il tempo reale vero** vuole una connessione tenuta aperta. Fra le due vie, `SSE` è la
-più adatta di WebSocket: il flusso è a senso unico, server verso client, e passa dalla
-stessa origine dietro il reverse proxy senza aggiungere protocolli.
+**Perché sono state scartate le altre due**, e vale la pena lasciarlo scritto perché la
+domanda tornerà:
 
-Ha però **una complicazione che va vista prima di sceglierla, e non è tecnica**:
-`EventSource` non permette di aggiungere intestazioni, quindi non può portare
-l'`Authorization`. Restano due strade e una è da escludere: mettere il token
-**nell'URL** lo scriverebbe in cronologia, `Referer` e log dei proxy — esattamente
-l'argomento per cui in `C1` il codice d'invito non viaggia in un percorso
-([ADR-045](08-decisioni.md#adr-045)) — e per di più si tratterebbe dell'access token.
-L'altra è autenticare quel flusso **con il cookie**, che oggi esiste ma è il cookie del
-*refresh*, con il suo percorso e il suo scopo: usarlo per altro è una decisione di
-sicurezza a sé, non un dettaglio di trasporto.
+- **l'intervallo automatico** (`refetchInterval`) costa poco ma fa richieste che
+  nessuno ha chiesto, per una conversazione che nel prodotto vero procede a ore di
+  distanza. Un bottone dice la verità: i messaggi arrivano quando li si va a prendere;
+- **il tempo reale** (`SSE`, più adatto di WebSocket perché il flusso è a senso unico)
+  ha una complicazione che non è di trasporto ma di sicurezza: `EventSource` non può
+  mandare intestazioni, quindi niente `Authorization`. Il token **nell'URL** è escluso —
+  finirebbe in cronologia, `Referer` e log dei proxy, che è l'argomento per cui il
+  codice d'invito non viaggia in un percorso ([ADR-045](08-decisioni.md#adr-045)), e per
+  giunta si tratterebbe dell'access token. Autenticare con il cookie significherebbe
+  usare quello del *refresh* per altro, cioè una decisione di sicurezza a sé.
 
-C'è un terzo fatto che gioca a favore, il giorno in cui si volesse: **l'outbox degli
-eventi esiste già** e il worker lo drena, quindi una sorgente di notifiche da spingere
-c'è, e non andrebbe inventata.
-
-**Suggerimento**: se la domanda è «non voglio ricaricare la pagina», l'intervallo la
-chiude oggi e per zero rischio. Se la domanda è «voglio una chat», allora è una fetta a
-sé con un ADR sull'autenticazione del flusso, e conviene affrontarla dopo
-[R9](#raccolta-da-ordinare), che ridisegna comunque chi vede che cosa.
+Se un giorno servisse davvero, il pezzo che manca non è la sorgente: **l'outbox degli
+eventi esiste** e il worker lo drena. Manca la decisione sull'autenticazione del flusso,
+e conviene prenderla dopo [R9](#raccolta-da-ordinare), che ridisegna comunque chi vede
+che cosa.
 
 ### Cancellare, in generale
 
