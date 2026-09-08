@@ -368,6 +368,33 @@ questa sezione esiste: il criterio della fetta C non è la suite — che è verd
 senza mai aprire `curl`**. Finché quel giro non è stato fatto, «funziona» è
 un'affermazione che nessuno ha verificato.
 
+### Stato di avanzamento, all'8 settembre 2026
+
+**`T1`, `T2` e `T3` sono fatti; il giro no.** Chi riprende parte da `T4`, e l'ambiente è
+già quello che `T3` chiede.
+
+| Passo | Stato |
+|---|---|
+| `T1` | **fatto.** Il punto 10 corretto, e la rilettura ha trovato **il punto 4** con lo stesso difetto: «uno revocato e rifatto» si percorre senza mai presentare il codice revocato. Corretti entrambi in luogo, con le formulazioni vecchie conservate |
+| `T2` | **fatto.** Le otto occorrenze e la nota ad [ADR-023](08-decisioni.md#adr-023); il messaggio riletto davvero, con un ambiente incompleto |
+| `T3` | **fatto.** Volumi cancellati, database ricreato — 32 migration, invarianti tutte rispettate — bucket nuovo, `SECURE_COOKIES=false` già a posto. Che cosa è stato cancellato è annotato qui sotto |
+| `T4`–`T6` | **aperti.** Il giro non è stato percorso |
+| `T7` | **aperto**, perché è l'esito del giro |
+
+**Che cosa il `down-hard` ha portato via**, come la decisione 5 chiede di annotare:
+un'organizzazione (`AuraFact`), un utente, un immobile in bozza con due stanze, un
+contratto in bozza senza parti, una segnalazione aperta. Nessun documento, quindi nel
+bucket non c'era niente. L'evidenza di `R18` non c'era già più.
+
+**Il giro è cominciato e si è fermato al punto 2**, che ha già trovato un difetto —
+[`R26`](12-da-fare.md#lelenco), il filtro «Archiviato» che non può restituire niente — e
+questa è la dimostrazione più corta del perché la sezione esiste: il difetto è saltato
+fuori al secondo punto, camminando.
+
+**Che cosa serve per riprendere:** due account inquilino registrati, e le credenziali dei
+tre. La registrazione è il solo gesto che chi guida non può fare al posto di chi cammina,
+ed è anche il punto 1 e la prima metà del punto 5.
+
 ### Che cosa è stato deciso prima di pianificare
 
 | | Scelta | Alternativa scartata |
