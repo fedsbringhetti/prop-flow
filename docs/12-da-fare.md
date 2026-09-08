@@ -49,9 +49,45 @@ legge: questo file per sapere che cosa c'è, `09` per il piano della sezione in 
 l'esito in `11` della sezione appena chiusa per sapere che cosa è cambiato sotto i
 piedi. È la ragione per cui gli esiti si scrivono anche quando vanno bene.
 
+## L'ordine di esecuzione
+
+Deciso l'**8 settembre 2026**. Le voci si eseguono **per sezione, una per
+conversazione**: è il vincolo che ha deciso i raggruppamenti, e non l'argomento.
+
+Una sezione deve essere **autosufficiente** — chiudersi senza lasciare mezze cose a
+quella dopo — perché chi la esegue apre una sessione nuova che non ha visto le
+precedenti. Da qui due accorpamenti che per argomento non si farebbero:
+
+- **`R13`, `R17` e `R18` stanno insieme** perché sono un nodo, non tre voci: una quota
+  sbagliata non si corregge (`R17`), quindi il contratto non si attiva, quindi non si
+  elimina (`R13`), perché l'unica uscita sarebbe attivarlo. Prenderne una senza le
+  altre lascia il vicolo cieco aperto;
+- **`R7`, `R21` e `R22` hanno la stessa radice** — i DTO portano identificatori e
+  nessuna rotta risolve le persone — ma `R21` e `R22` restano con le segnalazioni,
+  dove si vedono. La sezione 5 va quindi eseguita **prima** della 6, o la 6 rifarà
+  quel lavoro.
+
+| | Sezione | Voci | Natura | Perché è lì |
+|---|---|---|---|---|
+| **1** | Ritocchi visibili | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Nessuna decisione aperta e nessuna dipendenza: è la sola sezione che si può eseguire senza discutere niente. Restituisce un prodotto più usabile per continuare a provarlo, che è il modo in cui queste voci stanno uscendo. `R4` è qui e non altrove perché tocca `AuthPage.tsx`, lo **stesso file** di `R5`: aprire quei due form una volta invece di due |
+| **2** | Le pendenze della fetta C | `R2` `R3` + il collaudo in undici punti | doc + due righe di backend | Chiude la fetta precedente invece di lasciarla a metà. `R2` è una correzione al testo del collaudo che va fatta **prima** di percorrerlo, o il punto 10 non prova ciò che dice |
+| **3** | Contratti: correggere gli errori | `R13` `R17` `R18` `R12` `R14` | backend | **Il nodo**, e il danno peggiore che esiste adesso: in database ci sono già contratti attivi con le quote sbagliate e nessun modo di correggerli. `R12` e `R14` entrano perché si toccano gli stessi handler |
+| **4** | Stati che nessuno aggiorna | `R1` `R11` `R25` | da decidere | Tre volte la stessa domanda — **derivato o scritto a mano?** — e conviene rispondere una volta sola. `R11` propende per derivato, `R1` per scritto, `R25` è una capacità che manca del tutto |
+| **5** | Segnalazioni | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Tre voci su sei sono già **decise**. Porta una migration (`R19`), due regole di dominio che mancano (`R23`, `R24`) e il primo pezzo del problema dei nomi (`R21`, `R22`) |
+| **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. Dopo la 5, che avrà già affrontato come si risolve un nome |
+| **7** | Cancellare, in generale | `R15` | client trasversale | Dopo la 3, perché finché un contratto non si elimina «elimina» non è un'operazione sola. Ha una decisione sua: che cosa significa il verbo su entità che si archiviano, si annullano o non si toccano, e che cosa vuol dire un esito parziale su N chiamate |
+| **8** | Il perimetro dei ruoli | `R9` | modello + ADR | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di sicurezza. **ADR prima del codice** |
+| **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
+
+**Si comincia dalla sezione 1.**
+
+L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
+riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
+alla conversazione successiva un contesto che non può ricostruire.
+
 ## L'elenco
 
-## Dal collaudo e dalla lettura del codice
+### Dal collaudo e dalla lettura del codice
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
@@ -60,7 +96,7 @@ piedi. È la ragione per cui gli esiti si scrivono anche quando vanno bene.
 | R3 | aperta | **Il messaggio di `C6` è invecchiato di un giorno** | Dice «nessuno lo carica da solo: lo fa la shell», e il `justfile` ora lo carica con `set dotenv-load`. Due righe in `crates/api/src/config.rs` |
 | R4 | aperta | **`zod` rende `/accesso` la rotta iniziale più pesante** | 543,4 kB (172,4 gz) contro i 438,7 (141,6) del riepilogo: un chunk da 107,9 kB che nessun'altra rotta iniziale tira, sulla prima schermata che vede un utente nuovo. Già in [Debiti tecnici noti](09-stato-e-roadmap.md#debiti-tecnici-noti). Il rimedio è non usarlo **su quei due form**, dove le regole sono un'email, dodici caratteri e un campo obbligatorio |
 
-## Interfaccia e prodotto
+### Interfaccia e prodotto
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
@@ -70,7 +106,7 @@ piedi. È la ragione per cui gli esiti si scrivono anche quando vanno bene.
 | R7 | aperta | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso |
 | R8 | aperta | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
 
-## Stati che nessuno aggiorna
+### Stati che nessuno aggiorna
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
@@ -86,7 +122,7 @@ Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui que
 - **che cosa fa la disdetta**, e che cosa fa un contratto futuro: una stanza con una locazione che comincia fra un mese oggi è `available`, e domani?
 - **`unavailable` resta manuale**, qualunque cosa si scelga: quello è un giudizio — una stanza in ristrutturazione — e non discende da nessun contratto. Un rimedio che derivi tutto lo cancellerebbe.
 
-## Contratti: creare, disfare, riconoscere
+### Contratti: creare, disfare, riconoscere
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
@@ -102,7 +138,7 @@ Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui que
 
 | R18 | aperta | **Una quota può finire a zero in silenzio**, e il contratto si attiva lo stesso | Vedi sotto: **osservato in database**, non dedotto |
 
-### R18 — come si arriva a un contratto attivo con i dati sbagliati
+#### R18 — come si arriva a un contratto attivo con i dati sbagliati
 
 Trovato durante il collaudo e verificato sulle righe vere. Su una stanza, un contratto **attivo** con due parti:
 
@@ -126,7 +162,7 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 
 **Da decidere, e sono domande distinte:** se il form debba proporre 100 solo quando la parte è davvero l'unica; se una quota a zero vada segnalata al momento in cui si invita, invece che scoperta dopo; se l'attivazione debba pretendere qualcosa di più della somma — per esempio che nessun inquilino sia a zero, o che l'intestatario principale abbia accettato. **La correzione a posteriori (R17) serve comunque**, perché i contratti già rotti esistono già.
 
-## Segnalazioni
+### Segnalazioni
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
@@ -138,13 +174,13 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 | R23 | aperta | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
 | R24 | aperta | **Riaprire dovrebbe chiedere il motivo** | `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un corpo. La chiusura invece ha già `resolution_notes`, quindi il precedente esiste e la simmetria è naturale. Se R23 si chiude vietando i messaggi dopo la chiusura, questa diventa **l'unica via** per dire «non è risolto», e allora il motivo non è un di più: è l'unica cosa che spiega perché la segnalazione è tornata viva |
 
-## Bollette
+### Bollette
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R25 | aperta | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#lelenco) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
 
-### Il thread non diventa live: un bottone «Aggiorna» — **deciso**
+#### Il thread non diventa live: un bottone «Aggiorna» — **deciso**
 
 La domanda era se si potesse rendere la conversazione in tempo reale. **Si è deciso di
 no**, e nemmeno con un intervallo automatico: nel riquadro del thread ci va un bottone
@@ -174,19 +210,19 @@ eventi esiste** e il worker lo drena. Manca la decisione sull'autenticazione del
 e conviene prenderla dopo [R9](#lelenco), che ridisegna comunque chi vede
 che cosa.
 
-## Cancellare, in generale
+### Cancellare, in generale
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R15 | aperta | **Selezionare righe in tabella e cancellarle in blocco**, e poter cancellare anche una sola riga | La parte di interfaccia è ripetibile — le tabelle passano già da `@/components/ui/table` — ma **«elimina» non è un'operazione sola**, ed è la cosa da sapere prima di disegnare un bottone unico: un immobile e una stanza si **archiviano** (`DELETE`, cancellazione soft), un addebito e una bolletta si **annullano** (`void`, che è un fatto contabile e non una cancellazione), un contratto oggi **non si tocca affatto** (R13). Un'azione di gruppo che chiami tutto «elimina» direbbe una cosa falsa su almeno due di questi. Va deciso anche che cosa fa una selezione multipla quando **una parte** fallisce: nessuna rotta accetta più identificatori, quindi sono N chiamate e un esito parziale è possibile |
 
-## Uscire da un'organizzazione
+### Uscire da un'organizzazione
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R16 | aperta | **Un inquilino deve poter uscire da un'organizzazione**, e l'operazione va negata se ha un contratto attivo | **Non esiste nessuna rotta**: su `/api/v1/organizations` c'è soltanto la `GET` che elenca le proprie. `app.org_members` ha però `status` e `deleted_at`, quindi l'uscita è già rappresentabile senza migration — è lo use case, la rotta e la regola a mancare. Il blocco richiesto è la parte interessante: «ha un contratto attivo» va verificato **e** garantito, e vale la lezione della `0029` sulle spese co-living, dove rendere l'uscita un confine vero ha richiesto una policy e non un `if`. Da decidere anche che cosa vede dopo: chi esce dall'unica organizzazione in cui abita resta con la propria, personale e vuota — cioè il caso di [ADR-045](08-decisioni.md#adr-045) al contrario |
 
-## Il perimetro dei ruoli — **la voce più grande della lista**
+### Il perimetro dei ruoli — **la voce più grande della lista**
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
@@ -226,62 +262,3 @@ almeno queste:
 
 Tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di
 sicurezza: è la voce che merita un ADR **prima** del codice, non dopo.
-
-
-## Prossimo passo suggerito
-
-**Il [collaudo della fetta C](11-piani-conclusi.md#esito-fetta-c)**, in undici punti, a
-mano, con due account e senza mai aprire `curl`. Non è una formalità dopo il lavoro: **è
-il criterio della fetta**, e il codice di `C1`–`C6` è scritto, verde e non ancora
-attraversato da nessuno.
-
-Il punto **10** — due finestre aperte insieme che non buttano fuori nessuno — è la prova
-di `C2`, e prima di questa fetta era **certo** che fallisse. Il punto **2** e il punto
-**4** provano `C4` e la revoca di `C1`, che prima non si potevano fare affatto.
-
-Quello che il giro trova va scritto nell'esito **anche se non si corregge**. Una fetta che
-chiude con «tutto bene» dopo un giro come quello è una fetta che il giro non l'ha fatto.
-
-**Poi**, e non prima, la fase [Prima degli utenti veri](09-stato-e-roadmap.md#prima-degli-utenti-veri): le
-notifiche per prime. Aprire a chi non ha scritto il codice è ciò che cambia il criterio
-d'ordine più sotto, ed è il collaudo a dire se si può.
-
-**Le fette A, B, B-bis e C sono concluse quanto al codice.** Il giro del denaro dal lato del proprietario è
-chiuso e l'insoluto scende; l'altra metà del prodotto esiste, e l'inquilino entra,
-vede che cosa deve, **dichiara di aver pagato**, segnala un guasto e ne segue il
-corso — e con la B-bis vede anche l'altra tasca, quella verso i coinquilini, che non
-passa affatto dal proprietario. I resoconti sono in fondo all'archivio:
-[fetta A](11-piani-conclusi.md#piano-completare-il-prodotto)
-· [esito](11-piani-conclusi.md#esito-completare-il-prodotto-fetta-a) ·
-[fetta B](11-piani-conclusi.md#piano-inquilino-fetta-b)
-· [esito](11-piani-conclusi.md#esito-inquilino-fetta-b) ·
-[fetta B-bis](11-piani-conclusi.md#piano-spese-co-living-fetta-b-bis) ·
-[fetta C](11-piani-conclusi.md#piano-fetta-c)
-· [esito](11-piani-conclusi.md#esito-fetta-c), **ancora aperto sul collaudo**.
-
-**Le notifiche vanno in fondo, e non sono più una fetta A-bis.** Erano i passi 9 e
-10 del piano archiviato, e la scelta era «prima o dopo la B». È stata sciolta: *dopo*,
-insieme a tutto il resto che serve solo a utenti veri. La ragione è nel criterio qui
-sotto.
-
-**Il co-living era provabile con dati veri solo dalla fetta B, ed è stato provato nella
-B-bis**: due account che entrano da un browser e vedono cose diverse è la condizione per
-accorgersi che un saldo è sbagliato, e con `curl` da entrambi i lati non lo sarebbe
-stato. La verifica che ha chiuso la fetta — un coinquilino che esce senza saldare e
-continua a comparire, **con il suo nome**, nei saldi che legge l'altro — non si sarebbe
-potuta fare prima.
-
-Le **due semantiche della dashboard** che erano rimaste aperte **sono state decise**:
-`written_off_total` è il nono numero, ed è il residuo e non l'importo; il credito da
-sovrapagamento resta fuori dal riepilogo e si evidenzia per addebito. Vedi
-[ADR-040](08-decisioni.md#adr-040).
-
-Il debito «nessun endpoint elenca le organizzazioni di un utente» — quello che la
-sezione [Cosa un client incontrerà per prime](09-stato-e-roadmap.md#cosa-un-client-incontrerà-per-prime)
-dava come primo — **è chiuso**: vedi [ADR-041](08-decisioni.md#adr-041). Resta aperto
-il suo gemello sulle **persone** di un'organizzazione, e resta aperto apposta: la
-fetta B ha verificato che quel menù sarebbe **vuoto**, perché un'organizzazione ha
-esattamente uno staff.
-
-Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
-quella qui sotto: **il fornitore di OCR**.
