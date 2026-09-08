@@ -280,197 +280,6 @@ cambia il contesto.
 | Un filtro parametrico su un enum non usa un indice parziale | Misurato, non dedotto: `($1::text IS NULL OR status = $1::app.payment_status)` **non** tocca `payments_pending_ix`, perché il cast `text → enum` passa da `enum_in`, che PostgreSQL dichiara `STABLE` e non `IMMUTABLE`, e non viene quindi ridotto a una costante. Il rimedio è nel repository dei pagamenti — una condizione ridondante che nomina il letterale — ed è **locale a quella query**. Ogni altro elenco del progetto usa lo stesso pattern parametrico su uno stato, e nessuno di quelli ha oggi un indice parziale da mancare | Quando un altro elenco filtrato per stato acquisisce un indice parziale. La misura e il rimedio stanno in [ADR-040](08-decisioni.md#adr-040) |
 | ~~Un `.env` più vecchio dello storage impedisce l'avvio dell'API~~ — **chiuso** dalla fetta C, `C6` | L'avvio fallisce ancora, ed è giusto che fallisca: **il rimedio non era un default**, perché uno storage configurato a caso sposta il fallimento al primo caricamento e lo fa somigliare a un problema di rete. È cambiato ciò che si legge: `AppConfig::load` distingue un'impostazione **mancante** da una **sbagliata**, e sulla prima dice che le variabili hanno prefisso `PROPFLOW__`, che l'elenco completo è in `.env.example`, e che nessuno lo carica da solo. Il messaggio di figment — quale campo, sotto quale chiave — resta nella catena delle cause | Chiuso, dopo tre occorrenze in tre fette |
 
-<a id="raccolta-da-ordinare"></a>
-
-## Raccolta da ordinare — **non è un piano**
-
-Cose emerse usando il prodotto e leggendo il codice, messe qui perché non si
-perdano. **Non sono decomposte, non sono ordinate e non sono decise**: diventano un
-piano quando si sceglie di farne una fetta, con il dettaglio che `CLAUDE.md` §3
-richiede. Tenerle qui in forma grezza è meglio che tenerle in una conversazione, ed
-è peggio che pianificarle: la differenza è dichiarata perché nessuno le prenda per
-lavoro istruito.
-
-Le note tecniche accanto a ciascuna sono **verificate**, non supposte: servono a chi
-pianificherà a non ripartire da zero.
-
-### Dal collaudo e dalla lettura del codice
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R1 | **Un immobile non esce mai da `draft`** | `PATCH /properties/{id}` accetta `status` (`UpdatePropertyRequest`), e **nessuna schermata lo manda**: né la creazione né `EditPropertyDialog`. Niente lo deriva, quindi l'etichetta resta sbagliata per sempre. **Non blocca nulla** — nessun use case guarda lo stato dell'immobile. Da chiudere è un `<Select>` nel dialogo. Nota di metodo: l'audit della fetta C non poteva trovarlo, perché confronta quali *funzioni* nessuno chiama e `updateProperty` **è** chiamata, solo mai con quel campo |
-| R2 | **Il punto 10 del collaudo non prova `C2` come è scritto** | Dice «il proprietario in una finestra, un inquilino nell'altra», e due account richiedono due contenitori di cookie: senza cookie condiviso non c'è contesa, e il punto passerebbe anche con il lock rimosso. La versione che lo esercita è **due schede dello stesso account nello stesso profilo, ricaricate insieme**. Correzione al testo in `11-piani-conclusi.md` |
-| R3 | **Il messaggio di `C6` è invecchiato di un giorno** | Dice «nessuno lo carica da solo: lo fa la shell», e il `justfile` ora lo carica con `set dotenv-load`. Due righe in `crates/api/src/config.rs` |
-| R4 | **`zod` rende `/accesso` la rotta iniziale più pesante** | 543,4 kB (172,4 gz) contro i 438,7 (141,6) del riepilogo: un chunk da 107,9 kB che nessun'altra rotta iniziale tira, sulla prima schermata che vede un utente nuovo. Già in [Debiti tecnici noti](#debiti-tecnici-noti). Il rimedio è non usarlo **su quei due form**, dove le regole sono un'email, dodici caratteri e un campo obbligatorio |
-
-### Interfaccia e prodotto
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R5 | **Mostrare la password**, in accesso e registrazione | `AuthPage.tsx`, i due `Input type="password"`. Il bottone va dentro il campo e deve restare raggiungibile da tastiera; l'etichetta cambia con lo stato e va nel catalogo, non nel JSX |
-| R10 | **La creazione di una stanza offre meno campi della modifica** | `NewRoomDialog` chiede nome, canone, superficie e bagno privato; `RoomDialog` — la modale di `C4` — aggiunge *arredata*, e il `POST` ne accetterebbe altri ancora. Chi crea una stanza non ha modo di sapere che il resto esiste, e nemmeno che si può correggere dopo: il nome è unico per immobile, quindi «tanto lo sistemo dopo» è proprio la cosa da dire, e non è detta. Da allineare i due form e a mettere la frase nel primo — la stringa non esiste ancora nel catalogo |
-| R6 | **La navigazione non si vede tutta**: su alcune schermate compare solo la metà superiore. Separatore e sezione dell'organizzazione vanno **in basso** | `#navigazione-principale` in `shell.tsx`. Oggi è un `<nav>` con la lista e, sotto, il selettore in un blocco `lg:block`: manca un'altezza piena con il selettore ancorato in fondo (`flex` in colonna, `min-h`, e la lista che scorre). Va guardato **anche a schermo stretto**, dove il menù è a scomparsa e il selettore sta già nella barra in alto |
-| R7 | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso |
-| R8 | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
-
-### Stati che nessuno aggiorna
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R11 | **Una stanza occupata resta «Disponibile»** | Osservato dalla scheda di un immobile: *Chi ci abita* mostra la persona **con la sua stanza**, e la tabella delle stanze accanto dice `available`. La causa non è di presentazione: `RoomStatus::Occupied` esiste nell'enum del dominio e in `app.room_status`, e **nessuno lo scrive mai** — nessun use case, nessun trigger. Il commento di `Room::create` in `crates/domain/src/property/room.rs` dichiara «lo stato passa a `Occupied` quando un contratto la impegna», e quella transizione **non è implementata**: è un invariante scritto e non mantenuto, che è peggio di uno assente perché chi legge il dominio lo dà per vero |
-
-**R11 e [R1](#raccolta-da-ordinare) sono la stessa famiglia** — un campo di stato che l'API accetta e che nessuno aggiorna — ma il rimedio non è lo stesso, e vale la pena non trattarli insieme senza deciderlo.
-
-Su un immobile lo stato è un giudizio di chi amministra, quindi un campo nel form è la risposta giusta. **Su una stanza no**: che sia occupata è un *fatto*, e discende dai contratti. Metterci una tendina significherebbe chiedere a una persona di ricordarsi di aggiornare a mano qualcosa che il database sa già — e `app.property_residents` della migration `0030` lo calcola di fatto, unendo `lease_parties` a `leases` e a `rooms` per contratti attivi.
-
-Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui questa voce non è un rimedio di due righe:
-
-- **derivato o scritto?** Una colonna aggiornata da un trigger sull'attivazione e sulla disdetta di un contratto, oppure uno stato calcolato al momento della lettura, che non può divergere ma non si può filtrare con un indice;
-- **che cosa fa la disdetta**, e che cosa fa un contratto futuro: una stanza con una locazione che comincia fra un mese oggi è `available`, e domani?
-- **`unavailable` resta manuale**, qualunque cosa si scelga: quello è un giudizio — una stanza in ristrutturazione — e non discende da nessun contratto. Un rimedio che derivi tutto lo cancellerebbe.
-
-### Contratti: creare, disfare, riconoscere
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R12 | **Avvertire della sovrapposizione alla creazione**, non solo all'attivazione: se in quel periodo c'è già un contratto, «Crea» chiede una conferma in più | **È una modifica di solo client**, ed è la scoperta che rende la voce piccola. I due vincoli `leases_no_overlap_property` e `leases_no_overlap_room` della `0005` hanno una `WHERE` che copre `pending_signature`, `active` ed `expiring` — **e non `draft`**: le bozze sono escluse *apposta*, perché una bozza è lavoro in corso e due bozze che si sovrappongono sono legittime. Il `409` all'attivazione è quindi corretto e resta; quello che manca è dirlo prima, e il client può saperlo con `listLeases` filtrato sull'immobile confrontando i periodi. **Non toccare i vincoli**: allargarli a `draft` vieterebbe di abbozzare due ipotesi alternative sullo stesso periodo |
-| R13 | **Un contratto creato per sbaglio non si elimina**: l'unica via è attivarlo e disdirlo | Le rotte dei contratti sono cinque — `POST /leases`, `GET /leases`, `GET /leases/{id}`, `POST .../parties`, `POST .../activate`, `POST .../terminate` — e **non c'è una `DELETE`**. La colonna `deleted_at` c'è, quindi il livello dati regge già la cancellazione soft: manca lo use case e la rotta. Da decidere **quali stati** siano archiviabili: una bozza certamente; un contratto attivo no, perché per quello la via è la disdetta, che è un fatto diverso e lascia traccia |
-| R14 | **Dare un nome ai contratti**, perché in tabella sono tutti uguali | `app.leases` **non ha una colonna nome**: ci sono `notes` e `registration_number`, e l'elenco mostra tipo più data, da cui le righe identiche. Ci sono due vie e vanno pesate insieme, non scelte per prima: (a) una colonna `label`, cioè migration, dominio, DTO e form; (b) comporre l'etichetta da ciò che il contratto già è — immobile e stanza — che **non è gratis**, perché il DTO `Lease` porta `property_id` e `room_id` e **nessun nome**, quindi vorrebbe dire allargare la risposta o fare una richiesta per riga. La (b) risolve «sono tutti uguali»; solo la (a) permette di chiamarlo *«Rossi, secondo piano»* |
-
-| R17 | **Le parti contrattuali non si modificano dopo**, nemmeno da chi amministra | C'è **solo** `POST /leases/{id}/parties`: nessuna `PATCH`, nessuna `DELETE`. Una parte si aggiunge e resta com'è — nome, email, telefono, ruolo, quota, intestatario principale. `app.lease_parties` ha però sia `left_at` sia `deleted_at`, quindi correggere e togliere sono **già rappresentabili** senza migration: mancano gli use case e le rotte |
-
-**R17 e R13 insieme fanno un vicolo cieco, e va visto prima di stimarli separatamente.** L'attivazione pretende che le quote degli inquilini sommino a 100 (`lease.shares_not_hundred`). Se una parte viene inserita con la quota sbagliata: non la si può correggere (R17), quindi il contratto non si attiva; e non lo si può eliminare (R13), perché la sola uscita sarebbe attivarlo e disdirlo — che è precisamente ciò che non riesce. **Il contratto resta lì per sempre**, non attivabile e non rimovibile, e l'unico rimedio è rifarlo daccapo lasciando in elenco quello rotto — che con R14 non ancora fatto è pure indistinguibile dal buono.
-
-È la ragione per cui queste due, se si sceglie di farle, conviene farle nella stessa fetta.
-
-| R18 | **Una quota può finire a zero in silenzio**, e il contratto si attiva lo stesso | Vedi sotto: **osservato in database**, non dedotto |
-
-#### R18 — come si arriva a un contratto attivo con i dati sbagliati
-
-Trovato durante il collaudo e verificato sulle righe vere. Su una stanza, un contratto **attivo** con due parti:
-
-| parte | quota | intestatario | ha accettato |
-|---|---|---|---|
-| `inq2` | **100,00** | sì | **no** |
-| `inq3` | **0,00** | no | sì |
-
-Cioè: **l'inquilino che è entrato davvero non deve niente, e il 100% è di qualcuno che non ha mai accettato.** Il contratto è `active`, quindi ha superato ogni controllo.
-
-**Il backend non è ingenuo, ed è importante saperlo prima di "aggiustarlo" nel posto sbagliato.** `InviteTenant` non mette una quota fissa: chiama `remaining_share(&parties)`, che è `100 − assegnato` con il minimo a zero (`crates/application/src/use_cases/invitation/invite_tenant.rs`). È la scelta giusta — si invita il secondo inquilino e prende ciò che resta.
-
-Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sbagliata da sola:
-
-1. `AddPartyDialog` propone `share_percent: '100'` e `is_primary: true`. Chi aggiunge la **prima** parte si prende quindi tutto, e nel co-living la prima parte non è l'unica;
-2. ogni invito successivo riceve `remaining_share`, che a quel punto è **zero**, e nessuno lo dice: né il form dell'invito, né la modale che consegna il codice, né l'elenco delle parti, che mostra `0,00 %` come un dato qualunque;
-3. **l'attivazione verifica la somma, non il senso**: `100 + 0 = 100` passa, e la parte che regge quel 100 può essere una che non ha mai accettato l'invito. `lease.shares_not_hundred` non ha nulla da eccepire;
-4. **niente di tutto questo si corregge dopo** ([R17](#raccolta-da-ordinare)): non si cambia una quota, non si toglie una parte.
-
-**Le conseguenze non restano nel contratto.** `app.property_residents` proietta le parti dei contratti attivi, quindi la parte fantasma compare fra **chi abita l'immobile** — con il suo nome, accanto all'inquilino vero. Ed è anche una parte che, se un giorno accettasse, si troverebbe intestataria del 100%.
-
-**Da decidere, e sono domande distinte:** se il form debba proporre 100 solo quando la parte è davvero l'unica; se una quota a zero vada segnalata al momento in cui si invita, invece che scoperta dopo; se l'attivazione debba pretendere qualcosa di più della somma — per esempio che nessun inquilino sia a zero, o che l'intestatario principale abbia accettato. **La correzione a posteriori (R17) serve comunque**, perché i contratti già rotti esistono già.
-
-### Segnalazioni
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R19 | **La visibilità di una segnalazione diventa una scelta di chi la apre** — casella *«visibile a tutti gli inquilini»* — e il comportamento di oggi resta il default | **Decisa.** Oggi non è un difetto ma la policy: `app.can_access_ticket` (`0014`) concede a staff, a chi l'ha aperta, a chi l'ha in carico, e a `t.lease_id IS NOT NULL AND can_access_lease(...)` — quindi una segnalazione sull'immobile intero, che non ha contratto, resta privata. **Quel default resta**, e si aggiunge una scelta esplicita per il caso vero: la caldaia condominiale interessa a tutti. Serve una colonna su `app.tickets`, un `ALTER POLICY` con un ramo in più, il campo nel DTO e la casella nel form — quindi **una migration**, e non un filtro applicativo: la visibilità è un confine del database. Il predicato «chi guarda abita in questo immobile» va scelto fra ciò che la `0030` ha già introdotto (`app.shares_home_with`, `app.property_residents`) invece di scriverne un terzo. Da decidere se la casella si possa cambiare dopo l'apertura, il che la lega a R19-bis |
-| R19-bis | **Chi ha aperto una segnalazione può modificarla finché nessuno l'ha presa in carico** | **Decisa.** La forma della regola **esiste già** ed è quella dell'annullamento: lo staff sempre, chi ha segnalato **solo finché è `open`** — «finché nessuno ci ha messo mano». Qui vale lo stesso confine, cioè fino ad `assigned`. La trappola sta nella rotta: **`PATCH /tickets/{id}` esiste già** ma è `update_costs`, ed è **solo staff** e sui soli campi di costo. Allargarla significherebbe una rotta con due autorizzazioni diverse a seconda dei campi presenti — costi allo staff, testo a chi ha segnalato — che è il genere di cosa che si sbaglia in silenzio. Da decidere: allargare con attenzione o una rotta a sé, e **quali campi** siano modificabili (titolo e descrizione sì; categoria e priorità sono il lavoro del triage, che è dello staff) |
-| R20 | **«Prendi in carico» si nasconde a chi l'ha già presa in carico** | **Decisa, ed è solo client.** Oggi `assignable = open \|\| triaged \|\| assigned` in `TicketActions.tsx`: `assigned` è nell'elenco perché il bottone serve anche a **riassegnare**, e per questo non si toglie del tutto — sparisce quando `ticket.assigned_to` è chi guarda. Chi la vede assegnata a un altro continua a poterla prendere |
-| R21 | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo di [R14](#raccolta-da-ordinare): i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
-| R22 | **Nel thread non si capisce chi scrive**: si vorrebbe ruolo e nome — *Proprietario · Mario Rossi* | Stesso ceppo di R21: i messaggi portano l'autore come identificatore. Il **ruolo** però è più economico del nome — si deduce da chi è staff — e da solo risolve gran parte della domanda («me lo dice il proprietario o un coinquilino?»). Vale la pena separare le due metà: il ruolo si può fare senza toccare l'API, il nome no |
-| R23 | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
-| R24 | **Riaprire dovrebbe chiedere il motivo** | `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un corpo. La chiusura invece ha già `resolution_notes`, quindi il precedente esiste e la simmetria è naturale. Se R23 si chiude vietando i messaggi dopo la chiusura, questa diventa **l'unica via** per dire «non è risolto», e allora il motivo non è un di più: è l'unica cosa che spiega perché la segnalazione è tornata viva |
-
-### Bollette
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R25 | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#raccolta-da-ordinare) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
-
-#### Il thread non diventa live: un bottone «Aggiorna» — **deciso**
-
-La domanda era se si potesse rendere la conversazione in tempo reale. **Si è deciso di
-no**, e nemmeno con un intervallo automatico: nel riquadro del thread ci va un bottone
-che rilegge, premuto da chi vuole.
-
-È **solo client** e non aggiunge niente all'architettura: il thread ha già una chiave
-propria (`keys.ticketMessages`), scelta perché invalidarlo non rilegga anche il
-dettaglio, quindi il bottone è la sua `refetch`. Va progettato come tutto il resto —
-lo stato di caricamento c'è già, e il bottone si disabilita mentre rilegge.
-
-**Perché sono state scartate le altre due**, e vale la pena lasciarlo scritto perché la
-domanda tornerà:
-
-- **l'intervallo automatico** (`refetchInterval`) costa poco ma fa richieste che
-  nessuno ha chiesto, per una conversazione che nel prodotto vero procede a ore di
-  distanza. Un bottone dice la verità: i messaggi arrivano quando li si va a prendere;
-- **il tempo reale** (`SSE`, più adatto di WebSocket perché il flusso è a senso unico)
-  ha una complicazione che non è di trasporto ma di sicurezza: `EventSource` non può
-  mandare intestazioni, quindi niente `Authorization`. Il token **nell'URL** è escluso —
-  finirebbe in cronologia, `Referer` e log dei proxy, che è l'argomento per cui il
-  codice d'invito non viaggia in un percorso ([ADR-045](08-decisioni.md#adr-045)), e per
-  giunta si tratterebbe dell'access token. Autenticare con il cookie significherebbe
-  usare quello del *refresh* per altro, cioè una decisione di sicurezza a sé.
-
-Se un giorno servisse davvero, il pezzo che manca non è la sorgente: **l'outbox degli
-eventi esiste** e il worker lo drena. Manca la decisione sull'autenticazione del flusso,
-e conviene prenderla dopo [R9](#raccolta-da-ordinare), che ridisegna comunque chi vede
-che cosa.
-
-### Cancellare, in generale
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R15 | **Selezionare righe in tabella e cancellarle in blocco**, e poter cancellare anche una sola riga | La parte di interfaccia è ripetibile — le tabelle passano già da `@/components/ui/table` — ma **«elimina» non è un'operazione sola**, ed è la cosa da sapere prima di disegnare un bottone unico: un immobile e una stanza si **archiviano** (`DELETE`, cancellazione soft), un addebito e una bolletta si **annullano** (`void`, che è un fatto contabile e non una cancellazione), un contratto oggi **non si tocca affatto** (R13). Un'azione di gruppo che chiami tutto «elimina» direbbe una cosa falsa su almeno due di questi. Va deciso anche che cosa fa una selezione multipla quando **una parte** fallisce: nessuna rotta accetta più identificatori, quindi sono N chiamate e un esito parziale è possibile |
-
-### Uscire da un'organizzazione
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R16 | **Un inquilino deve poter uscire da un'organizzazione**, e l'operazione va negata se ha un contratto attivo | **Non esiste nessuna rotta**: su `/api/v1/organizations` c'è soltanto la `GET` che elenca le proprie. `app.org_members` ha però `status` e `deleted_at`, quindi l'uscita è già rappresentabile senza migration — è lo use case, la rotta e la regola a mancare. Il blocco richiesto è la parte interessante: «ha un contratto attivo» va verificato **e** garantito, e vale la lezione della `0029` sulle spese co-living, dove rendere l'uscita un confine vero ha richiesto una policy e non un `if`. Da decidere anche che cosa vede dopo: chi esce dall'unica organizzazione in cui abita resta con la propria, personale e vuota — cioè il caso di [ADR-045](08-decisioni.md#adr-045) al contrario |
-
-### Il perimetro dei ruoli — **la voce più grande della lista**
-
-| # | Cosa | Quel che si sa già |
-|---|---|---|
-| R9 | **Separare inquilini e proprietari**: accesso unico, **registrazione libera solo per gli inquilini**; un proprietario si fa verificare fuori dal prodotto e riceve un invito per registrarsi. Un inquilino non deve poter creare immobili | Vedi sotto: non è una fetta di client |
-
-**R9 non si chiude nascondendo un bottone**, e va detto prima che qualcuno ci provi.
-
-L'unico caso d'uso di registrazione che esiste si chiama `RegisterOwner`
-(`crates/application/src/use_cases/auth/register_owner.rs`) e crea **sempre**
-un'organizzazione personale con `OrgRole::Owner`: `Organization::personal(...)` e
-`OrgMember::active(..., OrgRole::Owner, ...)`. Ne segue che **ogni utente registrato
-è owner di una propria organizzazione**, quindi un inquilino che si iscrive da sé, in
-casa propria, è staff — e lì può creare immobili legittimamente, perché la Row Level
-Security e `ensure_staff` glielo concedono.
-
-Il client oggi fa la cosa giusta e non basta: `useIsStaff()` toglie *Immobili* dalla
-navigazione e nasconde «Registra un immobile» ([ADR-042](08-decisioni.md#adr-042)),
-ma è una scelta di **cosa offrire** e non un confine — ed è scritto proprio così
-nell'ADR. Nella propria organizzazione quel ramo dice `owner`, e il bottone ricompare
-a ragione.
-
-Quindi R9 tocca il **modello**, non la presentazione, e le domande da sciogliere sono
-almeno queste:
-
-- un utente che nasce inquilino **ha** un'organizzazione propria? Se no, che cosa
-  vede prima di accettare un invito, dato che oggi ogni elenco ha bisogno di
-  `X-Org-Id`? Se sì, in che ruolo?
-- l'invito che oggi esiste (`org_invitations`) porta l'appartenenza a
-  un'organizzazione **esistente** e conferisce solo `tenant` — vincolo nel dominio e
-  ripetuto nella policy. Un invito che *crea* un proprietario con la sua
-  organizzazione è un'altra cosa e non esiste;
-- come si verifica un proprietario, e dove vive quello stato: fuori dal prodotto —
-  una email, una decisione manuale — oppure dentro, con una colonna e una
-  transizione;
-- che cosa succede agli utenti già registrati, che sono tutti owner della propria
-  organizzazione.
-
-Tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di
-sicurezza: è la voce che merita un ADR **prima** del codice, non dopo.
-
-
 ## Prossimo passo suggerito
 
 **Il [collaudo della fetta C](11-piani-conclusi.md#esito-fetta-c)**, in undici punti, a
@@ -528,6 +337,22 @@ esattamente uno staff.
 
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
+
+<a id="raccolta-da-ordinare"></a>
+
+## Da fare — l'elenco sta in [12](12-da-fare.md)
+
+Le cose da sistemare e da costruire — **ventisei voci**, raccolte usando il prodotto e
+leggendo il codice — hanno un file loro: [12 — Da fare](12-da-fare.md).
+
+**Stanno lì e non qui per una ragione di ciclo di vita**, che è il criterio con cui
+questi documenti si dividono: `09` si riscrive a ogni fetta, e una raccolta che vive
+dentro il piano in corso viene cancellata insieme a esso. `12` invece cresce e si svuota
+di continuo, una voce alla volta.
+
+Quel file **non è un piano** e lo dichiara: le voci sono riconosciute e non istruite. Il
+piano di una sezione si scrive **qui**, quando si sceglie di eseguirla, e poi si archivia
+in [11](11-piani-conclusi.md) con il suo esito.
 
 ### Il criterio d'ordine, finché a provare è chi costruisce
 
