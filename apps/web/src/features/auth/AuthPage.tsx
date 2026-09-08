@@ -1,10 +1,8 @@
-import { zodResolver } from '@hookform/resolvers/zod'
 import { Eye, EyeOff } from 'lucide-react'
 import type { ComponentProps } from 'react'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
-import { z } from 'zod'
 
 import { ApiError, fieldErrorFor } from '@/api/problem'
 import { InlineError } from '@/components/state'
@@ -14,23 +12,40 @@ import { t } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/app/session'
 
-const loginSchema = z.object({
-  email: z.email({ message: t.validation.email }),
-  password: z.string().min(1, t.validation.required),
-})
+/**
+ * **Questi due form non usano `zod`, e sono gli unici.**
+ *
+ * `NewLeasePage`, `NewPropertyPage` e `NewBillPage` validano con `zodResolver`, e
+ * la coerenza direbbe di fare lo stesso anche qui. Non si fa apposta: quelle sono
+ * rotte **pigre**, e il loro peso non è sulla prima visita; `/accesso` invece è la
+ * prima schermata che un utente nuovo vede, senza niente in cache, e `zod` era un
+ * chunk da 107,9 kB (32,5 gz) che nessun'altra rotta iniziale tirava dentro.
+ *
+ * Le regole di questi form sono tre — un'email formalmente valida, dodici
+ * caratteri di password, dei campi obbligatori — e `react-hook-form` le esprime da
+ * sé. Chi passasse di qui per «uniformare» rimetterebbe il chunk esattamente dove
+ * costa di più.
+ *
+ * L'espressione dell'email è **volutamente larga**: serve a fermare un refuso
+ * evidente prima del giro di rete, non a decidere che cosa sia un indirizzo — quello
+ * lo dice il server, che resta l'autorità.
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-const registerSchema = z.object({
-  email: z.email({ message: t.validation.email }),
-  fullName: z.string().min(1, t.validation.required),
-  // Dodici caratteri, come la policy del server: verificarlo qui evita un giro
-  // di rete per dire una cosa che si sa già, e **non** sostituisce il controllo
-  // del server, che resta l'autorità.
-  password: z.string().min(12, t.validation.passwordTooShort),
-  organizationName: z.string().optional(),
-})
+/** Dodici caratteri, come la policy del server. */
+const PASSWORD_MIN_LENGTH = 12
 
-type LoginValues = z.infer<typeof loginSchema>
-type RegisterValues = z.infer<typeof registerSchema>
+interface LoginValues {
+  email: string
+  password: string
+}
+
+interface RegisterValues {
+  email: string
+  fullName: string
+  password: string
+  organizationName: string
+}
 
 function AuthFrame({
   title,
@@ -98,7 +113,6 @@ export function LoginPage() {
   const { store } = useSession()
   const [error, setError] = useState<unknown>(null)
   const form = useForm<LoginValues>({
-    resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
   })
 
@@ -130,7 +144,10 @@ export function LoginPage() {
           {(props) => (
             <Input
               {...props}
-              {...form.register('email')}
+              {...form.register('email', {
+                required: t.validation.required,
+                pattern: { value: EMAIL_PATTERN, message: t.validation.email },
+              })}
               type="email"
               autoComplete="email"
               autoFocus
@@ -141,7 +158,7 @@ export function LoginPage() {
           {(props) => (
             <PasswordInput
               {...props}
-              {...form.register('password')}
+              {...form.register('password', { required: t.validation.required })}
               autoComplete="current-password"
             />
           )}
@@ -159,7 +176,6 @@ export function RegisterPage() {
   const navigate = useNavigate()
   const [error, setError] = useState<unknown>(null)
   const form = useForm<RegisterValues>({
-    resolver: zodResolver(registerSchema),
     defaultValues: { email: '', fullName: '', password: '', organizationName: '' },
   })
 
@@ -205,12 +221,25 @@ export function RegisterPage() {
         <InlineError error={error} />
         <Field label={t.auth.fullName} error={form.formState.errors.fullName?.message} required>
           {(props) => (
-            <Input {...props} {...form.register('fullName')} autoComplete="name" autoFocus />
+            <Input
+              {...props}
+              {...form.register('fullName', { required: t.validation.required })}
+              autoComplete="name"
+              autoFocus
+            />
           )}
         </Field>
         <Field label={t.auth.email} error={form.formState.errors.email?.message} required>
           {(props) => (
-            <Input {...props} {...form.register('email')} type="email" autoComplete="email" />
+            <Input
+              {...props}
+              {...form.register('email', {
+                required: t.validation.required,
+                pattern: { value: EMAIL_PATTERN, message: t.validation.email },
+              })}
+              type="email"
+              autoComplete="email"
+            />
           )}
         </Field>
         <Field
@@ -222,7 +251,13 @@ export function RegisterPage() {
           {(props) => (
             <PasswordInput
               {...props}
-              {...form.register('password')}
+              {...form.register('password', {
+                required: t.validation.required,
+                // Verificarlo qui evita un giro di rete per dire una cosa che si
+                // sa già, e **non** sostituisce il controllo del server, che resta
+                // l'autorità.
+                minLength: { value: PASSWORD_MIN_LENGTH, message: t.validation.passwordTooShort },
+              })}
               autoComplete="new-password"
             />
           )}
