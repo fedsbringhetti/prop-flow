@@ -190,6 +190,8 @@ export const it = {
     privateBathroom: 'Bagno privato',
     furnished: 'Arredata',
     status: 'Stato',
+    /** L'unica superficie che una stanza abbia: `GET /rooms/{id}` non esiste. */
+    dialogExplain: 'Correggi i dati della stanza, o archiviala per liberarne il nome.',
     archive: 'Archivia la stanza',
     archiveConfirm: 'Archiviare questa stanza?',
     archiveExplain: 'Il nome torna libero per una stanza nuova. La traccia resta.',
