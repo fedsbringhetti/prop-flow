@@ -280,6 +280,8 @@ cambia il contesto.
 | Un filtro parametrico su un enum non usa un indice parziale | Misurato, non dedotto: `($1::text IS NULL OR status = $1::app.payment_status)` **non** tocca `payments_pending_ix`, perché il cast `text → enum` passa da `enum_in`, che PostgreSQL dichiara `STABLE` e non `IMMUTABLE`, e non viene quindi ridotto a una costante. Il rimedio è nel repository dei pagamenti — una condizione ridondante che nomina il letterale — ed è **locale a quella query**. Ogni altro elenco del progetto usa lo stesso pattern parametrico su uno stato, e nessuno di quelli ha oggi un indice parziale da mancare | Quando un altro elenco filtrato per stato acquisisce un indice parziale. La misura e il rimedio stanno in [ADR-040](08-decisioni.md#adr-040) |
 | ~~Un `.env` più vecchio dello storage impedisce l'avvio dell'API~~ — **chiuso** dalla fetta C, `C6` | L'avvio fallisce ancora, ed è giusto che fallisca: **il rimedio non era un default**, perché uno storage configurato a caso sposta il fallimento al primo caricamento e lo fa somigliare a un problema di rete. È cambiato ciò che si legge: `AppConfig::load` distingue un'impostazione **mancante** da una **sbagliata**, e sulla prima dice che le variabili hanno prefisso `PROPFLOW__`, che l'elenco completo è in `.env.example`, e che nessuno lo carica da solo. Il messaggio di figment — quale campo, sotto quale chiave — resta nella catena delle cause | Chiuso, dopo tre occorrenze in tre fette |
 
+<a id="raccolta-da-ordinare"></a>
+
 ## Raccolta da ordinare — **non è un piano**
 
 Cose emerse usando il prodotto e leggendo il codice, messe qui perché non si
@@ -306,9 +308,26 @@ pianificherà a non ripartire da zero.
 | # | Cosa | Quel che si sa già |
 |---|---|---|
 | R5 | **Mostrare la password**, in accesso e registrazione | `AuthPage.tsx`, i due `Input type="password"`. Il bottone va dentro il campo e deve restare raggiungibile da tastiera; l'etichetta cambia con lo stato e va nel catalogo, non nel JSX |
+| R10 | **La creazione di una stanza offre meno campi della modifica** | `NewRoomDialog` chiede nome, canone, superficie e bagno privato; `RoomDialog` — la modale di `C4` — aggiunge *arredata*, e il `POST` ne accetterebbe altri ancora. Chi crea una stanza non ha modo di sapere che il resto esiste, e nemmeno che si può correggere dopo: il nome è unico per immobile, quindi «tanto lo sistemo dopo» è proprio la cosa da dire, e non è detta. Da allineare i due form e a mettere la frase nel primo — la stringa non esiste ancora nel catalogo |
 | R6 | **La navigazione non si vede tutta**: su alcune schermate compare solo la metà superiore. Separatore e sezione dell'organizzazione vanno **in basso** | `#navigazione-principale` in `shell.tsx`. Oggi è un `<nav>` con la lista e, sotto, il selettore in un blocco `lg:block`: manca un'altezza piena con il selettore ancorato in fondo (`flex` in colonna, `min-h`, e la lista che scorre). Va guardato **anche a schermo stretto**, dove il menù è a scomparsa e il selettore sta già nella barra in alto |
 | R7 | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso |
 | R8 | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
+
+### Stati che nessuno aggiorna
+
+| # | Cosa | Quel che si sa già |
+|---|---|---|
+| R11 | **Una stanza occupata resta «Disponibile»** | Osservato dalla scheda di un immobile: *Chi ci abita* mostra la persona **con la sua stanza**, e la tabella delle stanze accanto dice `available`. La causa non è di presentazione: `RoomStatus::Occupied` esiste nell'enum del dominio e in `app.room_status`, e **nessuno lo scrive mai** — nessun use case, nessun trigger. Il commento di `Room::create` in `crates/domain/src/property/room.rs` dichiara «lo stato passa a `Occupied` quando un contratto la impegna», e quella transizione **non è implementata**: è un invariante scritto e non mantenuto, che è peggio di uno assente perché chi legge il dominio lo dà per vero |
+
+**R11 e [R1](#raccolta-da-ordinare) sono la stessa famiglia** — un campo di stato che l'API accetta e che nessuno aggiorna — ma il rimedio non è lo stesso, e vale la pena non trattarli insieme senza deciderlo.
+
+Su un immobile lo stato è un giudizio di chi amministra, quindi un campo nel form è la risposta giusta. **Su una stanza no**: che sia occupata è un *fatto*, e discende dai contratti. Metterci una tendina significherebbe chiedere a una persona di ricordarsi di aggiornare a mano qualcosa che il database sa già — e `app.property_residents` della migration `0030` lo calcola di fatto, unendo `lease_parties` a `leases` e a `rooms` per contratti attivi.
+
+Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui questa voce non è un rimedio di due righe:
+
+- **derivato o scritto?** Una colonna aggiornata da un trigger sull'attivazione e sulla disdetta di un contratto, oppure uno stato calcolato al momento della lettura, che non può divergere ma non si può filtrare con un indice;
+- **che cosa fa la disdetta**, e che cosa fa un contratto futuro: una stanza con una locazione che comincia fra un mese oggi è `available`, e domani?
+- **`unavailable` resta manuale**, qualunque cosa si scelga: quello è un giudizio — una stanza in ristrutturazione — e non discende da nessun contratto. Un rimedio che derivi tutto lo cancellerebbe.
 
 ### Il perimetro dei ruoli — **la voce più grande della lista**
 
