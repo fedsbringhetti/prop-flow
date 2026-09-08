@@ -25,9 +25,10 @@ Due avvertenze che nascono da come il file viene caricato, entrambe in
   `/app/config`. Avviata altrove il file semplicemente non c'è: le quattro
   impostazioni obbligatorie falliscono rumorosamente, tutte le altre ripiegano in
   silenzio sui default del codice, che non sono per forza quelli di questa tabella.
-- **`.env` non lo legge nessuno.** Nessun crate dipende da `dotenvy` e
-  `docker-compose.yml` dichiara le variabili inline. È un file da dare alla shell —
-  `set -a; source .env; set +a` — non una sorgente di configurazione.
+- **`.env` non lo legge nessun processo.** Nessun crate dipende da `dotenvy` e
+  `docker-compose.yml` dichiara le variabili inline. Lo carica chi avvia: `just`, che ha
+  `set dotenv-load`, o la shell con `set -a; source .env; set +a` per chi lancia un
+  binario a mano. Resta un file per l'ambiente, non una sorgente di configurazione.
 
 ### Impostazioni dell'API e del worker
 
@@ -66,9 +67,9 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 **Un'impostazione obbligatoria che manca ferma l'avvio, e lo dice.** `AppConfig::load`
 distingue un'impostazione **mancante** da una **sbagliata**: sulla prima il messaggio
 ricorda il prefisso `PROPFLOW__`, rimanda a `.env.example` per l'elenco completo, e
-ricorda che quel file nessuno lo carica da solo — lo fa la shell, con
-`set -a; source .env; set +a`. Il messaggio di figment, che dice quale campo e sotto
-quale chiave, resta nella catena delle cause.
+ricorda che quel file il processo non lo carica da solo — lo fa `just`, o la shell con
+`set -a; source .env; set +a` per chi lancia il binario a mano. Il messaggio di figment,
+che dice quale campo e sotto quale chiave, resta nella catena delle cause.
 
 Non c'è un default per le credenziali dello storage, ed è deliberato: uno storage
 configurato a caso sposterebbe il fallimento al primo caricamento di un documento, dove

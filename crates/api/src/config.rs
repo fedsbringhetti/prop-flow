@@ -17,8 +17,10 @@ use figment::providers::{Env, Format, Toml};
 /// default qui sotto. Non c'è un avviso perché la configurazione si carica prima
 /// della telemetria: vedi `docs/08-decisioni.md#adr-023`.
 ///
-/// `.env` non lo legge nessuno: lo carica la shell (`set -a; source .env; set +a`),
-/// stesso ADR.
+/// `.env` non lo legge **questo processo**: lo carica chi lo avvia — `just`, che ha
+/// `set dotenv-load`, o la shell con `set -a; source .env; set +a` per chi lancia il
+/// binario a mano. Stesso ADR: resta un file per l'ambiente, non una sorgente di
+/// configurazione.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -171,8 +173,9 @@ pub enum ConfigError {
     #[error(
         "manca un'impostazione obbligatoria.\n         Le variabili hanno prefisso PROPFLOW__ e il doppio underscore separa i \
          livelli (PROPFLOW__STORAGE__ACCESS_KEY_ID).\n         L'elenco completo, con valori buoni per lo sviluppo locale, è in \
-         .env.example — che nessuno carica da solo: lo fa la shell, con \
-         `set -a; source .env; set +a`.\n         Un .env copiato prima di una fetta che ha aggiunto impostazioni non le \
+         .env.example — che il processo non carica da solo: lo fa `just` (che ha \
+         set dotenv-load), oppure la shell con `set -a; source .env; set +a` se stai \
+         lanciando il binario a mano.\n         Un .env copiato prima di una fetta che ha aggiunto impostazioni non le \
          ha: confrontalo con .env.example."
     )]
     Incomplete {

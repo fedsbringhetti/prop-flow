@@ -294,7 +294,7 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 docker compose up -d postgres minio minio-setup   # minio: storage dei documenti
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
 cp .env.example .env                    # poi adattare
-set -a; source .env; set +a             # nessuno lo carica da solo: lo fa la shell
+set -a; source .env; set +a             # solo se lanci a mano: `just` lo carica da sé
 cargo run -p propflow-migrator
 cargo run -p propflow-api               # Swagger UI su http://localhost:8080/docs
 cargo run -p propflow-worker            # dispatcher dell'outbox

@@ -714,6 +714,22 @@ sta in `/app/config`. Altrove il file non viene trovato e figment lo salta senza
 protestare, perché è dichiarato opzionale: le quattro impostazioni obbligatorie
 falliscono rumorosamente, le altre ripiegano sui default del codice.
 
+**Aggiornamento dell'8 settembre 2026: adesso lo carica `just`, e la decisione non
+cambia.** Il `justfile` ha `set dotenv-load`, quindi `just api` e `just worker`
+leggono `.env` da sé e il passo `set -a; source .env; set +a` serve solo a chi lancia
+un binario a mano. **Non è una terza sorgente di configurazione** e non tocca niente
+di ciò che è deciso qui sopra: nessun crate dipende da `dotenvy`, il processo continua
+a non leggere quel file, e `just` lo carica **fuori** dal processo esattamente come
+faceva la shell — produce variabili d'ambiente come tutte le altre. È cambiata
+l'ergonomia, non una proprietà del sistema, ed è per questo che l'aggiornamento è una
+nota e non un ADR nuovo.
+
+L'occasione per scriverlo è stata `R3`: l'affermazione «`.env` lo carica la shell»
+viveva in **otto** posti — il messaggio d'errore di `AppConfig` e il commento del tipo,
+`CLAUDE.md`, `README.md`, `.env.example`, due righe di [06](06-sviluppo.md), due di
+[07](07-operazioni.md) e questo ADR — ed è invecchiata in tutti insieme il giorno in cui
+il `justfile` è entrato.
+
 Non c'è un avviso perché non c'è ancora dove scriverlo: la configurazione si carica
 **prima** della telemetria — è la configurazione a dire come inizializzarla — quindi
 un `warn!` non avrebbe alcun subscriber, e scrivere su stderr da una funzione di
