@@ -15,6 +15,7 @@ import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDateTime } from '@/lib/format'
 import { TicketActions } from './TicketActions'
+import { AttachmentsCard } from '../shared/attachments'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { TicketPriorityBadge, TicketStatusBadge } from '../shared/status'
 
@@ -122,6 +123,21 @@ export function TicketDetailPage() {
                 ) : null}
               </CardBody>
             </Card>
+          </PageSection>
+
+          <PageSection>
+            {/* La foto del guasto, che è la ragione per cui `tickets` mancava
+                dall'unione degli owner: la rotta esisteva, il tipo no, e il
+                typecheck rifiutava la segnalazione prima che qualcuno potesse
+                provarla. Sta **prima** dello storico perché è ciò che si guarda
+                subito: una perdita si capisce da una fotografia più che da tre
+                righe di descrizione. */}
+            <AttachmentsCard
+              owner={{ type: 'tickets', id }}
+              title={t.document.ticketTitle}
+              hint={t.document.ticketHint}
+              kind="photo"
+            />
           </PageSection>
 
           <PageSection>

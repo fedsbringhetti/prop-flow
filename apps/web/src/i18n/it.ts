@@ -190,6 +190,8 @@ export const it = {
     privateBathroom: 'Bagno privato',
     furnished: 'Arredata',
     status: 'Stato',
+    /** L'unica superficie che una stanza abbia: `GET /rooms/{id}` non esiste. */
+    dialogExplain: 'Correggi i dati della stanza, o archiviala per liberarne il nome.',
     archive: 'Archivia la stanza',
     archiveConfirm: 'Archiviare questa stanza?',
     archiveExplain: 'Il nome torna libero per una stanza nuova. La traccia resta.',
@@ -278,6 +280,38 @@ export const it = {
     },
   },
 
+  /**
+   * Gli allegati, con un catalogo solo per tutti e sei gli owner.
+   *
+   * Le stringhe sono deliberatamente generiche — «Allegati», «Carica un file» —
+   * perché la stessa scheda compare su un immobile, una stanza, un contratto, una
+   * segnalazione e un addebito. Dove il nome proprio conta, come la *scansione* di
+   * una bolletta, la schermata passa il proprio titolo.
+   */
+  document: {
+    title: 'Allegati',
+    upload: 'Carica un file',
+    uploadHint: 'PDF o immagine, fino a 25 MB.',
+    download: 'Scarica',
+    empty: 'Nessun allegato.',
+    archive: 'Archivia l’allegato',
+    archiveConfirm: 'Archiviare questo allegato?',
+    /** La policy ammette lo staff **oppure** chi ha caricato: il messaggio non
+     *  promette un ruolo, perché all'uploader quel ruolo non serve. */
+    archiveExplain:
+      'Sparisce dall’elenco e non si scarica più. La traccia resta, e il file non si ricarica da qui: bisogna caricarne un altro.',
+    /* I titoli propri di chi ha già un nome per i suoi allegati. */
+    propertyTitle: 'Documenti dell’immobile',
+    propertyHint: 'Planimetrie, certificazioni, verbali.',
+    roomTitle: 'Allegati della stanza',
+    leaseTitle: 'Documenti del contratto',
+    leaseHint: 'Il contratto firmato, i documenti d’identità, le ricevute.',
+    ticketTitle: 'Foto e allegati',
+    ticketHint: 'Una foto dice più di una descrizione: allegala qui.',
+    chargeTitle: 'Allegati dell’addebito',
+    chargeHint: 'La fattura, la ricevuta, il conteggio.',
+  },
+
   invitation: {
     title: 'Inviti',
     invite: 'Invita un inquilino',
@@ -294,10 +328,43 @@ export const it = {
     tokenExplain:
       'L’invio automatico delle email non è ancora attivo: copia questo codice e mandalo tu, come preferisci. Vale sette giorni e si vede una volta sola.',
     tokenLabel: 'Codice d’invito',
+    /** Dove il codice si usa. Senza questa riga il proprietario ha in mano una
+     *  credenziale e nessun posto a cui mandare chi la riceve. */
+    tokenWhereToUse:
+      'Chi lo riceve deve prima creare il proprio account, poi incollare il codice in «Ho un codice d’invito».',
     alreadyPending: 'C’è già un invito in attesa per questa email.',
     pending: 'In attesa',
     accepted: 'Accettato',
     expired: 'Scaduto',
+
+    /* La revoca, che vive **solo** qui.
+       Nessuna rotta elenca gli inviti: `revokeInvitation` vuole l'id, e l'unico
+       momento in cui il client ce l'ha è subito dopo averlo creato. Costruire un
+       elenco vorrebbe dire aggiungere una rotta. */
+    revokeTitle: 'Revocare questo invito?',
+    revokeExplain:
+      'Il codice smette di funzionare subito e potrai rifarne uno. È l’unico momento in cui puoi revocarlo: chiusa questa finestra, resta solo aspettare che scada.',
+    revokeDone: 'Invito revocato. Puoi rifarlo qui, con l’indirizzo giusto.',
+
+    /* L'accettazione, che è la metà del giro che mancava. */
+    acceptEntry: 'Ho un codice d’invito',
+    acceptTitle: 'Accetta un invito',
+    acceptSubtitle:
+      'Incolla il codice che ti ha mandato chi affitta la casa: ti mette dentro la sua organizzazione, dove trovi il contratto e quello che devi.',
+    acceptSubmit: 'Entra',
+    acceptCodeHint: 'Vale sette giorni dall’emissione. Non è la password del tuo account.',
+    /** Accettare richiede una sessione: la rotta è autenticata. Chi arriva senza
+     *  account trova scritto che cosa fare, non un `401`. */
+    acceptNeedsAccountTitle: 'Prima serve il tuo account',
+    acceptNeedsAccountBody:
+      'Un invito si accetta da dentro PropFlow: crea il tuo account — o entra, se ce l’hai già — e torna qui con il codice.',
+    /** `auth.invalid_credentials` è ciò che l'API risponde a un codice sbagliato,
+     *  scaduto o intestato a un altro indirizzo: distinguerli direbbe a chi prova
+     *  quali inviti esistono. Il messaggio del catalogo — «email o password non
+     *  corrette» — qui sarebbe fuori posto, quindi la schermata lo riscrive. */
+    acceptCodeRejected:
+      'Questo codice non è valido: può essere sbagliato, scaduto, o intestato a un’altra email. Chiedine uno nuovo a chi te lo ha mandato.',
+    acceptAlreadyDone: 'Questo invito è già stato accettato: sei già dentro.',
   },
 
   ticket: {

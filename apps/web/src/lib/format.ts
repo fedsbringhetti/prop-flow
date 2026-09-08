@@ -72,6 +72,41 @@ export function formatDecimal(
   }
 }
 
+/**
+ * La dimensione di un file, **da `Intl` come tutto il resto**.
+ *
+ * `size_bytes` è un intero e non un decimale dell'API: qui un `number` è il tipo
+ * giusto, e la regola sui `parseFloat` non c'entra — non c'è nessuna stringa
+ * decimale da preservare.
+ *
+ * L'unità si sceglie a soglie e la si passa a `Intl` con `style: 'unit'`, che la
+ * localizza da sé: scrivere `` `${(n / 1048576).toFixed(1)} MB` `` produrrebbe
+ * `1.4 MB` con il punto anche in italiano, che è esattamente il difetto che questo
+ * modulo esiste per non avere. Le soglie sono binarie perché il limite del
+ * caricamento è 25 MiB, cioè binario: dirlo in megabyte decimali farebbe leggere
+ * `26,2 MB` a un file rifiutato per averne superati 25.
+ */
+export function formatBytes(bytes: number, locale: Locale = activeLocale): string {
+  const [value, unit]: [number, string] =
+    bytes >= 1024 * 1024
+      ? [bytes / (1024 * 1024), 'megabyte']
+      : bytes >= 1024
+        ? [bytes / 1024, 'kilobyte']
+        : [bytes, 'byte']
+  try {
+    return new Intl.NumberFormat(localeTag(locale), {
+      style: 'unit',
+      unit,
+      unitDisplay: 'short',
+      maximumFractionDigits: value < 10 && unit !== 'byte' ? 1 : 0,
+    }).format(value)
+  } catch {
+    // Un motore senza `style: 'unit'`: meglio il numero senza unità che nessun
+    // numero. Vale la stessa scelta di `formatAmount`.
+    return new Intl.NumberFormat(localeTag(locale)).format(Math.round(value))
+  }
+}
+
 /** Un intero: conteggi, numeri di locali. */
 export function formatCount(value: number, locale: Locale = activeLocale): string {
   return new Intl.NumberFormat(localeTag(locale)).format(value)

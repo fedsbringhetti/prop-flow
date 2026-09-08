@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ApiClient } from './client'
 import { ApiError } from './problem'
@@ -124,7 +124,14 @@ function scenario(options: { singleFlight: boolean }): {
   session: SessionStore
 } {
   const api = new RotatingApi()
-  const session = new SessionStore({ fetch: api.fetch, singleFlight: options.singleFlight })
+  // Il lock fra schede segue il singolo volo: questo scenario mette a confronto
+  // il difetto e il rimedio, e con il lock acceso il ramo «difetto» sarebbe
+  // protetto da qualcos'altro. Vedi il primo test di questo file.
+  const session = new SessionStore({
+    fetch: api.fetch,
+    singleFlight: options.singleFlight,
+    crossTabLock: options.singleFlight,
+  })
   const client = new ApiClient({ fetch: api.fetch, session })
   // La sessione parte con un access token già scaduto: è lo stato in cui una
   // pagina si trova quando la si riapre dopo un quarto d'ora.
@@ -152,7 +159,17 @@ describe('il refresh a singolo volo', () => {
    */
   it('senza la promessa condivisa, tre richieste parallele buttano fuori l’utente', async () => {
     const api = new RotatingApi()
-    const session = new SessionStore({ fetch: api.fetch, singleFlight: false })
+    // **Anche il lock fra schede va spento**, e la ragione è la stessa per cui
+    // questo test esiste: il lock serializza pure dentro una scheda, quindi
+    // lasciandolo acceso le tre chiamate passerebbero una alla volta e
+    // riuscirebbero tutte. Il difetto resterebbe invisibile, e questo test —
+    // che serve a dimostrare che il singolo volo protegge da qualcosa —
+    // passerebbe senza provare niente.
+    const session = new SessionStore({
+      fetch: api.fetch,
+      singleFlight: false,
+      crossTabLock: false,
+    })
     const client = new ApiClient({ fetch: api.fetch, session })
     await session.refresh()
     api.resetCounters()
@@ -254,6 +271,131 @@ describe('il refresh a singolo volo', () => {
     failNext = true
     await expect(session.refresh()).rejects.toMatchObject({ status: 0 })
     expect(session.current).not.toBeNull()
+  })
+})
+
+/**
+ * **Due schede**, che è il difetto che il singolo volo non poteva coprire.
+ *
+ * Due `SessionStore` sono due contesti JavaScript quanto basta per questo test:
+ * ognuno ha la propria promessa in memoria, e nessuna delle due sa dell'altra.
+ * Il cookie invece è **uno solo** — lo tiene `RotatingApi`, che qui fa da browser
+ * oltre che da server — ed è esattamente la condizione reale: ciò che le schede
+ * condividono è il cookie, non la sessione.
+ *
+ * Lo scenario non è di laboratorio: è accaduto durante il collaudo della fetta
+ * B-bis, con due schede aperte sulla stessa origine, e nei log dell'API si è
+ * letto `riuso di un refresh token già ruotato: revocate tutte le sessioni`.
+ */
+describe('il refresh fra schede', () => {
+  /**
+   * **Il difetto, riprodotto al contrario**, come per il singolo volo.
+   *
+   * Senza il lock le due schede presentano lo stesso refresh token: la prima
+   * ruota, la seconda presenta quello vecchio, e l'API — che tratta il riuso come
+   * prova di una copia rubata — revoca la catena. Chi guardava la seconda scheda
+   * si ritrova fuori senza aver fatto niente.
+   *
+   * Serve a quello a cui serviva il suo gemello: senza questo test, quello qui
+   * sotto passerebbe anche con il lock rotto.
+   */
+  it('senza il lock, due schede che rinnovano insieme fanno revocare la catena', async () => {
+    const api = new RotatingApi()
+    const primaScheda = new SessionStore({ fetch: api.fetch, crossTabLock: false })
+    const secondaScheda = new SessionStore({ fetch: api.fetch, crossTabLock: false })
+
+    await primaScheda.refresh()
+    await secondaScheda.refresh()
+    api.resetCounters()
+
+    const esiti = await Promise.allSettled([primaScheda.refresh(), secondaScheda.refresh()])
+
+    expect(api.refreshCalls.length).toBe(2)
+    // Lo stesso token presentato due volte: è **questo** che l'API punisce.
+    expect(api.refreshCalls[0]).toBe(api.refreshCalls[1])
+    const rifiutati = esiti.filter((esito) => esito.status === 'rejected')
+    expect(rifiutati.length).toBeGreaterThan(0)
+    const caduto = rifiutati[0]
+    if (caduto && caduto.status === 'rejected') {
+      expect(caduto.reason).toBeInstanceOf(ApiError)
+      expect((caduto.reason as ApiError).status).toBe(401)
+    }
+  })
+
+  /**
+   * Lo stesso scenario con il lock: **due** rinnovi, e nessuno dei due rifiutato.
+   *
+   * Due e non uno, ed è la decisione e non una svista: le schede non si passano
+   * l'access token, che resta in memoria e non deve uscirne. La seconda aspetta,
+   * poi rinnova per sé presentando il cookie **ruotato** — cioè una rotazione
+   * legittima, che è tutto ciò che serviva.
+   */
+  it('con il lock, due schede rinnovano una alla volta e restano dentro', async () => {
+    const api = new RotatingApi()
+    const primaScheda = new SessionStore({ fetch: api.fetch })
+    const secondaScheda = new SessionStore({ fetch: api.fetch })
+
+    await primaScheda.refresh()
+    await secondaScheda.refresh()
+    api.resetCounters()
+
+    const sessioni = await Promise.all([primaScheda.refresh(), secondaScheda.refresh()])
+
+    expect(api.refreshCalls.length).toBe(2)
+    // Token **diversi**: la seconda ha atteso e ha presentato quello nuovo.
+    expect(api.refreshCalls[0]).not.toBe(api.refreshCalls[1])
+    expect(sessioni.every((sessione) => sessione.accessToken !== '')).toBe(true)
+    expect(primaScheda.current).not.toBeNull()
+    expect(secondaScheda.current).not.toBeNull()
+  })
+
+  /**
+   * Che cosa il ripiego scrive, che è la parte facile da sbagliare.
+   *
+   * Il lock su `localStorage` esiste dove i Web Locks non ci sono — ed è il ramo
+   * che questi test percorrono, perché jsdom non ha `navigator.locks`. Deve
+   * scrivere **un marcatore con una scadenza e mai un token**: metterci la
+   * sessione lo renderebbe leggibile a uno script qualunque, che è esattamente la
+   * proprietà per cui l'access token non lascia la memoria.
+   */
+  it('il ripiego scrive un marcatore con una scadenza, e nessun segreto', async () => {
+    const api = new RotatingApi()
+    const session = new SessionStore({ fetch: api.fetch })
+
+    let scrittoDurante: string | null = null
+    const originale = localStorage.setItem.bind(localStorage)
+    const spia = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation((chiave: string, valore: string) => {
+        if (chiave.includes('refresh')) scrittoDurante = valore
+        originale(chiave, valore)
+      })
+
+    try {
+      const sessione = await session.refresh()
+
+      expect(scrittoDurante).not.toBeNull()
+      const marcatore = JSON.parse(scrittoDurante ?? '{}') as Record<string, unknown>
+      // Due campi, e nessuno dei due è un segreto.
+      expect(Object.keys(marcatore).sort()).toEqual(['holder', 'until'])
+      expect(typeof marcatore['until']).toBe('number')
+      expect(marcatore['until']).toBeGreaterThan(Date.now())
+      // La prova esplicita: il token consegnato non compare da nessuna parte.
+      expect(scrittoDurante).not.toContain(sessione.accessToken)
+    } finally {
+      spia.mockRestore()
+    }
+  })
+
+  /** Il marcatore si **rilascia**: la scheda successiva non deve aspettare. */
+  it('il marcatore sparisce a rinnovo concluso', async () => {
+    const api = new RotatingApi()
+    const session = new SessionStore({ fetch: api.fetch })
+
+    await session.refresh()
+
+    const rimasti = Object.keys(localStorage).filter((chiave) => chiave.includes('refresh'))
+    expect(rimasti).toEqual([])
   })
 })
 

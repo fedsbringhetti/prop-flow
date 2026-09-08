@@ -5,13 +5,15 @@ import { Link, useNavigate, useParams } from 'react-router'
 
 import {
   archiveProperty,
+  archiveRoom,
   createRoom,
   getProperty,
   listResidents,
   listRooms,
   updateProperty,
+  updateRoom,
 } from '@/api/endpoints'
-import type { EnergyClass, Property } from '@/api/types'
+import type { EnergyClass, Property, Room } from '@/api/types'
 import { Async, Empty, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,6 +25,7 @@ import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDecimal } from '@/lib/format'
+import { AttachmentsCard } from '../shared/attachments'
 import { RoomStatusBadge } from '../shared/status'
 import { PropertyStatusBadge } from '../shared/status'
 
@@ -132,6 +135,20 @@ export function PropertyDetailPage() {
 
           <PageSection>
             <ResidentsCard propertyId={id} />
+          </PageSection>
+
+          <PageSection>
+            {/* Caricare è di chi è **membro**, non dello staff: l'inquilino
+                allega al perimetro che gli compete, e a decidere che cosa gli
+                competa è `app.can_access_attachment` attraverso le policy, non un
+                ramo sul ruolo scritto qui. Su un immobile archiviato invece non
+                si allega più, come non ci si aggiungono stanze. */}
+            <AttachmentsCard
+              owner={{ type: 'properties', id }}
+              title={t.document.propertyTitle}
+              hint={t.document.propertyHint}
+              canUpload={data.status !== 'archived'}
+            />
           </PageSection>
         </>
       )}
@@ -284,8 +301,13 @@ function EditPropertyDialog({ property }: { property: Property }) {
  * `archived` copre due condizioni che qui hanno lo **stesso** effetto — un
  * immobile archiviato non accetta stanze nuove, e chi non amministra non ne
  * aggiunge — e nessun'altra: l'elenco si legge in entrambi i casi.
+ *
+ * Correggerle è la stessa condizione, e per questo la colonna delle azioni segue
+ * lo stesso flag: `PATCH /rooms/{id}` e `DELETE /rooms/{id}` sono `staff`, e una
+ * stanza di un immobile archiviato risponde `409`.
  */
 function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boolean }) {
+  const canManage = !archived
   const client = useApi()
   const rooms = useQuery({
     queryKey: keys.rooms(propertyId),
@@ -313,6 +335,7 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
                 <Th>{t.room.privateBathroom}</Th>
                 <ThNumeric>{t.room.surface}</ThNumeric>
                 <ThNumeric>{t.room.monthlyRent}</ThNumeric>
+                {canManage ? <Th>{t.common.actions}</Th> : null}
               </tr>
             </thead>
             <tbody>
@@ -331,6 +354,11 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
                       ? formatAmount(room.monthly_rent, { currency: room.currency })
                       : t.common.none}
                   </TdNumeric>
+                  {canManage ? (
+                    <Td>
+                      <RoomDialog room={room} propertyId={propertyId} />
+                    </Td>
+                  ) : null}
                 </Tr>
               ))}
             </tbody>
@@ -338,6 +366,189 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
         )}
       </Async>
     </Card>
+  )
+}
+
+/**
+ * La scheda di una stanza: si corregge, si archivia, e porta i suoi allegati.
+ *
+ * # Perché una modale e non una pagina
+ *
+ * Una stanza non ha una rotta propria — `GET /rooms/{id}` non esiste, l'elenco
+ * passa dall'immobile — e inventarne una vorrebbe dire leggere il dettaglio
+ * filtrando una lista. Questa modale è la **sola** superficie che una stanza
+ * abbia, e per questo raccoglie tutto ciò che la riguarda invece di lasciare gli
+ * allegati senza posto.
+ *
+ * # Il nome è unico per immobile, quindi un refuso non è cosmetico
+ *
+ * Occupa un nome che poi non si può riusare, e finché la stanza esiste nessun'altra
+ * può chiamarsi così. Correggerlo è il caso d'uso principale di questa modale;
+ * l'archiviazione **libera il nome**, e la conferma lo dice — la stringa era già
+ * nel catalogo, scritta per questo momento.
+ *
+ * # Il `PATCH` è parziale con la semantica di sempre
+ *
+ * Assente = invariato, `null` = azzerato. Un campo svuotato manda `null`
+ * esplicito: senza quella distinzione un canone inserito per sbaglio non si
+ * potrebbe più togliere.
+ */
+function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
+  const client = useApi()
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+
+  const [values, setValues] = useState({
+    name: room.name,
+    monthly_rent: room.monthly_rent ?? '',
+    size_sqm: room.size_sqm ?? '',
+    bathroom: room.has_private_bathroom,
+    furnished: room.is_furnished ?? false,
+  })
+
+  async function reread() {
+    await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
+    // Il conteggio dei locali sta sull'immobile: una stanza archiviata lo cambia.
+    await queryClient.invalidateQueries({ queryKey: keys.property(propertyId) })
+  }
+
+  const save = useMutation({
+    mutationFn: () =>
+      updateRoom(client, room.id, {
+        name: values.name,
+        // `|| null` e non `|| undefined`: svuotare deve azzerare, non lasciare
+        // com'era. È la stessa scelta del `PATCH` dell'immobile.
+        monthly_rent: values.monthly_rent.trim() || null,
+        size_sqm: values.size_sqm.trim() || null,
+        has_private_bathroom: values.bathroom,
+        is_furnished: values.furnished,
+      }),
+    onSuccess: async () => {
+      await reread()
+      setOpen(false)
+      setError(null)
+    },
+    onError: setError,
+  })
+
+  const archive = useMutation({
+    mutationFn: () => archiveRoom(client, room.id),
+    onSuccess: async () => {
+      await reread()
+      setOpen(false)
+    },
+  })
+
+  return (
+    <FormDialog
+      trigger={
+        <Button size="sm" variant="ghost">
+          {t.common.edit}
+          {/* Il nome nell'etichetta accessibile: in una tabella di sei stanze
+              «Modifica» ripetuto sei volte non dice quale, e chi naviga con un
+              lettore di schermo sente solo quello. */}
+          <span className="sr-only"> — {room.name}</span>
+        </Button>
+      }
+      title={room.name}
+      description={t.room.dialogExplain}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setError(null)
+      }}
+    >
+      <div className="flex flex-col gap-5">
+        <form
+          noValidate
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            save.mutate()
+          }}
+        >
+          <InlineError error={error} />
+          <Field label={t.room.name} hint={t.room.nameHint} required>
+            {(props) => (
+              <Input
+                {...props}
+                value={values.name}
+                onChange={(event) => setValues((v) => ({ ...v, name: event.target.value }))}
+              />
+            )}
+          </Field>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label={t.room.monthlyRent}>
+              {(props) => (
+                <Input
+                  {...props}
+                  inputMode="decimal"
+                  value={values.monthly_rent}
+                  onChange={(event) =>
+                    setValues((v) => ({ ...v, monthly_rent: event.target.value }))
+                  }
+                />
+              )}
+            </Field>
+            <Field label={t.room.surface}>
+              {(props) => (
+                <Input
+                  {...props}
+                  inputMode="decimal"
+                  value={values.size_sqm}
+                  onChange={(event) => setValues((v) => ({ ...v, size_sqm: event.target.value }))}
+                />
+              )}
+            </Field>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={values.bathroom}
+              onChange={(event) => setValues((v) => ({ ...v, bathroom: event.target.checked }))}
+            />
+            {t.room.privateBathroom}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={values.furnished}
+              onChange={(event) => setValues((v) => ({ ...v, furnished: event.target.checked }))}
+            />
+            {t.room.furnished}
+          </label>
+          <div className="flex flex-wrap justify-end gap-2">
+            <ConfirmAction
+              trigger={
+                <Button variant="dangerGhost">
+                  <Archive aria-hidden />
+                  {t.room.archive}
+                </Button>
+              }
+              title={t.room.archiveConfirm}
+              explanation={t.room.archiveExplain}
+              confirmLabel={t.room.archive}
+              onConfirm={() => archive.mutateAsync()}
+            />
+            <Button type="submit" variant="primary" disabled={save.isPending}>
+              {save.isPending ? t.common.saving : t.common.save}
+            </Button>
+          </div>
+        </form>
+
+        {/* Gli allegati della stanza stanno qui perché **qui** è l'unica
+            superficie che una stanza abbia: senza una rotta di dettaglio, la sola
+            alternativa sarebbe stata lasciarli irraggiungibili. */}
+        <AttachmentsCard
+          owner={{ type: 'rooms', id: room.id }}
+          title={t.document.roomTitle}
+          kind="photo"
+        />
+      </div>
+    </FormDialog>
   )
 }
 

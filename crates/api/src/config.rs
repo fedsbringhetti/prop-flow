@@ -149,15 +149,69 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// Il rifiuto della configurazione, con **dove trovare ciò che manca**.
+///
+/// Esiste per un difetto che ha morso tre volte, sempre allo stesso punto:
+/// avviare l'API per un giro a mano con un `.env` copiato prima della fetta dei
+/// documenti. Mancano le quattro `PROPFLOW__STORAGE__*`, e figment risponde
+/// `missing field `access_key_id` for key "default.storage"` — che è la
+/// validazione che fa il suo mestiere, e non dice **da dove** debba arrivare
+/// quella variabile né che `.env.example` la porti.
+///
+/// **Il rimedio non è un default**: uno storage configurato a caso è peggio di un
+/// avvio fallito, perché il fallimento si sposterebbe al primo caricamento e
+/// somiglierebbe a un problema di rete. Il rimedio è dire dove si copia.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// Un'impostazione senza default e senza valore.
+    ///
+    /// Il messaggio di figment — quale campo e sotto quale chiave — arriva dalla
+    /// catena delle cause e **non si ripete qui**: anyhow le stampa entrambe, e
+    /// dirla due volte allontana il rimedio dalla riga che lo dà.
+    #[error(
+        "manca un'impostazione obbligatoria.\n         Le variabili hanno prefisso PROPFLOW__ e il doppio underscore separa i \
+         livelli (PROPFLOW__STORAGE__ACCESS_KEY_ID).\n         L'elenco completo, con valori buoni per lo sviluppo locale, è in \
+         .env.example — che nessuno carica da solo: lo fa la shell, con \
+         `set -a; source .env; set +a`.\n         Un .env copiato prima di una fetta che ha aggiunto impostazioni non le \
+         ha: confrontalo con .env.example."
+    )]
+    Incomplete {
+        #[source]
+        source: Box<figment::Error>,
+    },
+    /// Un valore c'è ed è sbagliato: un numero non numerico, un booleano scritto
+    /// male. Qui il messaggio di figment basta — dice quale chiave e perché — e
+    /// aggiungere la prosa qui sopra sarebbe rumore su un errore già chiaro.
+    #[error("configurazione non valida")]
+    Invalid {
+        #[source]
+        source: Box<figment::Error>,
+    },
+}
+
 impl AppConfig {
     /// L'errore è incapsulato: `figment::Error` accumula il contesto di tutte le
     /// sorgenti e supera i 200 byte, che non vale la pena propagare per valore.
-    pub fn load() -> Result<Self, Box<figment::Error>> {
+    pub fn load() -> Result<Self, ConfigError> {
         Figment::new()
             .merge(Toml::file("config/default.toml"))
             .merge(Env::prefixed("PROPFLOW__").split("__"))
             .extract()
-            .map_err(Box::new)
+            .map_err(|error| {
+                // `MissingField` è il caso del `.env` vecchio; `UnknownField` no,
+                // ma condivide il rimedio — si guarda `.env.example` e si vede
+                // come si chiama davvero.
+                let incomplete = matches!(
+                    error.kind,
+                    figment::error::Kind::MissingField(_) | figment::error::Kind::UnknownField(..)
+                );
+                let source = Box::new(error);
+                if incomplete {
+                    ConfigError::Incomplete { source }
+                } else {
+                    ConfigError::Invalid { source }
+                }
+            })
     }
 
     #[must_use]

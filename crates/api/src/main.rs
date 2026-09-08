@@ -19,7 +19,9 @@ use tokio::signal;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = AppConfig::load().context("configurazione non valida")?;
+    // Senza `.context`: `ConfigError` dice già che cosa manca **e dove trovarlo**,
+    // e un contesto generico sopra allontanerebbe il rimedio dalla prima riga.
+    let config = AppConfig::load()?;
 
     let _telemetry = telemetry::init(&TelemetrySettings {
         service_name: config.telemetry.service_name.clone(),

@@ -1,21 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Ban, CheckCircle2, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { Ban, CheckCircle2 } from 'lucide-react'
+import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
-import {
-  UPLOAD_LIMIT_BYTES,
-  documentContentPath,
-  getBill,
-  listDocuments,
-  listLeases,
-  rechargeBill,
-  uploadDocument,
-  validateBill,
-  voidBill,
-} from '@/api/endpoints'
-import { ApiError } from '@/api/problem'
-import { Async, Empty, InlineError } from '@/components/state'
+import { getBill, listLeases, rechargeBill, validateBill, voidBill } from '@/api/endpoints'
+import { Async, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmAction, FormDialog } from '@/components/ui/confirm'
@@ -25,6 +14,7 @@ import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
+import { AttachmentsCard } from '../shared/attachments'
 import { BillStatusBadge } from '../shared/status'
 import { OcrReviewCard } from './OcrReview'
 
@@ -172,12 +162,14 @@ export function BillDetailPage() {
 }
 
 /**
- * La scansione, e il controllo della dimensione **prima** di inviarla.
+ * La scansione della bolletta, che è la scheda degli allegati **con un lavoro in
+ * più**.
  *
- * Il limite del corpo su queste rotte è 25 MiB, e oltre quello la risposta è un
- * `413` che non dice quale limite né su quale file. Una fotografia da 30 MB scelta
- * da un telefono ci finisce dentro senza fatica: controllare prima costa una riga
- * e trasforma un errore muto in una frase che si capisce.
+ * Era il modello da cui `AttachmentsCard` è stata estratta, e qui resta un
+ * involucro sottile per una ragione che le altre cinque non hanno: su una bolletta
+ * in bozza il caricamento **accoda la lettura automatica**, e il job non compare
+ * nella risposta del caricamento. Le due chiavi dell'OCR vanno quindi rilette
+ * dopo, e sono le sole invalidazioni che non appartengono alla scheda condivisa.
  */
 function ScansCard({
   billId,
@@ -190,94 +182,25 @@ function ScansCard({
    *  si è riaddebitato, e chi paga deve poterlo aprire. */
   canUpload: boolean
 }) {
-  const client = useApi()
   const queryClient = useQueryClient()
-  const input = useRef<HTMLInputElement>(null)
-  const [error, setError] = useState<unknown>(null)
-
-  const documents = useQuery({
-    queryKey: keys.documents('utility-bills', billId),
-    queryFn: () => listDocuments(client, { type: 'utility-bills', id: billId }),
-  })
-
-  const upload = useMutation({
-    mutationFn: (file: File) =>
-      uploadDocument(client, { type: 'utility-bills', id: billId }, file, 'utility_bill'),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: keys.documents('utility-bills', billId) })
-      // Su una bolletta in bozza il caricamento **accoda la lettura automatica**:
-      // il job non compare nella risposta del caricamento, quindi va riletto.
-      await queryClient.invalidateQueries({ queryKey: keys.billOcr(billId) })
-      await queryClient.invalidateQueries({ queryKey: keys.bill(billId) })
-      setError(null)
-    },
-    onError: setError,
-  })
 
   return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>{t.bill.scan}</CardTitle>
-          {draft && canUpload ? (
-            <p className="mt-0.5 text-xs text-ink-muted">{t.bill.uploadHint}</p>
-          ) : null}
-        </div>
-        {canUpload ? (
-          <div>
-            <input
-              ref={input}
-              type="file"
-              className="sr-only"
-              accept="application/pdf,image/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                if (!file) return
-                if (file.size > UPLOAD_LIMIT_BYTES) {
-                  setError(new ApiError({ status: 413, code: 'request.payload_too_large' }))
-                  return
-                }
-                upload.mutate(file)
-              }}
-            />
-            <Button size="sm" onClick={() => input.current?.click()} disabled={upload.isPending}>
-              <Upload aria-hidden />
-              {upload.isPending ? t.common.saving : t.bill.uploadScan}
-            </Button>
-          </div>
-        ) : null}
-      </CardHeader>
-      <CardBody className="flex flex-col gap-3">
-        <InlineError error={error} />
-        <Async
-          query={documents}
-          isEmpty={(page) => page.items.length === 0}
-          empty={<Empty title={t.ocr.none} />}
-        >
-          {(page) => (
-            <ul className="divide-y divide-border-subtle">
-              {page.items.map((document) => (
-                <li
-                  key={document.id}
-                  className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
-                >
-                  <span className="min-w-0 truncate">{document.original_filename}</span>
-                  <a
-                    href={documentContentPath(document.id)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-accent underline-offset-4 hover:underline"
-                  >
-                    {t.bill.download}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Async>
-      </CardBody>
-    </Card>
+    <AttachmentsCard
+      owner={{ type: 'utility-bills', id: billId }}
+      title={t.bill.scan}
+      {...(draft ? { hint: t.bill.uploadHint } : {})}
+      kind="utility_bill"
+      canUpload={canUpload}
+      emptyTitle={t.ocr.none}
+      onUploaded={async () => {
+        // Su una bolletta in bozza il caricamento **accoda la lettura
+        // automatica**: il job non compare nella risposta del caricamento,
+        // quindi va riletto. Sulle altre non c'è niente da rileggere.
+        if (!draft) return
+        await queryClient.invalidateQueries({ queryKey: keys.billOcr(billId) })
+        await queryClient.invalidateQueries({ queryKey: keys.bill(billId) })
+      }}
+    />
   )
 }
 

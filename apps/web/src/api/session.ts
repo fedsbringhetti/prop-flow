@@ -41,8 +41,167 @@ export interface SessionStoreOptions {
    * singolo volo evita. Vedi il commento su {@link SessionStore.refresh}.
    */
   singleFlight?: boolean
+  /**
+   * Il lock **fra schede**. Vero sempre, tranne in un test.
+   *
+   * Disattivarlo esiste per la stessa ragione di `singleFlight`: poter
+   * riprodurre il difetto che il lock evita. Vedi {@link withRefreshLock}.
+   */
+  crossTabLock?: boolean
   /** Chiamato quando la sessione cade: il guscio rimanda al login. */
   onSessionEnded?: () => void
+}
+
+/**
+ * Il nome del lock, per origine.
+ *
+ * Le schede della stessa origine condividono **il cookie**, quindi condividono
+ * anche ciò che va serializzato. Un nome per utente non servirebbe: due sessioni
+ * di due utenti nello stesso browser sono due cookie diversi, ma il primo dei due
+ * rinnovi a partire non è mai in attesa del secondo per più di un istante.
+ */
+const REFRESH_LOCK = 'propflow.refresh.v1'
+
+/** Vita del marcatore di ripiego: una scheda chiusa a metà rinnovo lo libera. */
+const FALLBACK_LOCK_TTL_MS = 15_000
+/** Ogni quanto si guarda se il lock si è liberato. */
+const FALLBACK_POLL_MS = 20
+/**
+ * Dopo quanto si procede **senza** il lock.
+ *
+ * Un rinnovo bloccato per sempre è peggio del difetto che il lock evita: là si
+ * perde la sessione e si rientra, qui l'applicazione resterebbe ferma senza dire
+ * perché. Venti secondi sono molto più di un rinnovo e molto meno di un'attesa
+ * che qualcuno noti.
+ */
+const FALLBACK_GIVE_UP_MS = 20_000
+
+interface LockMarker {
+  /** Chi lo tiene. **Un identificatore, mai un token.** */
+  holder: string
+  /** Quando scade, in millisecondi epoch. */
+  until: number
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function readMarker(): LockMarker | null {
+  try {
+    const raw = localStorage.getItem(REFRESH_LOCK)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<LockMarker>
+    if (typeof parsed.holder !== 'string' || typeof parsed.until !== 'number') return null
+    return { holder: parsed.holder, until: parsed.until }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Il ripiego, dove i Web Locks non ci sono.
+ *
+ * Scrive **un marcatore con una scadenza** e mai il token: ciò che va in
+ * `localStorage` è un identificatore casuale e un istante, cioè niente che serva a
+ * qualcuno che lo legga.
+ *
+ * `localStorage` non ha un confronta-e-scambia, quindi due schede che guardino nel
+ * medesimo istante possono scrivere entrambe. Il rimedio è rileggere dopo aver
+ * scritto: **l'ultima scrittura vince**, e chi si rilegge diverso riprova. Resta
+ * una finestra teorica — entrambe rileggono prima che l'altra scriva — e in quel
+ * caso si torna esattamente al comportamento di oggi, che è il difetto e non una
+ * regressione. È il prezzo di non avere `navigator.locks`, che nei browser di
+ * questo decennio c'è.
+ */
+async function withStorageLock<T>(run: () => Promise<T>): Promise<T> {
+  const holder =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`
+  const giveUpAt = Date.now() + FALLBACK_GIVE_UP_MS
+  let held = false
+
+  for (;;) {
+    const marker = readMarker()
+    const free = marker === null || marker.until <= Date.now()
+
+    if (free) {
+      try {
+        localStorage.setItem(
+          REFRESH_LOCK,
+          JSON.stringify({ holder, until: Date.now() + FALLBACK_LOCK_TTL_MS }),
+        )
+      } catch {
+        // `localStorage` non disponibile — navigazione privata, impostazioni del
+        // browser: si rinuncia al coordinamento e si rinnova comunque. Perdere il
+        // lock è tornare al comportamento di prima; rifiutarsi di rinnovare
+        // sarebbe una sessione che muore per una preferenza del browser.
+        return run()
+      }
+      await delay(FALLBACK_POLL_MS)
+      if (readMarker()?.holder === holder) {
+        held = true
+        break
+      }
+    }
+
+    if (Date.now() >= giveUpAt) break
+    await delay(FALLBACK_POLL_MS)
+  }
+
+  try {
+    return await run()
+  } finally {
+    if (held) {
+      try {
+        // Solo se è ancora il proprio: uno scaduto e ripreso da un'altra scheda
+        // non va cancellato da chi lo aveva prima.
+        if (readMarker()?.holder === holder) localStorage.removeItem(REFRESH_LOCK)
+      } catch {
+        // Vedi sopra: il marcatore scade da sé.
+      }
+    }
+  }
+}
+
+interface WebLockManager {
+  request: <T>(name: string, callback: () => Promise<T>) => Promise<T>
+}
+
+/**
+ * Serializza il rinnovo **fra le schede**, senza trasmettere niente.
+ *
+ * Il singolo volo è una promessa in memoria, e due schede sono due contesti
+ * JavaScript: se l'access token di entrambe scade insieme, la seconda presenta un
+ * refresh token già ruotato, l'API lo legge come prova di una copia rubata e
+ * revoca l'intera catena. Non è un'ipotesi — è accaduto, con due schede aperte
+ * sulla stessa origine e nessuno che avesse fatto niente.
+ *
+ * La via che viene in mente per prima è **trasmettere la sessione**: chi vince
+ * rinnova e manda l'access token alle altre con `BroadcastChannel`. Funziona, e
+ * rompe una proprietà scelta apposta — l'access token vive in memoria e non è
+ * leggibile da uno script che arrivi dopo il caricamento. Metterlo su un canale, o
+ * peggio in `localStorage`, lo espone esattamente a ciò da cui era tenuto fuori.
+ *
+ * **Non serve condividerlo.** Ciò che le schede condividono è il cookie, e l'API
+ * ruota a ogni uso: il riuso lo rileva soltanto su *due usi dello stesso token*.
+ * Se la seconda scheda aspetta che la prima abbia finito e poi rinnova a sua
+ * volta, presenta il cookie **nuovo**, che è una rotazione legittima. Serve una
+ * coda, non una trasmissione.
+ *
+ * Costa `N` rinnovi per `N` schede invece di uno: una volta ogni quindici minuti
+ * per scheda, e in cambio il token non lascia la memoria.
+ *
+ * *Alternativa scartata: un `SharedWorker` che tenga la sessione.* È il disegno
+ * giusto per un'applicazione che ne avesse bisogno, e qui sarebbe un terzo
+ * contesto da far vivere, morire e ricollegare per un problema che un lock chiude
+ * in venti righe.
+ */
+function withRefreshLock<T>(run: () => Promise<T>): Promise<T> {
+  const locks = (navigator as Navigator & { locks?: WebLockManager }).locks
+  if (locks) return locks.request(REFRESH_LOCK, run)
+  return withStorageLock(run)
 }
 
 /**
@@ -64,13 +223,17 @@ export interface SessionStoreOptions {
  * **aspetta quella** invece di farne una propria. Non è un'ottimizzazione — non
  * risparmia una richiesta, evita una revoca.
  *
- * # Quello che resta fuori, e va saputo
+ * # Fra schede, che è il secondo strato
  *
- * Fra **schede diverse** il problema resta, e una promessa in memoria non lo
- * risolve: due schede sono due contesti JavaScript. Servirebbe un coordinamento
- * (`BroadcastChannel`, o un lock su `localStorage`). In questa fetta si accetta:
- * il sintomo è raro — due schede il cui access token scade nello stesso istante —
- * e il rimedio è ricaricare. È registrato fra i debiti noti.
+ * Una promessa in memoria non attraversa i contesti JavaScript, quindi due schede
+ * la aggirano per costruzione. Sopra il singolo volo c'è quindi un lock per
+ * origine — {@link withRefreshLock} — che **serializza** i rinnovi invece di
+ * trasmettere la sessione: chi arriva secondo aspetta, e poi rinnova a sua volta
+ * presentando il cookie già ruotato, che è una rotazione legittima.
+ *
+ * I due strati non si sovrappongono e non sono ridondanti: il singolo volo
+ * risparmia i rinnovi dentro una scheda, il lock impedisce che due schede li
+ * facciano insieme.
  */
 export class SessionStore {
   private session: Session | null = null
@@ -79,12 +242,14 @@ export class SessionStore {
   private readonly baseUrl: string
   private readonly fetchImpl: FetchLike
   private readonly singleFlight: boolean
+  private readonly crossTabLock: boolean
   private readonly onSessionEnded: (() => void) | undefined
 
   constructor(options: SessionStoreOptions = {}) {
     this.baseUrl = options.baseUrl ?? '/api/v1'
     this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init))
     this.singleFlight = options.singleFlight ?? true
+    this.crossTabLock = options.crossTabLock ?? true
     this.onSessionEnded = options.onSessionEnded
   }
 
@@ -158,7 +323,19 @@ export class SessionStore {
     return attempt
   }
 
-  private async performRefresh(): Promise<Session> {
+  /**
+   * Il rinnovo, **in coda con le altre schede**.
+   *
+   * Il lock avvolge la chiamata e non la promessa: due schede devono poter
+   * arrivare qui insieme e passare una alla volta, non condividere un risultato —
+   * che è precisamente la differenza fra serializzare e trasmettere.
+   */
+  private performRefresh(): Promise<Session> {
+    if (!this.crossTabLock) return this.sendRefresh()
+    return withRefreshLock(() => this.sendRefresh())
+  }
+
+  private async sendRefresh(): Promise<Session> {
     let response: Response
     try {
       response = await this.fetchImpl(`${this.baseUrl}/auth/refresh`, {

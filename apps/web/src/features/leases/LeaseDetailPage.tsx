@@ -8,6 +8,7 @@ import {
   getLease,
   addLeaseParty,
   inviteTenant,
+  revokeInvitation,
   issueCharge,
   listCharges,
   terminateLease,
@@ -24,6 +25,7 @@ import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
+import { AttachmentsCard } from '../shared/attachments'
 import { ChargeStatusBadge, LeaseStatusBadge } from '../shared/status'
 
 const PARTY_ROLES: LeasePartyRole[] = ['tenant', 'cotenant', 'guarantor']
@@ -172,6 +174,18 @@ export function LeaseDetailPage() {
 
           <PageSection>
             <LeaseChargesCard leaseId={id} currency={data.currency} canIssue={isStaff} />
+          </PageSection>
+
+          <PageSection>
+            {/* Il contratto è l'owner su cui l'inquilino allega davvero: la
+                carta d'identità che gli è stata chiesta, una ricevuta. Per
+                questo `canUpload` resta al suo default. */}
+            <AttachmentsCard
+              owner={{ type: 'leases', id }}
+              title={t.document.leaseTitle}
+              hint={t.document.leaseHint}
+              kind="lease_contract"
+            />
           </PageSection>
         </>
       )}
@@ -331,12 +345,31 @@ function AddPartyDialog({ leaseId }: { leaseId: string }) {
  *
  * Il token è una **credenziale**: si mostra una volta, non si conserva, e non
  * finisce in nessun log — ecco perché non passa da nessuna cache di query.
+ *
+ * # La revoca vive qui, e da nessun'altra parte
+ *
+ * `revokeInvitation` vuole l'id dell'invito, e **nessuna rotta elenca gli
+ * inviti**: l'unico momento in cui il client ce l'ha è subito dopo averlo creato,
+ * cioè adesso. Serve al caso vero — «ho sbagliato indirizzo, lo rifaccio» — e va
+ * offerto qui dicendo che dopo resta solo lasciarlo scadere.
+ *
+ * Costruire un elenco per offrirla altrove vorrebbe dire aggiungere una rotta,
+ * cioè backend dentro una fetta di client.
+ *
+ * # La conferma è **dentro** questa modale e non un'altra sopra
+ *
+ * `ConfirmAction` aprirebbe un secondo dialogo sopra il primo: due strati modali
+ * per un gesto che si spiega in due righe, e il codice appena emesso sparirebbe
+ * dietro. Qui la modale cambia corpo e torna al form, che è anche il gesto
+ * successivo — rifare l'invito con l'indirizzo giusto.
  */
 function InviteTenantDialog({ leaseId }: { leaseId: string }) {
   const client = useApi()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [issued, setIssued] = useState<Invitation | null>(null)
+  const [confirmingRevoke, setConfirmingRevoke] = useState(false)
+  const [revoked, setRevoked] = useState(false)
   const [copied, setCopied] = useState(false)
   const [values, setValues] = useState({ email: '', full_name: '' })
 
@@ -344,6 +377,22 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
     mutationFn: () => inviteTenant(client, leaseId, values),
     onSuccess: (invitation) => {
       setIssued(invitation)
+      setRevoked(false)
+      setError(null)
+    },
+    onError: setError,
+  })
+
+  const revoke = useMutation({
+    mutationFn: (invitationId: string) => revokeInvitation(client, invitationId),
+    onSuccess: () => {
+      // Si torna al form **con i campi pieni**: chi revoca lo fa quasi sempre
+      // per correggere l'indirizzo, e ridigitare il nome sarebbe una punizione
+      // per aver notato l'errore.
+      setIssued(null)
+      setConfirmingRevoke(false)
+      setCopied(false)
+      setRevoked(true)
       setError(null)
     },
     onError: setError,
@@ -357,8 +406,14 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
           {t.invitation.invite}
         </Button>
       }
-      title={issued ? t.invitation.tokenTitle : t.invitation.inviteTitle}
-      description={issued ? t.invitation.tokenExplain : undefined}
+      title={
+        issued && confirmingRevoke
+          ? t.invitation.revokeTitle
+          : issued
+            ? t.invitation.tokenTitle
+            : t.invitation.inviteTitle
+      }
+      description={issued && !confirmingRevoke ? t.invitation.tokenExplain : undefined}
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
@@ -367,11 +422,30 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
           setIssued(null)
           setError(null)
           setCopied(false)
+          setConfirmingRevoke(false)
+          setRevoked(false)
           setValues({ email: '', full_name: '' })
         }
       }}
     >
-      {issued ? (
+      {issued && confirmingRevoke ? (
+        <div className="flex flex-col gap-4">
+          <InlineError error={error} />
+          <p className="text-sm text-ink-muted">{t.invitation.revokeExplain}</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={() => setConfirmingRevoke(false)} disabled={revoke.isPending}>
+              {t.common.cancel}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={revoke.isPending}
+              onClick={() => revoke.mutate(issued.id)}
+            >
+              {revoke.isPending ? t.common.saving : t.invitation.revoke}
+            </Button>
+          </div>
+        </div>
+      ) : issued ? (
         <div className="flex flex-col gap-3">
           <div>
             <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
@@ -381,7 +455,11 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
               {issued.accept_token}
             </code>
           </div>
-          <div className="flex justify-end gap-2">
+          <p className="text-sm text-ink-muted">{t.invitation.tokenWhereToUse}</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="dangerGhost" onClick={() => setConfirmingRevoke(true)}>
+              {t.invitation.revoke}
+            </Button>
             <Button
               onClick={() => {
                 void navigator.clipboard.writeText(issued.accept_token).then(() => setCopied(true))
@@ -405,6 +483,11 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
           }}
         >
           <InlineError error={error} />
+          {revoked ? (
+            <p role="status" className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-ink-muted">
+              {t.invitation.revokeDone}
+            </p>
+          ) : null}
           <Field label={t.invitation.fullName} required>
             {(props) => (
               <Input

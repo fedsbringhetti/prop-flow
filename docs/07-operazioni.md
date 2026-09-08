@@ -63,6 +63,19 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 | `PROPFLOW__TELEMETRY__FILTER` | `info,propflow_api=debug,propflow_application=debug` | direttiva `EnvFilter` |
 | `PROPFLOW__TELEMETRY__JSON_LOGS` | `false` | `true` in produzione |
 
+**Un'impostazione obbligatoria che manca ferma l'avvio, e lo dice.** `AppConfig::load`
+distingue un'impostazione **mancante** da una **sbagliata**: sulla prima il messaggio
+ricorda il prefisso `PROPFLOW__`, rimanda a `.env.example` per l'elenco completo, e
+ricorda che quel file nessuno lo carica da solo — lo fa la shell, con
+`set -a; source .env; set +a`. Il messaggio di figment, che dice quale campo e sotto
+quale chiave, resta nella catena delle cause.
+
+Non c'è un default per le credenziali dello storage, ed è deliberato: uno storage
+configurato a caso sposterebbe il fallimento al primo caricamento di un documento, dove
+somiglierebbe a un problema di rete invece che a una configurazione incompleta. Il caso
+tipico è **un `.env` copiato prima della fetta dei documenti**, che non ha le quattro
+`PROPFLOW__STORAGE__*`: si confronta con `.env.example`.
+
 Le due impostazioni di limite del corpo sono **due** perché
 `RequestBodyLimitLayer` è montato sull'intero router: un limite più largo dichiarato
 sulla sola rotta di upload non verrebbe mai raggiunto, perché il layer esterno
