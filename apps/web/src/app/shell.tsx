@@ -15,13 +15,13 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router'
 
 import { getOrganizations } from '@/api/endpoints'
 import type { Organization } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Loading } from '@/components/state'
+import { Loading, SkeletonRows } from '@/components/state'
 import { t } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { keys } from './query'
@@ -209,7 +209,16 @@ export function AppShell() {
           key={location.pathname}
           className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8"
         >
-          <Outlet />
+          {/* Il confine di `Suspense` di ogni rotta, e **con il suo stato**.
+              Sta qui dentro `<main>` e non attorno al guscio: il cambio di
+              schermata non deve smontare la navigazione né il selettore
+              dell'organizzazione, che sono ciò che resta fermo mentre il resto
+              cambia. Il ripiego è lo scheletro che le schermate mostrano già
+              mentre leggono i propri dati — senza, dove c'era uno scheletro
+              comparirebbe una pagina bianca. */}
+          <Suspense fallback={<SkeletonRows rows={5} />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

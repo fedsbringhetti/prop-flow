@@ -1,31 +1,89 @@
+import { Suspense, lazy } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router'
 
 import { Loading } from '@/components/state'
-import { LoginPage, RegisterPage } from '@/features/auth/AuthPage'
-import { BillDetailPage } from '@/features/bills/BillDetailPage'
-import { BillsPage } from '@/features/bills/BillsPage'
-import { NewBillPage } from '@/features/bills/NewBillPage'
-import { ChargeDetailPage } from '@/features/charges/ChargeDetailPage'
-import { ChargesPage } from '@/features/charges/ChargesPage'
-import { DashboardPage } from '@/features/dashboard/DashboardPage'
-import {
-  AcceptInvitationPage,
-  AcceptInvitationSignedOutPage,
-} from '@/features/invitations/AcceptInvitationPage'
-import { ExpenseGroupDetailPage } from '@/features/expenses/ExpenseGroupDetailPage'
-import { ExpenseGroupsPage } from '@/features/expenses/ExpenseGroupsPage'
-import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
-import { LeasesPage } from '@/features/leases/LeasesPage'
-import { NewLeasePage } from '@/features/leases/NewLeasePage'
-import { PaymentsPage } from '@/features/payments/PaymentsPage'
-import { TicketDetailPage } from '@/features/tickets/TicketDetailPage'
-import { TicketsPage } from '@/features/tickets/TicketsPage'
-import { NewPropertyPage } from '@/features/properties/NewPropertyPage'
-import { PropertiesPage } from '@/features/properties/PropertiesPage'
-import { PropertyDetailPage } from '@/features/properties/PropertyDetailPage'
 import { QueryProvider } from './query'
 import { useIsStaff, useSession } from './session'
 import { AppShell, TENANT_HOME } from './shell'
+
+/**
+ * Ogni rotta è un pezzo a sé, e il guscio non è.
+ *
+ * Il bundle era **un pezzo solo da 690 kB** (202 compressi): chi apriva il
+ * riepilogo scaricava anche le bollette, le segnalazioni e le spese co-living. Su
+ * desktop non si nota, e il proprietario è su desktop; **l'inquilino è su rete
+ * mobile**, e dalla fetta B esiste davvero.
+ *
+ * `lazy` sta **fuori** dal componente: dentro, ogni render creerebbe un modulo
+ * pigro nuovo, cioè smonterebbe e rimonterebbe la schermata a ogni giro — un
+ * difetto che si manifesta come uno sfarfallio e non come un errore.
+ *
+ * Le pagine di autenticazione restano pigre come le altre: chi non ha una sessione
+ * ne carica **una sola**, e chi ce l'ha non ne carica nessuna.
+ */
+const AuthPage = () => import('@/features/auth/AuthPage')
+const LoginPage = lazy(async () => ({ default: (await AuthPage()).LoginPage }))
+const RegisterPage = lazy(async () => ({ default: (await AuthPage()).RegisterPage }))
+
+const InvitationPage = () => import('@/features/invitations/AcceptInvitationPage')
+const AcceptInvitationPage = lazy(async () => ({
+  default: (await InvitationPage()).AcceptInvitationPage,
+}))
+const AcceptInvitationSignedOutPage = lazy(async () => ({
+  default: (await InvitationPage()).AcceptInvitationSignedOutPage,
+}))
+
+const DashboardPage = lazy(async () => ({
+  default: (await import('@/features/dashboard/DashboardPage')).DashboardPage,
+}))
+const PropertiesPage = lazy(async () => ({
+  default: (await import('@/features/properties/PropertiesPage')).PropertiesPage,
+}))
+const NewPropertyPage = lazy(async () => ({
+  default: (await import('@/features/properties/NewPropertyPage')).NewPropertyPage,
+}))
+const PropertyDetailPage = lazy(async () => ({
+  default: (await import('@/features/properties/PropertyDetailPage')).PropertyDetailPage,
+}))
+const LeasesPage = lazy(async () => ({
+  default: (await import('@/features/leases/LeasesPage')).LeasesPage,
+}))
+const NewLeasePage = lazy(async () => ({
+  default: (await import('@/features/leases/NewLeasePage')).NewLeasePage,
+}))
+const LeaseDetailPage = lazy(async () => ({
+  default: (await import('@/features/leases/LeaseDetailPage')).LeaseDetailPage,
+}))
+const TicketsPage = lazy(async () => ({
+  default: (await import('@/features/tickets/TicketsPage')).TicketsPage,
+}))
+const TicketDetailPage = lazy(async () => ({
+  default: (await import('@/features/tickets/TicketDetailPage')).TicketDetailPage,
+}))
+const BillsPage = lazy(async () => ({
+  default: (await import('@/features/bills/BillsPage')).BillsPage,
+}))
+const NewBillPage = lazy(async () => ({
+  default: (await import('@/features/bills/NewBillPage')).NewBillPage,
+}))
+const BillDetailPage = lazy(async () => ({
+  default: (await import('@/features/bills/BillDetailPage')).BillDetailPage,
+}))
+const ChargesPage = lazy(async () => ({
+  default: (await import('@/features/charges/ChargesPage')).ChargesPage,
+}))
+const ChargeDetailPage = lazy(async () => ({
+  default: (await import('@/features/charges/ChargeDetailPage')).ChargeDetailPage,
+}))
+const PaymentsPage = lazy(async () => ({
+  default: (await import('@/features/payments/PaymentsPage')).PaymentsPage,
+}))
+const ExpenseGroupsPage = lazy(async () => ({
+  default: (await import('@/features/expenses/ExpenseGroupsPage')).ExpenseGroupsPage,
+}))
+const ExpenseGroupDetailPage = lazy(async () => ({
+  default: (await import('@/features/expenses/ExpenseGroupDetailPage')).ExpenseGroupDetailPage,
+}))
 
 /**
  * I percorsi sono **in italiano**, come l'interfaccia.
@@ -61,7 +119,14 @@ export function App() {
 
   if (!session) {
     return (
-      <Routes>
+      /* **Un confine di `Suspense` senza il suo stato è una pagina bianca** dove
+         prima c'era uno scheletro, ed è il difetto che la divisione del bundle
+         introduce se la si fa distrattamente. Qui il ripiego è lo stesso
+         `Loading` a schermo intero che il ripristino della sessione mostra un
+         istante prima: chi arriva vede una cosa sola che continua, non un lampo
+         di bianco fra due schermate. */
+      <Suspense fallback={<Loading className="min-h-screen justify-center" />}>
+        <Routes>
         <Route path="/accesso" element={<LoginPage />} />
         <Route path="/registrazione" element={<RegisterPage />} />
         {/* Accettare un invito richiede una sessione — la rotta dell'API è
@@ -77,13 +142,20 @@ export function App() {
           path="*"
           element={<Navigate to="/accesso" replace state={{ from: location.pathname }} />}
         />
-      </Routes>
+        </Routes>
+      </Suspense>
     )
   }
 
   return (
     <QueryProvider>
       <Routes>
+        {/* Il confine sta **dentro** il guscio e non attorno, ed è la
+            differenza fra una schermata che arriva e un'applicazione che
+            sparisce: fuori, il cambio di rotta smonterebbe navigazione e
+            selettore dell'organizzazione a ogni passaggio. Il ripiego è lo
+            `SkeletonRows` che le schermate usano già mentre caricano i propri
+            dati, quindi il salto di layout è quello di sempre. */}
         <Route element={<AppShell />}>
           {/* La radice è del ruolo, non della schermata. Per lo staff è il
               riepilogo; per chi abita è lo scadenzario, perché la dashboard gli
