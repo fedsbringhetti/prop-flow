@@ -1,7 +1,10 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Ventisei voci**, con un identificatore stabile ciascuna.
+**Ventuno voci**, con un identificatore stabile ciascuna.
+
+Erano ventisei: `R4`, `R5`, `R6`, `R10` e `R20`, più il bottone del thread, sono uscite
+con la [sezione 1](11-piani-conclusi.md#esito-sezione-1) l'8 settembre 2026.
 
 ## Perché un file a sé
 
@@ -69,7 +72,7 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 
 | | Sezione | Voci | Natura | Perché è lì |
 |---|---|---|---|---|
-| **1** | Ritocchi visibili | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Nessuna decisione aperta e nessuna dipendenza: è la sola sezione che si può eseguire senza discutere niente. Restituisce un prodotto più usabile per continuare a provarlo, che è il modo in cui queste voci stanno uscendo. `R4` è qui e non altrove perché tocca `AuthPage.tsx`, lo **stesso file** di `R5`: aprire quei due form una volta invece di due |
+| ~~**1**~~ | ~~Ritocchi visibili~~ — **conclusa** l'8 settembre 2026 | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-1) · [esito](11-piani-conclusi.md#esito-sezione-1). La riga resta perché l'ordine si legge per intero, e perché l'esito dice una cosa che serve alle sezioni dopo: la navigazione richiedeva **tre** modifiche e non due |
 | **2** | Le pendenze della fetta C | `R2` `R3` + il collaudo in undici punti | doc + due righe di backend | Chiude la fetta precedente invece di lasciarla a metà. `R2` è una correzione al testo del collaudo che va fatta **prima** di percorrerlo, o il punto 10 non prova ciò che dice |
 | **3** | Contratti: correggere gli errori | `R13` `R17` `R18` `R12` `R14` | backend | **Il nodo**, e il danno peggiore che esiste adesso: in database ci sono già contratti attivi con le quote sbagliate e nessun modo di correggerli. `R12` e `R14` entrano perché si toccano gli stessi handler |
 | **4** | Stati che nessuno aggiorna | `R1` `R11` `R25` | da decidere | Tre volte la stessa domanda — **derivato o scritto a mano?** — e conviene rispondere una volta sola. `R11` propende per derivato, `R1` per scritto, `R25` è una capacità che manca del tutto |
@@ -79,7 +82,7 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | **8** | Il perimetro dei ruoli | `R9` | modello + ADR | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di sicurezza. **ADR prima del codice** |
 | **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
 
-**Si comincia dalla sezione 1.**
+**La sezione 1 è conclusa: si continua dalla 2.**
 
 L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
 riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
@@ -94,15 +97,11 @@ alla conversazione successiva un contesto che non può ricostruire.
 | R1 | aperta | **Un immobile non esce mai da `draft`** | `PATCH /properties/{id}` accetta `status` (`UpdatePropertyRequest`), e **nessuna schermata lo manda**: né la creazione né `EditPropertyDialog`. Niente lo deriva, quindi l'etichetta resta sbagliata per sempre. **Non blocca nulla** — nessun use case guarda lo stato dell'immobile. Da chiudere è un `<Select>` nel dialogo. Nota di metodo: l'audit della fetta C non poteva trovarlo, perché confronta quali *funzioni* nessuno chiama e `updateProperty` **è** chiamata, solo mai con quel campo |
 | R2 | aperta | **Il punto 10 del collaudo non prova `C2` come è scritto** | Dice «il proprietario in una finestra, un inquilino nell'altra», e due account richiedono due contenitori di cookie: senza cookie condiviso non c'è contesa, e il punto passerebbe anche con il lock rimosso. La versione che lo esercita è **due schede dello stesso account nello stesso profilo, ricaricate insieme**. Correzione al testo in `11-piani-conclusi.md` |
 | R3 | aperta | **Il messaggio di `C6` è invecchiato di un giorno** | Dice «nessuno lo carica da solo: lo fa la shell», e il `justfile` ora lo carica con `set dotenv-load`. Due righe in `crates/api/src/config.rs` |
-| R4 | aperta | **`zod` rende `/accesso` la rotta iniziale più pesante** | 543,4 kB (172,4 gz) contro i 438,7 (141,6) del riepilogo: un chunk da 107,9 kB che nessun'altra rotta iniziale tira, sulla prima schermata che vede un utente nuovo. Già in [Debiti tecnici noti](09-stato-e-roadmap.md#debiti-tecnici-noti). Il rimedio è non usarlo **su quei due form**, dove le regole sono un'email, dodici caratteri e un campo obbligatorio |
 
 ### Interfaccia e prodotto
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R5 | aperta | **Mostrare la password**, in accesso e registrazione | `AuthPage.tsx`, i due `Input type="password"`. Il bottone va dentro il campo e deve restare raggiungibile da tastiera; l'etichetta cambia con lo stato e va nel catalogo, non nel JSX |
-| R10 | aperta | **La creazione di una stanza offre meno campi della modifica** | `NewRoomDialog` chiede nome, canone, superficie e bagno privato; `RoomDialog` — la modale di `C4` — aggiunge *arredata*, e il `POST` ne accetterebbe altri ancora. Chi crea una stanza non ha modo di sapere che il resto esiste, e nemmeno che si può correggere dopo: il nome è unico per immobile, quindi «tanto lo sistemo dopo» è proprio la cosa da dire, e non è detta. Da allineare i due form e a mettere la frase nel primo — la stringa non esiste ancora nel catalogo |
-| R6 | aperta | **La navigazione non si vede tutta**: su alcune schermate compare solo la metà superiore. Separatore e sezione dell'organizzazione vanno **in basso** | `#navigazione-principale` in `shell.tsx`. Oggi è un `<nav>` con la lista e, sotto, il selettore in un blocco `lg:block`: manca un'altezza piena con il selettore ancorato in fondo (`flex` in colonna, `min-h`, e la lista che scorre). Va guardato **anche a schermo stretto**, dove il menù è a scomparsa e il selettore sta già nella barra in alto |
 | R7 | aperta | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso |
 | R8 | aperta | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
 
@@ -168,7 +167,6 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 |---|---|---|---|
 | R19 | **decisa** | **La visibilità di una segnalazione diventa una scelta di chi la apre** — casella *«visibile a tutti gli inquilini»* — e il comportamento di oggi resta il default | **Decisa.** Oggi non è un difetto ma la policy: `app.can_access_ticket` (`0014`) concede a staff, a chi l'ha aperta, a chi l'ha in carico, e a `t.lease_id IS NOT NULL AND can_access_lease(...)` — quindi una segnalazione sull'immobile intero, che non ha contratto, resta privata. **Quel default resta**, e si aggiunge una scelta esplicita per il caso vero: la caldaia condominiale interessa a tutti. Serve una colonna su `app.tickets`, un `ALTER POLICY` con un ramo in più, il campo nel DTO e la casella nel form — quindi **una migration**, e non un filtro applicativo: la visibilità è un confine del database. Il predicato «chi guarda abita in questo immobile» va scelto fra ciò che la `0030` ha già introdotto (`app.shares_home_with`, `app.property_residents`) invece di scriverne un terzo. Da decidere se la casella si possa cambiare dopo l'apertura, il che la lega a R19-bis |
 | R19-bis | **decisa** | **Chi ha aperto una segnalazione può modificarla finché nessuno l'ha presa in carico** | **Decisa.** La forma della regola **esiste già** ed è quella dell'annullamento: lo staff sempre, chi ha segnalato **solo finché è `open`** — «finché nessuno ci ha messo mano». Qui vale lo stesso confine, cioè fino ad `assigned`. La trappola sta nella rotta: **`PATCH /tickets/{id}` esiste già** ma è `update_costs`, ed è **solo staff** e sui soli campi di costo. Allargarla significherebbe una rotta con due autorizzazioni diverse a seconda dei campi presenti — costi allo staff, testo a chi ha segnalato — che è il genere di cosa che si sbaglia in silenzio. Da decidere: allargare con attenzione o una rotta a sé, e **quali campi** siano modificabili (titolo e descrizione sì; categoria e priorità sono il lavoro del triage, che è dello staff) |
-| R20 | **decisa** | **«Prendi in carico» si nasconde a chi l'ha già presa in carico** | **Decisa, ed è solo client.** Oggi `assignable = open \|\| triaged \|\| assigned` in `TicketActions.tsx`: `assigned` è nell'elenco perché il bottone serve anche a **riassegnare**, e per questo non si toglie del tutto — sparisce quando `ticket.assigned_to` è chi guarda. Chi la vede assegnata a un altro continua a poterla prendere |
 | R21 | aperta | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo di [R14](#lelenco): i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
 | R22 | aperta | **Nel thread non si capisce chi scrive**: si vorrebbe ruolo e nome — *Proprietario · Mario Rossi* | Stesso ceppo di R21: i messaggi portano l'autore come identificatore. Il **ruolo** però è più economico del nome — si deduce da chi è staff — e da solo risolve gran parte della domanda («me lo dice il proprietario o un coinquilino?»). Vale la pena separare le due metà: il ruolo si può fare senza toccare l'API, il nome no |
 | R23 | aperta | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
@@ -179,38 +177,6 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R25 | aperta | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#lelenco) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
-
-<a id="thread-aggiorna"></a>
-
-#### Il thread non diventa live: un bottone «Aggiorna» — **deciso**
-
-La domanda era se si potesse rendere la conversazione in tempo reale. **Si è deciso di
-no**, e nemmeno con un intervallo automatico: nel riquadro del thread ci va un bottone
-che rilegge, premuto da chi vuole.
-
-È **solo client** e non aggiunge niente all'architettura: il thread ha già una chiave
-propria (`keys.ticketMessages`), scelta perché invalidarlo non rilegga anche il
-dettaglio, quindi il bottone è la sua `refetch`. Va progettato come tutto il resto —
-lo stato di caricamento c'è già, e il bottone si disabilita mentre rilegge.
-
-**Perché sono state scartate le altre due**, e vale la pena lasciarlo scritto perché la
-domanda tornerà:
-
-- **l'intervallo automatico** (`refetchInterval`) costa poco ma fa richieste che
-  nessuno ha chiesto, per una conversazione che nel prodotto vero procede a ore di
-  distanza. Un bottone dice la verità: i messaggi arrivano quando li si va a prendere;
-- **il tempo reale** (`SSE`, più adatto di WebSocket perché il flusso è a senso unico)
-  ha una complicazione che non è di trasporto ma di sicurezza: `EventSource` non può
-  mandare intestazioni, quindi niente `Authorization`. Il token **nell'URL** è escluso —
-  finirebbe in cronologia, `Referer` e log dei proxy, che è l'argomento per cui il
-  codice d'invito non viaggia in un percorso ([ADR-045](08-decisioni.md#adr-045)), e per
-  giunta si tratterebbe dell'access token. Autenticare con il cookie significherebbe
-  usare quello del *refresh* per altro, cioè una decisione di sicurezza a sé.
-
-Se un giorno servisse davvero, il pezzo che manca non è la sorgente: **l'outbox degli
-eventi esiste** e il worker lo drena. Manca la decisione sull'autenticazione del flusso,
-e conviene prenderla dopo [R9](#lelenco), che ridisegna comunque chi vede
-che cosa.
 
 ### Cancellare, in generale
 

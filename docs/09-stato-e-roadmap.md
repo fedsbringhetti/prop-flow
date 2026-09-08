@@ -100,6 +100,9 @@ dell'API dietro un reverse proxy.
 | **Il rinnovo è serializzato fra le schede**: lock per origine sopra il singolo volo, e il token non lascia la memoria ([ADR-044](08-decisioni.md#adr-044)) | completo per la fetta C |
 | **Allegati su sei owner** da un componente solo: immobile, stanza, contratto, segnalazione, bolletta, addebito — con il limite dei 25 MiB controllato prima di inviare e l'archiviazione offerta a chi la policy ammette | completo per la fetta C |
 | **Le stanze si correggono e si archiviano**, da una modale che è la loro unica superficie: `GET /rooms/{id}` non esiste | completo per la fetta C |
+| **La stanza si crea con tutti i suoi campi**, dallo stesso componente che la corregge: sette, non quattro contro cinque. `status` resta fuori finché non si decide se sia derivato (`R11`) | completo per la sezione 1 |
+| **La barra laterale è alta quanto la finestra e resta ferma**, con il selettore dell'organizzazione ancorato in fondo e l'elenco che scorre a sé — da `lg` in su, che sotto è un menù a scomparsa | completo per la sezione 1 |
+| **La password si può guardare**, e i due form di autenticazione non tirano più `zod`: −76,4 kB sulla prima schermata che vede un utente nuovo | completo per la sezione 1 |
 | **Il bundle è diviso per rotta**, con i confini di `Suspense` dentro il guscio e con il loro stato | completo per la fetta C |
 | I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
 | Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
@@ -112,13 +115,15 @@ dell'API dietro un reverse proxy.
 | Pagamenti: registrazione di un incasso con l'attribuzione come scelta esplicita, **coda delle dichiarazioni** con conferma e rifiuto, chiave di idempotenza generata una volta per intento | completo per la fetta A |
 | Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
 
-69 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+73 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
 volo **e quello fra schede, entrambi riprodotti anche al contrario** — 11 sui
 decimali e sulla formattazione, 5
 sulla chiave di idempotenza, 4 sull'accettazione di un invito — l'header che **non**
 si manda, l'organizzazione che si sceglie, e il messaggio che non parla di password —
-9 sui percorsi da sola tastiera e sui form che non
-perdono ciò che è stato digitato, 6 sulla dichiarazione di pagamento, 5 sul guscio —
+10 sui percorsi da sola tastiera e sui form che non
+perdono ciò che è stato digitato — fra cui il bottone che mostra la password, che è nel
+giro di tabulazione e **non invia il form** — 3 su «Prendi in carico», che sparisce a chi
+ce l'ha e resta su ciò che è di qualcun altro, 6 sulla dichiarazione di pagamento, 5 sul guscio —
 la navigazione per ruolo, il selettore che mostra i nomi, e l'organizzazione
 ricordata che l'elenco vero corregge — e 13 sulle spese co-living: la risoluzione dei
 nomi **compreso chi non è più residente**, la somma dei netti verificata sugli interi, e
@@ -273,7 +278,7 @@ cambia il contesto.
 | ~~Il refresh non è coordinato **fra schede**~~ — **chiuso** dalla fetta C, `C2` | Era il difetto più costoso della lista, ed era **osservato** e non ipotetico: due schede aperte, l'access token scaduto insieme, la seconda che presenta un refresh già ruotato, e l'API che revoca la catena. La previsione era «serve `BroadcastChannel` o un lock su `localStorage`», e la seconda metà è quella giusta — ma la parte che contava non era il meccanismo: era **che cosa** le schede si scambiano. Trasmettere l'access token avrebbe funzionato e avrebbe rotto la proprietà per cui quel token vive in memoria. Si serializza invece: `navigator.locks` con ripiego su un marcatore che scade, e ognuna rinnova per sé presentando il cookie ruotato. Vedi [ADR-044](08-decisioni.md#adr-044) | Chiuso. Il punto 10 del collaudo è la sua prova, e prima della fetta era **certo** che fallisse |
 | ~~Non esiste un endpoint che elenchi le **organizzazioni** di un utente~~ — **chiuso** dalla fetta B | `GET /api/v1/organizations` restituisce `id`, `name`, `slug` e `role`, ed è **l'unica rotta che risponde senza un'organizzazione attiva**: chiederne una per sapere quali si hanno sarebbe circolare. La previsione era «un `GET /memberships` di poche righe, e la domanda vera è quali colonne esporre»: il percorso è `/organizations` senza prefisso `me` — la Row Level Security restringe già alle proprie — e le colonne sono quattro. Il `localStorage` si è ridotto a ricordare *quale* era attiva. Vedi [ADR-041](08-decisioni.md#adr-041) | Chiuso |
 | ~~Il bundle del client è un pezzo solo~~ — **chiuso** dalla fetta C, `C5`, e ne lascia uno nuovo | Diviso per rotta con `React.lazy`, e i confini di `Suspense` stanno **dentro** il guscio: fuori, ogni cambio di rotta avrebbe smontato navigazione e selettore dell'organizzazione. La rotta iniziale di chi abita passa da 690,6 kB (201,7 gz) a **455,7 (148,3)**, quella di chi amministra a **438,7 (141,6)**. Il totale su tutte le rotte **cresce** — 706,8 kB, 226,2 gz — ed è il baratto giusto, ma va saputo prima che qualcuno lo misuri senza dire di quale rotta | Chiuso. I numeri per rotta sono nell'[esito](11-piani-conclusi.md#esito-fetta-c) |
-| **Il login è la rotta iniziale più pesante**, ed è la prima che si vede | Emerso misurando `C5`, e prima era invisibile perché ogni rotta pesava uguale. `AuthPage` valida i form con `zod`, che è un chunk da 107,9 kB (32,5 gz) tirato dentro da nessun'altra rotta iniziale: `/accesso` sta a **543,4 kB (172,4 gz)** contro i 438,7 (141,6) del riepilogo. È il posto peggiore in cui avere il picco — un utente nuovo non ha nulla in cache — e il rimedio non è togliere `zod` dal progetto: è non usarlo **su quei due form**, dove le regole sono un'email, dodici caratteri e un campo obbligatorio. Fuori dalla fetta C perché il perimetro era chiuso, non perché sia difficile | Quando qualcuno di esterno userà il login su rete mobile, o insieme al prossimo intervento sui form di autenticazione |
+| ~~**Il login è la rotta iniziale più pesante**~~ — **chiuso** dalla sezione 1, `S2` | `zod` è uscito da `AuthPage` e da lì soltanto: le regole di quei due form sono tre — un'email, dodici caratteri, dei campi obbligatori — e `react-hook-form` le esprime da sé. Rimisurato prima e dopo sullo stesso albero: **−76,4 kB (−20,6 gz)**, da 556,5 kB (176,6) a **480,1 (156,0)**. Restano 30 kB sopra il riepilogo, e non sono `zod`: sono `react-hook-form`, che quei form usano davvero. **Le altre tre schermate tengono `zod`**, e non è un'incoerenza da sanare — sono rotte pigre, e «uniformare» rimetterebbe il chunk sulla prima schermata | Chiuso. I numeri e il metodo sono nell'[esito](11-piani-conclusi.md#esito-sezione-1) |
 | Gli allegati si scaricano da un link senza `Authorization` | `GET /documents/{id}/content` risponde `307` verso un URL pre-firmato, e il client ci arriva con un `<a href>` — che è ciò che permette al browser di scaricare invece di tenere i byte in memoria. Il link però non porta il token, quindi funziona solo finché la rotta accetta la richiesta dal contesto della scheda. Oggi funziona; il giorno in cui l'API pretendesse l'header su quella rotta, il download smetterebbe di funzionare **senza che nulla in questo repository cambi** | Se il download smette di funzionare, o quando si decida come firmare i link lato client. L'alternativa è un `fetch` con il token seguito da un `blob:` URL, che tiene il file in memoria — accettabile per un PDF, non per una scansione da 25 MB |
 | `actions/checkout@v4` gira su Node 20 | I runner lo forzano già su Node 24 con un avviso di deprecazione. Non rompe oggi, romperà quando GitHub toglierà il ponte | Al prossimo intervento sui workflow, o quando l'avviso diventa errore |
 | La coda delle dichiarazioni non si filtra per immobile | `GET /api/v1/payments` ha `status` e `lease_id`, e non `property_id`: `app.payments` non ha quella colonna e il legame passerebbe da due salti (`payment → charge → lease → property`). Con pochi immobili la coda sta in una pagina e il filtro non compra niente; con decine diventa lunga | Quando gli immobili per organizzazione passano la decina, o se qualcuno chiede «i pagamenti di questa casa» |
@@ -282,16 +287,19 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [sezione 1](#piano-sezione-1)**, prima delle nove dell'
-[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione): sei ritocchi di sola
-interfaccia, nessuna decisione da prendere, e un prodotto più usabile per continuare a
-provarlo — che è il modo in cui le voci di [12](12-da-fare.md) stanno uscendo.
+**Il [collaudo della fetta C](11-piani-conclusi.md#esito-fetta-c)**, in undici punti, a
+mano, con due account e senza mai aprire `curl`. Non è una formalità dopo il lavoro: **è
+il criterio della fetta**, e il codice di `C1`–`C6` è scritto, verde e non ancora
+attraversato per intero. È la **sezione 2** dell'
+[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione), e comincia correggendo il
+testo del punto 10 (`R2`), che come è scritto non proverebbe ciò che dice.
 
-**Subito dopo, il [collaudo della fetta C](11-piani-conclusi.md#esito-fetta-c)**, in
-undici punti, a mano, con due account e senza mai aprire `curl`. Non è una formalità dopo
-il lavoro: **è il criterio della fetta**, e il codice di `C1`–`C6` è scritto, verde e non
-ancora attraversato per intero. È la sezione 2, e comincia correggendo il testo del punto
-10, che come è scritto non proverebbe ciò che dice.
+**La sezione 1 è conclusa** — sei ritocchi di sola interfaccia, nessuna decisione da
+prendere: [piano](11-piani-conclusi.md#piano-sezione-1) ·
+[esito](11-piani-conclusi.md#esito-sezione-1). Il backend non è stato toccato, e
+`/accesso` è stata rimisurata: **−76,4 kB (−20,6 gz)** sulla prima schermata che vede un
+utente nuovo. Ciò che quel lavoro ha trovato e che il piano non prevedeva — la
+navigazione richiedeva **tre** modifiche e non due — sta nell'esito.
 
 Il punto **10** — due finestre aperte insieme che non buttano fuori nessuno — è la prova
 di `C2`, e prima di questa fetta era **certo** che fallisse. Il punto **2** e il punto
@@ -344,231 +352,12 @@ esattamente uno staff.
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
 
-<a id="piano-sezione-1"></a>
-
-## Piano — Sezione 1: ritocchi visibili
-
-Pianificata l'**8 settembre 2026**. È la prima delle nove sezioni dell'
-[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione), e chiude **sei** voci:
-`R5`, `R4`, `R6`, `R10`, `R20` e il bottone del thread.
-
-**È la sola sezione che non richiede di decidere niente**, ed è per questo che va per
-prima: nessuna migration, nessuna rotta nuova, nessun cambiamento di dominio. Tutto
-`apps/web/`, e il backend non si tocca — **424 test Rust prima e dopo**.
-
-Il criterio di completamento è d'uso e non di suite: il prodotto va provato meglio dopo,
-perché è provandolo che stanno uscendo le voci di [12](12-da-fare.md).
-
-### Che cosa è stato deciso prima di pianificare
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| La validazione di accesso e registrazione | le regole native di **react-hook-form** | tenere `zod` e accettare il chunk sulla prima schermata |
-| La creazione di una stanza | **tutti** i campi che il `POST` accetta, meno `status` | lasciarla minima e rimandare alla modifica |
-| La navigazione | altezza piena e selettore **ancorato in fondo** | solo spostare il blocco, senza toccare l'altezza |
-| Il thread | un bottone **Aggiorna** premuto da chi vuole | un `refetchInterval`, o `SSE` |
-
-### Decisioni, con il perché
-
-#### 1. `zod` esce da `AuthPage`, e resta ovunque altro
-
-`/accesso` è la rotta iniziale più pesante — **543,4 kB contro i 438,7 del riepilogo** —
-perché `AuthPage` è l'unica entry iniziale che tira `zod`, un chunk da 107,9 kB (32,5
-gz). È il posto peggiore in cui avere il picco: chi arriva la prima volta non ha nulla in
-cache.
-
-Le regole di quei due form sono **tre**: un'email formalmente valida, dodici caratteri di
-password, campi obbligatori. `react-hook-form` le esprime da sé con `register(...,
-{ required, pattern, minLength })` — è già una dipendenza, e non se ne aggiunge nessuna.
-
-*Alternativa scartata: tenere `zod`.* Ha un argomento vero — **la coerenza**:
-`NewLeasePage`, `NewPropertyPage` e `NewBillPage` usano `zod` con `zodResolver`, e
-`AuthPage` diventerà l'unico form scritto in un altro modo. Si accetta, e il commento nel
-file deve dirlo, perché altrimenti qualcuno lo «uniformerà» rimettendo il chunk sulla
-prima schermata. **Le altre tre restano con `zod`**: sono rotte pigre, quindi il loro
-peso non è sulla prima visita.
-
-**La regola del server resta l'autorità**: il controllo a dodici caratteri qui evita un
-giro di rete per dire una cosa che si sa già, e non sostituisce niente. È già scritto
-così nel file e va conservato.
-
-#### 2. La stanza si crea con tutti i suoi campi, tranne lo stato
-
-`POST /properties/{id}/rooms` accetta **otto** campi: `name`, `status`, `size_sqm`,
-`floor`, `has_private_bathroom`, `is_furnished`, `monthly_rent`,
-`utility_share_percent`. Il form ne offre **quattro**, e la modale di modifica cinque:
-chi crea non ha modo di sapere che il resto esiste.
-
-Entrano `floor`, `is_furnished` e `utility_share_percent`. Quest'ultimo con il suo
-significato scritto — *assente vale «in parti uguali»* — perché un campo numerico vuoto
-in una schermata di co-living è ambiguo fra «zero» e «non specificato».
-
-**`status` resta fuori, ed è una scelta e non una dimenticanza.** Che stato abbia una
-stanza è la domanda di [`R11`](12-da-fare.md#lelenco), che è la sezione 4: oggi
-`Occupied` non lo scrive nessuno, e il dominio dichiara una transizione che non esiste.
-Offrire una tendina adesso **anticiperebbe quella decisione** nel posto sbagliato — e se
-la sezione 4 concludesse che lo stato va derivato dai contratti, quella tendina andrebbe
-tolta subito dopo averla aggiunta.
-
-**Va detto che si può correggere dopo**, ed è metà della voce: il nome è unico per
-immobile, quindi «tanto lo sistemo dopo» è esattamente la frase che serve. La stringa non
-esiste nel catalogo e va aggiunta.
-
-#### 3. La navigazione: il problema non è dove sta il blocco, è l'altezza
-
-Il sintomo è che su alcune schermate la barra laterale «si vede solo a metà». La causa è
-in `shell.tsx` e **non è il blocco dell'organizzazione**:
-
-```
-<div className="min-h-screen">                    ← il vincolo d'altezza è QUI
-  <div className="... flex ... lg:flex-row">      ← e questo ha altezza automatica
-    <nav className="shrink-0 ... lg:w-60">
-```
-
-`min-height` su un genitore **non allunga** un figlio di blocco: il contenitore flex è
-alto quanto il suo contenuto, e la barra — che è `stretch` dentro di esso — finisce dove
-finisce il contenuto. Su una schermata con poche righe si ferma a metà schermo, e sembra
-tagliata.
-
-Quindi servono **due** cose, e farne una sola non basta: il contenitore flex deve essere
-alto almeno quanto la finestra, e dentro la barra il blocco del selettore va spinto in
-fondo (`mt-auto` in una colonna flex). Spostare il blocco senza l'altezza lo lascerebbe
-attaccato all'elenco come adesso.
-
-**Solo da `lg` in su.** Sotto quella soglia la navigazione è un menù a scomparsa e il
-selettore sta già nella barra superiore: un `mt-auto` incondizionato spingerebbe in fondo
-qualcosa che lì non deve stare.
-
-L'elenco delle voci va reso scorrevole a sé (`overflow-y-auto`), altrimenti su una
-finestra bassa il selettore ancorato in fondo spinge fuori le ultime voci — che è lo
-stesso difetto, spostato.
-
-#### 4. «Prendi in carico» sparisce solo a chi ce l'ha
-
-`assignable = open || triaged || assigned`, e `assigned` è nell'elenco **apposta**: il
-bottone serve anche a **riassegnare** a qualcun altro. Non si toglie quindi lo stato dalla
-condizione — si aggiunge che chi guarda non sia già l'assegnatario.
-
-*Alternativa scartata: nasconderlo su `assigned` in generale.* Toglierebbe la
-riassegnazione, che è una funzione vera anche se oggi in organizzazione c'è un solo staff.
-
-#### 5. Il thread si aggiorna con un bottone
-
-Deciso: né tempo reale né intervallo automatico. Le ragioni per esteso, comprese le due
-vie scartate e il motivo di sicurezza che esclude `SSE` oggi, stanno in
-[12](12-da-fare.md#thread-aggiorna).
-
-Qui basta la parte esecutiva: il thread ha già una chiave propria
-(`keys.ticketMessages`), quindi il bottone è la sua `refetch`, e va **disabilitato mentre
-rilegge** — un bottone che non dà segno di aver fatto qualcosa viene premuto tre volte.
-
-### Decomposizione
-
-I passi sono **indipendenti** e si possono eseguire e verificare uno per uno. L'ordine
-suggerito mette per primo ciò che si vede subito.
-
-##### `S1` — Mostrare la password
-
-`AuthPage.tsx`, i due campi `type="password"`. Un bottone dentro il campo che alterna
-`password` e `text`.
-
-Va **raggiungibile da tastiera** e deve dire che cosa fa: `aria-label` che cambia con lo
-stato, e `aria-pressed`. Le due etichette vanno nel catalogo, non nel JSX. Il campo non
-deve perdere il focus quando si preme.
-
-##### `S2` — `zod` fuori da `AuthPage`
-
-Sostituire `zodResolver` con le regole native di `react-hook-form` sui due form, togliere
-gli import di `zod` **da quel file soltanto**, e lasciare un commento che dica perché
-questo form è diverso dagli altri tre.
-
-**La misura si rifà e si scrive**: la rotta `/accesso` va rimisurata sulla chiusura
-transitiva degli import, come nella fetta C, e il numero va nell'esito. Senza numero non
-si sa se è servito.
-
-##### `S3` — La navigazione a tutta altezza, con il selettore in fondo
-
-`shell.tsx`. Portare il vincolo d'altezza sul contenitore flex, rendere la barra una
-colonna flex da `lg` in su, spingere in fondo il blocco del selettore, e rendere
-scorrevole l'elenco.
-
-**Da provare a tre altezze**: una schermata con poche righe — dove il difetto si vede —
-una lunga, e una finestra bassa, dove si verifica che il selettore non spinga fuori le
-voci. E a 375 px, dove non deve cambiare niente.
-
-##### `S4` — La stanza si crea con tutti i campi
-
-`NewRoomDialog` in `PropertyDetailPage.tsx`: aggiungere `floor`, `is_furnished` e
-`utility_share_percent`, con il suo significato. Aggiungere la frase che dice che si può
-correggere dopo, e la stringa nel catalogo.
-
-**I due form vanno allineati**, non solo ampliati: `NewRoomDialog` e `RoomDialog`
-chiedono le stesse cose, e sono già due elenchi di campi che divergono. Se diventano tre
-divergeranno di nuovo — vale la pena estrarre i campi condivisi in un componente solo, che
-è anche ciò che impedisce alla prossima aggiunta di finire in uno solo dei due.
-
-##### `S5` — «Prendi in carico» sparisce a chi ce l'ha
-
-`TicketActions.tsx`: alla condizione si aggiunge che `ticket.assigned_to` non sia chi
-guarda. Serve l'identificatore dalla sessione, che il file già può leggere.
-
-##### `S6` — Il bottone «Aggiorna» nel thread
-
-`TicketDetailPage.tsx`, nella `ThreadCard`. Un bottone nell'intestazione del riquadro che
-chiama la `refetch` della query paginata, disabilitato mentre è in volo. Stringa nel
-catalogo.
-
-### Trappole
-
-**Il catalogo, sempre.** Nessuna stringa visibile dentro un componente: le nuove vanno in
-`i18n/it.ts`. È la regola che una sezione di soli ritocchi viola più facilmente, perché
-ogni singola stringa sembra troppo piccola per meritare una chiave.
-
-**`min-height` su un genitore non allunga un figlio di blocco.** È la causa di `R6`, ed è
-la cosa che si sbaglia riprovandoci: spostare il blocco senza toccare l'altezza non
-risolve niente.
-
-**`mt-auto` va condizionato a `lg`.** Sotto, la navigazione è un menù a scomparsa e non
-una colonna alta quanto lo schermo.
-
-**Il bottone della password non deve inviare il form.** Dentro un `<form>` il default di
-`<button>` è `submit`: `Button` del progetto mette già `type="button"` da sé, e questo va
-**conservato** se si scrive un elemento a mano invece di usarlo.
-
-**`assigned` non esce dalla condizione di `assignable`.** Serve alla riassegnazione: si
-aggiunge un termine, non si toglie uno stato.
-
-**Le altre tre schermate con `zod` non si toccano.** Sono rotte pigre e il loro peso non
-è sulla prima visita; «uniformare» toglierebbe validazione dove non costa niente.
-
-**Le azioni avvolgono.** Chi aggiunge il bottone del thread o quello della password non
-reintroduca `shrink-0`: è la trappola registrata dalla fetta B, e a 375 px fa scorrere in
-orizzontale la pagina intera.
-
-### Come si saprà che è finita
-
-- i due form di accesso mostrano la password, da mouse e da tastiera;
-- `/accesso` **misurata di nuovo**, con il numero scritto nell'esito;
-- la barra laterale arriva in fondo su una schermata corta, e il selettore sta in basso;
-- una stanza si crea con tutti i suoi dati, e la schermata dice che si correggono dopo;
-- «Prendi in carico» non compare su ciò che si ha già in carico, e compare su ciò che ha
-  qualcun altro;
-- il thread ha il suo bottone, che si disabilita mentre lavora;
-- `npm run typecheck`, `lint`, `test`, `build` verdi, e **424 test Rust invariati**.
-
-### Che cosa **non** entra
-
-- **`R1`, `R11`, `R25`** — gli stati che nessuno aggiorna: sono la sezione 4, e hanno una
-  decisione comune da prendere una volta sola;
-- **il collaudo in undici punti**, che è la sezione 2;
-- **qualunque cosa tocchi l'API.** Se durante l'esecuzione sembra necessaria una rotta,
-  la conclusione giusta è che quella cosa appartiene a un'altra sezione.
 
 <a id="raccolta-da-ordinare"></a>
 
 ## Da fare — l'elenco sta in [12](12-da-fare.md)
 
-Le cose da sistemare e da costruire — **ventisei voci**, raccolte usando il prodotto e
+Le cose da sistemare e da costruire — **ventuno voci**, raccolte usando il prodotto e
 leggendo il codice — hanno un file loro: [12 — Da fare](12-da-fare.md).
 
 **Stanno lì e non qui per una ragione di ciclo di vita**, che è il criterio con cui

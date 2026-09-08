@@ -6865,3 +6865,382 @@ oggetto che non la chiede.
 | 11 | il percorso dell'inquilino **a 375 px** | — |
 
 Ciò che il giro trova va scritto qui **anche se non si corregge**.
+
+---
+
+<a id="piano-sezione-1"></a>
+
+## Piano — Sezione 1: ritocchi visibili
+
+Pianificata l'**8 settembre 2026**. È la prima delle nove sezioni dell'
+[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione), e chiude **sei** voci:
+`R5`, `R4`, `R6`, `R10`, `R20` e il bottone del thread.
+
+**È la sola sezione che non richiede di decidere niente**, ed è per questo che va per
+prima: nessuna migration, nessuna rotta nuova, nessun cambiamento di dominio. Tutto
+`apps/web/`, e il backend non si tocca — **424 test Rust prima e dopo**.
+
+Il criterio di completamento è d'uso e non di suite: il prodotto va provato meglio dopo,
+perché è provandolo che stanno uscendo le voci di [12](12-da-fare.md).
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| La validazione di accesso e registrazione | le regole native di **react-hook-form** | tenere `zod` e accettare il chunk sulla prima schermata |
+| La creazione di una stanza | **tutti** i campi che il `POST` accetta, meno `status` | lasciarla minima e rimandare alla modifica |
+| La navigazione | altezza piena e selettore **ancorato in fondo** | solo spostare il blocco, senza toccare l'altezza |
+| Il thread | un bottone **Aggiorna** premuto da chi vuole | un `refetchInterval`, o `SSE` |
+
+### Decisioni, con il perché
+
+#### 1. `zod` esce da `AuthPage`, e resta ovunque altro
+
+`/accesso` è la rotta iniziale più pesante — **543,4 kB contro i 438,7 del riepilogo** —
+perché `AuthPage` è l'unica entry iniziale che tira `zod`, un chunk da 107,9 kB (32,5
+gz). È il posto peggiore in cui avere il picco: chi arriva la prima volta non ha nulla in
+cache.
+
+Le regole di quei due form sono **tre**: un'email formalmente valida, dodici caratteri di
+password, campi obbligatori. `react-hook-form` le esprime da sé con `register(...,
+{ required, pattern, minLength })` — è già una dipendenza, e non se ne aggiunge nessuna.
+
+*Alternativa scartata: tenere `zod`.* Ha un argomento vero — **la coerenza**:
+`NewLeasePage`, `NewPropertyPage` e `NewBillPage` usano `zod` con `zodResolver`, e
+`AuthPage` diventerà l'unico form scritto in un altro modo. Si accetta, e il commento nel
+file deve dirlo, perché altrimenti qualcuno lo «uniformerà» rimettendo il chunk sulla
+prima schermata. **Le altre tre restano con `zod`**: sono rotte pigre, quindi il loro
+peso non è sulla prima visita.
+
+**La regola del server resta l'autorità**: il controllo a dodici caratteri qui evita un
+giro di rete per dire una cosa che si sa già, e non sostituisce niente. È già scritto
+così nel file e va conservato.
+
+#### 2. La stanza si crea con tutti i suoi campi, tranne lo stato
+
+`POST /properties/{id}/rooms` accetta **otto** campi: `name`, `status`, `size_sqm`,
+`floor`, `has_private_bathroom`, `is_furnished`, `monthly_rent`,
+`utility_share_percent`. Il form ne offre **quattro**, e la modale di modifica cinque:
+chi crea non ha modo di sapere che il resto esiste.
+
+Entrano `floor`, `is_furnished` e `utility_share_percent`. Quest'ultimo con il suo
+significato scritto — *assente vale «in parti uguali»* — perché un campo numerico vuoto
+in una schermata di co-living è ambiguo fra «zero» e «non specificato».
+
+**`status` resta fuori, ed è una scelta e non una dimenticanza.** Che stato abbia una
+stanza è la domanda di [`R11`](12-da-fare.md#lelenco), che è la sezione 4: oggi
+`Occupied` non lo scrive nessuno, e il dominio dichiara una transizione che non esiste.
+Offrire una tendina adesso **anticiperebbe quella decisione** nel posto sbagliato — e se
+la sezione 4 concludesse che lo stato va derivato dai contratti, quella tendina andrebbe
+tolta subito dopo averla aggiunta.
+
+**Va detto che si può correggere dopo**, ed è metà della voce: il nome è unico per
+immobile, quindi «tanto lo sistemo dopo» è esattamente la frase che serve. La stringa non
+esiste nel catalogo e va aggiunta.
+
+#### 3. La navigazione: il problema non è dove sta il blocco, è l'altezza
+
+Il sintomo è che su alcune schermate la barra laterale «si vede solo a metà». La causa è
+in `shell.tsx` e **non è il blocco dell'organizzazione**:
+
+```
+<div className="min-h-screen">                    ← il vincolo d'altezza è QUI
+  <div className="... flex ... lg:flex-row">      ← e questo ha altezza automatica
+    <nav className="shrink-0 ... lg:w-60">
+```
+
+`min-height` su un genitore **non allunga** un figlio di blocco: il contenitore flex è
+alto quanto il suo contenuto, e la barra — che è `stretch` dentro di esso — finisce dove
+finisce il contenuto. Su una schermata con poche righe si ferma a metà schermo, e sembra
+tagliata.
+
+Quindi servono **due** cose, e farne una sola non basta: il contenitore flex deve essere
+alto almeno quanto la finestra, e dentro la barra il blocco del selettore va spinto in
+fondo (`mt-auto` in una colonna flex). Spostare il blocco senza l'altezza lo lascerebbe
+attaccato all'elenco come adesso.
+
+**Solo da `lg` in su.** Sotto quella soglia la navigazione è un menù a scomparsa e il
+selettore sta già nella barra superiore: un `mt-auto` incondizionato spingerebbe in fondo
+qualcosa che lì non deve stare.
+
+L'elenco delle voci va reso scorrevole a sé (`overflow-y-auto`), altrimenti su una
+finestra bassa il selettore ancorato in fondo spinge fuori le ultime voci — che è lo
+stesso difetto, spostato.
+
+#### 4. «Prendi in carico» sparisce solo a chi ce l'ha
+
+`assignable = open || triaged || assigned`, e `assigned` è nell'elenco **apposta**: il
+bottone serve anche a **riassegnare** a qualcun altro. Non si toglie quindi lo stato dalla
+condizione — si aggiunge che chi guarda non sia già l'assegnatario.
+
+*Alternativa scartata: nasconderlo su `assigned` in generale.* Toglierebbe la
+riassegnazione, che è una funzione vera anche se oggi in organizzazione c'è un solo staff.
+
+#### 5. Il thread si aggiorna con un bottone
+
+Deciso: né tempo reale né intervallo automatico. Le ragioni per esteso, comprese le due
+vie scartate e il motivo di sicurezza che esclude `SSE` oggi, stanno
+[in fondo a questo piano](#thread-aggiorna) — sono state scritte in
+[12](12-da-fare.md) quando la decisione è stata presa, e si sono spostate qui con la voce
+che chiudevano.
+
+Qui basta la parte esecutiva: il thread ha già una chiave propria
+(`keys.ticketMessages`), quindi il bottone è la sua `refetch`, e va **disabilitato mentre
+rilegge** — un bottone che non dà segno di aver fatto qualcosa viene premuto tre volte.
+
+### Decomposizione
+
+I passi sono **indipendenti** e si possono eseguire e verificare uno per uno. L'ordine
+suggerito mette per primo ciò che si vede subito.
+
+##### `S1` — Mostrare la password
+
+`AuthPage.tsx`, i due campi `type="password"`. Un bottone dentro il campo che alterna
+`password` e `text`.
+
+Va **raggiungibile da tastiera** e deve dire che cosa fa: `aria-label` che cambia con lo
+stato, e `aria-pressed`. Le due etichette vanno nel catalogo, non nel JSX. Il campo non
+deve perdere il focus quando si preme.
+
+##### `S2` — `zod` fuori da `AuthPage`
+
+Sostituire `zodResolver` con le regole native di `react-hook-form` sui due form, togliere
+gli import di `zod` **da quel file soltanto**, e lasciare un commento che dica perché
+questo form è diverso dagli altri tre.
+
+**La misura si rifà e si scrive**: la rotta `/accesso` va rimisurata sulla chiusura
+transitiva degli import, come nella fetta C, e il numero va nell'esito. Senza numero non
+si sa se è servito.
+
+##### `S3` — La navigazione a tutta altezza, con il selettore in fondo
+
+`shell.tsx`. Portare il vincolo d'altezza sul contenitore flex, rendere la barra una
+colonna flex da `lg` in su, spingere in fondo il blocco del selettore, e rendere
+scorrevole l'elenco.
+
+**Da provare a tre altezze**: una schermata con poche righe — dove il difetto si vede —
+una lunga, e una finestra bassa, dove si verifica che il selettore non spinga fuori le
+voci. E a 375 px, dove non deve cambiare niente.
+
+##### `S4` — La stanza si crea con tutti i campi
+
+`NewRoomDialog` in `PropertyDetailPage.tsx`: aggiungere `floor`, `is_furnished` e
+`utility_share_percent`, con il suo significato. Aggiungere la frase che dice che si può
+correggere dopo, e la stringa nel catalogo.
+
+**I due form vanno allineati**, non solo ampliati: `NewRoomDialog` e `RoomDialog`
+chiedono le stesse cose, e sono già due elenchi di campi che divergono. Se diventano tre
+divergeranno di nuovo — vale la pena estrarre i campi condivisi in un componente solo, che
+è anche ciò che impedisce alla prossima aggiunta di finire in uno solo dei due.
+
+##### `S5` — «Prendi in carico» sparisce a chi ce l'ha
+
+`TicketActions.tsx`: alla condizione si aggiunge che `ticket.assigned_to` non sia chi
+guarda. Serve l'identificatore dalla sessione, che il file già può leggere.
+
+##### `S6` — Il bottone «Aggiorna» nel thread
+
+`TicketDetailPage.tsx`, nella `ThreadCard`. Un bottone nell'intestazione del riquadro che
+chiama la `refetch` della query paginata, disabilitato mentre è in volo. Stringa nel
+catalogo.
+
+### Trappole
+
+**Il catalogo, sempre.** Nessuna stringa visibile dentro un componente: le nuove vanno in
+`i18n/it.ts`. È la regola che una sezione di soli ritocchi viola più facilmente, perché
+ogni singola stringa sembra troppo piccola per meritare una chiave.
+
+**`min-height` su un genitore non allunga un figlio di blocco.** È la causa di `R6`, ed è
+la cosa che si sbaglia riprovandoci: spostare il blocco senza toccare l'altezza non
+risolve niente.
+
+**`mt-auto` va condizionato a `lg`.** Sotto, la navigazione è un menù a scomparsa e non
+una colonna alta quanto lo schermo.
+
+**Il bottone della password non deve inviare il form.** Dentro un `<form>` il default di
+`<button>` è `submit`: `Button` del progetto mette già `type="button"` da sé, e questo va
+**conservato** se si scrive un elemento a mano invece di usarlo.
+
+**`assigned` non esce dalla condizione di `assignable`.** Serve alla riassegnazione: si
+aggiunge un termine, non si toglie uno stato.
+
+**Le altre tre schermate con `zod` non si toccano.** Sono rotte pigre e il loro peso non
+è sulla prima visita; «uniformare» toglierebbe validazione dove non costa niente.
+
+**Le azioni avvolgono.** Chi aggiunge il bottone del thread o quello della password non
+reintroduca `shrink-0`: è la trappola registrata dalla fetta B, e a 375 px fa scorrere in
+orizzontale la pagina intera.
+
+### Come si saprà che è finita
+
+- i due form di accesso mostrano la password, da mouse e da tastiera;
+- `/accesso` **misurata di nuovo**, con il numero scritto nell'esito;
+- la barra laterale arriva in fondo su una schermata corta, e il selettore sta in basso;
+- una stanza si crea con tutti i suoi dati, e la schermata dice che si correggono dopo;
+- «Prendi in carico» non compare su ciò che si ha già in carico, e compare su ciò che ha
+  qualcun altro;
+- il thread ha il suo bottone, che si disabilita mentre lavora;
+- `npm run typecheck`, `lint`, `test`, `build` verdi, e **424 test Rust invariati**.
+
+### Che cosa **non** entra
+
+- **`R1`, `R11`, `R25`** — gli stati che nessuno aggiorna: sono la sezione 4, e hanno una
+  decisione comune da prendere una volta sola;
+- **il collaudo in undici punti**, che è la sezione 2;
+- **qualunque cosa tocchi l'API.** Se durante l'esecuzione sembra necessaria una rotta,
+  la conclusione giusta è che quella cosa appartiene a un'altra sezione.
+
+<a id="esito-sezione-1"></a>
+
+## Esito — Sezione 1, ritocchi visibili
+
+**Eseguita l'8 settembre 2026**, per intero: `S1`–`S6`, cioè `R5`, `R4`, `R6`, `R10`,
+`R20` e il bottone del thread. Le sei voci escono da [12](12-da-fare.md).
+
+**Il backend non è stato toccato**, come il piano prevedeva: **424 test Rust prima e
+dopo**, e nessuna migration, nessuna rotta, nessun DTO. Il client passa da **69 a 73
+test**: uno sul bottone della password, tre su «Prendi in carico».
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `S1` | un bottone dentro i due campi password: `aria-label` che cambia, `aria-pressed`, e il `mousedown` annullato perché scoprire la password non tolga il fuoco a chi sta digitando |
+| `S2` | `zodResolver` sostituito dalle regole native di `react-hook-form` **su quel file soltanto**. I numeri sotto |
+| `S3` | l'altezza sul contenitore flex, la barra come colonna `lg`, il selettore in fondo con `mt-auto`, l'elenco che scorre a sé — **più una terza cosa che il piano non aveva previsto**, sotto |
+| `S4` | `NewRoomDialog` e `RoomDialog` condividono un solo `RoomFields`: sette campi identici invece di quattro e cinque divergenti. `status` è restato fuori |
+| `S5` | «Prendi in carico» sparisce a chi ce l'ha, e resta su ciò che è di qualcun altro |
+| `S6` | il bottone «Aggiorna» nell'intestazione del thread, disabilitato mentre rilegge |
+
+### La misura di `/accesso`, rifatta
+
+Rifatta **sullo stesso albero, prima e dopo**, con uno script che somma la chiusura
+transitiva degli import di ogni entry — il guscio più il chunk della rotta — e ne
+comprime il risultato. È lo stesso criterio della fetta C.
+
+| Rotta iniziale | Prima | Dopo | |
+|---|---|---|---|
+| `/accesso` — il login | 556,5 kB · 176,6 gz | **480,1 kB · 156,0 gz** | −13,7 % · −11,7 % |
+| `/` — riepilogo | 449,3 kB · 145,0 gz | 449,8 kB · 145,2 gz | +0,5 kB, le stringhe nuove |
+| `/addebiti` — chi abita | 466,6 kB · 151,8 gz | 467,1 kB · 152,0 gz | idem |
+| `/invito` | 451,4 kB · 146,3 gz | 451,9 kB · 146,5 gz | idem |
+
+**Due cose vanno lette e non passate sopra.**
+
+La prima: **i numeri assoluti non coincidono con quelli della fetta C** — che dava 543,4
+kB per `/accesso` e 438,7 per il riepilogo — e la ragione è che quella misura è di un
+altro albero e forse di un'altra compressione. È per questo che il confronto qui sopra è
+*prima e dopo con lo stesso script*, e non «543,4 → 480,1»: due misure prese con due
+metodi non si sottraggono. Il **delta** è la cosa vera, e vale −76,4 kB (−20,6 gz).
+
+La seconda: **`/accesso` non torna al livello del riepilogo**, e restano 30 kB di
+distanza. Non è `zod`, che è sparito dalla sua chiusura: è **`react-hook-form`**, che i
+due form usano e che il riepilogo non tira. Prima era dentro lo stesso chunk di `zod` e
+la divisione lo ha reso un pezzo a sé. Trenta kB per la validazione dei due form è il
+prezzo della cosa stessa, non un debito: toglierlo vorrebbe dire scrivere quei form a
+mano.
+
+### Che cosa il piano non aveva previsto
+
+**`R6` richiedeva tre modifiche e non due.** Il piano diceva l'altezza sul contenitore
+flex e `mt-auto` sul blocco, ed entrambe servono; ma con **quelle sole**, su una
+schermata **lunga**, la barra si allunga quanto il *documento* e il selettore ancorato in
+fondo finisce a mille pixel di distanza — cioè il difetto di partenza al contrario:
+prima era troppo corta, così sarebbe stata troppo lunga. Il piano chiedeva di provare
+anche una schermata lunga, ed è quella prova ad averlo trovato.
+
+Il rimedio è che «tutta altezza» significhi **la finestra e non il documento**:
+`lg:sticky lg:top-0 lg:h-screen` sulla barra. Con `h-screen` la colonna è alta quanto la
+finestra qualunque cosa faccia il contenuto, e `sticky` la tiene ferma mentre il resto
+scorre. Il `min-h-screen` sul contenitore flex **resta** e non è ridondante: è ciò che
+regge il caso opposto, la schermata corta, dove senza di esso lo sfondo della colonna si
+fermerebbe a metà.
+
+**Le quattro geometrie, misurate nel browser e non a occhio:** finestra 1024×400 con un
+documento da 834 px — barra alta 400, elenco scorrevole a sé, selettore in fondo;
+scorrendo a 400, la barra resta a `top: 0`; a 375 px la barra torna `display: block`,
+`position: static`, l'elenco non scorre e il blocco del selettore è `display: none`,
+perché lì il selettore sta nella barra in alto. Nessuno scorrimento orizzontale.
+
+**Il bottone della password ha reso ambiguo `getByLabelText(/password/i)`**, che ora
+trova due controlli: il campo e il bottone, che si chiama «Mostra la password» perché è
+ciò che fa. Quattro test esistenti lo interrogavano così. Si è scelto di **dire quale dei
+due si vuole** (`{ selector: 'input' }`) invece di rendere il bottone più muto: due
+controlli distinti devono restare distinguibili anche per chi li ascolta.
+
+**Il giro di tabulazione è cambiato**, ed è una conseguenza voluta: fra il campo password
+e «Entra» c'è ora il bottone che scopre la password. Il test che lo percorre lo dice
+esplicitamente.
+
+### Che cosa è entrato senza essere nel piano
+
+- **la virgola decimale nei campi della stanza.** `420,50` digitato in un'interfaccia
+  italiana produceva un `422`, e il catalogo su quel codice dice «controlla i campi
+  segnalati» **senza segnalarne nessuno**. Vale ora per canone, superficie e quota, in
+  entrambi i form, perché passano dallo stesso componente;
+- **la quota delle utenze è verificata prima di partire**, 0–100 con al più due decimali
+  come `app.percentage`, e **solo dopo un tentativo di invio** — un errore che compare a
+  ogni tasto mentre si scrive `33,33` è rumore. Senza questo, l'unico messaggio sarebbe
+  stato quel «controlla i campi segnalati» che non segnala niente;
+- **la creazione di una stanza invalida anche l'immobile**: il conteggio dei locali sta
+  lì, e prima non si aggiornava;
+- **tre test su «Prendi in carico»**, che è la voce dove una regressione sarebbe muta:
+  togliere `assigned` dalla condizione sembra la semplificazione ovvia e toglierebbe la
+  **riassegnazione**. Il test è stato provato al contrario — con la condizione vecchia
+  fallisce.
+
+### Come è stato verificato
+
+`just ci` — `fmt`, `clippy -D warnings`, purezza del dominio, i test del workspace, il
+client per intero, e la suite con il database: **424 test Rust, 73 del client**.
+
+E poi **usandolo**, che per una sezione di soli ritocchi è il criterio vero: accesso con
+la password mostrata e nascosta, la barra alle tre altezze e a 375 px, una stanza creata
+con tutti i campi — quota a `150` rifiutata dal client, `33,33` accettata, piano e
+arredata riletti dalla modale di modifica — e poi archiviata. Il bottone del thread
+provato in volo: una richiesta sola, disabilitato mentre rilegge.
+
+**Un pezzo non è stato provato a mano, e va detto:** «Prendi in carico» che **sparisce**
+richiede una segnalazione assegnata, cioè una transizione irreversibile su dati veri.
+Coperto dai tre test invece che dal giro a mano; l'altra metà — il bottone che *c'è* su
+una segnalazione aperta di nessuno — è stata vista.
+
+### Che cosa resta aperto
+
+- **la sezione 2**, il collaudo in undici punti della fetta C, che resta il primo lavoro;
+- **`R11` e `R1`**, gli stati che nessuno aggiorna: `status` è restato fuori dal form
+  della stanza apposta, ed è la sezione 4;
+- **il thread non è live**, e la scelta è registrata: il bottone dice la verità, cioè che
+  i messaggi arrivano quando li si va a prendere.
+
+<a id="thread-aggiorna"></a>
+
+### Il thread non diventa live: un bottone «Aggiorna»
+
+La domanda era se si potesse rendere la conversazione in tempo reale. **Si è deciso di
+no**, e nemmeno con un intervallo automatico: nel riquadro del thread ci va un bottone
+che rilegge, premuto da chi vuole.
+
+È **solo client** e non aggiunge niente all'architettura: il thread ha già una chiave
+propria (`keys.ticketMessages`), scelta perché invalidarlo non rilegga anche il
+dettaglio, quindi il bottone è la sua `refetch`. Va progettato come tutto il resto —
+lo stato di caricamento c'è già, e il bottone si disabilita mentre rilegge.
+
+**Perché sono state scartate le altre due**, e vale la pena lasciarlo scritto perché la
+domanda tornerà:
+
+- **l'intervallo automatico** (`refetchInterval`) costa poco ma fa richieste che
+  nessuno ha chiesto, per una conversazione che nel prodotto vero procede a ore di
+  distanza. Un bottone dice la verità: i messaggi arrivano quando li si va a prendere;
+- **il tempo reale** (`SSE`, più adatto di WebSocket perché il flusso è a senso unico)
+  ha una complicazione che non è di trasporto ma di sicurezza: `EventSource` non può
+  mandare intestazioni, quindi niente `Authorization`. Il token **nell'URL** è escluso —
+  finirebbe in cronologia, `Referer` e log dei proxy, che è l'argomento per cui il
+  codice d'invito non viaggia in un percorso ([ADR-045](08-decisioni.md#adr-045)), e per
+  giunta si tratterebbe dell'access token. Autenticare con il cookie significherebbe
+  usare quello del *refresh* per altro, cioè una decisione di sicurezza a sé.
+
+Se un giorno servisse davvero, il pezzo che manca non è la sorgente: **l'outbox degli
+eventi esiste** e il worker lo drena. Manca la decisione sull'autenticazione del flusso,
+e conviene prenderla dopo [`R9`](12-da-fare.md#lelenco), che ridisegna comunque chi vede
+che cosa.
