@@ -436,6 +436,9 @@ export const it = {
      *  di richiesta: `changed_by` può quindi mancare, e non è un difetto. */
     historyOpened: 'Aperta',
     thread: 'Conversazione',
+    /** Il thread non è live per scelta: i messaggi arrivano quando li si va a
+     *  prendere, e il bottone lo dice invece di far credere il contrario. */
+    threadRefresh: 'Aggiorna',
     threadEmpty: 'Nessun messaggio.',
     threadEmptyHint: 'Scrivi qui per aggiungere qualcosa: il thread non si riscrive mai.',
     message: 'Messaggio',

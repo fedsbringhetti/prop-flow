@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send } from 'lucide-react'
+import { RefreshCw, Send } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
@@ -217,6 +217,20 @@ function HistoryRow({ change }: { change: TicketStatusChange }) {
  * Il client non ha nulla da nascondere, e la casella per scriverne compare al solo
  * staff perché a un inquilino che chiedesse `is_internal` l'API risponderebbe
  * `403`.
+ *
+ * # I messaggi arrivano quando li si va a prendere
+ *
+ * Niente tempo reale e **nemmeno un intervallo automatico**: un `refetchInterval`
+ * costa poco ma fa richieste che nessuno ha chiesto, per una conversazione che nel
+ * prodotto vero procede a ore di distanza. Un bottone dice la verità. `SSE` è
+ * escluso per una ragione che non è di trasporto ma di sicurezza — `EventSource`
+ * non manda intestazioni, quindi resterebbero il token nell'URL o il cookie del
+ * refresh usato per altro.
+ *
+ * Il thread ha una **chiave propria** (`keys.ticketMessages`), scelta perché
+ * invalidarlo non rilegga anche il dettaglio: il bottone è quindi la sua `refetch`,
+ * e si disabilita mentre lavora — uno che non dà segno di aver fatto qualcosa viene
+ * premuto tre volte.
  */
 function ThreadCard({ ticketId }: { ticketId: string }) {
   const client = useApi()
@@ -254,6 +268,15 @@ function ThreadCard({ ticketId }: { ticketId: string }) {
     <Card>
       <CardHeader>
         <CardTitle>{t.ticket.thread}</CardTitle>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void query.refetch()}
+          disabled={query.isFetching}
+        >
+          <RefreshCw aria-hidden className={query.isFetching ? 'animate-spin' : undefined} />
+          {query.isFetching ? t.state.loadingTitle : t.ticket.threadRefresh}
+        </Button>
       </CardHeader>
 
       <Async
