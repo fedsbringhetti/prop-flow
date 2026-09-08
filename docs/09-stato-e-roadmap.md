@@ -343,6 +343,32 @@ Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui que
 
 È la ragione per cui queste due, se si sceglie di farle, conviene farle nella stessa fetta.
 
+| R18 | **Una quota può finire a zero in silenzio**, e il contratto si attiva lo stesso | Vedi sotto: **osservato in database**, non dedotto |
+
+#### R18 — come si arriva a un contratto attivo con i dati sbagliati
+
+Trovato durante il collaudo e verificato sulle righe vere. Su una stanza, un contratto **attivo** con due parti:
+
+| parte | quota | intestatario | ha accettato |
+|---|---|---|---|
+| `inq2` | **100,00** | sì | **no** |
+| `inq3` | **0,00** | no | sì |
+
+Cioè: **l'inquilino che è entrato davvero non deve niente, e il 100% è di qualcuno che non ha mai accettato.** Il contratto è `active`, quindi ha superato ogni controllo.
+
+**Il backend non è ingenuo, ed è importante saperlo prima di "aggiustarlo" nel posto sbagliato.** `InviteTenant` non mette una quota fissa: chiama `remaining_share(&parties)`, che è `100 − assegnato` con il minimo a zero (`crates/application/src/use_cases/invitation/invite_tenant.rs`). È la scelta giusta — si invita il secondo inquilino e prende ciò che resta.
+
+Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sbagliata da sola:
+
+1. `AddPartyDialog` propone `share_percent: '100'` e `is_primary: true`. Chi aggiunge la **prima** parte si prende quindi tutto, e nel co-living la prima parte non è l'unica;
+2. ogni invito successivo riceve `remaining_share`, che a quel punto è **zero**, e nessuno lo dice: né il form dell'invito, né la modale che consegna il codice, né l'elenco delle parti, che mostra `0,00 %` come un dato qualunque;
+3. **l'attivazione verifica la somma, non il senso**: `100 + 0 = 100` passa, e la parte che regge quel 100 può essere una che non ha mai accettato l'invito. `lease.shares_not_hundred` non ha nulla da eccepire;
+4. **niente di tutto questo si corregge dopo** ([R17](#raccolta-da-ordinare)): non si cambia una quota, non si toglie una parte.
+
+**Le conseguenze non restano nel contratto.** `app.property_residents` proietta le parti dei contratti attivi, quindi la parte fantasma compare fra **chi abita l'immobile** — con il suo nome, accanto all'inquilino vero. Ed è anche una parte che, se un giorno accettasse, si troverebbe intestataria del 100%.
+
+**Da decidere, e sono domande distinte:** se il form debba proporre 100 solo quando la parte è davvero l'unica; se una quota a zero vada segnalata al momento in cui si invita, invece che scoperta dopo; se l'attivazione debba pretendere qualcosa di più della somma — per esempio che nessun inquilino sia a zero, o che l'intestatario principale abbia accettato. **La correzione a posteriori (R17) serve comunque**, perché i contratti già rotti esistono già.
+
 ### Cancellare, in generale
 
 | # | Cosa | Quel che si sa già |
