@@ -5889,7 +5889,7 @@ zero con un membro uscito che ha ancora un conto aperto.
 
 `B9` (allegati sugli owner rimasti) e `B10` (bundle diviso per rotta, refresh fra
 schede) **escono da questa fetta** e diventano una fetta di manutenzione a sé — vedi
-[Manutenzione del client](09-stato-e-roadmap.md#manutenzione-del-client-b9-e-b10). Non è un rinvio per
+[la fetta C](#piano-fetta-c), che li ha assorbiti come `C3` e `C5`. Non è un rinvio per
 stanchezza: sono lavoro di manutenzione e non una capacità, il loro criterio di
 completamento non ha niente a che vedere con quello delle spese, e tenerli insieme
 rifarebbe l'errore che la fetta B ha dovuto correggere a metà dichiarando un taglio.
@@ -6383,3 +6383,485 @@ sono sei schermate in più, ed è `B10`: annotato, non risolto, com'era previsto
   fuori perimetro. È corretto rispetto all'isolamento e il client lo dice prima; farglielo
   vedere sarebbe un allargamento della visibilità, cioè una decisione di prodotto con la
   sua policy.
+
+<a id="piano-fetta-c"></a>
+
+## Piano — Chiudere i buchi che un collaudo incontrerebbe (fetta C)
+
+Pianificata il **7 settembre 2026**, dopo la B-bis e **facendo l'audit che nessuna fetta
+aveva fatto**: quali operazioni dell'API non si raggiungono da nessuna schermata. Ne sono
+uscite cinque, e **una di esse rompe il giro del prodotto**: nessuna schermata chiama
+`POST /auth/accept-invitation`, quindi un invitato non può entrare senza `curl`.
+
+Assorbe `B9` e `B10` della fetta B — restano nominati così dove l'archivio vi rimanda —
+e li mette accanto alle altre cose minime, perché hanno lo stesso criterio: **che il
+prodotto si possa percorrere per intero da due persone con un browser**, senza che chi
+prova debba conoscere l'API. È la condizione per la fase successiva, non un abbellimento:
+finché il giro si chiude solo con `curl`, «funziona» è un'affermazione su cui nessuno può
+essere smentito.
+
+**Sei passi**, `C1`–`C6`, e il **punto di taglio è dopo `C6`**. Il criterio è il
+[collaudo completo](#il-collaudo-completo-che-chiude-la-fetta), che si fa **dopo**, si fa
+**a mano** e lo fa **chi non ha scritto il codice**.
+
+### L'audit, che è il fatto da cui la fetta nasce
+
+Cinque funzioni del livello dati esistono e **nessuna schermata le chiama**, più una rotta
+che il livello dati non ha affatto:
+
+| Cosa | Conseguenza | Dove va |
+|---|---|---|
+| `acceptInvitation` | **un invitato non può accettare**: l'unico modo è `curl`. Il proprietario genera il codice e lo consegna, e lì il giro si ferma | `C1` |
+| `revokeInvitation` | un invito mandato all'indirizzo sbagliato non si ritira | `C1` |
+| `updateRoom`, `archiveRoom` | una stanza si crea e poi **non si corregge**: un nome sbagliato resta, e il nome è unico per immobile | `C4` |
+| `DELETE /documents/{id}` — **non c'è nemmeno la funzione** | un allegato caricato per sbaglio non si toglie | `C3` |
+| `getPayment` | nessuna, **ed è voluto**: vedi sotto | in nessun passo |
+
+**`getPayment` resta non chiamata apposta.** Il dettaglio di un pagamento non porta niente
+che la riga del suo elenco non abbia già, e una schermata in più che ripete gli stessi sei
+campi è lavoro che si paga due volte — a scriverla e a tenerla allineata. Sta scritto qui
+perché la prossima persona che rifà questo audit la troverà di nuovo, e senza questa riga
+la «completerebbe».
+
+**L'audit va rifatto**, ed è la parte riusabile di questa fetta: si fa confrontando le
+funzioni esportate da `@/api/endpoints` con chi le importa. Trovare una funzione mai
+chiamata non è di per sé un difetto — `getPayment` lo dimostra — ma è **sempre** una
+domanda da porsi, e per due fette non se l'era posta nessuno.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Il codice d'invito | si **incolla in un campo**, e non sta nell'URL | un link `/invito/<token>` da mandare |
+| Dopo l'accettazione | l'organizzazione appena accettata **diventa quella attiva** | lasciare che il default la scelga come sempre |
+| Il refresh fra schede | si **serializza**, non si condivide il token | trasmettere la sessione con `BroadcastChannel` |
+| L'ordine dei passi | il buco dell'invito **per primo**, il bundle per ultimo | il più facile per primo |
+| Il collaudo | **a mano, da chi non ha scritto il codice**, con un percorso scritto | una suite end-to-end automatica |
+| Il perimetro | sei passi, e la fase «utenti veri» **resta fuori** | portarsi dietro le notifiche, che sono lì accanto |
+
+### Decisioni prese, con il perché
+
+#### 1. Il codice d'invito si incolla, e non viaggia in un URL
+
+`accept_token` è **una credenziale**: chi ce l'ha entra in un'organizzazione. Un link
+`/invito/<token>` sarebbe più comodo e lo scriverebbe in tre posti che nessuno ripulisce —
+la cronologia del browser, il `Referer` verso qualunque risorsa esterna, e i log di
+qualunque proxy davanti al client. Il catalogo lo chiama già «codice», e la modale che lo
+consegna dice che vale sette giorni e si vede una volta sola: la schermata che lo riceve
+resta coerente con quella, ed è **un campo in cui incollare**.
+
+*Alternativa scartata: il link con il token nel percorso.* Comprerebbe un clic e
+venderebbe la credenziale a tre archivi che nessuno considera parte del prodotto.
+
+**Ne segue una conseguenza da progettare, non da subire**: accettare richiede una
+sessione, perché la rotta è autenticata. L'invitato deve quindi **prima avere un
+account**. La schermata lo dice e lo indirizza, invece di rispondere `401` a chi ha
+appena incollato un codice giusto.
+
+#### 2. Accettare sceglie l'organizzazione, ed è l'unico momento in cui si può sapere quale
+
+C'è un debito registrato da due fette: `pick_default_membership` preferisce il ruolo più
+alto — owner, poi manager, poi tenant — e la registrazione crea sempre un'organizzazione
+personale di cui si è owner. Un inquilino che si registra da sé atterra quindi **sempre**
+nella propria organizzazione vuota, e deve cambiare a mano. Lo si è visto durante il
+collaudo della B-bis: la prima schermata di un inquilino appena registrato è «Comincia
+registrando il tuo primo immobile».
+
+**Accettare un invito è il momento in cui l'ambiguità non c'è**: quella persona ha appena
+detto in quale organizzazione vuole entrare. La risposta porta `organization_id` e `role`,
+e il client chiama `selectOrganization` con quelli.
+
+*Alternativa scartata: cambiare `pick_default_membership` nel backend.* Vorrebbe dire
+decidere **per tutti** quale appartenenza vinca, e il caso legittimo esiste — chi affitta
+una casa e ne abita un'altra è owner della propria e tenant di un'altra, e nessuna delle
+due è ovvia. La scelta del client è locale, è reversibile dal selettore, e non richiede
+una migration.
+
+**Il debito non si chiude del tutto**, e va detto: chi entra da un browser nuovo, mesi
+dopo, riparte dal default di sempre. Si chiude a metà, e la metà che si chiude è la prima
+volta — che è quella che fa dire «non funziona».
+
+#### 3. Il refresh fra schede si **serializza**, e il token non lascia la memoria
+
+Il difetto è documentato da tre fette e nella B-bis **è accaduto**: due schede aperte, il
+rinnovo tentato da entrambe, `riuso di un refresh token già ruotato: revocate tutte le
+sessioni`, e la sessione fuori senza che nessuno avesse fatto niente. Con due account e
+due finestre — cioè il collaudo che questa fetta prepara — non è raro: è certo.
+
+La via che viene in mente per prima è **trasmettere la sessione**: la scheda che vince
+rinnova e manda l'access token alle altre con `BroadcastChannel`. Funziona, e **rompe una
+proprietà che il progetto ha scelto apposta**: l'access token vive in memoria e non è
+leggibile da uno script che arrivi dopo il caricamento della pagina. Metterlo su un canale
+o, peggio, in `localStorage` come ripiego, lo espone esattamente a ciò da cui era stato
+tenuto fuori.
+
+**Non serve condividerlo.** Ciò che le schede condividono è **il cookie**, e l'API ruota a
+ogni uso: il riuso lo rileva solo su *due usi dello stesso token*. Se la seconda scheda
+**aspetta** che la prima abbia finito e poi rinnova a sua volta, presenta il cookie
+**nuovo**, che è una rotazione legittima. Serve quindi una coda, non una trasmissione:
+`navigator.locks` — che è esattamente un mutex fra contesti della stessa origine — con
+ripiego su un lock in `localStorage` con scadenza, dove **si scrive un marcatore e non un
+segreto**.
+
+Costa `N` rinnovi per `N` schede invece di uno. È il prezzo giusto: succede una volta ogni
+quindici minuti per scheda, e compra il fatto che il token non esce dalla memoria.
+
+*Alternativa scartata: un `SharedWorker` che tenga la sessione.* È il disegno corretto per
+un'applicazione che ne avesse bisogno, e qui sarebbe un terzo contesto da far vivere,
+morire e ricollegare per risolvere un problema che un lock risolve in venti righe.
+
+#### 4. L'ordine: il buco dell'invito per primo, il bundle per ultimo
+
+`C1` è l'unico passo senza il quale **il collaudo non può cominciare**: il secondo account
+non esiste finché qualcuno non lo può far entrare. `C2` è il secondo perché è ciò che
+interrompe il collaudo a metà, e scoprirlo mentre si prova costa il doppio — si perde la
+sessione **e** si dubita di ciò che si stava guardando.
+
+`C5`, la divisione del bundle, va per ultimo e non perché sia difficile: **tocca ogni
+rotta**, quindi è il passo che più facilmente rompe qualcosa d'altro, ed è quello che si
+vuole avere davanti quando tutto il resto è già verde.
+
+#### 5. Il collaudo è a mano, e non una suite automatica
+
+La tentazione è scrivere Playwright e chiamarlo collaudo. Sono due cose diverse, e questa
+fetta vuole la prima: **una persona che non ha scritto il codice attraversa il prodotto e
+dice se sta in piedi**. Una suite end-to-end verifica che ciò che qualcuno ha già capito
+continui a valere; non trova la schermata che risponde a una domanda che nessuno si era
+posto, che è precisamente ciò che il collaudo deve trovare adesso.
+
+*Alternativa scartata: Playwright ora.* Va bene **dopo**, quando i percorsi sono stabili e
+il valore è la regressione. Prima, congela ipotesi.
+
+#### 6. Il perimetro si ferma qui, e le notifiche restano fuori
+
+Sono lì accanto — sono la fase successiva, e sono già pianificate — e prenderle dentro
+cambierebbe il criterio della fetta: «il prodotto si percorre per intero» non ha niente a
+che vedere con «un utente vero riceve un'email». Vale la ragione della decisione 7 della
+B-bis: due criteri scollegati in una fetta sola sono una fetta che si taglia a metà mentre
+la si esegue.
+
+### Decomposizione
+
+#### `C1` — L'invitato entra dall'interfaccia
+
+**È il passo per cui la fetta esiste.** Oggi il proprietario genera il codice, lo
+consegna, e lì il prodotto finisce: chi lo riceve non ha una schermata in cui usarlo.
+
+**Schermata `/invito`**, un campo e un bottone. Raggiungibile **con la sessione**, perché
+`POST /auth/accept-invitation` è autenticata: chi arriva senza account trova scritto che
+deve prima registrarsi, con il link, e che poi torna qui — non un `401`.
+
+**La chiamata va senza `X-Org-Id`**, ed è già così in `acceptInvitation`: è l'operazione
+che **crea** l'appartenenza, e dichiarare un'organizzazione di cui non si è ancora membri
+fa rispondere `403` a una richiesta legittima. Chi tocca quel codice non deve
+«uniformarlo» agli altri.
+
+**Alla riuscita si sceglie l'organizzazione appena accettata** (decisione 2) e si va alla
+pagina iniziale del ruolo che la risposta dichiara — che per un inquilino è `/addebiti` e
+non la radice.
+
+**I tre codici che questa rotta produce si traducono in tre messaggi diversi**:
+`invitation.not_found` (codice sbagliato o scaduto), `invitation.already_accepted` (qualcuno
+l'ha già usato, e non è un errore di chi legge), e `auth.required` se la sessione è caduta
+mentre si compilava.
+
+**La revoca sta nella modale che ha creato l'invito**, e non altrove: `revokeInvitation`
+vuole l'id, e **non esiste una rotta che elenchi gli inviti** — quindi l'unico momento in
+cui il client ha quell'id è subito dopo averlo creato. Serve al caso vero — «ho sbagliato
+indirizzo, lo rifaccio» — e va offerto lì, dicendo che dopo si potrà solo lasciarlo
+scadere. **Non inventare un elenco**: sarebbe una rotta nuova, cioè backend dentro una
+fetta di client.
+
+#### `C2` — Il refresh smette di buttare fuori chi ha due schede
+
+`SessionStore.refresh` ha già il singolo volo **dentro** una scheda. Si aggiunge il lock
+**fra** schede (decisione 3): chi entra mentre un'altra sta rinnovando aspetta, e poi
+rinnova a sua volta con il cookie ruotato.
+
+`navigator.locks.request` con un nome per origine, e ripiego su `localStorage` con un
+marcatore e una scadenza — mai il token. Il ripiego serve dove i Web Locks non ci sono, e
+deve **scadere**: una scheda chiusa a metà rinnovo non può bloccare le altre per sempre.
+
+**Il test si scrive al contrario**, come quello del singolo volo: due `SessionStore` che
+condividono il finto cookie, e la prova che senza il lock il secondo presenta il token già
+ruotato. È il modo in cui il singolo volo è stato verificato nella fetta 1, e vale la
+stessa condizione — un test che non fallisce quando il codice è sbagliato è un verde che
+non prova nulla.
+
+#### `C3` — Gli allegati sugli owner rimasti
+
+Immobile, stanza, contratto, segnalazione, addebito. `ScansCard` di `BillDetailPage` è il
+modello, e va estratto in un componente condiviso invece di essere copiato cinque volte.
+
+**`tickets` manca dall'unione degli owner** in `uploadDocument` e `listDocuments`, e la
+rotta esiste: va aggiunto, altrimenti il typecheck rifiuta la segnalazione.
+
+**L'archiviazione di un documento non ha nemmeno la funzione**: `DELETE /documents/{id}`.
+Il codice che restituisce a chi non può è `org.staff_role_required`, ed è **vero solo a
+metà** — la policy ammette lo staff *oppure* chi ha caricato — quindi il messaggio non deve
+promettere che serva un ruolo. È un debito registrato, e qui si evita di ripeterlo
+all'utente.
+
+**Il controllo della dimensione sta prima dell'invio** (`UPLOAD_LIMIT_BYTES`, 25 MiB):
+oltre il limite la risposta è un `413` che non dice quale limite né su quale file.
+
+Vale la trappola registrata: **il link di download non porta l'`Authorization`**, e
+funziona perché il browser lo segue nel contesto della scheda.
+
+#### `C4` — Le stanze si correggono e si archiviano
+
+`updateRoom` e `archiveRoom` esistono nel livello dati e non le chiama nessuno: una stanza
+si crea e resta com'è. Il nome è **unico per immobile**, quindi un refuso non è cosmetico —
+occupa un nome che poi non si può riusare.
+
+Il `PATCH` è parziale con la semantica di sempre: assente = invariato, `null` = azzerato.
+L'archiviazione **libera il nome**, e la conferma lo dice — la stringa esiste già nel
+catalogo (`t.room.archiveExplain`) ed è stata scritta per questo momento.
+
+#### `C5` — Il bundle diviso per rotta ← *passo che tocca tutto*
+
+`React.lazy` per rotta, con i confini di `Suspense` messi **dove stanno i tre stati**: un
+confine senza il suo stato produce una pagina bianca dove prima c'era uno scheletro.
+
+Il bundle è a **690 kB (202 compressi)**: 597 alla fetta 1, 614 alla A, 648 alla B, 690
+alla B-bis. Su desktop non si nota, e il proprietario è su desktop; **l'inquilino è su rete
+mobile**, e adesso esiste davvero.
+
+**La misura si scrive nell'esito**, prima e dopo, per rotta iniziale. Un «abbiamo diviso il
+bundle» senza numeri non è verificabile da chi legge fra un anno.
+
+#### `C6` — Il messaggio che ha morso tre volte
+
+L'unico passo che tocca il backend, ed è di dieci righe: un `.env` copiato prima della
+fetta dei documenti non ha le quattro `PROPFLOW__STORAGE__*`, e l'API si ferma con
+`missing field access_key_id for key "default.storage"` — che non dice **da dove** debba
+arrivare quella variabile né che `.env.example` la porti.
+
+Tre occorrenze in tre fette, sempre allo stesso punto: avviare l'API per il giro a mano.
+**Il rimedio non è un default** — uno storage configurato a caso è peggio di un avvio
+fallito — ma un messaggio che nomini il file da cui copiare.
+
+### Trappole
+
+Le prime tre vengono dall'audit e dalla lettura del codice; le altre sono note e sono qui
+perché il piano che le ha prodotte è archiviato e nessuno lo apre mentre esegue.
+
+**Accettare un invito va fatto senza `X-Org-Id`.** È l'operazione che crea
+l'appartenenza: dichiarare l'organizzazione di cui non si è ancora membri fa rispondere
+`403` a una richiesta legittima. `acceptInvitation` lo fa già, e va **non toccato**.
+
+**Non esiste una rotta che elenchi gli inviti.** La revoca è possibile solo con l'id che
+la creazione ha restituito, cioè nella stessa modale. Costruire un elenco vorrebbe dire
+aggiungere una rotta, cioè backend in una fetta di client.
+
+**`getPayment` resta non chiamata apposta**, e non è un pezzo mancante.
+
+**Il token dell'invito è una credenziale**: non nell'URL, non nei log, non conservato. Il
+client lo mostra una volta perché il proprietario lo consegni, e lo dimentica.
+
+**Il link di download non porta l'`Authorization`**, e funziona perché il browser lo segue
+nel contesto della scheda.
+
+**Il limite del corpo sulle rotte di caricamento è 25 MiB** e va controllato prima:
+oltre, la risposta è un `413` che non dice né quale limite né su quale file.
+
+**`org.staff_role_required` sull'archiviazione di un documento è vero a metà**: la policy
+ammette anche chi ha caricato. Il messaggio non deve promettere un ruolo.
+
+**Il nome di una stanza è unico per immobile**, e l'archiviazione lo libera.
+
+**Un confine di `Suspense` senza il suo stato è una pagina bianca** dove prima c'era uno
+scheletro.
+
+**Il lock fra schede non deve trasmettere il token**, e il ripiego su `localStorage` scrive
+un marcatore con una scadenza. Una scheda chiusa a metà rinnovo non può bloccare le altre.
+
+**Le azioni di una schermata avvolgono**, e `PageHeader` lo sa fare dalla fetta B: chi
+aggiunge azioni non reintroduca lo `shrink-0`.
+
+<a id="il-collaudo-completo-che-chiude-la-fetta"></a>
+
+### Il collaudo completo, che chiude la fetta
+
+`./ops/ci/test-integration.sh` verde e il job del client verde sono il minimo, non il
+criterio. **Il criterio è che una persona attraversi il prodotto per intero da un browser,
+con due account, senza mai aprire `curl`.**
+
+Va fatto **dopo `C6`**, sul percorso nativo (`cargo run -p propflow-api`, `npm run dev`) e
+in quest'ordine, perché ogni passo prepara il successivo:
+
+1. **il proprietario si registra**, e atterra sul riepilogo vuoto che dice da dove
+   cominciare;
+2. **registra un immobile**, ci aggiunge **due stanze**, e ne **corregge una** — che è `C4`
+   e che oggi non si può;
+3. **redige due contratti per stanza**, ci mette le parti, li attiva;
+4. **invita i due inquilini**, e consegna i due codici. Ne **revoca uno** e lo rifà, che è
+   l'altra metà di `C1`;
+5. **i due inquilini si registrano e accettano** — `C1`, il passo senza il quale il
+   collaudo si ferma qui — e si ritrovano **nell'organizzazione giusta**, non nella
+   propria vuota;
+6. **il proprietario registra una bolletta**, ne carica la scansione, ne rivede la lettura
+   della macchina se il fornitore è configurato, la valida e la **riaddebita** a un
+   contratto;
+7. **un inquilino apre una segnalazione** con una **foto allegata** — `C3` — e il
+   proprietario la porta per il ciclo: triage, presa in carico, sospensione, ripresa,
+   chiusura;
+8. **l'inquilino dichiara di aver pagato** un addebito; il proprietario la trova nella coda
+   e la conferma; il residuo scende;
+9. **i due inquilini creano un gruppo di spesa**, ci mettono una spesa a testa, uno rimborsa
+   l'altro, il creditore conferma, e i saldi tornano a zero;
+10. **da due finestre contemporaneamente** — il proprietario in una, un inquilino
+    nell'altra — si lascia scadere l'access token e si ricarica: nessuno dei due deve
+    ritrovarsi fuori. È `C2`, e prima di questa fetta è **certo** che succeda;
+11. **a 375 px**, il percorso dell'inquilino per intero.
+
+Ciò che il collaudo trova si scrive nell'esito **anche se non si corregge**: una fetta che
+chiude con «tutto bene» dopo un giro come questo è una fetta che il giro non l'ha fatto.
+
+### Che cosa **non** entra, e con quale ragione
+
+- **le notifiche**, che sono la fase successiva e hanno un criterio diverso (decisione 6);
+- **una suite end-to-end**, che va scritta quando i percorsi sono stabili (decisione 5);
+- **un elenco degli inviti**, che è una rotta nuova;
+- **il dettaglio di un pagamento**, che non porta niente in più della sua riga;
+- **il resto del debito sull'organizzazione predefinita**: si chiude la prima volta, non
+  ogni volta (decisione 2).
+
+<a id="esito-fetta-c"></a>
+
+## Esito — Fetta C, chiudere i buchi che un collaudo incontrerebbe
+
+**Eseguita l'8 settembre 2026**, per intero e fino al punto di taglio dichiarato:
+`C1`–`C6`, e **le notifiche sono restate fuori** come la decisione 6 prevedeva.
+
+**Il collaudo in undici punti non è ancora stato percorso**, ed è la ragione per cui
+questo esito è **aperto**: il criterio della fetta non è la suite, è che una persona che
+non ha scritto il codice attraversi il prodotto con due account e un browser. Ciò che
+quel giro troverà si scrive qui sotto, **anche se non si corregge**. Un esito che si
+chiudesse con «tutto bene» prima del giro sarebbe un esito che il giro non l'ha fatto.
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `C1` | schermata `/invito`, un campo e un bottone. L'organizzazione appena accettata **diventa quella attiva**, e si atterra sulla pagina iniziale del ruolo. La revoca vive nella modale che ha creato l'invito, e da nessun'altra parte |
+| `C2` | lock per origine sopra il singolo volo: `navigator.locks`, con ripiego su un marcatore in `localStorage` che scade. Il token non lascia la memoria |
+| `C3` | `AttachmentsCard` estratta da `ScansCard` e usata su **sei** owner. `tickets` aggiunto all'unione, `archiveDocument` scritta |
+| `C4` | la stanza si corregge e si archivia, da una modale che è la sua unica superficie |
+| `C5` | bundle diviso per rotta. I numeri sono qui sotto |
+| `C6` | il messaggio della configurazione nomina `.env.example` e dice come si carica |
+
+**Il backend è stato toccato una volta sola**, in `C6`: `AppConfig::load` restituisce un
+`ConfigError` tipizzato invece di un `figment::Error` incapsulato, e `main.rs` perde il
+`.context` che ora contraddirebbe. **424 test Rust prima e dopo** — nessuno di essi
+asserisce su quel messaggio, ed è coerente: è prosa per un umano al primo avvio.
+
+Il client passa da **61 a 69 test**: quattro sull'accettazione dell'invito e quattro sul
+rinnovo fra schede.
+
+### I numeri del bundle, per rotta iniziale
+
+Misurati sulla chiusura transitiva degli import di ogni entry, gzip incluso. Prima era
+**un pezzo solo**: ogni rotta pagava tutto.
+
+| Rotta iniziale | Prima | Dopo | |
+|---|---|---|---|
+| `/` — riepilogo, chi amministra | 690,6 kB · 201,7 gz | **438,7 kB · 141,6 gz** | −36 % · −30 % |
+| `/addebiti` — chi abita | 690,6 kB · 201,7 gz | **455,7 kB · 148,3 gz** | −34 % · −26 % |
+| `/invito` | 690,6 kB · 201,7 gz | **440,8 kB · 142,8 gz** | −36 % · −29 % |
+| `/accesso` — il login | 690,6 kB · 201,7 gz | **543,4 kB · 172,4 gz** | −21 % · −15 % |
+| tutte le rotte insieme | 690,6 kB · 201,7 gz | 706,8 kB · 226,2 gz | +2 % · +12 % |
+
+**Due righe vanno lette e non passate sopra.**
+
+La prima: **il totale cresce**. Dividere costa un preambolo per chunk, e chi visitasse
+ogni schermata scaricherebbe più di prima. È il baratto giusto — nessuno visita ventuno
+schermate in una sessione, e l'inquilino ne visita tre — ma va saputo, perché il giorno
+in cui qualcuno misurasse «il bundle» senza dire *di quale rotta* leggerebbe un
+peggioramento.
+
+La seconda: **il login è la rotta più pesante**, e non è un caso. `AuthPage` usa `zod`
+per gli schemi dei form, e `zod` è un chunk da 107,9 kB (32,5 gz) che nessuna altra rotta
+iniziale tira dentro. È **la prima schermata che un utente nuovo vede**, cioè il posto
+peggiore in cui avere il picco. Non si tocca in questa fetta — sarebbe riscrivere la
+validazione di due form, e il perimetro è chiuso — ma è un debito nuovo, registrato in
+`09` con il suo rimedio.
+
+### Che cosa il piano non aveva previsto
+
+**`invitation.not_found` non è il codice che si riceve per un codice sbagliato.** Il piano
+ne prevedeva tre — `invitation.not_found`, `invitation.already_accepted`, `auth.required`
+— e il primo è sbagliato: l'API risponde **`401 auth.invalid_credentials`** a un token
+sconosciuto, scaduto **o intestato a un'altra email**, e li rende indistinguibili apposta,
+perché distinguerli sarebbe un oracolo su quali inviti esistono
+(`http_contract.rs::an_unknown_token_is_indistinguishable_from_someone_elses`).
+
+Ne segue una cosa che il piano non poteva sapere: nel catalogo quel codice significa
+«email o password non corrette», che su questa schermata è una frase su una password che
+nessuno ha digitato. Il messaggio è quindi **della schermata e non del codice**, ed è
+l'unico posto del client dove un `code` si traduce fuori dal catalogo. C'è un test che lo
+tiene, perché è esattamente il genere di cosa che qualcuno «semplifica».
+
+**Lo `state.from` era una promessa che nessuno manteneva.** Il commento in `App.tsx`
+diceva che chi arriva su una pagina interna senza sessione «non perde dove stava
+andando», e lo `state` veniva scritto — ma dopo il login si andava sempre alla radice,
+perché nessuno lo leggeva. È stato scoperto progettando `C1`, dove serve davvero: chi si
+registra per accettare un invito deve tornare su `/invito`. Ora lo legge, accettando solo
+un percorso interno — uno `state` di `history` lo fabbrica chiunque, e un valore che
+cominci con `//` sarebbe una redirezione aperta regalata da tre righe di comodità.
+
+**Il lock fra schede maschera il difetto che il singolo volo evita.** Non era previsto e
+si è visto subito: il test della fetta 1 che riproduceva il difetto ha **smesso di
+fallire**, perché il lock serializza anche dentro una scheda. Il test è stato corretto per
+disattivare entrambi i meccanismi, con la ragione scritta accanto. È il caso da manuale
+del criterio del progetto — un test che non fallisce quando il codice è sbagliato è un
+verde che non prova nulla — e stavolta si è manifestato al contrario: un verde nuovo che
+copriva la dimostrazione di un difetto vecchio.
+
+**La stanza non aveva una superficie propria.** `GET /rooms/{id}` non esiste — l'elenco
+passa dall'immobile — quindi `C3` e `C4` si sono uniti: la modale che corregge la stanza
+è anche l'unico posto in cui i suoi allegati possono stare. L'alternativa sarebbe stata
+una rotta di dettaglio che legge filtrando una lista, cioè una schermata in più per un
+oggetto che non la chiede.
+
+### Le trappole, e quali hanno morso
+
+| Trappola | Esito |
+|---|---|
+| accept-invitation senza `X-Org-Id` | **non ha morso**, ed è merito del piano: `acceptInvitation` era già giusta, e il piano diceva di non toccarla. C'è ora un test che guarda l'header vero |
+| nessuna rotta elenca gli inviti | rispettata: la revoca sta nella modale, e nessun elenco è stato inventato |
+| `getPayment` resta non chiamata | rispettata. L'audit rifatto a fine fetta la ritrova sola, ed è corretto |
+| il limite di 25 MiB prima di inviare | nella scheda condivisa, quindi in tutti e sei i posti invece che in uno |
+| `org.staff_role_required` vero a metà | il bottone di archiviazione si offre a chi è staff **oppure** ha caricato, cioè come dice la `USING` di `documents_update`: il modo migliore di non ripetere una mezza verità è non farla incontrare |
+| un `Suspense` senza il suo stato | **ha morso in scrittura e non in esecuzione**: il primo confine è stato scritto attorno al guscio, il che avrebbe smontato navigazione e selettore a ogni cambio di rotta. Corretto prima di provarlo, mettendolo dentro `<main>` |
+| le azioni avvolgono, niente `shrink-0` | rispettata anche nella scheda nuova |
+
+### Che cosa resta aperto
+
+- **il collaudo in undici punti**, che è il criterio della fetta;
+- **`zod` sul login**, debito nuovo di `C5` (sopra);
+- **il debito sull'organizzazione predefinita si chiude a metà**, come la decisione 2
+  prevedeva: chi entra da un browser nuovo mesi dopo riparte dal default di sempre;
+- **il ripiego del lock non ha un confronta-e-scambia**: resta una finestra teorica in cui
+  due schede scrivono insieme, e in quel caso si torna al difetto — non a una regressione.
+  Vedi [ADR-044](08-decisioni.md#adr-044).
+
+### Il collaudo — da percorrere
+
+*Questa sezione si riempie percorrendolo, ed è ciò che chiude la fetta.*
+
+| # | Punto | Esito |
+|---|---|---|
+| 1 | il proprietario si registra e atterra sul riepilogo vuoto | — |
+| 2 | immobile, due stanze, **una corretta** (`C4`) | — |
+| 3 | due contratti per stanza, parti, attivazione | — |
+| 4 | due inviti, **uno revocato e rifatto** (`C1`) | — |
+| 5 | i due inquilini si registrano e **accettano** (`C1`), nell'organizzazione giusta | — |
+| 6 | bolletta, scansione, revisione OCR, validazione, riaddebito | — |
+| 7 | segnalazione con **foto allegata** (`C3`), e il ciclo completo | — |
+| 8 | dichiarazione di pagamento, conferma, residuo che scende | — |
+| 9 | gruppo di spesa, una spesa a testa, rimborso, saldi a zero | — |
+| 10 | **due finestre insieme**, token scaduto, nessuno buttato fuori (`C2`) | — |
+| 11 | il percorso dell'inquilino **a 375 px** | — |
+
+Ciò che il giro trova va scritto qui **anche se non si corregge**.

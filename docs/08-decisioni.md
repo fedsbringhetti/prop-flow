@@ -2492,3 +2492,131 @@ navigazione con *Immobili*.
 **Le schermate restano progettate e raggiungibili per URL**, come `PaymentsPage`: un
 `owner` che abiti in una delle proprie case è in un gruppo come chiunque altro, e per lui
 `/spese` risponde.
+
+<a id="adr-044"></a>
+
+## ADR-044 — Il rinnovo fra schede si serializza, e la sessione non si trasmette
+
+**8 settembre 2026.** Passo `C2` della fetta C. Chiude un difetto documentato da tre
+fette e **osservato** nella B-bis, e la decisione che prende non è «coordinare o no» —
+quello era pacifico — ma **che cosa** le schede si scambino.
+
+### Il fatto
+
+Il refresh a singolo volo è una promessa in memoria, e due schede sono due contesti
+JavaScript. Se l'access token di entrambe scade nello stesso istante, la seconda presenta
+un refresh token **già ruotato**; l'API tratta il riuso come prova che qualcuno ne ha una
+copia e revoca l'intera catena. Nella fetta B-bis è accaduto senza cercarlo, con due
+schede aperte sulla stessa origine: `riuso di un refresh token già ruotato: revocate
+tutte le sessioni` nei log, e la sessione fuori senza che nessuno avesse fatto niente.
+
+«Raro» era vero solo finché si teneva una scheda sola. Con due account e due finestre —
+cioè il collaudo che la fetta C prepara — non è un caso limite: è certo.
+
+### La via che viene in mente per prima, e perché è sbagliata
+
+**Trasmettere la sessione**: la scheda che vince rinnova e manda l'access token alle
+altre con `BroadcastChannel`. Funziona, ed è il motivo per cui va scritta qui invece che
+scartata in silenzio — chi la propone non sta sbagliando ragionamento, sta ignorando un
+vincolo.
+
+Il vincolo è che **l'access token vive in memoria apposta**: non è leggibile da uno
+script che arrivi dopo il caricamento della pagina, e muore al reload. Metterlo su un
+canale — o, peggio, in `localStorage` come ripiego — lo espone esattamente a ciò da cui
+era stato tenuto fuori. Si comprerebbe un rinnovo risparmiato vendendo la sola proprietà
+per cui quel token non sta in `localStorage`.
+
+### La decisione: una coda, non una trasmissione
+
+**Non serve condividerlo.** Ciò che le schede condividono è **il cookie**, e l'API ruota
+a ogni uso: il riuso lo rileva soltanto su *due usi dello stesso token*. Se la seconda
+scheda **aspetta** che la prima abbia finito e poi rinnova a sua volta, presenta il
+cookie **nuovo** — che è una rotazione legittima, non un riuso.
+
+Serve quindi un mutex per origine: `navigator.locks.request`, che è esattamente questo,
+con ripiego su un lock in `localStorage` dove i Web Locks non ci sono. Il ripiego scrive
+**un marcatore con una scadenza e mai il token**: un identificatore casuale e un istante,
+cioè niente che serva a chi lo legga.
+
+Costa `N` rinnovi per `N` schede invece di uno. È il prezzo giusto: succede una volta
+ogni quindici minuti per scheda, e compra il fatto che il token non esce dalla memoria.
+
+### Conseguenze
+
+- **i due strati non sono ridondanti.** Il singolo volo risparmia i rinnovi *dentro* una
+  scheda, il lock impedisce che due schede li facciano *insieme*. Il lock serializza
+  anche in-scheda, quindi maschera il difetto che il singolo volo evita: i test che
+  riproducono quel difetto disattivano **entrambi**, ed è scritto lì perché un verde che
+  non prova nulla è peggio di un test assente;
+- **il marcatore deve scadere.** Una scheda chiusa a metà rinnovo non può bloccare le
+  altre per sempre: 15 secondi di vita, e dopo 20 di attesa si procede comunque senza il
+  lock. Un rinnovo bloccato per sempre è peggio del difetto che il lock evita — là si
+  perde la sessione e si rientra, qui l'applicazione resterebbe ferma senza dire perché;
+- **`localStorage` non ha un confronta-e-scambia**, quindi il ripiego rilegge dopo aver
+  scritto e riprova se non si ritrova. Resta una finestra teorica in cui due schede
+  scrivono davvero insieme, e in quel caso si torna al comportamento di prima: il
+  difetto, non una regressione. È il prezzo di non avere `navigator.locks`, che nei
+  browser di questo decennio c'è.
+
+*Alternativa scartata: un `SharedWorker` che tenga la sessione.* È il disegno corretto
+per un'applicazione che ne avesse bisogno, e qui sarebbe un terzo contesto da far vivere,
+morire e ricollegare per risolvere un problema che un lock chiude in venti righe.
+
+<a id="adr-045"></a>
+
+## ADR-045 — Accettare un invito sceglie l'organizzazione, ed è l'unico momento in cui si sa quale
+
+**8 settembre 2026.** Passo `C1` della fetta C. Chiude **a metà** — deliberatamente — un
+debito registrato da due fette, e la metà che chiude è quella che conta.
+
+### Il fatto
+
+`pick_default_membership` preferisce il ruolo più alto — owner, poi manager, poi tenant —
+e la registrazione crea **sempre** un'organizzazione personale di cui si è owner. Un
+inquilino che si registra da sé atterra quindi sempre nella propria organizzazione vuota,
+e deve cambiare a mano dal selettore. Lo si è visto nel collaudo della B-bis: la prima
+schermata di un inquilino appena registrato è «Comincia registrando il tuo primo
+immobile», che è il contrario di ciò che quella persona è venuta a fare.
+
+### La decisione
+
+**Accettare un invito è il momento in cui l'ambiguità non c'è**: quella persona ha appena
+dichiarato in quale organizzazione vuole entrare. La risposta di
+`POST /auth/accept-invitation` porta `organization_id` e `role`, e il client chiama
+`selectOrganization` con quelli, poi manda alla pagina iniziale **del ruolo** — che per
+un inquilino è `/addebiti` e non la radice.
+
+*Alternativa scartata: cambiare `pick_default_membership` nel backend.* Vorrebbe dire
+decidere **per tutti** quale appartenenza vinca, e il caso legittimo esiste: chi affitta
+una casa e ne abita un'altra è owner della propria e tenant di un'altra, e nessuna delle
+due è ovvia. La scelta del client è locale, è reversibile dal selettore, e non richiede
+una migration.
+
+### Il debito non si chiude del tutto, e va detto
+
+Chi entra da un browser nuovo, mesi dopo, riparte dal default di sempre: il ricordo vive
+in `localStorage` e quel browser non ce l'ha. **Si chiude la prima volta, non ogni
+volta** — ed è la prima volta a far dire «non funziona».
+
+### Il codice non viaggia in un URL
+
+Corollario, e riguarda la schermata che riceve il codice. `accept_token` è **una
+credenziale**: chi ce l'ha entra in un'organizzazione. Un link `/invito/<token>`
+comprerebbe un clic e scriverebbe quella credenziale in tre archivi che nessuno ripulisce
+— la cronologia del browser, il `Referer` verso qualunque risorsa esterna, e i log di
+ogni proxy davanti al client. **È un campo in cui incollare**, coerente con la modale che
+lo consegna, che lo chiama «codice» e dice che vale sette giorni.
+
+Ne segue una conseguenza progettata invece che subita: accettare richiede una sessione,
+perché la rotta è autenticata. Chi arriva su `/invito` senza account **non riceve un
+`401`**: trova scritto che deve prima registrarsi, con il link, e che poi torna lì — e ci
+torna davvero, perché lo `state.from` della redirezione al login, che fino a questa fetta
+nessuno leggeva, adesso decide dove si atterra dopo essere entrati.
+
+### La chiamata va senza `X-Org-Id`, e non si «uniforma»
+
+È l'operazione che **crea** l'appartenenza: dichiarare un'organizzazione di cui non si è
+ancora membri fa rispondere `403` a una richiesta legittima. `acceptInvitation` lo fa già
+con `withoutOrganization`, ed è verificato da un test che guarda **l'header vero** e non
+il codice che lo scrive — perché la prossima persona che passa di lì vedrà un'eccezione
+alla regola «`X-Org-Id` sempre» e sarà tentata di toglierla.
