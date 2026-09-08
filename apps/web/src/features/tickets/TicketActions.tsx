@@ -111,6 +111,15 @@ export function TicketActions({ ticket }: { ticket: Ticket }) {
   const assignable =
     ticket.status === 'open' || ticket.status === 'triaged' || ticket.status === 'assigned'
 
+  // **`assigned` resta fra gli stati assegnabili**: il bottone serve anche a
+  // *riassegnare* a qualcun altro, e toglierlo dall'elenco toglierebbe quella
+  // funzione a tutti. Quello che si aggiunge è che chi guarda non l'abbia già in
+  // carico — «prendi in carico» su qualcosa che si ha già in carico è l'unico caso
+  // in cui il bottone non dice niente. Il confronto passa dal `null` esplicito: un
+  // `undefined === undefined` renderebbe assegnatario chiunque su una segnalazione
+  // che non ha nessuno.
+  const alreadyMine = ticket.assigned_to !== null && ticket.assigned_to === userId
+
   // Chi ha segnalato: `reported_by` è nullo quando la riga è stata scritta fuori
   // da un contesto di richiesta, e un `undefined === undefined` non deve
   // trasformare chiunque nel segnalante.
@@ -122,7 +131,7 @@ export function TicketActions({ ticket }: { ticket: Ticket }) {
         <TriageDialog ticket={ticket} onDone={refresh} />
       ) : null}
 
-      {isStaff && assignable && userId ? (
+      {isStaff && assignable && !alreadyMine && userId ? (
         <ConfirmAction
           trigger={
             <Button variant="primary">
