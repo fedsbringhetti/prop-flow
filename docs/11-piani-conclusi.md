@@ -6855,16 +6855,33 @@ oggetto che non la chiede.
 | 1 | il proprietario si registra e atterra sul riepilogo vuoto | — |
 | 2 | immobile, due stanze, **una corretta** (`C4`) | — |
 | 3 | due contratti per stanza, parti, attivazione | — |
-| 4 | due inviti, **uno revocato e rifatto** (`C1`) | — |
+| 4 | due inviti; il primo **revocato, e il codice revocato presentato davvero** — che è l'unico modo di provare la revoca — poi rifatto (`C1`) | — |
 | 5 | i due inquilini si registrano e **accettano** (`C1`), nell'organizzazione giusta | — |
 | 6 | bolletta, scansione, revisione OCR, validazione, riaddebito | — |
 | 7 | segnalazione con **foto allegata** (`C3`), e il ciclo completo | — |
 | 8 | dichiarazione di pagamento, conferma, residuo che scende | — |
 | 9 | gruppo di spesa, una spesa a testa, rimborso, saldi a zero | — |
-| 10 | **due finestre insieme**, token scaduto, nessuno buttato fuori (`C2`) | — |
+| 10 | **due schede dello stesso account**, stesso profilo, token scaduto, ricaricate insieme: nessuna delle due viene buttata fuori (`C2`) | — |
 | 11 | il percorso dell'inquilino **a 375 px** | — |
 
 Ciò che il giro trova va scritto qui **anche se non si corregge**.
+
+**Due punti sono stati corretti prima di percorrerli**, e ciò che dicevano resta scritto
+qui sotto perché è quello che si credeva. Nessuno dei due era una previsione smentita:
+erano istruzioni che **non provavano ciò che dichiaravano**, e percorrerle com'erano
+scritte avrebbe prodotto due righe verdi che non significano niente.
+
+- il **10** diceva «*due finestre insieme*, token scaduto, nessuno buttato fuori». Due
+  finestre di **due account** sono due contenitori di cookie, quindi due catene di refresh
+  distinte: non c'è contesa, e il punto passerebbe anche con il lock di `C2` rimosso. Ciò
+  che `C2` protegge è la corsa di due schede della **stessa** sessione;
+- il **4** diceva «due inviti, *uno revocato e rifatto*», che si percorre premendo
+  «revoca» e creando un invito nuovo — **senza mai presentare il codice revocato**. La
+  revoca si prova solo provando a usarlo: deve essere rifiutato.
+
+La rilettura che li ha trovati è il passo `T1` della
+[sezione 2](09-stato-e-roadmap.md#piano-sezione-2), e la ragione per cui una correzione
+entra nell'archivio è la sua decisione 1.
 
 ---
 
