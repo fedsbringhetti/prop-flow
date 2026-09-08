@@ -1,10 +1,11 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Ventuno voci**, con un identificatore stabile ciascuna.
+**Ventitré voci**, con un identificatore stabile ciascuna.
 
 Erano ventisei: `R4`, `R5`, `R6`, `R10` e `R20`, più il bottone del thread, sono uscite
-con la [sezione 1](11-piani-conclusi.md#esito-sezione-1) l'8 settembre 2026.
+con la [sezione 1](11-piani-conclusi.md#esito-sezione-1) l'8 settembre 2026. `R26` e `R27`
+sono entrate con la sezione 2, che è il collaudo: **è il posto da cui questo file cresce**.
 
 ## Perché un file a sé
 
@@ -126,7 +127,7 @@ Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui que
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R12 | aperta | **Avvertire della sovrapposizione alla creazione**, non solo all'attivazione: se in quel periodo c'è già un contratto, «Crea» chiede una conferma in più | **È una modifica di solo client**, ed è la scoperta che rende la voce piccola. I due vincoli `leases_no_overlap_property` e `leases_no_overlap_room` della `0005` hanno una `WHERE` che copre `pending_signature`, `active` ed `expiring` — **e non `draft`**: le bozze sono escluse *apposta*, perché una bozza è lavoro in corso e due bozze che si sovrappongono sono legittime. Il `409` all'attivazione è quindi corretto e resta; quello che manca è dirlo prima, e il client può saperlo con `listLeases` filtrato sull'immobile confrontando i periodi. **Non toccare i vincoli**: allargarli a `draft` vieterebbe di abbozzare due ipotesi alternative sullo stesso periodo |
-| R13 | aperta | **Un contratto creato per sbaglio non si elimina**: l'unica via è attivarlo e disdirlo | Le rotte dei contratti sono cinque — `POST /leases`, `GET /leases`, `GET /leases/{id}`, `POST .../parties`, `POST .../activate`, `POST .../terminate` — e **non c'è una `DELETE`**. La colonna `deleted_at` c'è, quindi il livello dati regge già la cancellazione soft: manca lo use case e la rotta. Da decidere **quali stati** siano archiviabili: una bozza certamente; un contratto attivo no, perché per quello la via è la disdetta, che è un fatto diverso e lascia traccia |
+| R13 | aperta | **Un contratto creato per sbaglio non si elimina**: l'unica via è attivarlo e disdirlo | Le rotte dei contratti sono cinque — `POST /leases`, `GET /leases`, `GET /leases/{id}`, `POST .../parties`, `POST .../activate`, `POST .../terminate` — e **non c'è una `DELETE`**. La colonna `deleted_at` c'è, quindi il livello dati regge già la cancellazione soft: manca lo use case e la rotta. **E c'è di più, trovato con [R26](#lelenco)**: `Lease::cancel()` esiste nel dominio — annulla una bozza o un contratto in attesa di firma, con l'invariante `LeaseNotCancellable` a guardia — e **non lo chiama nessuno**. La transizione giusta è già scritta e non è esposta. Da decidere **quali stati** siano archiviabili: una bozza certamente; un contratto attivo no, perché per quello la via è la disdetta, che è un fatto diverso e lascia traccia |
 | R14 | aperta | **Dare un nome ai contratti**, perché in tabella sono tutti uguali | `app.leases` **non ha una colonna nome**: ci sono `notes` e `registration_number`, e l'elenco mostra tipo più data, da cui le righe identiche. Ci sono due vie e vanno pesate insieme, non scelte per prima: (a) una colonna `label`, cioè migration, dominio, DTO e form; (b) comporre l'etichetta da ciò che il contratto già è — immobile e stanza — che **non è gratis**, perché il DTO `Lease` porta `property_id` e `room_id` e **nessun nome**, quindi vorrebbe dire allargare la risposta o fare una richiesta per riga. La (b) risolve «sono tutti uguali»; solo la (a) permette di chiamarlo *«Rossi, secondo piano»* |
 
 | R17 | aperta | **Le parti contrattuali non si modificano dopo**, nemmeno da chi amministra | C'è **solo** `POST /leases/{id}/parties`: nessuna `PATCH`, nessuna `DELETE`. Una parte si aggiunge e resta com'è — nome, email, telefono, ruolo, quota, intestatario principale. `app.lease_parties` ha però sia `left_at` sia `deleted_at`, quindi correggere e togliere sono **già rappresentabili** senza migration: mancano gli use case e le rotte |
@@ -189,6 +190,13 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R16 | aperta | **Un inquilino deve poter uscire da un'organizzazione**, e l'operazione va negata se ha un contratto attivo | **Non esiste nessuna rotta**: su `/api/v1/organizations` c'è soltanto la `GET` che elenca le proprie. `app.org_members` ha però `status` e `deleted_at`, quindi l'uscita è già rappresentabile senza migration — è lo use case, la rotta e la regola a mancare. Il blocco richiesto è la parte interessante: «ha un contratto attivo» va verificato **e** garantito, e vale la lezione della `0029` sulle spese co-living, dove rendere l'uscita un confine vero ha richiesto una policy e non un `if`. Da decidere anche che cosa vede dopo: chi esce dall'unica organizzazione in cui abita resta con la propria, personale e vuota — cioè il caso di [ADR-045](08-decisioni.md#adr-045) al contrario |
+
+### Dal collaudo della fetta C
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R26 | aperta | **Gli elenchi offrono filtri per stati che non possono comparire**, e sono tre elenchi con tre cause diverse | Trovato al punto 2 del collaudo archiviando un immobile e non ritrovandolo nemmeno filtrando per «Archiviato». **Immobili**: archiviare fa due cose nello stesso `UPDATE` (`soft_delete` in `crates/infrastructure/src/db/repositories/property.rs`) — `status = 'archived'` **e** `deleted_at` — ma `list` filtra `deleted_at IS NULL`, quindi la riga esce da ogni elenco, quel filtro compreso; e `find_by_id` ha lo stesso filtro, quindi nemmeno l'URL della scheda funziona più (`404`). Le altre quattro opzioni di quel `<Select>` sono vuote per la ragione di [R1](#lelenco). **Contratti**: l'opzione «Annullato» non può comparire perché `Lease::cancel()` **esiste nel dominio e non la chiama nessuno** — nessuno use case, nessuna rotta (vedi [R13](#lelenco)). **Bollette**: «Pagata» e «Contestata» sono gli stati di [R25](#lelenco), che nessuno scrive. Le tre cause sono diverse ma la domanda è una sola, e conviene rispondere una volta: **un filtro deve offrire solo ciò che può comparire**, e dove lo stato è vero ma la riga è nascosta serve un modo di includerla. **Non toccare l'archiviazione**: che sia un soft delete è giusto |
+| R27 | aperta | **`README.md` e [06](06-sviluppo.md) insegnano ancora il primo avvio a mano** | Trovato scrivendo `R3`. Le due pagine elencano `docker compose up`, `generate-jwt-keys.sh`, il `psql` dei ruoli e i tre `cargo run`, mentre `just setup` fa la stessa cosa in un comando e `just api`/`just worker`/`just web` avviano. Non è sbagliato — quei comandi funzionano, e `CLAUDE.md` §4 dice che la fonte della verità è lui — ma è **più lungo e più facile da sbagliare** proprio nella pagina che un estraneo legge per prima. Da decidere se il `justfile` diventi la via raccomandata anche lì, o se resti uno strumento di comodo per chi già conosce il progetto |
 
 ### Il perimetro dei ruoli — **la voce più grande della lista**
 
