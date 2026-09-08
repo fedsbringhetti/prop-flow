@@ -8,6 +8,7 @@ import {
   LifeBuoy,
   LogOut,
   Menu,
+  TicketCheck,
   Banknote,
   Receipt,
   Users,
@@ -15,7 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router'
+import { Link, NavLink, Outlet, useLocation } from 'react-router'
 
 import { getOrganizations } from '@/api/endpoints'
 import type { Organization } from '@/api/types'
@@ -345,6 +346,20 @@ function OrganizationMenu() {
           ))}
 
           <DropdownMenu.Separator className="my-1 h-px bg-border-subtle" />
+          {/* **Dove si usa un codice d'invito**, e sta qui per una ragione
+              precisa: chi ha appena ricevuto un invito arriva in questo menù da
+              sé, perché è il posto in cui si va quando ci si accorge di essere
+              nell'organizzazione sbagliata. Una voce nella navigazione
+              principale sarebbe un permanente per un gesto che si fa una volta. */}
+          <DropdownMenu.Item asChild>
+            <Link
+              to="/invito"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-surface-muted"
+            >
+              <TicketCheck className="size-4" aria-hidden />
+              {t.invitation.acceptEntry}
+            </Link>
+          </DropdownMenu.Item>
           <DropdownMenu.Item
             onSelect={() => {
               void store.logout()

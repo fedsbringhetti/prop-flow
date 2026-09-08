@@ -8,6 +8,10 @@ import { NewBillPage } from '@/features/bills/NewBillPage'
 import { ChargeDetailPage } from '@/features/charges/ChargeDetailPage'
 import { ChargesPage } from '@/features/charges/ChargesPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
+import {
+  AcceptInvitationPage,
+  AcceptInvitationSignedOutPage,
+} from '@/features/invitations/AcceptInvitationPage'
 import { ExpenseGroupDetailPage } from '@/features/expenses/ExpenseGroupDetailPage'
 import { ExpenseGroupsPage } from '@/features/expenses/ExpenseGroupsPage'
 import { LeaseDetailPage } from '@/features/leases/LeaseDetailPage'
@@ -36,6 +40,21 @@ export function App() {
   const isStaff = useIsStaff()
   const location = useLocation()
 
+  /**
+   * Dove si torna dopo essere entrati.
+   *
+   * Lo `state` lo scrive la redirezione al login qui sotto, e non è fidato — è
+   * pur sempre lo stato di una `history` che chiunque può fabbricare — quindi si
+   * accetta **solo un percorso interno**: un valore che cominci con `//` sarebbe
+   * un'origine esterna scritta come se fosse un percorso, cioè una redirezione
+   * aperta regalata da tre righe di comodità.
+   */
+  const requested = (location.state as { from?: unknown } | null)?.from
+  const returnTo =
+    typeof requested === 'string' && requested.startsWith('/') && !requested.startsWith('//')
+      ? requested
+      : '/'
+
   if (restoring) {
     return <Loading className="min-h-screen justify-center" />
   }
@@ -45,6 +64,12 @@ export function App() {
       <Routes>
         <Route path="/accesso" element={<LoginPage />} />
         <Route path="/registrazione" element={<RegisterPage />} />
+        {/* Accettare un invito richiede una sessione — la rotta dell'API è
+            autenticata — quindi chi arriva qui con un codice in mano e senza
+            account non va al login in silenzio: gli si dice che cosa fare
+            prima. Mandarlo al login gli farebbe leggere «entra» senza sapere
+            che deve prima registrarsi, e il codice giusto darebbe `401`. */}
+        <Route path="/invito" element={<AcceptInvitationSignedOutPage />} />
         {/* Chi arriva su una pagina interna senza sessione va al login **e non
             perde dove stava andando**: il percorso resta nello stato, e un
             ritorno al login da una scadenza non fa ricominciare da capo. */}
@@ -90,11 +115,16 @@ export function App() {
               di `PaymentsPage`. */}
           <Route path="/spese" element={<ExpenseGroupsPage />} />
           <Route path="/spese/:id" element={<ExpenseGroupDetailPage />} />
+          <Route path="/invito" element={<AcceptInvitationPage />} />
         </Route>
         {/* Chi è già entrato non deve poter tornare al login da un segnalibro:
-            vedrebbe un form che non serve a niente. */}
-        <Route path="/accesso" element={<Navigate to="/" replace />} />
-        <Route path="/registrazione" element={<Navigate to="/" replace />} />
+            vedrebbe un form che non serve a niente. **Torna dove stava
+            andando**, che è la promessa che lo `state` qui sopra scrive e che
+            fino a questo passo nessuno manteneva: chi si registra per accettare
+            un invito ripassa da `/invito` invece di atterrare sul riepilogo
+            vuoto della propria organizzazione. */}
+        <Route path="/accesso" element={<Navigate to={returnTo} replace />} />
+        <Route path="/registrazione" element={<Navigate to={returnTo} replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </QueryProvider>
