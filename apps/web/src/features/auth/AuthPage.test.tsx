@@ -22,7 +22,24 @@ import { LoginPage } from './AuthPage'
  * 2. **`Invio` in un campo di testo invia il form**, che è il gesto che chiunque
  *    usa e che si perde nel momento in cui qualcuno intercetta `keydown`;
  * 3. il form **non perde ciò che è stato digitato** quando la richiesta fallisce.
+ *
+ * A queste si aggiunge il bottone che **mostra la password**, che è nel giro di
+ * tabulazione apposta: un'icona con un `onClick` sarebbe invisibile a chi non usa
+ * il mouse, e dentro un `<form>` un `<button>` senza `type` invierebbe il form
+ * invece di scoprire il campo.
  */
+
+/**
+ * Il campo, e non il bottone che lo scopre.
+ *
+ * `getByLabelText(/password/i)` da solo ne trova **due**: l'etichetta del campo e
+ * l'`aria-label` del bottone, che dice «Mostra la password» perché è ciò che fa.
+ * Sono due controlli distinti e devono restare distinguibili, quindi qui si dice
+ * quale dei due si vuole invece di rendere il bottone più muto.
+ */
+function passwordField(): HTMLElement {
+  return screen.getByLabelText(/password/i, { selector: 'input' })
+}
 
 function renderLogin(fetchImpl: typeof fetch) {
   vi.stubGlobal('fetch', fetchImpl)
@@ -70,7 +87,7 @@ describe('l’accesso da sola tastiera', () => {
 
     await user.keyboard('federica.bianchi@example.it')
     await user.tab()
-    expect(screen.getByLabelText(/password/i)).toHaveFocus()
+    expect(passwordField()).toHaveFocus()
 
     await user.keyboard('cavallo batteria graffetta')
     // `Invio` dentro un campo di testo: è l'invio implicito del form, e funziona
@@ -101,7 +118,11 @@ describe('l’accesso da sola tastiera', () => {
     })
 
     await user.type(await screen.findByLabelText(/email/i), 'federica.bianchi@example.it')
-    await user.type(screen.getByLabelText(/password/i), 'cavallo batteria graffetta')
+    await user.type(passwordField(), 'cavallo batteria graffetta')
+    // Fra il campo e l'invio c'è il bottone che mostra la password, ed è lì
+    // apposta: è raggiungibile da tastiera come tutto il resto.
+    await user.tab()
+    expect(screen.getByRole('button', { name: /mostra la password/i })).toHaveFocus()
     await user.tab()
     expect(screen.getByRole('button', { name: /entra/i })).toHaveFocus()
     await user.keyboard(' ')
@@ -135,14 +156,14 @@ describe('l’accesso da sola tastiera', () => {
     })
 
     await user.type(await screen.findByLabelText(/email/i), 'federica.bianchi@example.it')
-    await user.type(screen.getByLabelText(/password/i), 'password sbagliata')
+    await user.type(passwordField(), 'password sbagliata')
     await user.click(screen.getByRole('button', { name: /entra/i }))
 
     // L'errore è annunciato — `role="alert"` — e non solo disegnato.
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/email o password non corrette/i)
     expect(screen.getByLabelText(/email/i)).toHaveValue('federica.bianchi@example.it')
-    expect(screen.getByLabelText(/password/i)).toHaveValue('password sbagliata')
+    expect(passwordField()).toHaveValue('password sbagliata')
   })
 
   /**
@@ -156,7 +177,45 @@ describe('l’accesso da sola tastiera', () => {
     renderLogin(async () => jsonResponse(401, { code: 'auth.invalid_credentials', status: 401 }))
 
     expect(await screen.findByLabelText(/email/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(passwordField()).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /entra/i })).toBeInTheDocument()
+  })
+
+  /**
+   * **Mostrare la password non invia il form.**
+   *
+   * Dentro un `<form>` il default di `<button>` è `submit`, ed è il difetto più
+   * comune e più invisibile dei form HTML: si scopre premendo, quando la pagina è
+   * già partita. Qui si verifica che il carattere si veda, che l'etichetta dica in
+   * che stato si è — l'icona da sola è ambigua — e che **nessuna richiesta parta**.
+   */
+  it('mostra e nasconde la password senza inviare il form', async () => {
+    const calls: string[] = []
+    const user = userEvent.setup()
+
+    renderLogin(async (input, init) => {
+      const url = String(input)
+      calls.push(`${init?.method ?? 'GET'} ${url}`)
+      return jsonResponse(401, { code: 'auth.invalid_credentials', status: 401 })
+    })
+
+    await user.type(await screen.findByLabelText(/email/i), 'federica.bianchi@example.it')
+    await user.type(passwordField(), 'cavallo batteria graffetta')
+    expect(passwordField()).toHaveAttribute('type', 'password')
+
+    const toggle = screen.getByRole('button', { name: /mostra la password/i })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await user.click(toggle)
+
+    expect(passwordField()).toHaveAttribute('type', 'text')
+    // Ciò che era stato digitato resta, e il campo non si è svuotato scoprendolo.
+    expect(passwordField()).toHaveValue('cavallo batteria graffetta')
+
+    const pressed = screen.getByRole('button', { name: /nascondi la password/i })
+    expect(pressed).toHaveAttribute('aria-pressed', 'true')
+    await user.click(pressed)
+    expect(passwordField()).toHaveAttribute('type', 'password')
+
+    expect(calls.some((call) => call.includes('/auth/login'))).toBe(false)
   })
 })

@@ -55,6 +55,10 @@ export const it = {
     email: 'Email',
     password: 'Password',
     passwordHint: 'Almeno 12 caratteri. Una frase lunga vale più di un simbolo.',
+    /** L'etichetta cambia con lo stato: l'icona da sola è ambigua fra «adesso è
+     *  visibile» e «premi per renderla visibile». */
+    showPassword: 'Mostra la password',
+    hidePassword: 'Nascondi la password',
     fullName: 'Nome e cognome',
     organizationName: 'Nome dell’organizzazione',
     organizationNameHint: 'Se lo lasci vuoto usiamo il tuo nome.',

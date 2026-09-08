@@ -1,4 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Eye, EyeOff } from 'lucide-react'
+import type { ComponentProps } from 'react'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
@@ -9,6 +11,7 @@ import { InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 import { t } from '@/i18n'
+import { cn } from '@/lib/utils'
 import { useSession } from '@/app/session'
 
 const loginSchema = z.object({
@@ -50,6 +53,44 @@ function AuthFrame({
         <p className="mt-6 text-sm text-ink-muted">{footer}</p>
       </div>
     </main>
+  )
+}
+
+/**
+ * La password si può guardare, e il bottone sta **dentro** il campo.
+ *
+ * Non è una comodità estetica: dodici caratteri digitati alla cieca si sbagliano, e
+ * chi non riesce a entrare non ha modo di sapere se ha sbagliato la password o il
+ * tasto maiuscolo. Le tre cose che rendono il gesto vero e non decorativo:
+ *
+ * 1. **è raggiungibile da tastiera** — è un `<button>` nel giro di tabulazione, non
+ *    un'icona con un `onClick`;
+ * 2. **dice che cosa fa e in che stato è** — `aria-label` che cambia, e
+ *    `aria-pressed`, perché l'icona da sola è ambigua fra «adesso è visibile» e
+ *    «premi per renderla visibile»;
+ * 3. **non ruba il fuoco al campo**: il `mousedown` è annullato, così chi sta
+ *    digitando continua a digitare dove stava.
+ *
+ * Il `type` non è mai `text` di default: si torna nascosti a ogni montaggio.
+ */
+function PasswordInput({ className, ...props }: ComponentProps<'input'>) {
+  const [visible, setVisible] = useState(false)
+
+  return (
+    <div className="relative">
+      <Input {...props} type={visible ? 'text' : 'password'} className={cn('pr-10', className)} />
+      <Button
+        variant="ghost"
+        size="icon"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => setVisible((shown) => !shown)}
+        aria-label={visible ? t.auth.hidePassword : t.auth.showPassword}
+        aria-pressed={visible}
+        className="absolute inset-y-0 right-0 text-ink-muted"
+      >
+        {visible ? <EyeOff aria-hidden /> : <Eye aria-hidden />}
+      </Button>
+    </div>
   )
 }
 
@@ -98,10 +139,9 @@ export function LoginPage() {
         </Field>
         <Field label={t.auth.password} error={form.formState.errors.password?.message} required>
           {(props) => (
-            <Input
+            <PasswordInput
               {...props}
               {...form.register('password')}
-              type="password"
               autoComplete="current-password"
             />
           )}
@@ -180,10 +220,9 @@ export function RegisterPage() {
           required
         >
           {(props) => (
-            <Input
+            <PasswordInput
               {...props}
               {...form.register('password')}
-              type="password"
               autoComplete="new-password"
             />
           )}
