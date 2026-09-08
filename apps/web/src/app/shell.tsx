@@ -130,12 +130,18 @@ export function AppShell() {
   const navigation = isStaff ? staffNavigation : tenantNavigation
 
   return (
-    <div className="min-h-screen">
+    <div>
       <a href="#contenuto" className="skip-link">
         {t.app.skipToContent}
       </a>
 
-      <div className="mx-auto flex w-full max-w-[100rem] flex-col lg:flex-row">
+      {/* **L'altezza sta qui, e non sul `<div>` di fuori.** Era il contrario, e
+          il sintomo era una barra laterale che «si vede a metà»: un `min-height`
+          su un genitore **non allunga** un figlio di blocco, quindi il
+          contenitore flex era alto quanto il suo contenuto e la barra — che è
+          `stretch` dentro di esso — finiva dove finiva il contenuto. Su una
+          schermata di poche righe si fermava a metà schermo. */}
+      <div className="mx-auto flex min-h-screen w-full max-w-[100rem] flex-col lg:flex-row">
         {/* Barra superiore su schermo stretto: il menù è a scomparsa, e il
             titolo resta sempre visibile perché è anche il ritorno al riepilogo. */}
         <div className="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface px-4 py-3 lg:hidden">
@@ -155,18 +161,26 @@ export function AppShell() {
           </div>
         </div>
 
+        {/* Da `lg` in su è una colonna alta quanto la finestra e **ancorata**:
+            `h-screen` e non `stretch`, perché su una schermata lunga la barra si
+            allungherebbe quanto il documento e il selettore in fondo finirebbe a
+            quattromila pixel di distanza. Sotto quella soglia è un menù a
+            scomparsa e nulla di tutto questo si applica. */}
         <nav
           id="navigazione-principale"
           aria-label={t.nav.main}
           className={cn(
-            'shrink-0 border-b border-border-subtle bg-surface lg:w-60 lg:border-r lg:border-b-0',
-            menuOpen ? 'block' : 'hidden lg:block',
+            'shrink-0 border-b border-border-subtle bg-surface',
+            'lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-60 lg:flex-col lg:border-r lg:border-b-0',
+            menuOpen ? 'block' : 'hidden',
           )}
         >
           <div className="hidden px-4 py-4 lg:block">
             <span className="text-sm font-semibold">{t.app.name}</span>
           </div>
-          <ul className="flex flex-col gap-0.5 p-2">
+          {/* `min-h-0` non è ornamentale: senza, un figlio flex non scende sotto
+              la propria altezza naturale e `overflow-y-auto` non scorre mai. */}
+          <ul className="flex flex-col gap-0.5 p-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {navigation.map((item) => (
               <li key={item.to}>
                 <NavLink
@@ -195,7 +209,12 @@ export function AppShell() {
               </li>
             ))}
           </ul>
-          <div className="hidden border-t border-border-subtle p-2 lg:block">
+          {/* **In fondo, e solo da `lg`.** `mt-auto` vuol dire «in fondo alla
+              colonna flex», e sotto quella soglia la colonna non c'è: la
+              navigazione è a scomparsa e il selettore sta già nella barra in
+              alto, dove un `mt-auto` incondizionato spingerebbe in basso
+              qualcosa che lì non deve stare. */}
+          <div className="hidden border-t border-border-subtle p-2 lg:mt-auto lg:block">
             <OrganizationMenu />
           </div>
         </nav>
