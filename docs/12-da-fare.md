@@ -180,6 +180,8 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 |---|---|---|---|
 | R25 | aperta | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#lelenco) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
 
+<a id="thread-aggiorna"></a>
+
 #### Il thread non diventa live: un bottone «Aggiorna» — **deciso**
 
 La domanda era se si potesse rendere la conversazione in tempo reale. **Si è deciso di

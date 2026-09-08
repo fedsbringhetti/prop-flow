@@ -456,7 +456,7 @@ riassegnazione, che è una funzione vera anche se oggi in organizzazione c'è un
 
 Deciso: né tempo reale né intervallo automatico. Le ragioni per esteso, comprese le due
 vie scartate e il motivo di sicurezza che esclude `SSE` oggi, stanno in
-[12](12-da-fare.md#il-thread-non-diventa-live-un-bottone-aggiorna--deciso).
+[12](12-da-fare.md#thread-aggiorna).
 
 Qui basta la parte esecutiva: il thread ha già una chiave propria
 (`keys.ticketMessages`), quindi il bottone è la sua `refetch`, e va **disabilitato mentre
