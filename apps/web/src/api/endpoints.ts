@@ -582,6 +582,20 @@ export function getBillOcr(client: ApiClient, id: Uuid): Promise<BillOcrStatus> 
 export const UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024
 
 /**
+ * Gli owner a cui si può allegare un documento.
+ *
+ * Sono i **sei** che l'API espone, e `tickets` c'era nella rotta e non in questa
+ * unione: la segnalazione con la foto del guasto non compilava, e il typecheck la
+ * rifiutava prima ancora di poterla provare. I nomi sono quelli dei percorsi —
+ * plurali, con `utility-bills` col trattino — e non quelli dell'enum
+ * `attachment_owner_type`, che è singolare: qui si scrive un URL.
+ */
+export type DocumentOwner = {
+  type: 'properties' | 'rooms' | 'leases' | 'tickets' | 'utility-bills' | 'charges'
+  id: Uuid
+}
+
+/**
  * Carica un allegato.
  *
  * Il `Content-Type` lo mette il browser, con il boundary del multipart: metterlo
@@ -593,7 +607,7 @@ export const UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024
  */
 export function uploadDocument(
   client: ApiClient,
-  owner: { type: 'properties' | 'rooms' | 'leases' | 'utility-bills' | 'charges'; id: Uuid },
+  owner: DocumentOwner,
   file: File,
   kind?: string,
 ): Promise<StoredDocument> {
@@ -608,7 +622,7 @@ export function uploadDocument(
 
 export function listDocuments(
   client: ApiClient,
-  owner: { type: 'properties' | 'rooms' | 'leases' | 'utility-bills' | 'charges'; id: Uuid },
+  owner: DocumentOwner,
 ): Promise<Page<StoredDocument>> {
   return client.get<Page<StoredDocument>>(`/${owner.type}/${owner.id}/documents`)
 }
@@ -627,6 +641,19 @@ export function listDocuments(
  */
 export function documentContentPath(id: Uuid): string {
   return `/api/v1/documents/${id}/content`
+}
+
+/**
+ * Archivia un allegato. Cancellazione **soft**, come tutto il resto.
+ *
+ * Il codice che l'API restituisce a chi non può è `org.staff_role_required`, ed è
+ * **vero solo a metà**: la policy `documents_update` ammette lo staff *oppure* chi
+ * ha caricato il documento. Chi mostra quel messaggio non deve quindi promettere
+ * che serva un ruolo — all'uploader quel ruolo non serve. È un debito registrato,
+ * e qui si evita almeno di ripeterlo all'utente.
+ */
+export function archiveDocument(client: ApiClient, id: Uuid): Promise<void> {
+  return client.delete(`/documents/${id}`)
 }
 
 // ---------------------------------------------------------------------------

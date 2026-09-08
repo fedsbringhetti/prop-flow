@@ -23,6 +23,7 @@ import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDecimal } from '@/lib/format'
+import { AttachmentsCard } from '../shared/attachments'
 import { RoomStatusBadge } from '../shared/status'
 import { PropertyStatusBadge } from '../shared/status'
 
@@ -132,6 +133,20 @@ export function PropertyDetailPage() {
 
           <PageSection>
             <ResidentsCard propertyId={id} />
+          </PageSection>
+
+          <PageSection>
+            {/* Caricare è di chi è **membro**, non dello staff: l'inquilino
+                allega al perimetro che gli compete, e a decidere che cosa gli
+                competa è `app.can_access_attachment` attraverso le policy, non un
+                ramo sul ruolo scritto qui. Su un immobile archiviato invece non
+                si allega più, come non ci si aggiungono stanze. */}
+            <AttachmentsCard
+              owner={{ type: 'properties', id }}
+              title={t.document.propertyTitle}
+              hint={t.document.propertyHint}
+              canUpload={data.status !== 'archived'}
+            />
           </PageSection>
         </>
       )}

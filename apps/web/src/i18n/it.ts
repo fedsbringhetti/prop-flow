@@ -278,6 +278,38 @@ export const it = {
     },
   },
 
+  /**
+   * Gli allegati, con un catalogo solo per tutti e sei gli owner.
+   *
+   * Le stringhe sono deliberatamente generiche — «Allegati», «Carica un file» —
+   * perché la stessa scheda compare su un immobile, una stanza, un contratto, una
+   * segnalazione e un addebito. Dove il nome proprio conta, come la *scansione* di
+   * una bolletta, la schermata passa il proprio titolo.
+   */
+  document: {
+    title: 'Allegati',
+    upload: 'Carica un file',
+    uploadHint: 'PDF o immagine, fino a 25 MB.',
+    download: 'Scarica',
+    empty: 'Nessun allegato.',
+    archive: 'Archivia l’allegato',
+    archiveConfirm: 'Archiviare questo allegato?',
+    /** La policy ammette lo staff **oppure** chi ha caricato: il messaggio non
+     *  promette un ruolo, perché all'uploader quel ruolo non serve. */
+    archiveExplain:
+      'Sparisce dall’elenco e non si scarica più. La traccia resta, e il file non si ricarica da qui: bisogna caricarne un altro.',
+    /* I titoli propri di chi ha già un nome per i suoi allegati. */
+    propertyTitle: 'Documenti dell’immobile',
+    propertyHint: 'Planimetrie, certificazioni, verbali.',
+    roomTitle: 'Allegati della stanza',
+    leaseTitle: 'Documenti del contratto',
+    leaseHint: 'Il contratto firmato, i documenti d’identità, le ricevute.',
+    ticketTitle: 'Foto e allegati',
+    ticketHint: 'Una foto dice più di una descrizione: allegala qui.',
+    chargeTitle: 'Allegati dell’addebito',
+    chargeHint: 'La fattura, la ricevuta, il conteggio.',
+  },
+
   invitation: {
     title: 'Inviti',
     invite: 'Invita un inquilino',
@@ -332,7 +364,6 @@ export const it = {
       'Questo codice non è valido: può essere sbagliato, scaduto, o intestato a un’altra email. Chiedine uno nuovo a chi te lo ha mandato.',
     acceptAlreadyDone: 'Questo invito è già stato accettato: sei già dentro.',
   },
-
 
   ticket: {
     title: 'Segnalazioni',

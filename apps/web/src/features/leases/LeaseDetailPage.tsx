@@ -25,6 +25,7 @@ import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
+import { AttachmentsCard } from '../shared/attachments'
 import { ChargeStatusBadge, LeaseStatusBadge } from '../shared/status'
 
 const PARTY_ROLES: LeasePartyRole[] = ['tenant', 'cotenant', 'guarantor']
@@ -175,6 +176,17 @@ export function LeaseDetailPage() {
             <LeaseChargesCard leaseId={id} currency={data.currency} canIssue={isStaff} />
           </PageSection>
 
+          <PageSection>
+            {/* Il contratto è l'owner su cui l'inquilino allega davvero: la
+                carta d'identità che gli è stata chiesta, una ricevuta. Per
+                questo `canUpload` resta al suo default. */}
+            <AttachmentsCard
+              owner={{ type: 'leases', id }}
+              title={t.document.leaseTitle}
+              hint={t.document.leaseHint}
+              kind="lease_contract"
+            />
+          </PageSection>
         </>
       )}
     </Async>

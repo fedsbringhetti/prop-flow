@@ -17,6 +17,7 @@ import { isNegative } from '@/lib/decimal'
 import { formatAmount, formatDate, formatDateTime } from '@/lib/format'
 import { DeclarePaymentDialog } from '../payments/DeclarePaymentDialog'
 import { RecordPaymentDialog } from '../payments/RecordPaymentDialog'
+import { AttachmentsCard } from '../shared/attachments'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { ChargeStatusBadge, PaymentStatusBadge } from '../shared/status'
 
@@ -185,6 +186,17 @@ export function ChargeDetailPage() {
 
             <PageSection>
               <ChargePayments charge={data} />
+            </PageSection>
+
+            <PageSection>
+              {/* Un addebito che si contesta si contesta con una carta: la
+                  fattura, il conteggio, la ricevuta di un bonifico. Vale per
+                  entrambe le parti, quindi `canUpload` resta al default. */}
+              <AttachmentsCard
+                owner={{ type: 'charges', id }}
+                title={t.document.chargeTitle}
+                hint={t.document.chargeHint}
+              />
             </PageSection>
           </>
         )
