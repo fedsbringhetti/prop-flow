@@ -162,8 +162,11 @@ export interface CreateRoomInput {
   name: string
   monthly_rent?: string
   size_sqm?: string
+  floor?: number
   has_private_bathroom?: boolean
   is_furnished?: boolean
+  /** 0–100 come stringa decimale. Assente significa «in parti uguali». */
+  utility_share_percent?: string
 }
 
 export function createRoom(

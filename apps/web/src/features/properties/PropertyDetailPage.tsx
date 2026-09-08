@@ -24,6 +24,7 @@ import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/co
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
+import { compareDecimals, parseDecimal } from '@/lib/decimal'
 import { formatAmount, formatDecimal } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
 import { RoomStatusBadge } from '../shared/status'
@@ -369,6 +370,171 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
   )
 }
 
+/** I campi di una stanza come li digita chi scrive: **stringhe**, anche i numeri. */
+interface RoomValues {
+  name: string
+  monthly_rent: string
+  size_sqm: string
+  floor: string
+  bathroom: boolean
+  furnished: boolean
+  utility_share: string
+}
+
+const NEW_ROOM: RoomValues = {
+  name: '',
+  monthly_rent: '',
+  size_sqm: '',
+  floor: '',
+  bathroom: false,
+  furnished: false,
+  utility_share: '',
+}
+
+function roomValuesOf(room: Room): RoomValues {
+  return {
+    name: room.name,
+    monthly_rent: room.monthly_rent ?? '',
+    size_sqm: room.size_sqm ?? '',
+    floor: room.floor?.toString() ?? '',
+    bathroom: room.has_private_bathroom,
+    furnished: room.is_furnished ?? false,
+    utility_share: room.utility_share_percent ?? '',
+  }
+}
+
+/**
+ * Un decimale come lo vuole l'API, da come lo scrive una persona italiana.
+ *
+ * `450,00` digitato in un'interfaccia italiana è un numero, non un errore: senza
+ * questa riga l'API risponde `422` e la schermata dice «controlla i campi
+ * segnalati» senza segnalarne nessuno.
+ */
+function decimalOf(raw: string): string {
+  return raw.trim().replace(',', '.')
+}
+
+/**
+ * La quota è `app.percentage`: 0–100, al più due decimali.
+ *
+ * Si verifica qui perché il rifiuto del server è un `422 validation.failed`, che
+ * nel catalogo dice «controlla i campi segnalati» — vero, ma senza dire quale.
+ * Solo **dopo un tentativo di invio**: un errore che compare a ogni tasto mentre
+ * si scrive `33,33` è rumore, non aiuto.
+ */
+function shareProblem(raw: string, submitted: boolean): string | undefined {
+  if (!submitted) return undefined
+  const value = decimalOf(raw)
+  if (!value) return undefined
+  const parsed = parseDecimal(value)
+  if (!parsed || parsed.scale > 2) return t.validation.percentage
+  if (compareDecimals(value, '0') < 0 || compareDecimals(value, '100') > 0) {
+    return t.validation.percentage
+  }
+  return undefined
+}
+
+/**
+ * I campi di una stanza, scritti **una volta sola** per i due form.
+ *
+ * Erano due elenchi distinti e già divergenti: la creazione ne chiedeva quattro, la
+ * modifica cinque, e il `POST` ne accetta otto. Chi creava una stanza non aveva
+ * modo di sapere che *arredata* esistesse, né la quota delle utenze. Due elenchi
+ * che chiedono le stesse cose divergono alla prima aggiunta, e la seconda finisce
+ * in uno solo dei due — che è esattamente com'è andata.
+ *
+ * **`status` resta fuori, e non è una dimenticanza.** Che stato abbia una stanza è
+ * una domanda aperta: `Occupied` non lo scrive nessuno, e il dominio dichiara una
+ * transizione — «passa a occupata quando un contratto la impegna» — che non è
+ * implementata. Offrire una tendina qui anticiperebbe quella decisione nel posto
+ * sbagliato, e se si concludesse che lo stato va **derivato** dai contratti
+ * andrebbe tolta subito dopo essere stata aggiunta.
+ */
+function RoomFields({
+  values,
+  onChange,
+  shareError,
+}: {
+  values: RoomValues
+  onChange: (patch: Partial<RoomValues>) => void
+  shareError: string | undefined
+}) {
+  return (
+    <>
+      <Field label={t.room.name} hint={t.room.nameHint} required>
+        {(props) => (
+          <Input
+            {...props}
+            value={values.name}
+            onChange={(event) => onChange({ name: event.target.value })}
+          />
+        )}
+      </Field>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Field label={t.room.monthlyRent}>
+          {(props) => (
+            <Input
+              {...props}
+              inputMode="decimal"
+              placeholder="450.00"
+              value={values.monthly_rent}
+              onChange={(event) => onChange({ monthly_rent: event.target.value })}
+            />
+          )}
+        </Field>
+        <Field label={t.room.surface}>
+          {(props) => (
+            <Input
+              {...props}
+              inputMode="decimal"
+              value={values.size_sqm}
+              onChange={(event) => onChange({ size_sqm: event.target.value })}
+            />
+          )}
+        </Field>
+        <Field label={t.room.floor}>
+          {(props) => (
+            <Input
+              {...props}
+              inputMode="numeric"
+              value={values.floor}
+              onChange={(event) => onChange({ floor: event.target.value })}
+            />
+          )}
+        </Field>
+      </div>
+      <Field label={t.room.utilityShare} hint={t.room.utilityShareHint} error={shareError}>
+        {(props) => (
+          <Input
+            {...props}
+            inputMode="decimal"
+            value={values.utility_share}
+            onChange={(event) => onChange({ utility_share: event.target.value })}
+          />
+        )}
+      </Field>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="size-4"
+          checked={values.bathroom}
+          onChange={(event) => onChange({ bathroom: event.target.checked })}
+        />
+        {t.room.privateBathroom}
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="size-4"
+          checked={values.furnished}
+          onChange={(event) => onChange({ furnished: event.target.checked })}
+        />
+        {t.room.furnished}
+      </label>
+    </>
+  )
+}
+
 /**
  * La scheda di una stanza: si corregge, si archivia, e porta i suoi allegati.
  *
@@ -399,13 +565,9 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
-  const [values, setValues] = useState({
-    name: room.name,
-    monthly_rent: room.monthly_rent ?? '',
-    size_sqm: room.size_sqm ?? '',
-    bathroom: room.has_private_bathroom,
-    furnished: room.is_furnished ?? false,
-  })
+  const [values, setValues] = useState<RoomValues>(roomValuesOf(room))
+  const [submitted, setSubmitted] = useState(false)
+  const shareError = shareProblem(values.utility_share, submitted)
 
   async function reread() {
     await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
@@ -419,15 +581,18 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
         name: values.name,
         // `|| null` e non `|| undefined`: svuotare deve azzerare, non lasciare
         // com'era. È la stessa scelta del `PATCH` dell'immobile.
-        monthly_rent: values.monthly_rent.trim() || null,
-        size_sqm: values.size_sqm.trim() || null,
+        monthly_rent: decimalOf(values.monthly_rent) || null,
+        size_sqm: decimalOf(values.size_sqm) || null,
+        floor: values.floor.trim() ? Number(values.floor) : null,
         has_private_bathroom: values.bathroom,
         is_furnished: values.furnished,
+        utility_share_percent: decimalOf(values.utility_share) || null,
       }),
     onSuccess: async () => {
       await reread()
       setOpen(false)
       setError(null)
+      setSubmitted(false)
     },
     onError: setError,
   })
@@ -465,61 +630,17 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
           className="flex flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault()
+            setSubmitted(true)
+            if (shareProblem(values.utility_share, true)) return
             save.mutate()
           }}
         >
           <InlineError error={error} />
-          <Field label={t.room.name} hint={t.room.nameHint} required>
-            {(props) => (
-              <Input
-                {...props}
-                value={values.name}
-                onChange={(event) => setValues((v) => ({ ...v, name: event.target.value }))}
-              />
-            )}
-          </Field>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label={t.room.monthlyRent}>
-              {(props) => (
-                <Input
-                  {...props}
-                  inputMode="decimal"
-                  value={values.monthly_rent}
-                  onChange={(event) =>
-                    setValues((v) => ({ ...v, monthly_rent: event.target.value }))
-                  }
-                />
-              )}
-            </Field>
-            <Field label={t.room.surface}>
-              {(props) => (
-                <Input
-                  {...props}
-                  inputMode="decimal"
-                  value={values.size_sqm}
-                  onChange={(event) => setValues((v) => ({ ...v, size_sqm: event.target.value }))}
-                />
-              )}
-            </Field>
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={values.bathroom}
-              onChange={(event) => setValues((v) => ({ ...v, bathroom: event.target.checked }))}
-            />
-            {t.room.privateBathroom}
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={values.furnished}
-              onChange={(event) => setValues((v) => ({ ...v, furnished: event.target.checked }))}
-            />
-            {t.room.furnished}
-          </label>
+          <RoomFields
+            values={values}
+            onChange={(patch) => setValues((v) => ({ ...v, ...patch }))}
+            shareError={shareError}
+          />
           <div className="flex flex-wrap justify-end gap-2">
             <ConfirmAction
               trigger={
@@ -557,19 +678,32 @@ function NewRoomDialog({ propertyId }: { propertyId: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
-  const [values, setValues] = useState({ name: '', monthly_rent: '', size_sqm: '', bathroom: false })
+  const [values, setValues] = useState<RoomValues>(NEW_ROOM)
+  const [submitted, setSubmitted] = useState(false)
+  const shareError = shareProblem(values.utility_share, submitted)
 
   const mutation = useMutation({
     mutationFn: () =>
       createRoom(client, propertyId, {
         name: values.name,
-        ...(values.monthly_rent.trim() ? { monthly_rent: values.monthly_rent.trim() } : {}),
-        ...(values.size_sqm.trim() ? { size_sqm: values.size_sqm.trim() } : {}),
+        // Sulla **creazione** un campo vuoto si omette e non si manda `null`: il
+        // `POST` non ha la semantica del `PATCH`, e omettere è dire «non lo so»,
+        // che è ciò che un campo lasciato in bianco significa qui.
+        ...(decimalOf(values.monthly_rent) ? { monthly_rent: decimalOf(values.monthly_rent) } : {}),
+        ...(decimalOf(values.size_sqm) ? { size_sqm: decimalOf(values.size_sqm) } : {}),
+        ...(values.floor.trim() ? { floor: Number(values.floor) } : {}),
         has_private_bathroom: values.bathroom,
+        is_furnished: values.furnished,
+        ...(decimalOf(values.utility_share)
+          ? { utility_share_percent: decimalOf(values.utility_share) }
+          : {}),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
-      setValues({ name: '', monthly_rent: '', size_sqm: '', bathroom: false })
+      // Il conteggio dei locali sta sull'immobile, e una stanza in più lo cambia.
+      await queryClient.invalidateQueries({ queryKey: keys.property(propertyId) })
+      setValues(NEW_ROOM)
+      setSubmitted(false)
       setOpen(false)
       setError(null)
     },
@@ -585,10 +719,18 @@ function NewRoomDialog({ propertyId }: { propertyId: string }) {
         </Button>
       }
       title={t.room.newTitle}
+      // **Che si possa correggere dopo va detto qui**, non scoperto dopo: il nome
+      // è l'unico dato che occupa qualcosa — è unico nell'immobile — e sapere che
+      // tutto si sistema poi è ciò che toglie a questo form la solennità che non
+      // deve avere.
+      description={t.room.newExplain}
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (!next) setError(null)
+        if (!next) {
+          setError(null)
+          setSubmitted(false)
+        }
       }}
     >
       <form
@@ -596,51 +738,17 @@ function NewRoomDialog({ propertyId }: { propertyId: string }) {
         className="flex flex-col gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          setSubmitted(true)
+          if (shareProblem(values.utility_share, true)) return
           mutation.mutate()
         }}
       >
         <InlineError error={error} />
-        <Field label={t.room.name} hint={t.room.nameHint} required>
-          {(props) => (
-            <Input
-              {...props}
-              value={values.name}
-              onChange={(event) => setValues((v) => ({ ...v, name: event.target.value }))}
-            />
-          )}
-        </Field>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label={t.room.monthlyRent}>
-            {(props) => (
-              <Input
-                {...props}
-                inputMode="decimal"
-                placeholder="450.00"
-                value={values.monthly_rent}
-                onChange={(event) => setValues((v) => ({ ...v, monthly_rent: event.target.value }))}
-              />
-            )}
-          </Field>
-          <Field label={t.room.surface}>
-            {(props) => (
-              <Input
-                {...props}
-                inputMode="decimal"
-                value={values.size_sqm}
-                onChange={(event) => setValues((v) => ({ ...v, size_sqm: event.target.value }))}
-              />
-            )}
-          </Field>
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={values.bathroom}
-            onChange={(event) => setValues((v) => ({ ...v, bathroom: event.target.checked }))}
-          />
-          {t.room.privateBathroom}
-        </label>
+        <RoomFields
+          values={values}
+          onChange={(patch) => setValues((v) => ({ ...v, ...patch }))}
+          shareError={shareError}
+        />
         <div className="flex justify-end gap-2">
           <Button onClick={() => setOpen(false)}>{t.common.cancel}</Button>
           <Button type="submit" variant="primary" disabled={mutation.isPending}>

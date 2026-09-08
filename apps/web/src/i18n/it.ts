@@ -191,9 +191,17 @@ export const it = {
     nameHint: 'Unico nell’immobile: «Camera doppia», «Singola sul cortile».',
     monthlyRent: 'Canone mensile',
     surface: 'Superficie',
+    floor: 'Piano',
     privateBathroom: 'Bagno privato',
     furnished: 'Arredata',
     status: 'Stato',
+    utilityShare: 'Quota delle utenze',
+    /** Un campo numerico vuoto, in una schermata di co-living, è ambiguo fra
+     *  «zero» e «non specificato»: qui il vuoto ha un significato e va scritto. */
+    utilityShareHint: 'Percentuale delle utenze a carico di questa stanza. Vuota vale «in parti uguali».',
+    /** Il nome è unico nell'immobile, quindi «tanto lo sistemo dopo» è proprio
+     *  la cosa da dire a chi crea una stanza — e non era detta da nessuna parte. */
+    newExplain: 'Non serve avere tutto adesso: ogni dato si corregge dopo, aprendo la stanza dall’elenco.',
     /** L'unica superficie che una stanza abbia: `GET /rooms/{id}` non esiste. */
     dialogExplain: 'Correggi i dati della stanza, o archiviala per liberarne il nome.',
     archive: 'Archivia la stanza',
