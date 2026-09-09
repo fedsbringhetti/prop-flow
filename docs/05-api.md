@@ -676,14 +676,15 @@ domanda «qual è il documento di questa riga».
 | GET | `/api/v1/tickets` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `open` |
 | GET | `/api/v1/tickets/{id}` | membro | `200` con lo storico degli stati, o `404` |
 | PATCH | `/api/v1/tickets/{id}` | staff | `200`. Solo i costi. `409` se annullata |
-| POST | `/api/v1/tickets/{id}/messages` | membro | `201`. `403` a un inquilino che chiede `is_internal` |
+| PATCH | `/api/v1/tickets/{id}/report` | staff, o chi ha segnalato finché è `open` | `200`. Titolo, descrizione, `visible_to_residents`. `409` se annullata |
+| POST | `/api/v1/tickets/{id}/messages` | membro | `201`. `403` a un inquilino che chiede `is_internal`. **`409 ticket.thread_closed` se la segnalazione non è più in lavorazione** |
 | GET | `/api/v1/tickets/{id}/messages` | membro | `200`, pagina keyset. Le note interne non compaiono all'inquilino |
 | POST | `/api/v1/tickets/{id}/triage` | staff | `200`. Imposta categoria e priorità |
 | POST | `/api/v1/tickets/{id}/assign` | staff | `200`. Corpo: `assignee_id` |
 | POST | `/api/v1/tickets/{id}/start` | staff | `200`. Avvia la lavorazione, o la riprende |
 | POST | `/api/v1/tickets/{id}/wait` | staff | `200`. Corpo: `waiting_on` (`tenant` o `owner`) |
 | POST | `/api/v1/tickets/{id}/close` | staff | `200`. Valorizza `closed_at` e, se inviato, `resolution_notes` |
-| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Riporta a `open` e azzera `closed_at` e `resolution_notes` |
+| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Corpo: `reason`, **obbligatorio**. Riporta a `open`, azzera `closed_at` e `resolution_notes`, e scrive il motivo nel thread |
 | POST | `/api/v1/tickets/{id}/cancel` | staff, o chi ha segnalato finché è `open` | `200` |
 
 L'apertura è annidata sotto l'immobile perché una segnalazione nasce **sempre** su un
@@ -693,8 +694,39 @@ dei documenti.
 
 **Ruolo minimo `membro` in apertura, elenco, dettaglio e thread.** È il modulo in cui
 l'inquilino prende la parola: fino a qui poteva solo leggere. Quali segnalazioni siano
-sue lo decide `app.can_access_ticket` — chi ha aperto, chi è assegnato, e chi è parte
-del contratto indicato — non un ramo applicativo sul ruolo.
+sue lo decide `app.can_access_ticket` — chi ha aperto, chi è assegnato, chi è parte
+del contratto indicato, e chi **abita l'immobile** se la segnalazione è dichiarata di
+interesse comune — non un ramo applicativo sul ruolo.
+
+#### La visibilità è una scelta di chi apre
+
+`visible_to_residents` nasce `false`, che è il comportamento di sempre: una segnalazione
+la vedono lo staff, chi l'ha aperta, chi ce l'ha in carico e chi è parte del contratto
+indicato. Con `true` la leggono anche i **residenti dell'immobile** — la caldaia
+condominiale interessa a tutti — e con essa il **thread**, lo **storico** e le
+**fotografie**, perché il ramo sta dentro `app.can_access_ticket`, che quattro policy
+consultano. Il predicato dei residenti è `app.property_residents`, la funzione che la
+`0030` ha già introdotto, e non una terza definizione di «chi abita qui».
+
+**Non concede nessuna scrittura**: `tickets_update` ha un predicato in linea — staff,
+`reported_by`, `assigned_to` — e non passa da quella funzione. Un residente vede e non
+riapre, non annulla, non corregge. Le **note interne** restano invisibili: le filtra un
+`AND` a parte di `ticket_messages_select`.
+
+Migration `0035`, [ADR-047](08-decisioni.md#adr-047).
+
+#### Chi è chi: i nomi viaggiano nella risposta
+
+`TicketResponse` porta `reported_by_name` e `assigned_to_name`; `TicketMessageResponse`
+porta `author_name`. Sono **facoltativi**, e l'assenza non è un errore: la policy
+`users_select` non concede a chiunque la riga di chiunque, e chi legge deve mettere
+un'etichetta neutra — mai l'identificatore ([ADR-043](08-decisioni.md#adr-043)).
+
+I nomi viaggiano **dentro** la risposta e non da una rotta che risolva le persone, che
+[ADR-036](08-decisioni.md#adr-036) e ADR-043 hanno già scartato due volte. Il ruolo resta
+accanto al nome e non al suo posto: `author_kind` dice da che parte del rapporto sta chi
+scrive, il nome dice chi è — e in un co-living due coinquilini sono entrambi `tenant`.
+Vedi [ADR-049](08-decisioni.md#adr-049).
 
 #### Il ciclo di vita
 
@@ -713,6 +745,12 @@ lavorazione: si entra con `/wait` e si esce con `/start`. Servono a dire perché
 segnalazione è ferma — «aspetto che tu sia in casa» è lo stato più comune di una
 manutenzione reale, e senza un nome resta una segnalazione che sembra abbandonata.
 
+**Su una segnalazione che non è più in lavorazione il thread si legge e non si
+scrive.** `POST /messages` risponde `409 ticket.thread_closed` su `closed`, `cancelled`
+e `resolved`; `GET /messages` continua a rispondere `200` con il thread intero. È una
+regola di **dominio** — il predicato è `TicketStatus::is_working`, lo stesso di `close` e
+`cancel` — e non un controllo di interfaccia. Chi vuole dire «non è risolto» **riapre**.
+
 **La riapertura è dell'inquilino**, ed è ciò che rende la segnalazione un rapporto
 invece di una casella postale: senza, un guasto ricorrente diventa una segnalazione
 nuova ogni volta e lo storico si frantuma proprio dove servirebbe intero. Solo **chi
@@ -726,6 +764,15 @@ gli manca un ruolo — nessun ruolo gli darebbe questa operazione — gli manca 
 stato lui a segnalare, e i due rimedi sono diversi. `org.staff_role_required` resta
 invece corretto in un caso: chi ha segnalato prova ad **annullare** una segnalazione
 già in lavorazione, dove il ruolo di staff serve davvero.
+
+**Riaprire pretende un `reason`**, e l'asimmetria con `resolution_notes` — che è
+facoltativo — è deliberata: la chiusura lascia comunque `closed_at` e una riga di
+storico, mentre da quando il thread chiuso non riceve messaggi la riapertura senza motivo
+non lascerebbe niente che la spieghi. Il motivo **diventa il primo messaggio del thread**,
+pubblico e di chi ha riaperto: il thread non si riscrive mai, quindi sopravvive alla
+chiusura successiva, e una segnalazione riaperta tre volte ha tre motivi, che una colonna
+non terrebbe. `ticket_status_history.reason` resta **non scritta**, e la ragione è in
+[ADR-050](08-decisioni.md#adr-050).
 
 Chiudere accetta un corpo con `resolution_notes`, facoltativo: è la risposta a «com'è
 andata a finire», che altrimenti andrebbe dedotta rileggendo il thread. La vede
@@ -746,13 +793,19 @@ Ognuna ha effetti propri — `closed_at`, una riga di storico, un evento — e u
 che li producesse di soppiatto renderebbe invisibile che siano avvenuti. È la stessa
 scelta di attivazione e disdetta dei contratti.
 
-Il `PATCH` resta per ciò che è davvero un attributo: `estimated_cost` e `actual_cost`,
-con la semantica generale del PATCH (assente = invariato, `null` = azzerato). Il resto
-non è modificabile, e non per dimenticanza:
+Il `PATCH` di `/tickets/{id}` resta per ciò che è davvero un attributo:
+`estimated_cost` e `actual_cost`, con la semantica generale del PATCH (assente =
+invariato, `null` = azzerato). Il resto:
 
-- **titolo e descrizione** sono il testo con cui una persona ha descritto un guasto in
-  un momento preciso, e il thread esiste apposta per correggere il tiro. Un titolo
-  riscritto dopo tre messaggi rende incomprensibili i tre messaggi;
+- **titolo, descrizione e visibilità** si correggono da `PATCH /tickets/{id}/report`, che
+  è una **rotta a sé** e non un allargamento di questa. La ragione è
+  l'autorizzazione: qui è staff, là è «staff sempre, chi ha segnalato finché è `open`», e
+  una rotta sola avrebbe due autorizzazioni **secondo i campi presenti nel corpo** — che è
+  il genere di cosa che si sbaglia in silenzio, perché con la semantica del `PATCH` i
+  campi sono assenti e un campo aggiunto un anno dopo sfuggirebbe al ramo.
+  [ADR-048](08-decisioni.md#adr-048) spiega perché la scelta di prima — «il testo non si
+  modifica, il thread esiste per correggere il tiro» — è stata revocata, e che cosa la
+  revoca costa;
 - **categoria e priorità** si impostano con il triage, perché sono ciò che `triaged`
   *significa*: lasciarle modificabili altrove renderebbe lo stato una dichiarazione
   non verificabile;

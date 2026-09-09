@@ -1,14 +1,16 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Quattordici voci**, con un identificatore stabile ciascuna.
+**Otto voci**, con un identificatore stabile ciascuna.
 
-Quattordici sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
+Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
 [sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
 la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
-[sezione 4](11-piani-conclusi.md#esito-sezione-4). Tre sono entrate — `R26`, `R27`, `R28` —
-e **due delle tre le ha trovate l'uso del prodotto**, non la lettura del codice.
+[sezione 4](11-piani-conclusi.md#esito-sezione-4); `R19`, `R19-bis`, `R21`, `R22`, `R23` e
+`R24` con la [sezione 5](11-piani-conclusi.md#esito-sezione-5). Tre sono entrate — `R26`,
+`R27`, `R28` — e **due delle tre le ha trovate l'uso del prodotto**, non la lettura del
+codice.
 
 ## Perché un file a sé
 
@@ -70,10 +72,12 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
   attivava, quindi non si eliminava (`R13`), perché l'unica uscita sarebbe stata
   attivarlo. Prenderne una senza le altre avrebbe lasciato aperto il vicolo cieco, ed è la
   ragione per cui sono state fatte insieme;
-- **`R7`, `R21` e `R22` hanno la stessa radice** — i DTO portano identificatori e
-  nessuna rotta risolve le persone — ma `R21` e `R22` restano con le segnalazioni,
-  dove si vedono. La sezione 5 va quindi eseguita **prima** della 6, o la 6 rifarà
-  quel lavoro.
+- ~~**`R7`, `R21` e `R22` hanno la stessa radice**~~ — **la sezione 5 ha risolto la sua
+  metà.** I DTO portavano identificatori e nessuna rotta risolveva le persone; `R21` e
+  `R22` sono state fatte con le segnalazioni, dove si vedono, e la forma scelta —
+  allargare la risposta con un modello di lettura, mai una rotta che risolva le persone —
+  è [ADR-049](08-decisioni.md#adr-049). `R7` la eredita invece di riderivarla, ed è la
+  ragione per cui la 5 andava **prima** della 6.
 
 | | Sezione | Voci | Natura | Perché è lì |
 |---|---|---|---|---|
@@ -81,18 +85,17 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | ~~**2**~~ | ~~Le pendenze della fetta C~~ — **conclusa** il 9 settembre 2026, **senza il collaudo** | `R2` `R3` | doc + una stringa di backend | [Esito](11-piani-conclusi.md#esito-sezione-2). `R2` ha corretto il punto 10 e, rileggendo gli altri dieci, ha trovato **il punto 4** con lo stesso difetto; `R3` era in **otto** posti e non in due. Il collaudo si è staccato ed è diventato la **5-bis** |
 | ~~**3**~~ | ~~Contratti: correggere gli errori~~ — **conclusa** il 9 settembre 2026 | `R13` `R17` `R18` `R12` `R14` | backend | Era il nodo e il danno peggiore che esistesse: contratti attivi con le quote sbagliate e nessun modo di correggerli. [Piano](11-piani-conclusi.md#piano-sezione-3) · [esito](11-piani-conclusi.md#esito-sezione-3). Eseguirla ha chiuso **un buco che non era in elenco** — si poteva aggiungere una parte a un contratto attivo — e ne ha aperto uno nuovo: `R28`, il subentro |
 | ~~**4**~~ | ~~Stati che nessuno aggiorna~~ — **conclusa** il 9 settembre 2026 | `R1` `R11` `R25` | migration + dominio + client | [Piano](11-piani-conclusi.md#piano-sezione-4) · [esito](11-piani-conclusi.md#esito-sezione-4). La risposta era già in [ADR-019](08-decisioni.md#adr-019): le conseguenze si derivano. Ha corretto **un numero falso che nessuno guardava** — `v_property_occupancy` diceva zero a tutti — e ha lasciato in un test la prova che un trigger sarebbe stato sbagliato |
-| **5** | Segnalazioni | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Tre voci su sei sono già **decise**. Porta una migration (`R19`), due regole di dominio che mancano (`R23`, `R24`) e il primo pezzo del problema dei nomi (`R21`, `R22`) |
-| **5-bis** | **Il collaudo in undici punti** | — | a mano, due account | **Rinviato qui il 9 settembre 2026**, dopo averne percorsi due punti. Sei degli undici attraversano schermate che le sezioni 3, 4, 5, 8 e 9 riscrivono: camminarli prima vuol dire camminarli due volte. Dopo la 5 ne restano fermi nove su undici — l'1 e il 5 dipendono da `R9`, che è la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per cinque sezioni. **Il piano è già scritto**: passi `T3`–`T7` dell'[esito della sezione 2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta. Il costo del rinvio è che il giro **alimenta i piani** e non solo li verifica: `R26` è entrata così |
-| **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. Dopo la 5, che avrà già affrontato come si risolve un nome |
+| ~~**5**~~ | ~~Segnalazioni~~ — **conclusa** il 9 settembre 2026 | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-5) · [esito](11-piani-conclusi.md#esito-sezione-5). **Due** migration: la `0035` allarga chi *vede*, la `0036` chi *scrive* — e la seconda **revoca** [ADR-026](08-decisioni.md#adr-026) su due colonne, emendando nello stesso passo l'invariante di schema e il test che la difendevano. Ha reso **portante** `users_select`: è il primo client che legge un nome da `app.users` |
+| **5-bis** | **Il collaudo in undici punti** — **è il prossimo** | — | a mano, due account | **Rinviato qui il 9 settembre 2026**, dopo averne percorsi due punti. Sei degli undici attraversano schermate che le sezioni 3, 4, 5, 8 e 9 riscrivono: camminarli prima vuol dire camminarli due volte. Dopo la 5 ne restano fermi nove su undici — l'1 e il 5 dipendono da `R9`, che è la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per cinque sezioni. **Il piano è già scritto**: passi `T3`–`T7` dell'[esito della sezione 2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta. Il costo del rinvio è che il giro **alimenta i piani** e non solo li verifica: `R26` è entrata così |
+| **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. La 5 ha già affrontato come si risolve un nome, ed è il modello da riusare: un modello di lettura che proietta `full_name` sotto `users_select`, non una rotta che risolva le persone ([ADR-049](08-decisioni.md#adr-049)) |
 | **7** | Cancellare, in generale | `R15` | client trasversale | Dopo la 3, perché finché un contratto non si elimina «elimina» non è un'operazione sola. Ha una decisione sua: che cosa significa il verbo su entità che si archiviano, si annullano o non si toccano, e che cosa vuol dire un esito parziale su N chiamate |
 | **8** | Il perimetro dei ruoli | `R9` | modello + ADR | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di sicurezza. **ADR prima del codice** |
 | **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
 
-**Concluse la 1, la 2, la 3 e la 4: si continua dalla 5.**
+**Concluse la 1, la 2, la 3, la 4 e la 5: si continua dalla 5-bis, cioè dal collaudo.**
 
-Il **collaudo** non è in fondo alla fila per dimenticanza: è la **5-bis**, e la riga dice
-perché. Va percorso lì e non dopo, o si pianificano cinque sezioni senza che nessuno abbia
-usato il prodotto.
+Non è in fondo alla fila per dimenticanza, e adesso è il suo turno: nove punti su undici
+sono su codice fermo, e le sezioni 3, 4 e 5 sono state verificate **solo con i test**.
 
 L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
 riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
@@ -109,7 +112,7 @@ alla conversazione successiva un contesto che non può ricostruire.
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R7 | aperta | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso |
+| R7 | aperta | **Un posto per vedere e modificare il proprio account** | Non esiste, e **non esiste nemmeno l'endpoint**: nessuna rotta legge o scrive l'utente corrente. Questo punto è **backend prima che client** — a differenza di tutta la fetta C, che non ha toccato l'API. Da decidere quali campi (nome, email, telefono, password) e che cosa comporta cambiare un'email, che è l'identificatore d'accesso. **La metà «come si risolve un nome» è già decisa** dalla sezione 5: un modello di lettura che proietta `full_name` sotto `users_select`, mai una rotta che risolva le persone ([ADR-049](08-decisioni.md#adr-049)) — e da quella sezione quella policy è portante, quindi il proprio account la deve rispettare invece di aggirarla |
 | R8 | aperta | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
 
 ### Stati che nessuno aggiorna
@@ -143,12 +146,19 @@ che adesso lo impedisce è [ADR-046](08-decisioni.md#adr-046).
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R19 | **decisa** | **La visibilità di una segnalazione diventa una scelta di chi la apre** — casella *«visibile a tutti gli inquilini»* — e il comportamento di oggi resta il default | **Decisa.** Oggi non è un difetto ma la policy: `app.can_access_ticket` (`0014`) concede a staff, a chi l'ha aperta, a chi l'ha in carico, e a `t.lease_id IS NOT NULL AND can_access_lease(...)` — quindi una segnalazione sull'immobile intero, che non ha contratto, resta privata. **Quel default resta**, e si aggiunge una scelta esplicita per il caso vero: la caldaia condominiale interessa a tutti. Serve una colonna su `app.tickets`, un `ALTER POLICY` con un ramo in più, il campo nel DTO e la casella nel form — quindi **una migration**, e non un filtro applicativo: la visibilità è un confine del database. Il predicato «chi guarda abita in questo immobile» va scelto fra ciò che la `0030` ha già introdotto (`app.shares_home_with`, `app.property_residents`) invece di scriverne un terzo. Da decidere se la casella si possa cambiare dopo l'apertura, il che la lega a R19-bis |
-| R19-bis | **decisa** | **Chi ha aperto una segnalazione può modificarla finché nessuno l'ha presa in carico** | **Decisa.** La forma della regola **esiste già** ed è quella dell'annullamento: lo staff sempre, chi ha segnalato **solo finché è `open`** — «finché nessuno ci ha messo mano». Qui vale lo stesso confine, cioè fino ad `assigned`. La trappola sta nella rotta: **`PATCH /tickets/{id}` esiste già** ma è `update_costs`, ed è **solo staff** e sui soli campi di costo. Allargarla significherebbe una rotta con due autorizzazioni diverse a seconda dei campi presenti — costi allo staff, testo a chi ha segnalato — che è il genere di cosa che si sbaglia in silenzio. Da decidere: allargare con attenzione o una rotta a sé, e **quali campi** siano modificabili (titolo e descrizione sì; categoria e priorità sono il lavoro del triage, che è dello staff) |
-| R21 | aperta | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo che `R14` aveva sui contratti — chiuso dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3) allargando la risposta con i nomi, che è una delle due vie: i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
-| R22 | aperta | **Nel thread non si capisce chi scrive**: si vorrebbe ruolo e nome — *Proprietario · Mario Rossi* | Stesso ceppo di R21: i messaggi portano l'autore come identificatore. Il **ruolo** però è più economico del nome — si deduce da chi è staff — e da solo risolve gran parte della domanda («me lo dice il proprietario o un coinquilino?»). Vale la pena separare le due metà: il ruolo si può fare senza toccare l'API, il nome no |
-| R23 | aperta | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
-| R24 | aperta | **Riaprire dovrebbe chiedere il motivo** | `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un corpo. La chiusura invece ha già `resolution_notes`, quindi il precedente esiste e la simmetria è naturale. Se R23 si chiude vietando i messaggi dopo la chiusura, questa diventa **l'unica via** per dire «non è risolto», e allora il motivo non è un di più: è l'unica cosa che spiega perché la segnalazione è tornata viva |
+
+**Le sei voci sono uscite con la [sezione 5](11-piani-conclusi.md#esito-sezione-5).** La
+visibilità è una scelta di chi apre (`R19`, migration `0035`), il testo si corregge finché
+nessuno ci ha messo mano (`R19-bis`, migration `0036` e `PATCH /tickets/{id}/report`), le
+risposte dicono **chi** e non solo quando (`R21`, `R22`), su una segnalazione chiusa il
+thread si legge e non si scrive (`R23`), e riaprire pretende un motivo che finisce nella
+conversazione (`R24`).
+
+Due cose che quella sezione lascia dette, e che serviranno a chi tocca il modulo:
+`ticket_status_history.reason` **resta non scritta**, con la ragione in
+[ADR-050](08-decisioni.md#adr-050); e `users_select` è ora **portante**, perché quella
+sezione è il primo client che legge un nome da `app.users`
+([ADR-049](08-decisioni.md#adr-049)).
 
 ### Bollette
 

@@ -31,7 +31,7 @@ Le regole stanno anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 34 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 36 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
 171 indici, 66 policy RLS, 50 trigger, 4 viste, 34 funzioni.
 
@@ -73,16 +73,22 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | **I contratti si correggono**: annullamento di una bozza, correzione e rimozione di una parte — tre rotte e **nessuna migration**, perché `deleted_at`, `left_at` e `lease_parties_update` erano già nella `0014` | completo per la sezione 3 |
 | **L'occupazione è derivata e non memorizzata**: `app.room_is_occupied` e `app.property_occupancy_status` (`0033`), con `v_property_occupancy` che smette di contare una colonna che nessuno scrive | completo per la sezione 4 |
 | **Una bolletta si dichiara pagata** al fornitore, con la sua data (`0034`). Non è un pagamento: `app.payments` modella il denaro in entrata | completo per la sezione 4 |
+| **Una segnalazione può essere di interesse comune** (`0035`): il quinto ramo sta in `app.can_access_ticket`, quindi con la riga arrivano il thread, lo storico e le fotografie. Non concede scrittura | completo per la sezione 5 |
+| **Il testo di una segnalazione si corregge** finché nessuno l'ha presa in carico: `PATCH /tickets/{id}/report` e la migration `0036`, che **revoca** su due colonne la scelta della `0020` | completo per la sezione 5 |
+| **Le risposte dicono chi**: nome di chi ha segnalato, di chi ha in carico e di chi scrive nel thread, letti da `app.users` sotto `users_select` | completo per la sezione 5 |
+| **Un thread terminato si legge e non si scrive**, e riaprire pretende un motivo che finisce nella conversazione | completo per la sezione 5 |
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-431 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
-del bordo HTTP, 76 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 89 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+438 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+del bordo HTTP, 81 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 91 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
-I quattro nuovi sono della sezione 3, e tre provano un **rifiuto**: il vicolo cieco
-percorso da capo a fondo, l'annullamento che libera il periodo, la quota a zero che ferma
-l'attivazione, e la parte con un utente dietro che non si tocca.
+I sette nuovi sono della sezione 5, e provano soprattutto **confini**: la segnalazione
+condivisa che arriva al coinquilino *con il thread e lo storico*, quella non condivisa che
+non gli arriva affatto, il coinquilino che la vede e non la scrive, la correzione che si
+chiude ad `assigned`, il thread chiuso che si legge e non si scrive, e il motivo della
+riapertura che si va a rileggere nella conversazione.
 
 ### Client web — le due metà
 
@@ -300,26 +306,36 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [sezione 5](12-da-fare.md#lordine-di-esecuzione)** — le segnalazioni: `R19`,
-`R19-bis`, `R21`, `R22`, `R23` e `R24`. Tre voci su sei sono già **decise**, e la sezione
-porta una migration (`R19`), due regole di dominio che mancano (`R23`, `R24`) e il primo
-pezzo del problema dei nomi (`R21`, `R22`).
+**Il [collaudo in undici punti](12-da-fare.md#lordine-di-esecuzione), che è la 5-bis.**
+Il piano è già scritto — passi `T3`–`T7` dell'[esito della sezione
+2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta — e da
+adesso **nove punti su undici sono su codice fermo**: l'1 e il 5 dipendono da `R9`, che è
+la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per altre tre
+sezioni.
 
-**Subito dopo viene il [collaudo](12-da-fare.md#lordine-di-esecuzione), che è la 5-bis** e
-non è in fondo alla fila per dimenticanza: nove punti su undici saranno su codice fermo. È
-anche il momento in cui si vedono per la prima volta con gli occhi le sezioni 3 e 4, che
-sono state verificate **solo con i test**.
+**È anche il momento in cui le sezioni 3, 4 e 5 si vedono per la prima volta con gli
+occhi.** Tutte e tre sono state verificate **solo con i test**, e la 5 cambia la scheda
+della segnalazione in quattro punti — la casella all'apertura, i nomi, il bottone
+«Correggi», la conversazione che si chiude — che il punto **7** attraversa per intero.
 
-**Il collaudo in undici punti è rinviato alla sezione 5-bis**, e non è una dimenticanza: la
-riga dell'[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione) porta la ragione, e
-l'[esito della sezione 2](11-piani-conclusi.md#esito-sezione-2) porta anche il costo del
-rinvio. In breve: sei degli undici punti attraversano schermate che le sezioni 3, 4, 5, 8 e
-9 riscrivono, quindi camminarli adesso vuol dire camminarli due volte; dopo la 5 ne restano
-fermi nove.
+**Chi riprende deve riavviare l'API e ricreare il database**: il binario in esecuzione è
+precedente alle rotte delle sezioni 3, 4 e 5, e le migration `0033`–`0036` vanno applicate.
+Il costo del rinvio è scritto nell'[esito della sezione
+2](11-piani-conclusi.md#esito-sezione-2) e resta vero: il giro **alimenta i piani** e non
+solo li verifica — `R26` è entrata così.
 
-**Ne segue una cosa che va tenuta presente pianificando la 4 e la 5**: si progetteranno
-leggendo il codice, senza che nessuno abbia usato il prodotto nel frattempo. È
-esattamente il modo in cui `R26` **non** sarebbe stata trovata.
+**La [sezione 5](11-piani-conclusi.md#esito-sezione-5) è conclusa**: la visibilità di una
+segnalazione è una scelta di chi la apre, il testo si corregge finché nessuno l'ha presa in
+carico, le risposte dicono **chi** e non solo quando, su una segnalazione chiusa il thread
+si legge e non si scrive, e riaprire pretende un motivo che finisce nella conversazione.
+[Piano](11-piani-conclusi.md#piano-sezione-5) ·
+[esito](11-piani-conclusi.md#esito-sezione-5). È la prima sezione che **revoca** una
+decisione documentata — [ADR-048](08-decisioni.md#adr-048) emenda
+[ADR-026](08-decisioni.md#adr-026) su due colonne — e il modo in cui lo fa, emendando
+l'invariante di schema e il test dei privilegi nello stesso passo della migration, è la
+parte da ricordare. Ha anche reso **portante** `users_select`: la `0030` aveva scritto che
+la finestra per restringerla l'avrebbe chiusa il primo client che leggesse un nome da lì,
+ed è questo.
 
 **La [sezione 2](11-piani-conclusi.md#esito-sezione-2) è conclusa quanto alle due
 correzioni**: il punto 10 del collaudo adesso prova ciò che dichiara — vuole due schede
@@ -398,8 +414,9 @@ quella qui sotto: **il fornitore di OCR**.
 
 ## Da fare — l'elenco sta in [12](12-da-fare.md)
 
-Le cose da sistemare e da costruire — **ventuno voci**, raccolte usando il prodotto e
-leggendo il codice — hanno un file loro: [12 — Da fare](12-da-fare.md).
+Le cose da sistemare e da costruire — **otto voci**, raccolte usando il prodotto e
+leggendo il codice — hanno un file loro: [12 — Da fare](12-da-fare.md). Erano ventuno: le
+sezioni 1–5 ne hanno chiuse venti, e tre sono entrate nel frattempo.
 
 **Stanno lì e non qui per una ragione di ciclo di vita**, che è il criterio con cui
 questi documenti si dividono: `09` si riscrive a ogni fetta, e una raccolta che vive

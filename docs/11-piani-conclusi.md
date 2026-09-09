@@ -8369,3 +8369,669 @@ Tutto, come per la sezione 3: solo test. E qui pesa di più, perché due scherma
 sotto gli occhi — la scheda dell'immobile e quella della bolletta — e i punti **2** e **6**
 del collaudo le attraversano. Sono anche i due punti che la sezione 5-bis rimetterà in
 piedi.
+
+---
+
+<a id="piano-sezione-5"></a>
+
+## Piano — Sezione 5: le segnalazioni
+
+Pianificata il **9 settembre 2026**. È la quinta dell'
+[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione) e chiude `R19`, `R19-bis`,
+`R21`, `R22`, `R23` e `R24`.
+
+Tre voci su sei erano già **decise** in [12](12-da-fare.md) e non si ridiscutono: la
+visibilità diventa una scelta di chi apre (`R19`), chi ha segnalato modifica finché
+nessuno ha preso in carico (`R19-bis`), e `R20` è chiusa dalla sezione 1. Il piano
+esiste per le tre che restano aperte e per **come** le tre decise si eseguono, che è la
+parte in cui questa sezione può sbagliare in silenzio.
+
+Le sei voci non sono la stessa domanda posta sei volte, come lo erano nella
+[sezione 4](11-piani-conclusi.md#piano-sezione-4). Sono **tre coppie**:
+
+| Coppia | Voci | Che cosa hanno in comune |
+|---|---|---|
+| chi vede, e chi tocca | `R19`, `R19-bis` | portano **due migration**, e la seconda **revoca una decisione già presa** |
+| chi è | `R21`, `R22` | è il problema dei nomi, e la risposta l'ha già data la sezione 3 |
+| che cosa si può ancora fare | `R23`, `R24` | due regole di dominio che mancano, e la seconda esiste **perché** la prima chiude una porta |
+
+### Tre cose che pianificare ha trovato, e che il backlog non diceva
+
+Sono la ragione per cui questo piano è più lungo delle sue sei righe di partenza.
+
+#### 1. `R19-bis` non è «una rotta in più»: contraddice tre cose che la CI verifica
+
+`PATCH /tickets/{id}` è `update_costs`, e questo il backlog lo dice. Quello che non dice
+è che **titolo e descrizione non sono modificabili per privilegio di colonna**, non per
+scelta applicativa, e che quel privilegio è verificato in tre posti diversi:
+
+- la migration [`0020`](../migrations/0020_ticket_column_privileges.sql) toglie a
+  `propflow_app` l'`UPDATE` sull'intera tabella e la riconcede su nove colonne.
+  `title` e `description` restano deliberatamente fuori, con la ragione scritta:
+  *«una segnalazione aperta sull'immobile sbagliato si annulla e si riapre»*;
+- il controllo `colonna-strutturale-scrivibile` di
+  `ops/sql/checks/schema_invariants.sql` **fallisce** se `propflow_app` acquista
+  l'`UPDATE` su `tickets.title` o `tickets.description`. È fra le invarianti che
+  `just ci` esegue;
+- il test `the_application_role_cannot_move_a_ticket_to_another_property`
+  (`crates/infrastructure/tests/persistence.rs`) **asserisce** che
+  `UPDATE app.tickets SET title = 'riscritto'` sia rifiutato con `permission denied`.
+
+E la ragione è scritta anche in [ADR-026](08-decisioni.md#adr-026), in
+`docs/05-api.md`, nel commento di `Ticket::apply_costs`, nel commento di
+`UpdateTicketCostsRequest` e nella stringa `t.ticket.onlyCostsArePatchable`.
+
+Ne segue che `R19-bis` **non si può eseguire senza revocare una decisione documentata**,
+e che il modo giusto di revocarla è una voce in [08](08-decisioni.md) *prima* del codice,
+non una riga tolta di soppiatto da un elenco di controllo. Chi arrivasse qui aspettandosi
+«uno use case e una rotta» scoprirebbe il vincolo al primo `just ci`, cioè dopo aver già
+scritto tutto.
+
+#### 2. La metà economica di `R22` **è già fatta**, e quel che resta è tutto l'altra
+
+Il backlog dice che il ruolo si deduce da chi è staff e che «da solo risolve gran parte
+della domanda». Il ruolo **c'è già sul filo e già a schermo**: `TicketMessageResponse`
+porta `author_kind`, e `MessageRow` in `TicketDetailPage.tsx` stampa
+`t.ticket.actors[message.author_kind]` — *Inquilino*, *Proprietario*, *Gestore*. Lo
+stesso vale per «Aperta da», che mostra `reported_by_kind`.
+
+Quindi la separazione che il backlog proponeva — prima il ruolo, poi il nome — non ha
+una prima metà da fare. E il caso che resta scoperto è **esattamente quello del
+co-living**: due coinquilini nel thread compaiono tutti e due come *Inquilino*, e la
+domanda «me lo dice il proprietario o un coinquilino?» ha già risposta mentre «quale
+coinquilino?» non ne ha nessuna. `R22` è quindi solo il nome, e va eseguita con `R21`
+invece che prima.
+
+#### 3. `ticket_status_history.reason` è una colonna che nessuno scrive, e il client la mostra già
+
+È lo stesso difetto che la [sezione 4](11-piani-conclusi.md#esito-sezione-4) ha trovato
+in `v_property_occupancy`, in forma più piccola. La colonna esiste dalla `0007`,
+`TicketStatusChange::reason()` la legge, `TicketStatusChangeResponse` la serializza e
+`HistoryRow` la renderizza — ed è **sempre `null`**, perché la scrive il trigger
+`tg_ticket_status_history`, che non ha modo di riceverla: `app.ticket_status_history`
+non ha nemmeno una policy di `INSERT`.
+
+Conta qui perché è il posto in cui verrebbe naturale mettere il motivo di `R24`. Non ci
+va, e la decisione 6 dice perché.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Dove va il ramo di visibilità (`R19`) | dentro **`app.can_access_ticket`**, sostituita con `CREATE OR REPLACE` | un `ALTER POLICY tickets_select`, che mostrerebbe la segnalazione e non il suo thread |
+| Il predicato «chi guarda abita qui» | **`app.property_residents(property_id)`**, già introdotta dalla `0030` | `app.shares_home_with`, che è utente↔utente e non filtra `lease_in_force` |
+| La forma di `R19-bis` | una **rotta a sé**, `PATCH /tickets/{id}/report` | allargare `PATCH /tickets/{id}`, che avrebbe due autorizzazioni secondo i campi presenti |
+| Chi corregge | **lo staff sempre, chi ha segnalato finché è `open`** | solo chi ha segnalato, che lascerebbe un refuso incorreggibile |
+| I nomi (`R21`, `R22`) | un **modello di lettura** che risolve gli identificatori dalle righe `app.users` che la RLS già concede | una rotta che risolva le persone, che [ADR-043](08-decisioni.md#adr-043) ha già scartato |
+| Quando manca il nome | **etichetta neutra dal catalogo**, mai l'UUID | mostrare l'identificatore, che è una resa |
+| Messaggi dopo la chiusura (`R23`) | **vietati in tutti e tre gli stati terminali** | ammessi su `closed`, che renderebbe la riapertura facoltativa |
+| Il motivo della riapertura (`R24`) | **obbligatorio**, e diventa il primo messaggio del giro nuovo | una colonna sulla segnalazione, o `ticket_status_history.reason` |
+
+### Decisioni, con il perché
+
+#### 1. Il ramo di visibilità sta nella **funzione**, non nella policy
+
+Il backlog dice «un `ALTER POLICY` con un ramo in più». È la via che viene in mente e
+produce un difetto preciso: `tickets_select` non è l'unica policy che decide chi vede una
+segnalazione. `app.can_access_ticket` è chiamata da **quattro** posti:
+
+| Chiamante | Che cosa concede |
+|---|---|
+| `tickets_select` | la riga della segnalazione |
+| `ticket_messages_select` | il thread (meno le note interne) |
+| `ticket_status_history_select` | lo storico degli stati |
+| `can_access_attachment('ticket', …)` | **le fotografie del guasto** |
+
+Allargare la sola `tickets_select` darebbe a un coinquilino una segnalazione che si apre
+e non si legge: niente thread, niente storico, niente foto, e nessun errore che spieghi
+perché. Il ramo va quindi dentro `app.can_access_ticket`, con
+`CREATE OR REPLACE FUNCTION` e la **stessa firma** — le policy la referenziano per oid,
+quindi non vanno né toccate né ricreate.
+
+**La conseguenza va detta ad alta voce e non è un effetto collaterale da scoprire:**
+condividere una segnalazione condivide *anche* la sua conversazione e le sue fotografie,
+e `ticket_messages_insert` passa dalla stessa funzione — quindi un residente può anche
+**scrivere** nel thread. È voluto: la caldaia condominiale interessa a tutti, e una
+visibilità che permetta di leggere «hanno chiamato il tecnico» ma non di rispondere
+«da me non funziona ancora» sarebbe una bacheca, non una segnalazione condivisa.
+
+**Che cosa la condivisione non dà**: `tickets_update` ha un predicato **in linea** —
+staff, `reported_by`, `assigned_to` — e non passa da `can_access_ticket`. Un residente
+non riapre, non annulla, non corregge e non chiude. Il confine di scrittura resta dov'è,
+ed è la ragione per cui questa migration è più piccola di quanto sembri.
+
+#### 2. Il predicato è `app.property_residents`, e la scelta non è di gusto
+
+Il vincolo dice di **scegliere** fra ciò che la `0030` ha già introdotto invece di
+scriverne un terzo. Le due candidate non sono equivalenti:
+
+`app.shares_home_with(p_user_id)` è **utente↔utente**: risponde «questa persona e chi
+chiama abitano la stessa casa». Per usarla servirebbe una persona da confrontare — chi ha
+segnalato — e ne verrebbero due difetti. Il primo: `reported_by` è
+`ON DELETE SET NULL`, quindi su una segnalazione il cui autore è stato cancellato il ramo
+sparirebbe e la condivisione smetterebbe di valere **senza che nessuno abbia cambiato
+niente**. Il secondo, peggiore: `shares_home_with` **non filtra `app.lease_in_force`**, e
+il suo commento dice che è deliberato — è un *pavimento* per la leggibilità dei nomi, non
+un elenco di chi ci abita adesso. Usarla qui darebbe a un inquilino uscito due anni fa la
+visibilità sulle segnalazioni nuove della casa in cui non vive più.
+
+`app.property_residents(p_property_id)` è **ancorata all'immobile**, che è la dimensione
+giusta: la segnalazione ha un `property_id` obbligatorio. Filtra `lease_in_force`,
+filtra `left_at IS NULL`, esclude i garanti, e ha già dentro `can_access_property` come
+confine. Il ramo diventa:
+
+```sql
+OR (t.visible_to_residents
+    AND EXISTS (SELECT 1 FROM app.property_residents(t.property_id) pr
+                 WHERE pr.user_id = app.current_user_id()))
+```
+
+**`t.visible_to_residents` va scritto per primo e il ramo va per ultimo nell'`OR`.**
+Non è formattazione: `can_access_ticket` è `COST 500` e viene valutata **per riga**
+nell'elenco delle segnalazioni. Con il booleano davanti, la funzione che restituisce
+righe non viene nemmeno chiamata sulle segnalazioni private, che sono il default e
+saranno la maggioranza.
+
+*Alternativa scartata: una terza funzione, `app.lives_in_property(p_property_id)`.*
+Sarebbe più leggibile di un `EXISTS` su una funzione tabellare e sarebbe la **seconda
+definizione** di «chi abita qui» che la `0030` esiste per impedire — la stessa trappola
+che quel file documenta alla sua terza occorrenza.
+
+#### 3. La colonna si chiama `visible_to_residents`, e il default è il comportamento di oggi
+
+`ALTER TABLE app.tickets ADD COLUMN visible_to_residents BOOLEAN NOT NULL DEFAULT false`.
+
+**Il default `false` è la decisione, non un ripiego**: `R19` dice che oggi non è un
+difetto ma la policy, e che quel comportamento resta. Una segnalazione nasce privata; chi
+la apre può dichiararla di interesse comune.
+
+*Perché non `visible_to_all_tenants`, che è la parola del backlog*: «tutti gli inquilini»
+si legge come «tutti gli inquilini dell'organizzazione», che sarebbe un confine diverso e
+più largo — un inquilino di un'altra casa dello stesso proprietario non c'entra niente.
+Il confine è **l'immobile**, e il nome della colonna deve dirlo, perché è la colonna che
+qualcuno leggerà fra un anno senza questo documento davanti. La casella nel form invece
+può e deve usare la parola comune: *«Visibile a chi abita in questo immobile»*.
+
+La colonna entra nella `GRANT UPDATE` — è modificabile, vedi la decisione 4 — e **non**
+entra fra le colonne strutturali del controllo 12.
+
+#### 4. `R19-bis` è una rotta a sé, e si chiama `/report`
+
+Il backlog nomina il pericolo esatto: *«una rotta con due autorizzazioni diverse a
+seconda dei campi presenti — costi allo staff, testo a chi ha segnalato — che è il genere
+di cosa che si sbaglia in silenzio»*. Il modo in cui si sbaglia in silenzio è concreto e
+vale la pena scriverlo: un `PATCH` con la semantica del progetto ha campi **assenti**,
+quindi l'autorizzazione dipenderebbe da quali chiavi ci sono nel JSON, e un campo
+aggiunto un anno dopo senza toccare quel ramo sarebbe scrivibile da chi non deve.
+
+Quindi: `PATCH /api/v1/tickets/{id}/report`, con **una sola** regola di autorizzazione
+per l'intera rotta. Il corpo porta `title`, `description` e `visible_to_residents`, tutti
+facoltativi con la semantica generale (assente = invariato); nessuno dei tre è
+azzerabile, quindi non serve `explicit_null`.
+
+**Perché un sostantivo e non un verbo.** Le sotto-risorse di questo modulo sono
+transizioni — `/triage`, `/assign`, `/close` — e sono `POST` perché hanno effetti
+propri. Questa non è una transizione: è la correzione di un attributo, e il metodo
+giusto resta `PATCH`. `report` è ciò che si corregge — la segnalazione così come è stata
+fatta — ed è la stessa cosa che la casella di visibilità decide. Tenere i tre campi
+insieme non è comodità: è che sono **tutti e tre quello che chi ha segnalato ha
+dichiarato**, e hanno per questo la stessa autorizzazione.
+
+*Alternativa scartata: `PUT /tickets/{id}/report` con tutti e tre i campi obbligatori.*
+Toglierebbe il problema dei campi assenti alla radice, e in cambio obbligherebbe chi
+cambia solo la casella a rimandare indietro un testo che non ha toccato — cioè a
+sovrascriverlo con una copia possibilmente vecchia. Il progetto non usa `PUT` da nessuna
+parte, e non è questo il caso per introdurlo.
+
+*Alternativa scartata: nessuna rotta, e la correzione passa dall'annullamento.* È
+letteralmente ciò che la `0020` prescrive oggi — «si annulla e si riapre» — e su un
+refuso nel titolo costa a chi segnala di rifare tutto e di perdere il riferimento
+`TK-000042` che ha già comunicato.
+
+**Chi corregge: lo staff sempre, chi ha segnalato finché è `open`.** È la forma di
+`canceller` in `transition.rs`, e non va **copiata**: va estratta e condivisa, perché due
+copie della stessa regola sono due regole che divergeranno alla prima modifica di una
+delle due. Ne segue anche che i codici di rifiuto restano quelli già in catalogo —
+`ticket.not_yours` a chi non ha segnalato, `org.staff_role_required` a chi ha segnalato
+ma la segnalazione è già in lavorazione — con i due rimedi diversi che quella
+distinzione esiste per dire.
+
+Il dominio rifiuta su `cancelled` con `ticket.cancelled`, come fa già `apply_costs`: una
+segnalazione annullata non si tocca più. Su una **chiusa** invece si corregge, e serve
+davvero: la si rilegge mesi dopo, e un titolo sbagliato lì è un titolo sbagliato per
+sempre.
+
+#### 5. Il privilegio di colonna si allarga di tre colonne, e questo **emenda ADR-026**
+
+`title`, `description` e `visible_to_residents` entrano nella `GRANT UPDATE` di
+`propflow_app`. Le prime due erano fuori con una ragione scritta, e la ragione cambia
+adesso perché **cambia il fatto**: la `0020` le teneva fuori dicendo che una segnalazione
+sbagliata si annulla e si riapre, cioè che non esisteva un modo legittimo di correggerle.
+`R19-bis` dice che quel modo deve esistere.
+
+Il criterio di [ADR-026](08-decisioni.md#adr-026) **non cambia** e va riletto per
+intero: lo strumento serve *«quando una colonna non ha un motivo legittimo di cambiare»*.
+Quello che cambia è che ora ce l'ha. `property_id`, `room_id`, `lease_id`,
+`reported_by`, `reference` e `currency` **restano fuori**, e la frase «si annulla e si
+riapre» resta vera per loro: una segnalazione aperta sull'immobile sbagliato non si
+sposta.
+
+Ne segue con precisione che cosa il privilegio smette di garantire, e va detto perché è
+il pezzo che si perde: dal momento del `GRANT`, un inquilino che sia `reported_by` può
+riscrivere titolo e descrizione **da qualunque stato** con una `UPDATE` scritta a mano
+sotto RLS, perché il limite «finché è `open`» è applicativo e una policy non può
+esprimerlo — non può confrontare la riga nuova con quella vecchia, che è la constatazione
+di ADR-021 e ADR-026. Resta vero ciò che la `0020` aveva già misurato: il confine di
+isolamento tiene, e ogni `UPDATE` finisce in `audit_log`. È esattamente lo stesso
+compromesso che vale oggi per `status` e `actual_cost`, che sono concesse e la cui
+disciplina è applicativa.
+
+**Due migration e non una**, come nella sezione 4 e per la stessa ragione: la prima
+(`0035`) allarga chi *vede*, la seconda (`0036`) allarga chi *scrive*. Sono due decisioni
+diverse, con due ADR diverse, e un solo file le farebbe rileggere come una cosa sola.
+
+#### 6. Il motivo della riapertura è **il primo messaggio del giro nuovo**
+
+`R23` e `R24` sono legate, e il verso del legame è quello che il backlog indica: se un
+thread chiuso non riceve più messaggi, riaprire diventa l'unico modo di dire «non è
+risolto», e allora il motivo non è un di più.
+
+Da qui due conseguenze.
+
+**Il motivo è obbligatorio.** `POST /tickets/{id}/reopen` oggi non accetta corpo; ne
+accetterà uno con `reason` non vuoto. È l'asimmetria con `resolution_notes`, che è
+facoltativo, e ha una ragione: la chiusura lascia comunque `closed_at` e una riga di
+storico, mentre la riapertura senza motivo non lascia **niente** che spieghi perché la
+segnalazione è tornata viva — e `R23` ha appena tolto l'unico canale alternativo.
+
+**Il motivo va nel thread.** `ReopenTicket` scrive, nella stessa transazione, un
+messaggio pubblico con quel testo, di chi ha riaperto. Tre ragioni:
+
+- **il thread non si riscrive mai** — `app.ticket_messages` ha due sole policy — quindi
+  il motivo sopravvive alla chiusura successiva, mentre `resolution_notes` viene
+  cancellato dalla riapertura stessa e una colonna simmetrica lo sarebbe a sua volta;
+- una segnalazione si riapre **più volte**, e tre riaperture hanno tre motivi. Una
+  colonna ne tiene uno;
+- chiude il cerchio di `R23` invece di lasciarlo aperto: chi ha segnalato e vuole dire
+  «non è risolto» lo dice riaprendo, e le sue parole finiscono dove finiscono tutte le
+  altre parole.
+
+*Alternativa scartata: `ticket_status_history.reason`.* È la colonna fatta apposta, il
+client la mostra già, e riempirla chiuderebbe il terzo fatto trovato più sopra. Costa
+però un **secondo canale verso il trigger**: la riga la scrive
+`tg_ticket_status_history`, che è `SECURITY DEFINER` perché quella tabella non ha policy
+di `INSERT`, quindi il motivo dovrebbe arrivargli da una `set_config` transazionale —
+il meccanismo di `app.current_user_id()`, che esiste e funziona. Si scarta per due
+ragioni. La prima è una trappola vera: una `set_config` locale vale per **tutta** la
+transazione, quindi una seconda transizione nella stessa richiesta erediterebbe il
+motivo della prima, e il rimedio (un trigger che consuma il valore azzerandolo) è
+macchina nuova per un campo di testo. La seconda è che `TicketRepository::update`
+prende `&Ticket` e il motivo **non è un attributo dell'aggregato**: farcelo passare
+vorrebbe dire o un campo che non appartiene alla segnalazione, o una firma diversa per
+una transizione sola.
+
+**`ticket_status_history.reason` resta quindi non scritta, e va detto invece di
+lasciarlo scoprire.** Non è una svista ed è la differenza con `v_property_occupancy`: là
+un numero *falso* veniva mostrato, qui un campo *vuoto* non compare. `HistoryRow` lo
+renderizza già condizionalmente, quindi non c'è niente da togliere.
+
+#### 7. Un thread chiuso non riceve messaggi, e il confine è il dominio
+
+`PostTicketMessage` fa `ensure_member` e **non guarda lo stato**: il thread di una
+segnalazione chiusa o annullata accetta scritture. È una regola di dominio che manca, e
+nasconderla nel client lascerebbe la rotta aperta.
+
+La regola: si scrive **esattamente nei sei stati di lavorazione**, cioè
+`TicketStatus::is_working()`. È lo stesso predicato che `close` e `cancel` usano già come
+guardia, e riusarlo invece di enumerare «non `closed` e non `cancelled`» copre da sé il
+terzo caso — `resolved`, che l'applicazione non scrive mai ma che una riga scritta a mano
+può contenere ([ADR-019](08-decisioni.md#adr-019) e la nota su `TicketStatus`).
+
+Un invariante nuovo, un codice nuovo, un messaggio nel catalogo. **Leggere resta
+permesso**: `ListTicketMessages` non cambia, e un thread chiuso si rilegge per intero.
+
+*Alternativa scartata: ammettere le repliche su `closed` e vietarle solo su `cancelled` e
+`resolved`.* Lascerebbe la riapertura facoltativa, e con essa il caso che il modulo è
+fatto per evitare — una conversazione che continua sotto uno stato che dice «finita».
+
+### Decomposizione
+
+L'ordine è quello del rischio: prima le due migration, che sono la parte che non si
+disfa, poi i nomi, poi le due regole di dominio. **Ogni passo che porta una decisione ha
+la sua voce in [08](08-decisioni.md) scritta prima del codice**, non dopo.
+
+##### `W1` — La visibilità diventa una scelta di chi apre (`R19`) — **ADR-047 prima**
+
+Migration `0035_a_ticket_can_be_shared_with_residents.sql`:
+
+- `ALTER TABLE app.tickets ADD COLUMN visible_to_residents BOOLEAN NOT NULL DEFAULT false`;
+- `CREATE OR REPLACE FUNCTION app.can_access_ticket(uuid)` con il quinto ramo, **ultimo
+  nell'`OR`** e con il booleano davanti all'`EXISTS`. Firma identica: le policy non si
+  toccano;
+- `GRANT UPDATE (visible_to_residents) ON app.tickets TO propflow_app`, nello stesso
+  blocco `DO $$` con la guardia sul ruolo che le altre migration usano.
+
+**Prima di scrivere**: rileggere la `0030`, che spiega perché una funzione che proietta
+non è intercambiabile con una policy allargata, e la testa della `0020`, che dice quali
+colonne restano fuori e perché.
+
+Poi: il campo nell'aggregato e in `TicketParts`, la colonna in `select_ticket!()` e
+nell'`INSERT`, `visible_to_residents` in `OpenTicketRequest` e in `TicketResponse`, la
+casella nel form di apertura accanto a quella del contratto — che è dove la conseguenza
+si spiega, come già fa `leaseNoneHint`.
+
+##### `W2` — Correggere ciò che si è scritto (`R19-bis`) — **ADR-048 prima**
+
+Migration `0036_a_report_can_be_corrected.sql`: `GRANT UPDATE (title, description)`, con
+in testa il perché la `0020` le teneva fuori e che cosa è cambiato.
+
+Nello **stesso passo**, e non in un momento successivo, perché sono le tre facce della
+stessa revoca:
+
+- `ops/sql/checks/schema_invariants.sql`: via le due righe `('tickets','title')` e
+  `('tickets','description')`, e il commento del controllo 12 aggiornato — resta a dire
+  perché le altre sei ci sono ancora;
+- `crates/infrastructure/tests/persistence.rs`: le due `UPDATE` passano dal blocco dei
+  rifiuti a quello delle concessioni, e il commento sopra cambia con esse. Il test
+  continua a provare che `property_id`, `room_id`, `lease_id`, `reference` e
+  `reported_by` restano negate;
+- `docs/05-api.md`, il commento di `Ticket::apply_costs`, quello di
+  `UpdateTicketCostsRequest` e la stringa `t.ticket.onlyCostsArePatchable`.
+
+Poi il codice: `Ticket::correct(...)` nel dominio con il rifiuto su `cancelled`;
+l'estrazione della guardia condivisa con `cancel`; lo use case `CorrectTicketReport`;
+`PATCH /api/v1/tickets/{id}/report`; nel client il bottone «Correggi» sulla scheda, con
+la stessa condizione dell'annullamento.
+
+##### `W3` — Dire chi (`R21`, `R22`) — **ADR-049 prima**
+
+Un modello di lettura, con la forma che la [sezione 3](11-piani-conclusi.md#esito-sezione-3)
+ha già stabilito per i nomi degli immobili: una porta, **una query per pagina**, la
+composizione nello use case, campi opzionali nel DTO.
+
+- porta: risoluzione di un insieme di `UserId` in nomi, letta da `app.users` sotto RLS.
+  Il precedente è `list_organizations_for_user` ([ADR-041](08-decisioni.md#adr-041)),
+  che si affida alla policy invece di ripetere il confine nel `WHERE`;
+- `TicketResponse` guadagna `reported_by_name` e `assigned_to_name`;
+  `TicketMessageResponse` guadagna `author_name`. Tutti e tre opzionali;
+- nel client: «In carico a» mostra **il nome e poi la data**, e non più la sola data —
+  che è il difetto letterale di `R21`; il thread mostra *Proprietario · Mario Rossi*;
+  «Aperta da» fa lo stesso.
+
+**`reported_by_name` entra pur non essendo nella lettera di `R21` né di `R22`**: è lo
+stesso identificatore risolto dalla stessa query e mostrato nella stessa scheda, tre
+righe più su di «In carico a». Lasciarlo fuori significherebbe consegnare una schermata
+in cui un nome compare e l'altro no.
+
+Quando il nome non torna — la riga `app.users` non è leggibile da chi guarda — il campo
+è **assente** e il client mette l'etichetta neutra del catalogo, mai l'UUID. È la regola
+di [ADR-043](08-decisioni.md#adr-043) e la stessa forma di «Immobile archiviato» della
+sezione 3.
+
+##### `W4` — Su una segnalazione chiusa non si scrive più (`R23`) — **ADR-050 prima**
+
+Un invariante nel dominio legato a `TicketStatus::is_working()`, la guardia in
+`PostTicketMessage` dopo la lettura della segnalazione, il codice e il messaggio nel
+catalogo. Nel client la casella di scrittura sparisce sugli stati terminali e **dice
+perché**, indicando la riapertura a chi ha segnalato.
+
+##### `W5` — Riaprire dice perché (`R24`) — stessa ADR-050
+
+`ReopenTicketCommand` porta un `reason` obbligatorio, validato dal value object del
+thread. `ReopenTicket` scrive il messaggio nella stessa transazione della transizione.
+
+La sequenza comune delle transizioni vive in `run()` in `transition.rs`, e **non va
+duplicata per questa**: il commento di quella funzione dice che è lì perché nessuna
+transizione dimentichi `TicketStatusChanged`, e una copia per la riapertura è
+esattamente il modo in cui una transizione lo dimentica. `run()` acquista quindi un
+punto in cui inserire un messaggio dentro la stessa unità di lavoro, e le altre sei lo
+lasciano vuoto.
+
+Nel client: il dialogo di riapertura passa da conferma a form con un campo obbligatorio,
+e il testo dice che quello che si scrive finisce nella conversazione.
+
+### Trappole
+
+**Il ramo di visibilità nella policy invece che nella funzione** è la trappola numero uno,
+e il sintomo è una segnalazione che si apre e non si legge: niente thread, niente storico,
+niente fotografie, nessun errore.
+
+**Il ramo va per ultimo e dietro il booleano.** `can_access_ticket` è `COST 500` e viene
+valutata per riga: `visible_to_residents AND EXISTS(...)` evita di chiamare una funzione
+tabellare su ogni segnalazione privata dell'elenco.
+
+**Una funzione con il confine dentro risponde «no» al pool privilegiato**, ed è la
+lezione della [sezione 4](11-piani-conclusi.md#esito-sezione-4) alla lettera:
+`app.property_residents` porta `can_access_property` nel corpo, che passa da
+`is_org_staff`, che chiede il ruolo di *quella* persona in *quella* organizzazione. Un
+test che verifichi la condivisione deve installare **`app.current_org_id` e
+`app.current_user_id`**, e vederlo fallire senza è il modo di scoprirlo tardi.
+
+**Non si scrive una terza definizione di «chi abita qui».** La `0030` documenta la
+trappola alla sua terza occorrenza; una `app.lives_in_property` sarebbe la quarta.
+
+**`R19-bis` fa fallire `just ci` in due posti prima ancora di sbagliare qualcosa**: il
+controllo `colonna-strutturale-scrivibile` e
+`the_application_role_cannot_move_a_ticket_to_another_property`. Vanno emendati **nello
+stesso passo** della migration, e l'emendamento è il documento della revoca — non un
+fastidio da togliere di mezzo.
+
+**Il privilegio di colonna non esprime «finché è `open`».** Una policy non può
+confrontare la riga nuova con quella vecchia. Chi cercasse di mettere quel limite nella
+`USING` di `tickets_update` si accorgerebbe tardi che restringerla romperebbe la
+**riapertura**, che parte proprio da `closed`.
+
+**Non copiare `canceller`.** La regola «staff sempre, chi ha segnalato finché è `open`»
+deve esistere una volta sola: due copie sono due regole, e la seconda smetterà di
+somigliare alla prima appena una delle due cambia.
+
+**La metà «ruolo» di `R22` è già in produzione.** Rifarla significherebbe riscrivere
+`MessageRow` per ottenere ciò che già mostra, e concludere la voce senza aver toccato il
+caso vero, che è il co-living.
+
+**Il nome che non c'è non è un errore.** Se `users_select` non concede la riga, il campo
+è assente: il client mette l'etichetta neutra e non l'UUID, e nessuno va a cercare un
+difetto nella query.
+
+**Questa sezione è il primo lettore di `users_select`**, e la `0030` lo aveva previsto
+per iscritto: *«la finestra per restringere è aperta e la chiude il primo client che
+legga un nome da lì»*. Dopo `W3` quella policy diventa portante, e restringerla non sarà
+più gratuito. Va scritto nell'ADR, non qui soltanto.
+
+**La guardia di `R23` non va nel costruttore del messaggio**, o la riapertura di `W5`
+inciamperebbe nella propria regola. Sta nello use case che *pubblica*, e la riapertura
+scrive il suo messaggio dopo aver riportato lo stato a `open`.
+
+**`run()` non si duplica per la riapertura.** È la funzione che garantisce che nessuna
+transizione dimentichi il proprio evento; una copia è il modo in cui una lo dimentica.
+
+**Le migration sono append-only**, e la funzione si sostituisce con
+`CREATE OR REPLACE FUNCTION` in un file nuovo, con la firma identica.
+
+**Non si prova nulla sul database di sviluppo.** Le migration si provano sul container
+effimero di `ops/ci/test-integration.sh`, che esiste per questo: `just down-hard`
+cancella i volumi, ed è già successo una volta — sta scritto
+nell'[esito della sezione 2](11-piani-conclusi.md#esito-sezione-2).
+
+### Come si saprà che è finita
+
+- una segnalazione dichiarata visibile la **legge un coinquilino che non è parte del suo
+  contratto**, e con essa il thread, lo storico e le fotografie: un test la percorre
+  tutta, non solo la riga;
+- lo stesso coinquilino **non** la riapre, non la annulla e non la corregge: la
+  `USING` di `tickets_update` non è cambiata, e un test lo prova;
+- una segnalazione **non** dichiarata visibile resta invisibile a quello stesso
+  coinquilino — è il default, ed è la metà che si dimentica di verificare;
+- chi ha segnalato corregge titolo e descrizione finché è `open`, e da `assigned` in poi
+  riceve `org.staff_role_required`; lo staff corregge sempre, e su una `cancelled` nessuno
+  dei due;
+- `just ci` è verde **con** il controllo 12 e il test dei privilegi emendati, e i due
+  continuano a rifiutare `property_id`, `room_id`, `lease_id`, `reference` e
+  `reported_by`;
+- «In carico a» dice **chi**, il thread distingue due coinquilini per nome, e un nome non
+  risolvibile mostra l'etichetta neutra e mai un UUID;
+- su una segnalazione chiusa il thread si **legge** e non si **scrive**, e il rifiuto ha
+  un messaggio italiano e non un codice;
+- riaprire senza motivo è rifiutato, e riaprire con un motivo lo lascia scritto nella
+  conversazione, dove sopravvive alla chiusura successiva;
+- `just ci` verde, con i test nuovi sui **due rami** di ogni rifiuto.
+
+### Che cosa **non** entra
+
+- **la modifica di categoria e priorità da parte di chi segnala**: sono il lavoro del
+  triage, che è dello staff, e lasciarle correggere altrove renderebbe `triaged` una
+  dichiarazione non verificabile — è la ragione per cui esistono come transizione;
+- **spostare una segnalazione** su un altro immobile, stanza o contratto. `property_id`,
+  `room_id` e `lease_id` restano non scrivibili, e la frase della `0020` resta vera per
+  loro;
+- **modificare o cancellare un messaggio del thread**: `app.ticket_messages` ha due sole
+  policy, e cambiarlo è una migration sulla policy, non una rotta;
+- **`ticket_status_history.reason`**, che resta non scritta con la ragione della
+  decisione 6;
+- **una rotta che elenchi le persone di un'organizzazione**: il debito è aperto apposta,
+  e [ADR-036](08-decisioni.md#adr-036) e [ADR-043](08-decisioni.md#adr-043) hanno già
+  scartato l'idea di proiettare un utente per identificatore. Qui i nomi viaggiano
+  **dentro** la risposta della segnalazione, che è la via che la sezione 3 ha già
+  percorso;
+- **`R7`**, il proprio account, che è la sezione 6 e che di questa sezione erediterà il
+  modo di risolvere un nome;
+- **il collaudo in undici punti**, che è la [5-bis](12-da-fare.md#lordine-di-esecuzione)
+  e viene subito dopo: sarà la prima volta che le sezioni 3, 4 e 5 si vedono con gli
+  occhi.
+
+<a id="esito-sezione-5"></a>
+
+## Esito — Sezione 5: le segnalazioni
+
+Eseguita il **9 settembre 2026**. Chiude `R19`, `R19-bis`, `R21`, `R22`, `R23` e `R24`.
+
+**Due migration, quattro ADR, una rotta nuova, e una decisione documentata revocata.** È
+la prima sezione che *toglie* qualcosa a un controllo di CI invece di aggiungerlo, e il
+modo in cui lo fa — emendando il controllo e il test **nello stesso passo** della
+migration — è la parte da ricordare.
+
+I test Rust passano da **431 a 438**, il client da **86 a 89**.
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `W1` | Migration `0035`: `visible_to_residents`, e il **quinto ramo dentro `app.can_access_ticket`** — non in `tickets_select` |
+| `W2` | Migration `0036` e `PATCH /tickets/{id}/report`, con l'invariante di schema e il test dei privilegi emendati nello stesso passo |
+| `W3` | `reported_by_name`, `assigned_to_name`, `author_name`: una query per pagina, e l'etichetta neutra quando il nome non torna |
+| `W4` | Un thread terminato si **legge** e non si scrive: `ticket.thread_closed` |
+| `W5` | Riaprire pretende un motivo, che diventa il primo messaggio del giro nuovo |
+
+### Il piano aveva ragione sulla trappola, e la trappola era più grande
+
+Il piano diceva che `R19-bis` contraddiceva tre cose che la CI verifica. Eseguendola sono
+state **quattro**, e la quarta è quella che sarebbe stata scoperta tardi: oltre alla
+migration `0020`, al controllo `colonna-strutturale-scrivibile` e al test
+`the_application_role_cannot_move_a_ticket_to_another_property`, la frase «di una
+segnalazione si modificano solo i costi» viveva anche in `docs/05-api.md`, nel commento di
+`Ticket::apply_costs`, in quello di `UpdateTicketCostsRequest` e nella stringa
+`t.ticket.onlyCostsArePatchable` del catalogo. Sette posti per un fatto solo — la stessa
+forma di `R3`, che ne aveva otto.
+
+**Il test dei privilegi non è stato accorciato, è stato riequilibrato.** Le due `UPDATE`
+su `title` e `description` sono passate dal blocco dei rifiuti a quello delle concessioni,
+e nel blocco dei rifiuti sono entrate `reported_by_kind` e `currency`, che erano fuori
+dalla `GRANT` e che nessun test nominava. Un test che perde due assert è un test più
+debole; questo ne ha quattro invece di due.
+
+### Che cosa il piano non aveva previsto
+
+**`TicketResponse` doveva portare i nomi *sempre*, transizioni comprese.** Il piano
+diceva «campi opzionali nel DTO» pensando alle sole letture. Ma se le transizioni non
+risolvessero i nomi, la stessa risposta li avrebbe a volte sì e a volte no, e un client non
+potrebbe distinguere «non leggibile» da «non risolto»: mostrerebbe l'etichetta neutra
+subito dopo un'azione riuscita. Da qui `TicketView` — segnalazione più nomi — restituita da
+**ogni** caso d'uso che restituisce una segnalazione, al prezzo di una query su al più due
+identificatori prima del commit.
+
+**`run()` ha dovuto crescere, e la forma scelta non è quella ovvia.** Il piano diceva «un
+punto in cui inserire un messaggio». Aggiungerlo come ottavo parametro avrebbe reso quella
+funzione una che si chiama leggendo la firma, e `extra_events` era già il settimo: le due
+cose sono diventate una struct sola, `Aftermath`, che porta gli eventi *e* il messaggio
+facoltativo. `TicketMessagePosted` lo emette `run`, non chi costruisce il messaggio — è la
+stessa proprietà per cui quella funzione esiste.
+
+**L'ordine dentro la riapertura conta più di quanto sembri.** Il messaggio si scrive
+**dopo** l'aggiornamento dello stato: al contrario, la regola «un thread terminato non
+riceve messaggi» colpirebbe proprio il messaggio che esiste per superarla. È scritto nel
+codice accanto alla riga, perché invertire due `await` sembra innocuo.
+
+**La metà «ruolo» di `R22` era già in produzione**, come il piano aveva trovato — e
+`reported_by_kind` lo era anche in «Aperta da». Il lavoro vero è stato il nome, e la
+schermata ora mostra le due cose **insieme**: il ruolo dice da che parte del rapporto sta
+chi scrive, il nome dice chi è.
+
+### Decisioni prese eseguendo
+
+**Il nome della colonna dice «residenti» e non «tutti gli inquilini».** La seconda formula
+è quella del backlog e si legge come «dell'organizzazione», che sarebbe un confine più
+largo e sbagliato: un inquilino di un'altra casa dello stesso proprietario non c'entra.
+La casella nel form usa invece la parola comune, dove il confine è chiaro dal contesto.
+
+**`app.property_residents` e non `app.shares_home_with`**, ed è la scelta che il vincolo
+chiedeva di fare invece di scrivere un terzo predicato. La seconda è utente↔utente e
+avrebbe avuto due difetti: `reported_by` è `ON DELETE SET NULL`, quindi la condivisione
+sarebbe sparita da sé alla cancellazione dell'autore; e non filtra `lease_in_force` —
+deliberatamente, è un pavimento e non un elenco — quindi un inquilino uscito due anni fa
+avrebbe visto le segnalazioni nuove della casa in cui non vive più.
+
+**Il ramo va per ultimo nell'`OR` e dietro il booleano.** `can_access_ticket` è `COST 500`
+e viene valutata per riga nell'elenco: con `visible_to_residents` davanti, la funzione che
+restituisce righe non viene chiamata affatto sulle segnalazioni private, che sono il
+default.
+
+**La correzione non guarda se la segnalazione è chiusa**, solo se è annullata — come
+`apply_costs`. Una chiusa si rilegge mesi dopo, e un titolo sbagliato lì è sbagliato per
+sempre.
+
+**`reported_by_name` è entrato pur non essendo nella lettera di `R21` né di `R22`**: è lo
+stesso identificatore, risolto dalla stessa query, mostrato nella stessa scheda tre righe
+più su di «In carico a». Lasciarlo fuori avrebbe consegnato una schermata in cui un nome
+compare e l'altro no.
+
+### Che cosa questa sezione ha reso portante
+
+**`users_select` non si restringe più gratis.** La `0030` lo aveva scritto per esteso — *«la
+finestra per restringere è aperta e la chiude il primo client che legga un nome da lì»* — e
+questa sezione è quel primo client. I due rami su cui il modulo ora poggia sono
+`shares_home_with`, che fa leggere al coinquilino il nome dell'altro nel thread, e
+`is_my_staff`, che fa leggere all'inquilino il nome di chi ha in carico la sua
+segnalazione. Un test li interroga tutti e tre insieme al ramo dello staff.
+
+Il fatto che `shares_home_with` **non** filtri `lease_in_force` era una scelta scritta nel
+suo commento; da adesso è una dipendenza, perché è ciò che rende leggibile il nome
+dell'autore di un messaggio vecchio su una segnalazione di chi si è nel frattempo
+trasferito.
+
+### Che cosa resta aperto
+
+- **`ticket_status_history.reason` resta non scritta**, e ora ha una ragione scritta invece
+  di essere solo vuota: riempirla richiederebbe un secondo canale verso il trigger — una
+  `set_config` transazionale che una seconda transizione erediterebbe — per un campo di
+  testo che il thread già tiene meglio. La differenza con il numero falso della sezione 4 è
+  che là un valore sbagliato **si mostrava**, qui un campo vuoto non compare;
+- **i nomi nello storico degli stati** non ci sono: `changed_by` resta un identificatore, e
+  la riga dello storico dice già ciò che serve — che cosa è cambiato e quando. È un'altra
+  domanda, e la si fa quando qualcuno la pone;
+- **`R26`** resta ferma dov'era: nessuna delle sei voci la tocca;
+- **la correzione non ha uno storico.** Chi ha riscritto il titolo sta in `audit_log` e
+  nell'evento `ticket.report_corrected`, che porta i **nomi dei campi** e non i valori —
+  perché il testo di una persona non finisce su un broker. Il testo di prima non è
+  recuperabile dal prodotto;
+- **il subentro (`R28`)** e **il perimetro dei ruoli (`R9`)** restano dove erano.
+
+### Che cosa non è stato provato a mano
+
+Tutto, come per la 3 e la 4: solo test. E qui pesa quanto nelle due precedenti, perché la
+schermata della segnalazione cambia in **quattro** punti — la casella all'apertura, i nomi,
+il bottone «Correggi», la conversazione che si chiude — e il punto **7** del collaudo la
+attraversa per intero.
+
+**È il momento della [5-bis](12-da-fare.md#lordine-di-esecuzione)**: nove punti su undici
+sono ora su codice fermo, ed è la prima volta che le sezioni 3, 4 e 5 si vedono con gli
+occhi invece che da una suite verde.

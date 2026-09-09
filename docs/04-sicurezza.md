@@ -210,6 +210,20 @@ Non prova che restringere sia sicuro. La verifica è una matrice di visibilità 
 scenario a due immobili, ed è un test di integrazione. Ragioni in
 [ADR-036](08-decisioni.md#adr-036).
 
+**Quella policy è ora portante, e non lo era.** La `0030` aveva scritto che la finestra
+per restringere l'avrebbe chiusa il primo client che leggesse un nome da lì: è la sezione
+5 delle segnalazioni, che risolve i nomi di chi ha segnalato, di chi ha in carico e di chi
+scrive nel thread leggendo `app.users.full_name` **sotto queste cinque condizioni**
+([ADR-049](08-decisioni.md#adr-049)). Da qui in avanti restringere `users_select` non è
+più gratuito, e i due rami che quel modulo poggia sono `shares_home_with` — il coinquilino
+legge il nome dell'altro — e `is_my_staff` — l'inquilino legge il nome di chi ha in carico
+la sua segnalazione.
+
+La proiezione è di **una colonna sola**, `full_name`, e non dell'aggregato `User`: email e
+telefono restano dove sono. È la stessa forma di `app.property_residents` — proiettare
+invece di rendere leggibile — e la ragione per cui un nome che non torna non è un errore,
+ma un'etichetta neutra a schermo.
+
 I due rami sullo staff non sono decorazione e **non sono l'uno l'inverso dell'altro**:
 senza il terzo il proprietario perderebbe di vista i propri inquilini, senza il quarto
 un inquilino non potrebbe mai sapere il nome del proprio proprietario.

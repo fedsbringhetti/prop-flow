@@ -127,6 +127,14 @@ un'organizzazione di cui l'utente non è membro e si aspetta zero righe.
 migration `0030` l'ha sostituita in `users_select`. Resta perché rimuoverla è un
 cambiamento a sé.
 
+`app.can_access_ticket` ha **cinque** rami dalla migration `0035`: al quarto — chi è
+parte del contratto indicato — se ne aggiunge uno per le segnalazioni dichiarate di
+interesse comune, che risponde a chi risulta residente dell'immobile secondo
+`app.property_residents`. Sta nella **funzione** e non in `tickets_select` perché quella
+funzione la consultano quattro policy — la riga, il thread, lo storico e gli allegati — e
+allargarne una sola darebbe una segnalazione che si apre e non si legge
+([ADR-047](08-decisioni.md#adr-047)).
+
 Sono `SECURITY DEFINER` per una ragione precisa: una policy che interroghi in linea
 una tabella a sua volta protetta da RLS ricorre su se stessa. Leggendo come
 *definer* — che è il proprietario delle tabelle, ed è esente dalle policy — la
@@ -291,6 +299,13 @@ Le due ragioni per cui lo si usa sono però diverse, e i due ADR le tengono dist
 sulle prime due tabelle la colonna non concessa **è il confine** dell'organizzazione;
 su `tickets` non c'è un confine da difendere, ma una coerenza strutturale
 (`room_id`, `lease_id` e `property_id`) che nessun vincolo dello schema impone.
+
+**Su `tickets` l'elenco si è accorciato di due colonne**, ed è una revoca deliberata:
+`title` e `description` sono tornate scrivibili con la migration `0036`, perché
+correggere un refuso è un motivo legittimo di cambiare e annullare-e-riaprire costerebbe
+il riferimento già comunicato. Il criterio di [ADR-026](08-decisioni.md#adr-026) non
+cambia — cambia il fatto — e il limite «finché nessuno ci ha messo mano» è applicativo,
+perché una policy non può esprimerlo. Vedi [ADR-048](08-decisioni.md#adr-048).
 
 Ne segue un onere: l'elenco concesso e le colonne che compaiono in una `UPDATE` sono
 la stessa lista, e allungare l'una richiede di allungare l'altra. È voluto — è il
