@@ -13,6 +13,7 @@ use propflow_domain::DomainError;
 use propflow_domain::lease::{
     Lease, LeaseParty, LeasePartyChanges, LeasePartyRole, LeaseStatus, LeaseType, RentFrequency,
 };
+use propflow_domain::ports::LeaseLabels;
 use propflow_domain::property::Patch;
 use propflow_domain::shared::{Currency, Email, LeaseId, LeasePartyId, Money, PropertyId, RoomId};
 use rust_decimal::Decimal;
@@ -360,6 +361,18 @@ pub struct LeaseResponse {
     pub termination_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Come si chiama l'immobile, per distinguere una riga dall'altra: senza,
+    /// l'elenco mostra tipo e date e i contratti si somigliano tutti.
+    ///
+    /// **Assente sulle risposte a una singola operazione** — attivazione,
+    /// disdetta, annullamento — dove chi chiama ha già il contratto sotto gli
+    /// occhi, e **quando l'immobile è archiviato**, che è il caso in cui la sua
+    /// riga non si legge più.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_label: Option<String>,
+    /// Assente sui contratti sull'immobile intero, che non hanno una stanza.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -367,6 +380,16 @@ pub struct LeaseResponse {
 impl LeaseResponse {
     fn from_view(view: &LeaseView) -> Self {
         Self::build(&view.lease, view.effective_status)
+    }
+
+    /// Con i nomi, per le due letture che li caricano.
+    fn from_view_with_labels(view: &LeaseView, labels: Option<&LeaseLabels>) -> Self {
+        let mut response = Self::build(&view.lease, view.effective_status);
+        if let Some(labels) = labels {
+            response.property_label.clone_from(&labels.property_label);
+            response.room_name.clone_from(&labels.room_name);
+        }
+        response
     }
 
     fn build(lease: &Lease, effective_status: LeaseStatus) -> Self {
@@ -394,6 +417,10 @@ impl LeaseResponse {
             terminated_at: lease.terminated_at(),
             termination_reason: lease.termination_reason().map(str::to_owned),
             notes: lease.notes().map(str::to_owned),
+            // I nomi non stanno nell'aggregato: li mette `from_view_with_labels`,
+            // che è l'unica via che li ha caricati.
+            property_label: None,
+            room_name: None,
             created_at: lease.created_at(),
             updated_at: lease.updated_at(),
         }
@@ -541,7 +568,11 @@ async fn list(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(LeasePageResponse {
-        items: page.items.iter().map(LeaseResponse::from_view).collect(),
+        items: page
+            .items
+            .iter()
+            .map(|item| LeaseResponse::from_view_with_labels(&item.view, item.labels.as_ref()))
+            .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
 }
@@ -565,6 +596,7 @@ async fn detail(
         lease,
         effective_status,
         parties,
+        labels,
     } = state
         .get_lease
         .execute(&context, LeaseId::from_uuid(id))
@@ -572,7 +604,13 @@ async fn detail(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(LeaseDetailResponse {
-        lease: LeaseResponse::build(&lease, effective_status),
+        lease: LeaseResponse::from_view_with_labels(
+            &LeaseView {
+                lease,
+                effective_status,
+            },
+            labels.as_ref(),
+        ),
         parties: parties
             .iter()
             .map(LeasePartyResponse::from_domain)

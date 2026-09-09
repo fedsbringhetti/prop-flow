@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use propflow_domain::lease::{Lease, LeaseParts};
 use propflow_domain::ports::{
-    LeasePage, LeaseQuery, LeaseRepository, RepositoryError, RepositoryResult,
+    LeaseLabels, LeasePage, LeaseQuery, LeaseRepository, RepositoryError, RepositoryResult,
 };
 use propflow_domain::shared::{Currency, LeaseId, Money, OrgId, PropertyId, RoomId};
 
@@ -213,6 +213,44 @@ impl LeaseRepository for PgUnitOfWork {
             return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
+    }
+
+    async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **`LEFT JOIN` su entrambi, e non è pignoleria.** Con un `INNER` un
+        // contratto sull'immobile intero — che non ha stanza — sparirebbe
+        // dall'elenco, e con lui ogni contratto il cui immobile è stato
+        // archiviato: due modi di far scomparire righe che esistono, per andare a
+        // prendere un nome.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT l.id                AS lease_id,
+                    p.label             AS property_label,
+                    r.name              AS room_name
+               FROM app.leases l
+               LEFT JOIN app.properties p
+                      ON p.id = l.property_id AND p.deleted_at IS NULL
+               LEFT JOIN app.rooms r
+                      ON r.id = l.room_id AND r.deleted_at IS NULL
+              WHERE l.id = ANY($1) AND l.deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let lease_id: Uuid = try_get(&row, "lease_id")?;
+                Ok(LeaseLabels {
+                    lease_id: LeaseId::from_uuid(lease_id),
+                    property_label: try_get(&row, "property_label")?,
+                    room_name: try_get(&row, "room_name")?,
+                })
+            })
+            .collect()
     }
 }
 

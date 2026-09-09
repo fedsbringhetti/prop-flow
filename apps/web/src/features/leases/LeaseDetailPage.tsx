@@ -68,7 +68,7 @@ export function LeaseDetailPage() {
       {(data) => (
         <>
           <PageHeader
-            title={t.lease.types[data.lease_type]}
+            title={data.property_label ?? t.lease.types[data.lease_type]}
             description={`${formatDate(data.start_date)} — ${formatDate(data.end_date)}`}
             breadcrumb={
               <Link to="/contratti" className="hover:underline">
@@ -127,9 +127,12 @@ export function LeaseDetailPage() {
                       to={`/immobili/${data.property_id}`}
                       className="text-accent underline-offset-4 hover:underline"
                     >
-                      {t.property.title}
+                      {data.property_label ?? t.lease.unknownProperty}
                     </Link>
                   </DescriptionItem>
+                  {data.room_name ? (
+                    <DescriptionItem label={t.lease.room}>{data.room_name}</DescriptionItem>
+                  ) : null}
                   <DescriptionItem label={t.lease.rentAmount} numeric>
                     {formatAmount(data.rent_amount, { currency: data.currency })}
                   </DescriptionItem>

@@ -20,7 +20,7 @@ pub use cancel::{CancelLease, CancelLeaseCommand};
 pub use correct_party::{CorrectLeaseParty, CorrectLeasePartyCommand};
 pub use draft::{DraftLease, DraftLeaseCommand};
 pub use get::{GetLease, LeaseDetail};
-pub use list::{LeaseListPage, ListLeases, ListLeasesQuery};
+pub use list::{LeaseListItem, LeaseListPage, ListLeases, ListLeasesQuery};
 pub use remove_party::{RemoveLeaseParty, RemoveLeasePartyCommand};
 pub use terminate::{TerminateLease, TerminateLeaseCommand};
 

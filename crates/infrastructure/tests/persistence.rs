@@ -690,7 +690,7 @@ async fn an_expired_lease_keeps_its_stored_state_but_leaves_the_dashboard() {
         !in_force
             .items
             .iter()
-            .any(|item| item.lease.id() == expired.id()),
+            .any(|item| item.view.lease.id() == expired.id()),
         "un contratto scaduto non deve comparire fra quelli in essere"
     );
 }

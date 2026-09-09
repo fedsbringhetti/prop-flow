@@ -254,6 +254,31 @@ pub trait LeaseRepository: Send {
     async fn insert(&mut self, lease: &Lease) -> RepositoryResult<()>;
     async fn update(&mut self, lease: &Lease) -> RepositoryResult<()>;
     async fn soft_delete(&mut self, lease: &Lease) -> RepositoryResult<()>;
+    /// I nomi di ciò che i contratti affittano, per un'intera pagina.
+    ///
+    /// **Una query e non una per riga**: l'elenco ne mostra venticinque, e
+    /// risolverli uno alla volta sarebbe il problema `N+1` scritto a mano. Sta qui
+    /// e non in un `JOIN` dentro `list` perché `list` costruisce l'aggregato, e
+    /// l'aggregato non ha un posto dove mettere un nome che non è suo.
+    async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>>;
+}
+
+/// Come si chiama ciò che un contratto affitta.
+///
+/// **Non fa parte dell'aggregato** e non ci deve entrare: il nome di un immobile
+/// appartiene all'immobile, e un contratto che se lo portasse dietro avrebbe due
+/// fonti di verità che divergono alla prima correzione. È un modello di lettura,
+/// come `LeasePage`, e serve a una cosa sola: un elenco in cui le righe si
+/// distinguono.
+///
+/// Entrambi i nomi sono opzionali, e per ragioni diverse. La **stanza** manca sui
+/// contratti sull'immobile intero, che è il caso normale. L'**immobile** manca
+/// quando la sua riga è archiviata: il contratto resta, il nome no.
+#[derive(Debug, Clone)]
+pub struct LeaseLabels {
+    pub lease_id: LeaseId,
+    pub property_label: Option<String>,
+    pub room_name: Option<String>,
 }
 
 /// Parti di un contratto.

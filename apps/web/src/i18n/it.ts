@@ -226,6 +226,9 @@ export const it = {
     property: 'Immobile',
     room: 'Stanza',
     wholeProperty: 'Immobile intero',
+    /** Quando l'immobile è archiviato il nome non si legge più: la riga resta e
+     *  lo dice, invece di mostrare uno spazio vuoto. */
+    unknownProperty: 'Immobile archiviato',
     startDate: 'Inizio',
     endDate: 'Fine',
     endDateHint: 'Esclusiva: per un contratto valido fino al 31 dicembre indica il 1° gennaio.',

@@ -122,6 +122,7 @@ export function LeasesPage() {
               <TableCaption>{t.lease.title}</TableCaption>
               <thead>
                 <tr>
+                  <Th>{t.lease.property}</Th>
                   <Th>{t.lease.type}</Th>
                   <Th>{t.lease.status}</Th>
                   <Th>{t.lease.startDate}</Th>
@@ -132,14 +133,22 @@ export function LeasesPage() {
               <tbody>
                 {items.map((lease) => (
                   <Tr key={lease.id}>
+                    {/* **Il nome di ciò che si affitta, non il tipo.** Tipo più
+                        date rendeva ogni riga uguale all'altra, che è il difetto
+                        per cui questa colonna esiste. La stanza sta sotto perché
+                        distingue due contratti nella stessa casa. */}
                     <Td>
                       <Link
                         to={`/contratti/${lease.id}`}
                         className="font-medium text-accent underline-offset-4 hover:underline"
                       >
-                        {t.lease.types[lease.lease_type]}
+                        {lease.property_label ?? t.lease.unknownProperty}
                       </Link>
+                      {lease.room_name ? (
+                        <span className="block text-xs text-ink-muted">{lease.room_name}</span>
+                      ) : null}
                     </Td>
+                    <Td>{t.lease.types[lease.lease_type]}</Td>
                     <Td>
                       <LeaseStatusBadge
                         status={lease.status}

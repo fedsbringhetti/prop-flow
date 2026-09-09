@@ -206,6 +206,16 @@ export interface Lease {
   deposit_amount: Amount
   utilities_included: boolean
   istat_indexation: boolean
+  /**
+   * Come si chiama l'immobile, per distinguere una riga dall'altra.
+   *
+   * **Assente** sulle risposte a una singola operazione — attivazione, disdetta,
+   * annullamento — dove chi chiama ha già il contratto sotto gli occhi, e quando
+   * l'immobile è archiviato.
+   */
+  property_label?: string
+  /** Assente sui contratti sull'immobile intero. */
+  room_name?: string
   signed_at: IsoDateTime | null
   terminated_at: IsoDateTime | null
   termination_reason?: string
