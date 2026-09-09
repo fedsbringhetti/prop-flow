@@ -1,11 +1,12 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Ventitré voci**, con un identificatore stabile ciascuna.
+**Diciannove voci**, con un identificatore stabile ciascuna.
 
-Erano ventisei: `R4`, `R5`, `R6`, `R10` e `R20`, più il bottone del thread, sono uscite
-con la [sezione 1](11-piani-conclusi.md#esito-sezione-1) l'8 settembre 2026. `R26` e `R27`
-sono entrate con la sezione 2, che è il collaudo: **è il posto da cui questo file cresce**.
+`R4`, `R5`, `R6`, `R10` e `R20`, più il bottone del thread, sono uscite con la
+[sezione 1](11-piani-conclusi.md#esito-sezione-1); `R12`, `R13`, `R14`, `R17` e `R18` con
+la [sezione 3](11-piani-conclusi.md#esito-sezione-3). `R26` e `R27` sono entrate con la
+sezione 2, che è il collaudo: **è il posto da cui questo file cresce**, ed è anche l'unico.
 
 ## Perché un file a sé
 
@@ -62,10 +63,11 @@ Una sezione deve essere **autosufficiente** — chiudersi senza lasciare mezze c
 quella dopo — perché chi la esegue apre una sessione nuova che non ha visto le
 precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 
-- **`R13`, `R17` e `R18` stanno insieme** perché sono un nodo, non tre voci: una quota
-  sbagliata non si corregge (`R17`), quindi il contratto non si attiva, quindi non si
-  elimina (`R13`), perché l'unica uscita sarebbe attivarlo. Prenderne una senza le
-  altre lascia il vicolo cieco aperto;
+- ~~**`R13`, `R17` e `R18` stanno insieme**~~ — **erano un nodo, e la sezione 3 l'ha
+  sciolto.** Una quota sbagliata non si correggeva (`R17`), quindi il contratto non si
+  attivava, quindi non si eliminava (`R13`), perché l'unica uscita sarebbe stata
+  attivarlo. Prenderne una senza le altre avrebbe lasciato aperto il vicolo cieco, ed è la
+  ragione per cui sono state fatte insieme;
 - **`R7`, `R21` e `R22` hanno la stessa radice** — i DTO portano identificatori e
   nessuna rotta risolve le persone — ma `R21` e `R22` restano con le segnalazioni,
   dove si vedono. La sezione 5 va quindi eseguita **prima** della 6, o la 6 rifarà
@@ -75,7 +77,7 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 |---|---|---|---|---|
 | ~~**1**~~ | ~~Ritocchi visibili~~ — **conclusa** l'8 settembre 2026 | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-1) · [esito](11-piani-conclusi.md#esito-sezione-1). La riga resta perché l'ordine si legge per intero, e perché l'esito dice una cosa che serve alle sezioni dopo: la navigazione richiedeva **tre** modifiche e non due |
 | **2** | Le pendenze della fetta C | `R2` `R3` + il collaudo in undici punti | doc + due righe di backend | Chiude la fetta precedente invece di lasciarla a metà. `R2` è una correzione al testo del collaudo che va fatta **prima** di percorrerlo, o il punto 10 non prova ciò che dice |
-| **3** | Contratti: correggere gli errori — **pianificata**, vedi [09](09-stato-e-roadmap.md#piano-sezione-3) | `R13` `R17` `R18` `R12` `R14` | backend | **Il nodo**, e il danno peggiore che esiste adesso: in database ci sono già contratti attivi con le quote sbagliate e nessun modo di correggerli. `R12` e `R14` entrano perché si toccano gli stessi handler. Pianificarla ha trovato **un buco in più**: si può aggiungere una parte a un contratto **attivo**, e da lì le quote non sommano più a 100 |
+| ~~**3**~~ | ~~Contratti: correggere gli errori~~ — **conclusa** il 9 settembre 2026 | `R13` `R17` `R18` `R12` `R14` | backend | Era il nodo e il danno peggiore che esistesse: contratti attivi con le quote sbagliate e nessun modo di correggerli. [Piano](11-piani-conclusi.md#piano-sezione-3) · [esito](11-piani-conclusi.md#esito-sezione-3). Eseguirla ha chiuso **un buco che non era in elenco** — si poteva aggiungere una parte a un contratto attivo — e ne ha aperto uno nuovo: `R28`, il subentro |
 | **4** | Stati che nessuno aggiorna | `R1` `R11` `R25` | da decidere | Tre volte la stessa domanda — **derivato o scritto a mano?** — e conviene rispondere una volta sola. `R11` propende per derivato, `R1` per scritto, `R25` è una capacità che manca del tutto |
 | **5** | Segnalazioni | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Tre voci su sei sono già **decise**. Porta una migration (`R19`), due regole di dominio che mancano (`R23`, `R24`) e il primo pezzo del problema dei nomi (`R21`, `R22`) |
 | **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. Dopo la 5, che avrà già affrontato come si risolve un nome |
@@ -126,41 +128,13 @@ Le domande da sciogliere prima di scrivere codice, e sono la ragione per cui que
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R12 | aperta | **Avvertire della sovrapposizione alla creazione**, non solo all'attivazione: se in quel periodo c'è già un contratto, «Crea» chiede una conferma in più | **È una modifica di solo client**, ed è la scoperta che rende la voce piccola. I due vincoli `leases_no_overlap_property` e `leases_no_overlap_room` della `0005` hanno una `WHERE` che copre `pending_signature`, `active` ed `expiring` — **e non `draft`**: le bozze sono escluse *apposta*, perché una bozza è lavoro in corso e due bozze che si sovrappongono sono legittime. Il `409` all'attivazione è quindi corretto e resta; quello che manca è dirlo prima, e il client può saperlo con `listLeases` filtrato sull'immobile confrontando i periodi. **Non toccare i vincoli**: allargarli a `draft` vieterebbe di abbozzare due ipotesi alternative sullo stesso periodo |
-| R13 | **decisa** | **Un contratto creato per sbaglio non si elimina**: l'unica via è attivarlo e disdirlo | Le rotte dei contratti sono cinque — `POST /leases`, `GET /leases`, `GET /leases/{id}`, `POST .../parties`, `POST .../activate`, `POST .../terminate` — e **non c'è una `DELETE`**. La colonna `deleted_at` c'è, quindi il livello dati regge già la cancellazione soft: manca lo use case e la rotta. **E c'è di più, trovato con [R26](#lelenco)**: `Lease::cancel()` esiste nel dominio — annulla una bozza o un contratto in attesa di firma, con l'invariante `LeaseNotCancellable` a guardia — e **non lo chiama nessuno**. La transizione giusta è già scritta e non è esposta. Da decidere **quali stati** siano archiviabili: una bozza certamente; un contratto attivo no, perché per quello la via è la disdetta, che è un fatto diverso e lascia traccia |
-| R14 | aperta | **Dare un nome ai contratti**, perché in tabella sono tutti uguali | `app.leases` **non ha una colonna nome**: ci sono `notes` e `registration_number`, e l'elenco mostra tipo più data, da cui le righe identiche. Ci sono due vie e vanno pesate insieme, non scelte per prima: (a) una colonna `label`, cioè migration, dominio, DTO e form; (b) comporre l'etichetta da ciò che il contratto già è — immobile e stanza — che **non è gratis**, perché il DTO `Lease` porta `property_id` e `room_id` e **nessun nome**, quindi vorrebbe dire allargare la risposta o fare una richiesta per riga. La (b) risolve «sono tutti uguali»; solo la (a) permette di chiamarlo *«Rossi, secondo piano»* |
 
-| R17 | **decisa** | **Le parti contrattuali non si modificano dopo**, nemmeno da chi amministra | C'è **solo** `POST /leases/{id}/parties`: nessuna `PATCH`, nessuna `DELETE`. Una parte si aggiunge e resta com'è — nome, email, telefono, ruolo, quota, intestatario principale. `app.lease_parties` ha però sia `left_at` sia `deleted_at`, quindi correggere e togliere sono **già rappresentabili** senza migration: mancano gli use case e le rotte |
 
-**R17 e R13 insieme fanno un vicolo cieco, e va visto prima di stimarli separatamente.** L'attivazione pretende che le quote degli inquilini sommino a 100 (`lease.shares_not_hundred`). Se una parte viene inserita con la quota sbagliata: non la si può correggere (R17), quindi il contratto non si attiva; e non lo si può eliminare (R13), perché la sola uscita sarebbe attivarlo e disdirlo — che è precisamente ciò che non riesce. **Il contratto resta lì per sempre**, non attivabile e non rimovibile, e l'unico rimedio è rifarlo daccapo lasciando in elenco quello rotto — che con R14 non ancora fatto è pure indistinguibile dal buono.
-
-È la ragione per cui queste due, se si sceglie di farle, conviene farle nella stessa fetta.
-
-| R18 | aperta | **Una quota può finire a zero in silenzio**, e il contratto si attiva lo stesso | Vedi sotto: **osservato in database**, non dedotto |
-
-#### R18 — come si arriva a un contratto attivo con i dati sbagliati
-
-Trovato durante il collaudo e verificato sulle righe vere. Su una stanza, un contratto **attivo** con due parti:
-
-| parte | quota | intestatario | ha accettato |
-|---|---|---|---|
-| `inq2` | **100,00** | sì | **no** |
-| `inq3` | **0,00** | no | sì |
-
-Cioè: **l'inquilino che è entrato davvero non deve niente, e il 100% è di qualcuno che non ha mai accettato.** Il contratto è `active`, quindi ha superato ogni controllo.
-
-**Il backend non è ingenuo, ed è importante saperlo prima di "aggiustarlo" nel posto sbagliato.** `InviteTenant` non mette una quota fissa: chiama `remaining_share(&parties)`, che è `100 − assegnato` con il minimo a zero (`crates/application/src/use_cases/invitation/invite_tenant.rs`). È la scelta giusta — si invita il secondo inquilino e prende ciò che resta.
-
-Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sbagliata da sola:
-
-1. `AddPartyDialog` propone `share_percent: '100'` e `is_primary: true`. Chi aggiunge la **prima** parte si prende quindi tutto, e nel co-living la prima parte non è l'unica;
-2. ogni invito successivo riceve `remaining_share`, che a quel punto è **zero**, e nessuno lo dice: né il form dell'invito, né la modale che consegna il codice, né l'elenco delle parti, che mostra `0,00 %` come un dato qualunque;
-3. **l'attivazione verifica la somma, non il senso**: `100 + 0 = 100` passa, e la parte che regge quel 100 può essere una che non ha mai accettato l'invito. `lease.shares_not_hundred` non ha nulla da eccepire;
-4. **niente di tutto questo si corregge dopo** ([R17](#lelenco)): non si cambia una quota, non si toglie una parte.
-
-**Le conseguenze non restano nel contratto.** `app.property_residents` proietta le parti dei contratti attivi, quindi la parte fantasma compare fra **chi abita l'immobile** — con il suo nome, accanto all'inquilino vero. Ed è anche una parte che, se un giorno accettasse, si troverebbe intestataria del 100%.
-
-**Da decidere, e sono domande distinte:** se il form debba proporre 100 solo quando la parte è davvero l'unica; se una quota a zero vada segnalata al momento in cui si invita, invece che scoperta dopo; se l'attivazione debba pretendere qualcosa di più della somma — per esempio che nessun inquilino sia a zero, o che l'intestatario principale abbia accettato. **La correzione a posteriori (R17) serve comunque**, perché i contratti già rotti esistono già.
+**Il vicolo cieco di `R13`, `R17` e `R18` è stato sciolto dalla
+[sezione 3](11-piani-conclusi.md#esito-sezione-3).** Come ci si arrivava — il form che
+proponeva 100 alla prima parte, l'invito successivo a zero, l'attivazione che verificava
+la somma e non il senso, e nessuna correzione possibile — è scritto nel piano, e la regola
+che adesso lo impedisce è [ADR-046](08-decisioni.md#adr-046).
 
 ### Segnalazioni
 
@@ -168,7 +142,7 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 |---|---|---|---|
 | R19 | **decisa** | **La visibilità di una segnalazione diventa una scelta di chi la apre** — casella *«visibile a tutti gli inquilini»* — e il comportamento di oggi resta il default | **Decisa.** Oggi non è un difetto ma la policy: `app.can_access_ticket` (`0014`) concede a staff, a chi l'ha aperta, a chi l'ha in carico, e a `t.lease_id IS NOT NULL AND can_access_lease(...)` — quindi una segnalazione sull'immobile intero, che non ha contratto, resta privata. **Quel default resta**, e si aggiunge una scelta esplicita per il caso vero: la caldaia condominiale interessa a tutti. Serve una colonna su `app.tickets`, un `ALTER POLICY` con un ramo in più, il campo nel DTO e la casella nel form — quindi **una migration**, e non un filtro applicativo: la visibilità è un confine del database. Il predicato «chi guarda abita in questo immobile» va scelto fra ciò che la `0030` ha già introdotto (`app.shares_home_with`, `app.property_residents`) invece di scriverne un terzo. Da decidere se la casella si possa cambiare dopo l'apertura, il che la lega a R19-bis |
 | R19-bis | **decisa** | **Chi ha aperto una segnalazione può modificarla finché nessuno l'ha presa in carico** | **Decisa.** La forma della regola **esiste già** ed è quella dell'annullamento: lo staff sempre, chi ha segnalato **solo finché è `open`** — «finché nessuno ci ha messo mano». Qui vale lo stesso confine, cioè fino ad `assigned`. La trappola sta nella rotta: **`PATCH /tickets/{id}` esiste già** ma è `update_costs`, ed è **solo staff** e sui soli campi di costo. Allargarla significherebbe una rotta con due autorizzazioni diverse a seconda dei campi presenti — costi allo staff, testo a chi ha segnalato — che è il genere di cosa che si sbaglia in silenzio. Da decidere: allargare con attenzione o una rotta a sé, e **quali campi** siano modificabili (titolo e descrizione sì; categoria e priorità sono il lavoro del triage, che è dello staff) |
-| R21 | aperta | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo di [R14](#lelenco): i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
+| R21 | aperta | **«In carico a» mostra la data e non chi** | `TicketResponse` porta `assigned_to` come **UUID** e `assigned_at`, e nessun nome. È lo stesso ceppo che `R14` aveva sui contratti — chiuso dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3) allargando la risposta con i nomi, che è una delle due vie: i DTO trasportano identificatori, e i nomi delle persone non hanno una rotta — il debito «nessun endpoint elenca le persone di un'organizzazione» è aperto **apposta**, perché la fetta B aveva verificato che quel menù sarebbe vuoto avendo un'organizzazione esattamente uno staff. Qui però il nome serve davvero, e le vie sono le solite due: allargare la risposta della segnalazione, oppure una rotta che risolva le persone |
 | R22 | aperta | **Nel thread non si capisce chi scrive**: si vorrebbe ruolo e nome — *Proprietario · Mario Rossi* | Stesso ceppo di R21: i messaggi portano l'autore come identificatore. Il **ruolo** però è più economico del nome — si deduce da chi è staff — e da solo risolve gran parte della domanda («me lo dice il proprietario o un coinquilino?»). Vale la pena separare le due metà: il ruolo si può fare senza toccare l'API, il nome no |
 | R23 | aperta | **Su una segnalazione chiusa si possono ancora mandare messaggi** | Verificato: `PostTicketMessage` (`crates/application/src/use_cases/ticket/thread.rs`) fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture. È una **regola di dominio che manca**, non un controllo di interfaccia: nasconderlo nel client lascerebbe la rotta aperta. Da decidere se `closed` ammetta ancora una replica — chi ha segnalato potrebbe voler dire «non è risolto» — o se quella sia proprio la via di riapertura |
 | R24 | aperta | **Riaprire dovrebbe chiedere il motivo** | `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un corpo. La chiusura invece ha già `resolution_notes`, quindi il precedente esiste e la simmetria è naturale. Se R23 si chiude vietando i messaggi dopo la chiusura, questa diventa **l'unica via** per dire «non è risolto», e allora il motivo non è un di più: è l'unica cosa che spiega perché la segnalazione è tornata viva |
@@ -183,7 +157,7 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R15 | aperta | **Selezionare righe in tabella e cancellarle in blocco**, e poter cancellare anche una sola riga | La parte di interfaccia è ripetibile — le tabelle passano già da `@/components/ui/table` — ma **«elimina» non è un'operazione sola**, ed è la cosa da sapere prima di disegnare un bottone unico: un immobile e una stanza si **archiviano** (`DELETE`, cancellazione soft), un addebito e una bolletta si **annullano** (`void`, che è un fatto contabile e non una cancellazione), un contratto oggi **non si tocca affatto** (R13). Un'azione di gruppo che chiami tutto «elimina» direbbe una cosa falsa su almeno due di questi. Va deciso anche che cosa fa una selezione multipla quando **una parte** fallisce: nessuna rotta accetta più identificatori, quindi sono N chiamate e un esito parziale è possibile |
+| R15 | aperta | **Selezionare righe in tabella e cancellarle in blocco**, e poter cancellare anche una sola riga | La parte di interfaccia è ripetibile — le tabelle passano già da `@/components/ui/table` — ma **«elimina» non è un'operazione sola**, ed è la cosa da sapere prima di disegnare un bottone unico: un immobile e una stanza si **archiviano** (`DELETE`, cancellazione soft), un addebito e una bolletta si **annullano** (`void`, che è un fatto contabile e non una cancellazione), un contratto si **annulla** finché è una bozza, e da attivo si disdice soltanto (sezione 3). Un'azione di gruppo che chiami tutto «elimina» direbbe una cosa falsa su almeno due di questi. Va deciso anche che cosa fa una selezione multipla quando **una parte** fallisce: nessuna rotta accetta più identificatori, quindi sono N chiamate e un esito parziale è possibile |
 
 ### Uscire da un'organizzazione
 
@@ -195,8 +169,14 @@ Il difetto nasce dal **concorso di quattro cose**, e nessuna delle quattro è sb
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R26 | aperta | **Gli elenchi offrono filtri per stati che non possono comparire**, e sono tre elenchi con tre cause diverse | Trovato al punto 2 del collaudo archiviando un immobile e non ritrovandolo nemmeno filtrando per «Archiviato». **Immobili**: archiviare fa due cose nello stesso `UPDATE` (`soft_delete` in `crates/infrastructure/src/db/repositories/property.rs`) — `status = 'archived'` **e** `deleted_at` — ma `list` filtra `deleted_at IS NULL`, quindi la riga esce da ogni elenco, quel filtro compreso; e `find_by_id` ha lo stesso filtro, quindi nemmeno l'URL della scheda funziona più (`404`). Le altre quattro opzioni di quel `<Select>` sono vuote per la ragione di [R1](#lelenco). **Contratti**: l'opzione «Annullato» non può comparire perché `Lease::cancel()` **esiste nel dominio e non la chiama nessuno** — nessuno use case, nessuna rotta (vedi [R13](#lelenco)). **Bollette**: «Pagata» e «Contestata» sono gli stati di [R25](#lelenco), che nessuno scrive. Le tre cause sono diverse ma la domanda è una sola, e conviene rispondere una volta: **un filtro deve offrire solo ciò che può comparire**, e dove lo stato è vero ma la riga è nascosta serve un modo di includerla. **Non toccare l'archiviazione**: che sia un soft delete è giusto |
+| R26 | aperta | **Gli elenchi offrono filtri per stati che non possono comparire**, e sono tre elenchi con tre cause diverse | Trovato al punto 2 del collaudo archiviando un immobile e non ritrovandolo nemmeno filtrando per «Archiviato». **Immobili**: archiviare fa due cose nello stesso `UPDATE` (`soft_delete` in `crates/infrastructure/src/db/repositories/property.rs`) — `status = 'archived'` **e** `deleted_at` — ma `list` filtra `deleted_at IS NULL`, quindi la riga esce da ogni elenco, quel filtro compreso; e `find_by_id` ha lo stesso filtro, quindi nemmeno l'URL della scheda funziona più (`404`). Le altre quattro opzioni di quel `<Select>` sono vuote per la ragione di [R1](#lelenco). **Contratti**: l'opzione «Annullato» non può comparire perché `Lease::cancel()` **esiste nel dominio e non la chiama nessuno** — nessuno use case, nessuna rotta. **Chiuso dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3)**, che ha esposto quella transizione: resta la faccia degli immobili e quella delle bollette. **Bollette**: «Pagata» e «Contestata» sono gli stati di [R25](#lelenco), che nessuno scrive. Le tre cause sono diverse ma la domanda è una sola, e conviene rispondere una volta: **un filtro deve offrire solo ciò che può comparire**, e dove lo stato è vero ma la riga è nascosta serve un modo di includerla. **Non toccare l'archiviazione**: che sia un soft delete è giusto |
 | R27 | aperta | **`README.md` e [06](06-sviluppo.md) insegnano ancora il primo avvio a mano** | Trovato scrivendo `R3`. Le due pagine elencano `docker compose up`, `generate-jwt-keys.sh`, il `psql` dei ruoli e i tre `cargo run`, mentre `just setup` fa la stessa cosa in un comando e `just api`/`just worker`/`just web` avviano. Non è sbagliato — quei comandi funzionano, e `CLAUDE.md` §4 dice che la fonte della verità è lui — ma è **più lungo e più facile da sbagliare** proprio nella pagina che un estraneo legge per prima. Da decidere se il `justfile` diventi la via raccomandata anche lì, o se resti uno strumento di comodo per chi già conosce il progetto |
+
+### Contratti: quel che la sezione 3 ha lasciato aperto
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R28 | aperta | **Il subentro: cambiare la composizione di un contratto attivo** | Nato dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3), che ha chiuso la porta da cui si entrava per sbaglio: aggiungere una parte a un contratto attivo era ammesso e faceva smettere le quote di sommare a 100, quindi ora si rifiuta con `lease.parties_locked` ([ADR-046](08-decisioni.md#adr-046)). Il caso legittimo dietro resta: **un coinquilino che subentra a metà contratto**. Non è un'aggiunta — è un cambio di composizione che deve tenere la somma a 100, cioè **due righe che cambiano insieme**, e nessuna richiesta lo permette: `PATCH /lease-parties/{id}` ne tocca una sola, e in mezzo si passa da uno stato che l'attivazione rifiuterebbe. Da decidere la forma: una richiesta che porta **tutte** le parti insieme e le sostituisce, oppure una transizione dedicata («esce X, entra Y, con queste quote»). La seconda dice anche *quando*, che è ciò che serve agli addebiti. Legata a `left_at`, che il modello ha e nessuno scrive |
 
 ### Il perimetro dei ruoli — **la voce più grande della lista**
 

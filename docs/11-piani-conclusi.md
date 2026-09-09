@@ -7261,3 +7261,383 @@ Se un giorno servisse davvero, il pezzo che manca non è la sorgente: **l'outbox
 eventi esiste** e il worker lo drena. Manca la decisione sull'autenticazione del flusso,
 e conviene prenderla dopo [`R9`](12-da-fare.md#lelenco), che ridisegna comunque chi vede
 che cosa.
+
+---
+
+<a id="piano-sezione-3"></a>
+
+## Piano — Sezione 3: contratti, correggere gli errori
+
+Pianificata il **9 settembre 2026**. È la terza dell'
+[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione) e chiude `R13`, `R17`, `R18`,
+`R12` e `R14`.
+
+**È il danno peggiore che esiste adesso**, e non è un'ipotesi: in database ci sono stati
+contratti attivi con le quote sbagliate, e non c'è modo di correggerli. La sezione esiste
+per togliere un **vicolo cieco**, non per aggiungere una funzione.
+
+### Il vicolo cieco, in quattro passi
+
+Va letto prima di stimare qualunque cosa, perché è il motivo per cui queste voci stanno
+insieme e non si prendono una alla volta:
+
+1. `AddPartyDialog` propone `share_percent: '100'` e `is_primary: true`. Chi aggiunge la
+   **prima** parte si prende tutto, e nel co-living la prima parte non è l'unica;
+2. l'invito successivo riceve `remaining_share`, che a quel punto è **zero**, e nessuno lo
+   dice;
+3. l'attivazione verifica **la somma, non il senso**: `100 + 0 = 100` passa;
+4. niente di tutto questo si corregge dopo — non si cambia una quota, non si toglie una
+   parte, e il contratto non si elimina: l'unica uscita sarebbe attivarlo e disdirlo, che
+   è precisamente ciò che non riesce.
+
+**Il contratto resta lì per sempre**, non attivabile e non rimovibile.
+
+C'è una prova che il codice stesso conosce il buco: `remaining_share`
+(`crates/application/src/use_cases/invitation/invite_tenant.rs`) porta scritto che una
+quota a zero va bene perché «chi amministra la correggerà». **Quella capacità non esiste**,
+ed è `R17`. La funzione non va riscritta: va data al progetto l'operazione che il suo
+commento presuppone.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Disfare un contratto sbagliato | **annullarlo**, esponendo `Lease::cancel` che esiste già | una `DELETE` con cancellazione soft |
+| Correggere una parte | `PATCH /lease-parties/{id}`, come `rooms` | una rotta annidata sotto il contratto |
+| Togliere una parte | soft delete **solo se non è mai stata collegata** a un utente | togliere anche una parte con un inquilino vero dietro |
+| L'attivazione | rifiuta **una quota a zero**; non pretende che l'intestatario abbia accettato | pretendere l'accettazione |
+| Aggiungere una parte a un contratto **attivo** | si rifiuta, con la ragione scritta | ammetterlo e ricontrollare la somma |
+| Dare un nome ai contratti | **due campi in più nella risposta**: nome dell'immobile e della stanza | una colonna `label`, o comporre nel client |
+
+### Decisioni, con il perché
+
+#### 1. Un contratto sbagliato si **annulla**, e la transizione esiste già
+
+`Lease::cancel()` è nel dominio da sempre: ammette `draft` e `pending_signature`, rifiuta
+il resto con `LeaseNotCancellable`, e **non la chiama nessuno** — nessuno use case, nessuna
+rotta. È stata trovata dalla sezione 2 mentre si guardava perché il filtro «Annullato»
+fosse sempre vuoto ([`R26`](12-da-fare.md#lelenco)).
+
+Quindi `R13` non è «manca la cancellazione»: è **una transizione scritta e non esposta**.
+Serve uno use case, una rotta `POST /leases/{id}/cancel` e un bottone.
+
+*Alternativa scartata: una `DELETE` con cancellazione soft.* Nasconderebbe la riga da ogni
+elenco — `leases_select` filtra `deleted_at IS NULL` — cioè riprodurrebbe esattamente la
+forma di `R26`: un'opzione «Annullato» che continua a non poter corrispondere a niente. E
+**perderebbe l'informazione**: che un contratto sia stato annullato è un fatto da leggere,
+non da nascondere. La cancellazione soft resta la via giusta per gli *immobili*, dove
+l'archiviazione è un'altra cosa.
+
+**Ne segue un effetto collaterale buono**: il filtro «Annullato» dei contratti smette di
+essere morto, cioè **un terzo di `R26` si chiude qui**. Gli altri due terzi — immobili
+archiviati e bollette pagate — restano aperti, e vanno detti come restanti invece di
+segnare la voce come fatta.
+
+#### 2. Le parti si correggono da una rotta di primo livello, e **non serve una migration**
+
+La forma è quella delle stanze, che è il precedente più vicino: si creano annidate
+(`POST /leases/{id}/parties`), si correggono e si tolgono da una rotta propria
+(`PATCH` e `DELETE /lease-parties/{id}`). Il kebab-case è quello di `expense-groups` e
+`utility-bills`.
+
+**Il livello dati regge già tutto**, ed è la cosa da sapere prima di aprire l'editor:
+`app.lease_parties` ha `deleted_at` e `left_at`, e la policy `lease_parties_update` della
+`0014` concede l'`UPDATE` allo staff dell'organizzazione. **Chi scrive una migration qui
+sta risolvendo il problema sbagliato.**
+
+Quali campi si correggono: `share_percent`, `full_name`, `phone`, `role`, `is_primary`.
+**L'email no, se la parte è già collegata a un utente**: l'email è ciò a cui l'invito è
+intestato e ciò che l'accettazione confronta, e cambiarla sotto i piedi a un inquilino
+registrato sposterebbe un rapporto già stabilito. Finché `user_id IS NULL` invece è
+correggibile, ed è il caso vero — un refuso nell'indirizzo a cui si è mandato l'invito.
+
+#### 3. Togliere una parte e far uscire un inquilino sono **due cose diverse**
+
+`DELETE /lease-parties/{id}` è per l'**errore di inserimento**: una parte aggiunta per
+sbaglio, mai collegata a nessuno. È una cancellazione soft — `deleted_at` — e gli indici
+unici parziali fanno il resto: `lease_parties_primary_uk` e `lease_parties_lease_user_uk`
+escludono le righe cancellate, quindi togliere una parte **libera** l'intestatario
+principale e il legame con l'utente. È voluto e va saputo.
+
+Su una parte **già collegata a un utente** la `DELETE` rifiuta. Quella non è una
+correzione: è una persona che se ne va, e il modello ha un campo apposta — `left_at`, che
+`ensure_tenancy_complete` già esclude dal conteggio delle quote. Ma «far uscire un
+inquilino» porta con sé le domande di [`R16`](12-da-fare.md#lelenco) — che cosa vede dopo,
+che ne è dei suoi addebiti — ed è la sezione 6. **Qui si rifiuta con un codice che dice
+perché**, invece di far finta che sia la stessa operazione.
+
+#### 4. L'attivazione rifiuta una quota a zero, e **non** pretende l'accettazione
+
+Sono due domande diverse e hanno risposte diverse.
+
+**Una quota a zero è un errore in ogni caso che sappiamo nominare**: un inquilino che non
+deve niente non è un inquilino, è una riga rimasta indietro. L'attivazione la rifiuta, con
+un invariante nuovo accanto a `LeaseSharesNotHundred`.
+
+**L'accettazione dell'intestatario no.** Un contratto si firma sulla carta prima che
+l'inquilino apra un account, e pretenderla bloccherebbe un giro legittimo — quello che il
+collaudo stesso percorre ai punti 3–5, dove si attiva prima di invitare.
+
+È un **cambiamento di regola di dominio**, quindi una voce in
+[08 — Decisioni](08-decisioni.md), scritta prima del codice: dice che cosa l'attivazione
+garantisce, che cosa deliberatamente non garantisce, e che i contratti già rotti in
+database **non vengono sanati** da questa regola — la correggerà `R17` a mano, e va detto
+o qualcuno penserà che l'invariante nuova valga anche all'indietro.
+
+#### 5. Su un contratto attivo non si aggiungono parti
+
+**Buco trovato pianificando, e non era in elenco**: `AddLeaseParty` fa `ensure_staff`,
+carica il contratto e inserisce. **Non guarda lo stato.** Quindi si può aggiungere una
+parte a un contratto **attivo**, e da quel momento le quote non sommano più a 100 senza
+che niente protesti — l'invariante è verificata solo *al momento* dell'attivazione.
+
+Si rifiuta. Il caso legittimo — un coinquilino che subentra a metà contratto — non è
+un'aggiunta: è un cambio di composizione che deve tenere la somma a 100, cioè
+un'operazione a sé che tocca due righe insieme e che nessuno ha ancora progettato.
+
+*Alternativa scartata: ammetterlo e ricontrollare la somma dopo l'inserimento.* Non si può
+fare in una richiesta sola — per aggiungere il terzo inquilino bisogna prima abbassare le
+quote degli altri due — quindi o si rifiuta sempre, o si inventa una richiesta che porta
+tutte le parti insieme. La seconda è il subentro, e va progettata quando serve davvero.
+
+Va aperta una voce in [12](12-da-fare.md) per il subentro, con questo ragionamento.
+
+#### 6. Il nome del contratto si compone nella **risposta**, non nel client e non in una colonna
+
+`app.leases` non ha una colonna nome: ci sono `notes` e `registration_number`, e l'elenco
+mostra tipo più date, da cui righe identiche. Le vie sono tre e non due.
+
+**Scelta: due campi in più in `LeaseResponse`** — `property_label` e `room_name` — che è un
+join nella query dell'elenco.
+
+*Alternativa scartata: una colonna `label`.* È l'unica che permette di chiamarlo «*Rossi,
+secondo piano*», e resta aperta come voce; ma è migration, dominio, DTO e form per
+risolvere un problema che oggi è «sono tutti uguali», e quello lo risolve il join.
+
+*Alternativa scartata: comporre nel client.* Sembra gratis — l'elenco degli immobili è una
+richiesta sola — ma le stanze sono una richiesta **per immobile**, e il client
+reimplementerebbe una giunzione che appartiene al modello di lettura.
+
+**Il join va `LEFT`**, ed è la trappola: la stanza è opzionale per costruzione, e un
+`INNER JOIN` farebbe sparire dall'elenco tutti i contratti sull'immobile intero.
+
+#### 7. La sovrapposizione si **avverte**, non si vieta
+
+`R12` è di solo client, ed è la scoperta che rende la voce piccola. I due vincoli di
+esclusione della `0005` coprono `pending_signature`, `active` ed `expiring` — **non
+`draft`** — e le bozze sono escluse *apposta*: due ipotesi alternative sullo stesso periodo
+sono legittime. Il `409 lease.period_overlap` all'attivazione è quindi corretto e **resta**.
+
+Quello che manca è dirlo prima: alla creazione il client chiede `listLeases` filtrato
+sull'immobile e confronta i periodi. Se ne trova uno che si sovrappone, «Crea» chiede una
+conferma in più.
+
+**Non si toccano i vincoli**, e il confronto del client deve replicarli esattamente: stessi
+tre stati, e la stessa dimensione — per immobile quando `room_id` è nullo, per stanza
+quando c'è. Un client che confrontasse tutto per immobile avviserebbe su due stanze diverse
+della stessa casa, cioè sul caso normale del co-living.
+
+### Decomposizione
+
+L'ordine è quello del danno: prima si apre il vicolo cieco, poi si smette di scavarlo.
+
+##### `U1` — Annullare un contratto (`R13`)
+
+Use case `CancelLease`, rotta `POST /leases/{id}/cancel`, bottone nella scheda del
+contratto, offerto solo su `draft` e `pending_signature`. Il dominio c'è già: `cancel()` e
+`LeaseNotCancellable`.
+
+Il filtro «Annullato» dell'elenco, che oggi non può corrispondere a niente, comincia a
+funzionare: **si verifica che sia così**, ed è la prova che `U1` è servito a qualcosa.
+
+##### `U2` — Correggere una parte (`R17`)
+
+`PATCH /lease-parties/{id}` con la semantica di sempre — assente = invariato, `null` =
+azzerato — sui campi decisi. L'email solo se `user_id IS NULL`, con un codice proprio per
+il rifiuto. Nel client: la riga delle parti diventa modificabile dalla scheda del
+contratto.
+
+**Nessuna migration.** La policy `lease_parties_update` esiste già.
+
+##### `U3` — Togliere una parte aggiunta per sbaglio (`R17`)
+
+`DELETE /lease-parties/{id}`: cancellazione soft, e rifiuto se la parte è collegata a un
+utente. Un test deve provare **entrambi** i rami, e uno deve provare che togliere
+l'intestatario principale libera davvero il posto — è l'indice unico parziale a garantirlo,
+ed è la cosa che nessuno verificherebbe guardando.
+
+##### `U4` — Le due regole che impediscono di rifare il danno (`R18`, e il buco della decisione 5)
+
+Nel dominio: l'attivazione rifiuta una quota a zero fra gli inquilini; l'aggiunta di una
+parte rifiuta su un contratto non più in bozza. Due invarianti nuove, due codici nuovi, due
+messaggi nel catalogo.
+
+**Prima il documento**: la voce in `08-decisioni.md` si scrive prima del codice, perché
+dice anche che cosa l'attivazione **non** garantisce.
+
+##### `U5` — Il form smette di produrre quote sbagliate (`R18`)
+
+`AddPartyDialog`: la quota proposta è il **residuo** — la stessa aritmetica di
+`remaining_share`, che il client può fare perché ha già l'elenco delle parti —
+e `is_primary` si propone solo se un intestatario non c'è già. Nella modale dell'invito, la
+quota che la nuova parte riceverà va **mostrata**, perché oggi la si scopre dopo.
+
+Da qui in avanti una quota a zero si vede **mentre** la si crea, che è l'unico momento in
+cui costa poco.
+
+##### `U6` — L'elenco dice quale contratto è quale (`R14`)
+
+`property_label` e `room_name` in `LeaseResponse`, con il `LEFT JOIN` nella query
+dell'elenco e del dettaglio; la colonna nell'elenco del client diventa *immobile · stanza*
+invece del tipo.
+
+##### `U7` — L'avviso di sovrapposizione (`R12`)
+
+Solo client, in `NewLeasePage`: `listLeases` sull'immobile, confronto dei periodi sui tre
+stati che i vincoli coprono, conferma in più se si sovrappone.
+
+### Trappole
+
+**Non si toccano i vincoli di esclusione.** Allargarli a `draft` vieterebbe di abbozzare
+due ipotesi alternative sullo stesso periodo, che è lavoro normale.
+
+**`R17` non ha una migration**, e chi ne scrive una sta risolvendo il problema sbagliato:
+`deleted_at`, `left_at` e la policy `lease_parties_update` ci sono già dalla `0014`.
+
+**Gli indici unici sono parziali su `deleted_at IS NULL`.** Togliere una parte libera
+l'intestatario principale e il legame con l'utente: è voluto, e va saputo prima di
+stupirsene.
+
+**Il join dei nomi è `LEFT`.** Con un `INNER` spariscono dall'elenco tutti i contratti
+sull'immobile intero, che non hanno una stanza.
+
+**L'email di una parte collegata non si tocca**: è ciò a cui l'invito è intestato.
+
+**`remaining_share` non va riscritta.** Ha già la forma giusta, e il suo commento assume
+`R17`: quello che manca è la capacità che presuppone.
+
+**L'invariante nuova non sana i contratti già rotti.** Quelli si correggono a mano con
+`U2`, e va scritto — o qualcuno cercherà una migration di bonifica che non esiste.
+
+**`R26` si chiude solo per un terzo.** Il filtro dei contratti smette di essere morto; gli
+immobili archiviati e le bollette pagate restano, e la voce va aggiornata invece di essere
+tolta.
+
+### Come si saprà che è finita
+
+- **il vicolo cieco non esiste più**, e si prova percorrendolo: si crea un contratto, si
+  sbaglia la quota, si corregge, si attiva. Un test lo fa da capo a fondo;
+- una bozza sbagliata si **annulla**, e il filtro «Annullato» la trova;
+- l'attivazione rifiuta una quota a zero, con un messaggio italiano e non un codice;
+- una parte aggiunta per sbaglio si toglie; una collegata a un inquilino no, e il rifiuto
+  dice perché;
+- l'elenco dei contratti dice **quale casa e quale stanza**;
+- la creazione avverte prima, e il `409` all'attivazione resta com'è;
+- `just ci` verde, con i test nuovi sui due rami di ogni rifiuto.
+
+### Che cosa **non** entra
+
+- **il subentro**: cambiare la composizione di un contratto attivo. Va aperto come voce
+  nuova in [12](12-da-fare.md), con il ragionamento della decisione 5;
+- **far uscire un inquilino** (`left_at`): è parente di [`R16`](12-da-fare.md#lelenco), che
+  è la sezione 6;
+- **la colonna `label`** dei contratti: resta aperta, ed è l'unica via per «*Rossi, secondo
+  piano*»;
+- **le altre due facce di `R26`**: immobili archiviati e bollette pagate;
+- **una bonifica dei dati già rotti.** Si correggono a mano, ed è precisamente la capacità
+  che questa sezione consegna.
+
+<a id="esito-sezione-3"></a>
+
+## Esito — Sezione 3: contratti, correggere gli errori
+
+Eseguita il **9 settembre 2026**, subito dopo la [sezione 1](#esito-sezione-1) e con la
+[sezione 2](09-stato-e-roadmap.md#piano-sezione-2) aperta a metà. Chiude `R13`, `R17`, `R18`, `R12` e `R14`.
+
+**Il vicolo cieco non esiste più**, e la prova non è una descrizione: è un test che lo
+percorre — si crea un contratto, si sbaglia la quota, l'attivazione rifiuta, si toglie la
+parte di troppo, si corregge quella buona, si attiva.
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `U1` | `POST /leases/{id}/cancel`. La transizione **c'era già** — `Lease::cancel`, con `LeaseNotCancellable` a guardia — e non la chiamava nessuno |
+| `U2` | `PATCH /lease-parties/{id}`: nome, telefono, ruolo, quota, intestatario. L'email **solo finché la parte non ha un utente** |
+| `U3` | `DELETE /lease-parties/{id}`: cancellazione soft, e rifiuto se dietro c'è una persona registrata |
+| `U4` | Due invarianti nuove: l'attivazione rifiuta **una quota a zero**, e su un contratto non più in bozza **non si aggiungono parti**. Prima il documento: [ADR-046](08-decisioni.md#adr-046) |
+| `U5` | Il form propone **il residuo** e non cento, offre l'intestatario solo se il posto è libero, e l'invito **dice quale quota** riceverà chi accetta |
+| `U6` | `property_label` e `room_name` nelle due letture, con un `LEFT JOIN` e **una query per pagina**; l'elenco mostra la casa e la stanza al posto del tipo |
+| `U7` | L'avviso di sovrapposizione alla creazione, con una conferma in più. Solo client: il `409` all'attivazione resta l'autorità |
+
+**Il backend cresce di tre rotte e nessuna migration**, che era la previsione del piano e
+si è rivelata esatta: `deleted_at`, `left_at` e la policy `lease_parties_update` erano già
+nella `0014`.
+
+I test Rust passano da **424 a 428**, il client da **73 a 86**.
+
+### Che cosa il piano non aveva previsto
+
+**`LeaseResponse` non aveva un posto dove mettere i nomi, e l'aggregato non deve
+averlo.** Il piano diceva «due campi in più nella risposta» come se fosse un join dentro
+la query dell'elenco: non lo è, perché quella query costruisce l'aggregato `Lease`, e il
+nome dell'immobile appartiene all'immobile. È diventato un **modello di lettura** —
+`LeaseLabels` nella porta, una query sola per l'intera pagina, e la composizione nello use
+case, che è la forma che `LeaseDetail` usava già per le parti. Costo reale: una porta, una
+query, un tipo applicativo e due campi opzionali nel DTO.
+
+**Il `LEFT JOIN` serviva più di quanto il piano dicesse.** La trappola parlava dei
+contratti sull'immobile intero, che non hanno una stanza. Ce n'è una seconda, e l'ha
+trovata `R26` della sezione 2: un contratto il cui **immobile è archiviato** — la riga ha
+`deleted_at`, e la query dei nomi la filtra come impone la regola 10 di `CLAUDE.md`. Con
+un `INNER JOIN` sarebbero spariti dall'elenco *tutti* i contratti di ogni immobile
+archiviato. Il campo resta assente, e il client mostra «Immobile archiviato» invece di uno
+spazio vuoto.
+
+**La quota tornava con due scale diverse.** `PATCH` rispondeva `"100"` e la rilettura
+`"100.00"`: la scala di un `Decimal` dipende da come è stato costruito. `format_amount`
+esisteva già con questo problema scritto nel suo commento, e la quota non lo usava — ora
+sì, e vale anche per la risposta all'aggiunta, che aveva lo stesso difetto da prima di
+questa sezione.
+
+**Il client faceva già la cosa giusta, e non bastava.** `AddPartyDialog` era offerto solo
+sulle bozze, ma l'API accettava una parte su un contratto attivo: è la stessa distinzione
+di [ADR-042](08-decisioni.md#adr-042) — che cosa si offre non è un confine — e questa volta
+il confine mancava davvero.
+
+### Decisioni prese eseguendo, che il piano non aveva sciolto
+
+**La correzione di una parte non ricontrolla la somma delle quote.** È deliberato e senza
+sarebbe impossibile rimediare: per portare due parti da `100 / 0` a `50 / 50` bisogna
+passare da uno stato in cui la somma non fa 100. Sta in [ADR-046](08-decisioni.md#adr-046)
+fra ciò che la regola **non** garantisce.
+
+**La correzione non guarda lo stato del contratto.** I contratti rotti che esistono in
+database sono **attivi**: rifiutare lì lascerebbe irreparabili proprio quelli, cioè tutti
+quelli per cui la sezione esiste.
+
+**La query dei nomi filtra `deleted_at IS NULL` sulle righe collegate**, come impone la
+regola 10, e quindi un immobile archiviato lascia il contratto senza nome. L'alternativa
+— leggere il nome anche di una riga archiviata — è più comoda e infrange una regola
+vincolante: si è scelta la regola, e il client dice che cosa è successo.
+
+### Che cosa resta aperto
+
+- **`R26` si chiude per un terzo.** Il filtro «Annullato» dei contratti adesso trova
+  qualcosa, e il test lo verifica. Gli immobili archiviati e le bollette pagate restano;
+  la voce è aggiornata, non tolta;
+- **il subentro** — cambiare la composizione di un contratto attivo — è la conseguenza
+  diretta di `U4`, ed è una voce nuova in [12](12-da-fare.md);
+- **la colonna `label`** dei contratti resta aperta: è l'unica via per chiamarne uno
+  «*Rossi, secondo piano*», e il join risolve «sono tutti uguali», che era la lamentela;
+- **far uscire un inquilino** (`left_at`) non è entrato, ed è parente di `R16`;
+- **niente bonifica dei dati già rotti**: si correggono a mano, ed è la capacità che
+  questa sezione consegna.
+
+### Che cosa non è stato provato a mano
+
+Tutto: questa sezione è stata scritta e verificata **solo con i test**. Il giro in undici
+punti della [sezione 2](09-stato-e-roadmap.md#piano-sezione-2) attraversa esattamente queste schermate — i
+punti 3, 4 e 5 — ed è il momento in cui il lavoro qui si vede davvero. È anche la ragione
+per cui la sezione 2 è stata lasciata aperta invece di percorrerla su codice che stava per
+cambiare.
