@@ -217,6 +217,25 @@ impl Lease {
         })
     }
 
+    /// Le parti si aggiungono finché il contratto non è in vigore.
+    ///
+    /// Senza questo controllo si poteva aggiungere una parte a un contratto
+    /// **attivo**, e da lì le quote non sommavano più a 100 senza che niente
+    /// protestasse: l'invariante delle quote è verificata *al momento*
+    /// dell'attivazione, e nessuno la riverifica dopo. Il caso legittimo dietro —
+    /// un coinquilino che subentra a metà contratto — non è un'aggiunta: è un
+    /// cambio di composizione che deve tenere la somma a 100, cioè un'operazione
+    /// su più righe insieme che non è progettata. Vedi ADR-046.
+    pub fn ensure_accepts_parties(&self) -> DomainResult<()> {
+        if !matches!(
+            self.status,
+            LeaseStatus::Draft | LeaseStatus::PendingSignature
+        ) {
+            return Err(DomainError::Invariant(Invariant::LeasePartiesLocked));
+        }
+        Ok(())
+    }
+
     /// Attiva il contratto: da qui impegna l'immobile o la stanza, e il vincolo di
     /// esclusione del database rifiuta un periodo già occupato.
     ///

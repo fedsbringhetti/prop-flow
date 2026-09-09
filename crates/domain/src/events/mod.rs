@@ -118,7 +118,10 @@ pub enum DomainEventPayload {
     LeaseDrafted(LeaseDrafted),
     LeaseActivated(LeaseActivated),
     LeaseTerminated(LeaseTerminated),
+    LeaseCancelled(LeaseCancelled),
     LeasePartyAdded(LeasePartyAdded),
+    LeasePartyCorrected(LeasePartyCorrected),
+    LeasePartyRemoved(LeasePartyRemoved),
     TenantInvited(TenantInvited),
     InvitationRevoked(InvitationRevoked),
     InvitationAccepted(InvitationAccepted),
@@ -162,7 +165,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(_) => "lease.drafted",
             Self::LeaseActivated(_) => "lease.activated",
             Self::LeaseTerminated(_) => "lease.terminated",
+            Self::LeaseCancelled(_) => "lease.cancelled",
             Self::LeasePartyAdded(_) => "lease.party.added",
+            Self::LeasePartyCorrected(_) => "lease.party.corrected",
+            Self::LeasePartyRemoved(_) => "lease.party.removed",
             Self::TenantInvited(_) => "identity.invitation.issued",
             Self::InvitationRevoked(_) => "identity.invitation.revoked",
             Self::InvitationAccepted(_) => "identity.invitation.accepted",
@@ -206,7 +212,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(_)
             | Self::LeaseActivated(_)
             | Self::LeaseTerminated(_)
-            | Self::LeasePartyAdded(_) => "Lease",
+            | Self::LeaseCancelled(_)
+            | Self::LeasePartyAdded(_)
+            | Self::LeasePartyCorrected(_)
+            | Self::LeasePartyRemoved(_) => "Lease",
             Self::TenantInvited(_) | Self::InvitationRevoked(_) | Self::InvitationAccepted(_) => {
                 "Invitation"
             }
@@ -270,7 +279,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(event) => event.lease_id.as_uuid(),
             Self::LeaseActivated(event) => event.lease_id.as_uuid(),
             Self::LeaseTerminated(event) => event.lease_id.as_uuid(),
+            Self::LeaseCancelled(event) => event.lease_id.as_uuid(),
             Self::LeasePartyAdded(event) => event.lease_id.as_uuid(),
+            Self::LeasePartyCorrected(event) => event.lease_id.as_uuid(),
+            Self::LeasePartyRemoved(event) => event.lease_id.as_uuid(),
             Self::TenantInvited(event) => event.invitation_id.as_uuid(),
             Self::InvitationRevoked(event) => event.invitation_id.as_uuid(),
             Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
@@ -314,7 +326,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(event) => Some(event.org_id),
             Self::LeaseActivated(event) => Some(event.org_id),
             Self::LeaseTerminated(event) => Some(event.org_id),
+            Self::LeaseCancelled(event) => Some(event.org_id),
             Self::LeasePartyAdded(event) => Some(event.org_id),
+            Self::LeasePartyCorrected(event) => Some(event.org_id),
+            Self::LeasePartyRemoved(event) => Some(event.org_id),
             Self::TenantInvited(event) => Some(event.org_id),
             Self::InvitationRevoked(event) => Some(event.org_id),
             Self::InvitationAccepted(event) => Some(event.org_id),
@@ -465,6 +480,42 @@ pub struct LeaseTerminated {
     pub org_id: OrgId,
     pub property_id: PropertyId,
     pub terminated_at: DateTime<Utc>,
+}
+
+/// Un contratto annullato prima di entrare in vigore.
+///
+/// **Non porta una data**, a differenza della disdetta, e non è una dimenticanza:
+/// l'aggregato non ne registra una — non c'è stato alcun rapporto da chiudere — e
+/// un campo qui che l'aggregato non ha renderebbe l'evento l'unica fonte di un
+/// fatto che il database non conserva. Quando è successo lo dice `occurred_at`
+/// dell'evento, come per ogni altro.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeaseCancelled {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+}
+
+/// **Nessun campo e nessun valore**, nemmeno quali sono cambiati.
+///
+/// Un evento che dicesse «la quota è passata da 100 a 50» sarebbe comodo e
+/// sbagliato per due ragioni: porterebbe dati di una persona fuori dall'aggregato,
+/// e diventerebbe una seconda fonte di verità sullo storico, che questo progetto
+/// tiene in `audit_log`. Chi consuma rilegge la parte.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeasePartyCorrected {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub party_id: LeasePartyId,
+}
+
+/// Una parte tolta perché inserita per sbaglio. Non è un inquilino che se ne va:
+/// quello ha una data e un evento suo, e non esiste ancora.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeasePartyRemoved {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub party_id: LeasePartyId,
 }
 
 /// Nessun nome né email: identificatori e ruolo bastano a sapere cosa invalidare.

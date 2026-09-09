@@ -244,11 +244,34 @@ export const it = {
     partyPrimary: 'Intestatario principale',
     addParty: 'Aggiungi una parte',
     partyAdded: 'Parte aggiunta.',
+    partyPhone: 'Telefono',
+    editParty: 'Correggi',
+    editPartyTitle: 'Correggi la parte',
+    /** La correzione esiste perché una quota sbagliata bloccava tutto: il
+     *  contratto non si attivava e non si poteva nemmeno rifare. */
+    editPartyExplain:
+      'Si corregge anche a contratto attivo: è il modo di sistemare le quote sbagliate che sono già in essere.',
+    partyCorrected: 'Parte corretta.',
+    /** L'email è ciò a cui l'invito è intestato: cambiarla dopo sposterebbe il
+     *  rapporto sotto i piedi di chi l'ha accettato. */
+    partyEmailLocked: 'Non si cambia: questa persona ha già accettato l’invito.',
+    removeParty: 'Togli dalla lista',
+    removePartyConfirm: 'Togliere questa parte?',
+    removePartyExplain:
+      'Si toglie ciò che è stato inserito per sbaglio. Il posto di intestatario principale torna libero.',
+    partyRemoved: 'Parte tolta.',
     activate: 'Attiva',
     activateConfirm: 'Attivare questo contratto?',
     activateExplain:
       'Il periodo viene occupato e il contratto diventa in essere. Serve almeno un inquilino, e le quote devono sommare a 100.',
     activated: 'Contratto attivato.',
+    /** Annullare e disdire non sono la stessa cosa, e le due frasi devono
+     *  dirlo: si annulla ciò che non è mai stato, si disdice ciò che è in corso. */
+    cancel: 'Annulla il contratto',
+    cancelConfirm: 'Annullare questo contratto?',
+    cancelExplain:
+      'Resta negli elenchi, con lo stato «Annullato», e il suo periodo torna libero per un altro contratto. Si annulla solo ciò che non è mai entrato in vigore.',
+    cancelled: 'Contratto annullato.',
     terminate: 'Disdici',
     terminateConfirm: 'Disdire questo contratto?',
     terminateExplain: 'Indica la data di fine rapporto. Il periodo si libera.',
@@ -1103,9 +1126,18 @@ export const it = {
     'room.archived': 'La stanza è archiviata e non è modificabile.',
     'lease.not_found': 'Contratto non trovato.',
     'lease.period_overlap': 'Il periodo si sovrappone a una locazione già attiva.',
+    'lease.party_not_found': 'Questa parte non esiste più.',
+    'lease.party_email_locked':
+      'L’email non si cambia: questa persona ha già accettato l’invito con quell’indirizzo.',
+    'lease.party_has_user':
+      'Questa parte è collegata a un inquilino registrato e non si toglie: è una persona che abita, non una riga sbagliata.',
     'lease.invalid_transition': 'Non si può fare da questo stato.',
     'lease.no_tenant_party': 'Il contratto non ha inquilini fra le parti.',
     'lease.shares_not_hundred': 'Le quote degli inquilini non sommano a 100.',
+    'lease.tenant_without_share':
+      'Un inquilino ha la quota a zero: correggila prima di attivare, o toglilo dalle parti.',
+    'lease.parties_locked':
+      'Le parti si aggiungono finché il contratto è in bozza. Su un contratto in essere si correggono quelle che ci sono.',
     'lease.primary_party_exists': 'C’è già un intestatario principale.',
     'lease.derived_status_filter': 'Questo stato è derivato e non si può filtrare.',
     'invitation.not_found': 'Invito non trovato.',

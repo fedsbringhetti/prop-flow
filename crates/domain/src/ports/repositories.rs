@@ -18,8 +18,9 @@ use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
 use crate::property::{Property, PropertyResident, PropertyStatus, Room};
 use crate::reporting::OwnerDashboard;
 use crate::shared::{
-    ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, OrgId,
-    PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId, UtilityBillId,
+    ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, LeasePartyId,
+    OrgId, PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId,
+    UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketReference, TicketStatus, TicketStatusChange};
 
@@ -257,13 +258,22 @@ pub trait LeaseRepository: Send {
 
 /// Parti di un contratto.
 ///
-/// Nessun `find_by_id`: una parte si raggiunge solo attraverso il proprio
-/// contratto, e caricarne una da sola non è un'operazione di dominio.
+/// `find_by_id` esiste perché **correggere una parte è un'operazione su una riga
+/// sola**: chi sistema una quota sbagliata ha in mano l'identificatore di quella
+/// parte, e farlo passare dal contratto vorrebbe dire caricarne l'elenco per
+/// scartarne tutte tranne una.
 #[async_trait]
 pub trait LeasePartyRepository: Send {
+    async fn find_by_id(&mut self, id: LeasePartyId) -> RepositoryResult<Option<LeaseParty>>;
     async fn list_for_lease(&mut self, lease_id: LeaseId) -> RepositoryResult<Vec<LeaseParty>>;
     async fn insert(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
     async fn update(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
+    /// Cancellazione soft di una parte inserita per sbaglio.
+    ///
+    /// Separata da `update` perché quella ha `deleted_at IS NULL` nella `WHERE` e
+    /// non tocca la colonna: sono due operazioni diverse, e scriverne una sola che
+    /// fa entrambe renderebbe possibile cancellare per distrazione.
+    async fn soft_delete(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
 }
 
 /// Inviti a entrare in un'organizzazione.

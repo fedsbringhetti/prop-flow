@@ -235,6 +235,26 @@ export function createLease(client: ApiClient, input: CreateLeaseInput): Promise
   return client.post<Lease>('/leases', input)
 }
 
+/**
+ * Corregge una parte, con la semantica `PATCH`: assente = invariato, `null` =
+ * azzerato.
+ *
+ * `email` la rifiuta l'API con `409 lease.party_email_locked` se la parte è già
+ * collegata a un utente — è ciò a cui l'invito è intestato.
+ */
+export function correctLeaseParty(
+  client: ApiClient,
+  partyId: Uuid,
+  patch: Record<string, unknown>,
+): Promise<LeaseParty> {
+  return client.patch<LeaseParty>(`/lease-parties/${partyId}`, patch)
+}
+
+/** Toglie una parte inserita per sbaglio: `204`. Rifiutata se ha un utente. */
+export function removeLeaseParty(client: ApiClient, partyId: Uuid): Promise<void> {
+  return client.delete(`/lease-parties/${partyId}`)
+}
+
 export interface AddPartyInput {
   role: LeasePartyRole
   full_name: string
@@ -258,6 +278,16 @@ export function activateLease(client: ApiClient, id: Uuid): Promise<Lease> {
 
 export function terminateLease(client: ApiClient, id: Uuid, reason?: string): Promise<Lease> {
   return client.post<Lease>(`/leases/${id}/terminate`, reason ? { reason } : {})
+}
+
+/**
+ * Annulla un contratto mai entrato in vigore.
+ *
+ * **Senza corpo**, a differenza della disdetta: non c'è stato alcun rapporto,
+ * quindi non c'è una ragione da registrare accanto a una data che non esiste.
+ */
+export function cancelLease(client: ApiClient, id: Uuid): Promise<Lease> {
+  return client.post<Lease>(`/leases/${id}/cancel`, {})
 }
 
 // ---------------------------------------------------------------------------

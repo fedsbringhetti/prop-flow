@@ -5,7 +5,10 @@ import { Link, useParams } from 'react-router'
 
 import {
   activateLease,
+  cancelLease,
+  correctLeaseParty,
   getLease,
+  removeLeaseParty,
   addLeaseParty,
   inviteTenant,
   revokeInvitation,
@@ -13,7 +16,7 @@ import {
   listCharges,
   terminateLease,
 } from '@/api/endpoints'
-import type { Invitation, LeasePartyRole } from '@/api/types'
+import type { Invitation, LeaseParty, LeasePartyRole } from '@/api/types'
 import { Async, Empty, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
@@ -55,6 +58,10 @@ export function LeaseDetailPage() {
     mutationFn: (reason: string) => terminateLease(client, id, reason || undefined),
     onSuccess: refresh,
   })
+  const cancel = useMutation({
+    mutationFn: () => cancelLease(client, id),
+    onSuccess: refresh,
+  })
 
   return (
     <Async query={lease}>
@@ -85,6 +92,20 @@ export function LeaseDetailPage() {
                     confirmLabel={t.lease.activate}
                     variant="primary"
                     onConfirm={() => activate.mutateAsync()}
+                  />
+                ) : null}
+                {/* **Annullare non è disdire**, e le due azioni non compaiono mai
+                    insieme: si annulla ciò che non è mai entrato in vigore, si
+                    disdice ciò che è in corso. Gli stati sono gli stessi che il
+                    dominio ammette in `Lease::cancel`, e offrirlo altrove darebbe
+                    `409 lease.invalid_transition` ogni volta. */}
+                {data.status === 'draft' || data.status === 'pending_signature' ? (
+                  <ConfirmAction
+                    trigger={<Button variant="dangerGhost">{t.lease.cancel}</Button>}
+                    title={t.lease.cancelConfirm}
+                    explanation={t.lease.cancelExplain}
+                    confirmLabel={t.lease.cancel}
+                    onConfirm={() => cancel.mutateAsync()}
                   />
                 ) : null}
                 {data.status === 'active' ? <TerminateAction onConfirm={terminate.mutateAsync} /> : null}
@@ -148,6 +169,7 @@ export function LeaseDetailPage() {
                       <Th>{t.lease.partyRole}</Th>
                       <Th>{t.lease.partyEmail}</Th>
                       <ThNumeric>{t.lease.partyShare}</ThNumeric>
+                      {isStaff ? <Th>{t.common.actions}</Th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -164,6 +186,15 @@ export function LeaseDetailPage() {
                         <Td>{t.lease.partyRoles[party.role]}</Td>
                         <Td>{party.email ?? t.common.none}</Td>
                         <TdNumeric>{formatDecimal(party.share_percent, { maximumFractionDigits: 2 })} %</TdNumeric>
+                        {/* **Si corregge in ogni stato del contratto**, e non solo
+                            in bozza: i contratti con le quote sbagliate che
+                            esistono oggi sono *attivi*, e rifiutare lì
+                            lascerebbe irreparabili proprio quelli. */}
+                        {isStaff ? (
+                          <Td>
+                            <PartyDialog party={party} leaseId={id} />
+                          </Td>
+                        ) : null}
                       </Tr>
                     ))}
                   </tbody>
@@ -209,6 +240,195 @@ function TerminateAction({ onConfirm }: { onConfirm: (reason: string) => Promise
         )}
       </Field>
     </ConfirmAction>
+  )
+}
+
+/**
+ * Correggere una parte, e toglierla se non è mai stata di nessuno.
+ *
+ * # Perché esiste
+ *
+ * Una quota sbagliata era definitiva: il contratto non si attivava — le quote
+ * devono sommare a 100 — e non si poteva rifare, perché annullarlo non era
+ * esposto. Restava lì, non attivabile e non rimovibile. Questa modale è metà del
+ * rimedio; l'altra metà è «Annulla il contratto».
+ *
+ * # L'email si blocca quando qualcuno l'ha usata
+ *
+ * È ciò a cui l'invito è intestato: finché nessuno ha accettato, correggerla
+ * rimedia a un refuso; dopo, sposterebbe il rapporto sotto i piedi di una persona
+ * registrata. Il campo si disabilita e **dice perché** invece di lasciar provare e
+ * far rispondere `409` all'API.
+ */
+function PartyDialog({ party, leaseId }: { party: LeaseParty; leaseId: string }) {
+  const client = useApi()
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  const linked = party.user_id !== undefined
+
+  const [values, setValues] = useState({
+    full_name: party.full_name,
+    email: party.email ?? '',
+    phone: party.phone ?? '',
+    role: party.role,
+    share_percent: party.share_percent,
+    is_primary: party.is_primary,
+  })
+
+  async function reread() {
+    await queryClient.invalidateQueries({ queryKey: keys.lease(leaseId) })
+  }
+
+  const save = useMutation({
+    mutationFn: () =>
+      correctLeaseParty(client, party.id, {
+        full_name: values.full_name,
+        // L'email non entra nel `PATCH` quando è bloccata: mandarla invariata
+        // sarebbe comunque un `409`, perché l'API guarda la presenza del campo e
+        // non se il valore è cambiato.
+        ...(linked ? {} : { email: values.email.trim() || null }),
+        phone: values.phone.trim() || null,
+        role: values.role,
+        share_percent: values.share_percent.trim().replace(',', '.'),
+        is_primary: values.is_primary,
+      }),
+    onSuccess: async () => {
+      await reread()
+      setOpen(false)
+      setError(null)
+    },
+    onError: setError,
+  })
+
+  const remove = useMutation({
+    mutationFn: () => removeLeaseParty(client, party.id),
+    onSuccess: async () => {
+      await reread()
+      setOpen(false)
+    },
+    onError: setError,
+  })
+
+  return (
+    <FormDialog
+      trigger={
+        <Button size="sm" variant="ghost">
+          {t.lease.editParty}
+          {/* In una tabella di tre parti «Correggi» ripetuto tre volte non dice
+              quale, e chi naviga con un lettore di schermo sente solo quello. */}
+          <span className="sr-only"> — {party.full_name}</span>
+        </Button>
+      }
+      title={t.lease.editPartyTitle}
+      description={t.lease.editPartyExplain}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setError(null)
+      }}
+    >
+      <form
+        noValidate
+        className="flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          save.mutate()
+        }}
+      >
+        <InlineError error={error} />
+        <Field label={t.lease.partyName} required>
+          {(props) => (
+            <Input
+              {...props}
+              value={values.full_name}
+              onChange={(event) => setValues((v) => ({ ...v, full_name: event.target.value }))}
+            />
+          )}
+        </Field>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label={t.lease.partyEmail}
+            {...(linked ? { hint: t.lease.partyEmailLocked } : {})}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                type="email"
+                disabled={linked}
+                value={values.email}
+                onChange={(event) => setValues((v) => ({ ...v, email: event.target.value }))}
+              />
+            )}
+          </Field>
+          <Field label={t.lease.partyPhone}>
+            {(props) => (
+              <Input
+                {...props}
+                inputMode="tel"
+                value={values.phone}
+                onChange={(event) => setValues((v) => ({ ...v, phone: event.target.value }))}
+              />
+            )}
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label={t.lease.partyRole}>
+            {(props) => (
+              <Select
+                {...props}
+                value={values.role}
+                onChange={(event) =>
+                  setValues((v) => ({ ...v, role: event.target.value as LeasePartyRole }))
+                }
+              >
+                {PARTY_ROLES.map((role) => (
+                  <option key={role} value={role}>
+                    {t.lease.partyRoles[role]}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label={t.lease.partyShare}>
+            {(props) => (
+              <Input
+                {...props}
+                inputMode="decimal"
+                value={values.share_percent}
+                onChange={(event) => setValues((v) => ({ ...v, share_percent: event.target.value }))}
+              />
+            )}
+          </Field>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4"
+            checked={values.is_primary}
+            onChange={(event) => setValues((v) => ({ ...v, is_primary: event.target.checked }))}
+          />
+          {t.lease.partyPrimary}
+        </label>
+        <div className="flex flex-wrap justify-end gap-2">
+          {/* Togliere è per l'errore di inserimento, e sparisce quando dietro c'è
+              una persona registrata: quella non è una riga sbagliata, è un
+              inquilino che eventualmente **esce**, ed è un'altra operazione. */}
+          {linked ? null : (
+            <ConfirmAction
+              trigger={<Button variant="dangerGhost">{t.lease.removeParty}</Button>}
+              title={t.lease.removePartyConfirm}
+              explanation={t.lease.removePartyExplain}
+              confirmLabel={t.lease.removeParty}
+              onConfirm={() => remove.mutateAsync()}
+            />
+          )}
+          <Button type="submit" variant="primary" disabled={save.isPending}>
+            {save.isPending ? t.common.saving : t.common.save}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
   )
 }
 

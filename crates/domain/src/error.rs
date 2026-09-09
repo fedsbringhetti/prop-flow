@@ -16,6 +16,12 @@ pub enum Entity {
     Room,
     #[error("Lease not found")]
     Lease,
+    /// Una parte contrattuale che non esiste, o che chi guarda non vede. Ha un
+    /// codice suo e non quello del contratto: chi corregge una quota sta agendo su
+    /// una riga precisa, e dirgli «contratto non trovato» manderebbe a cercare
+    /// nel posto sbagliato.
+    #[error("Lease party not found")]
+    LeaseParty,
     #[error("Invitation not found")]
     Invitation,
     #[error("Document not found")]
@@ -47,6 +53,7 @@ impl Entity {
             Self::Property => "property.not_found",
             Self::Room => "room.not_found",
             Self::Lease => "lease.not_found",
+            Self::LeaseParty => "lease.party_not_found",
             Self::Invitation => "invitation.not_found",
             Self::Document => "document.not_found",
             Self::Ticket => "ticket.not_found",
@@ -182,10 +189,18 @@ pub enum Invariant {
     LeaseNotCancellable,
     #[error("This lease party is already linked to another user")]
     LeasePartyAlreadyLinked,
+    #[error("The email of a party already linked to a user cannot be changed")]
+    LeasePartyEmailLocked,
+    #[error("A party linked to a user cannot be removed, only marked as left")]
+    LeasePartyHasUser,
     #[error("The lease has no tenant among its parties")]
     LeaseWithoutTenantParty,
     #[error("Tenant shares add up to {total} instead of 100")]
     LeaseSharesNotHundred { total: Decimal },
+    #[error("A tenant with a zero share is a leftover row, not a tenant")]
+    LeaseTenantWithoutShare,
+    #[error("Parties can only be added while the lease is a draft or awaiting signature")]
+    LeasePartiesLocked,
 
     #[error("The invitation has already been accepted")]
     InvitationAlreadyAccepted,
@@ -289,8 +304,12 @@ impl Invariant {
                 "lease.invalid_transition"
             }
             Self::LeasePartyAlreadyLinked => "lease.party_already_linked",
+            Self::LeasePartyEmailLocked => "lease.party_email_locked",
+            Self::LeasePartyHasUser => "lease.party_has_user",
             Self::LeaseWithoutTenantParty => "lease.no_tenant_party",
             Self::LeaseSharesNotHundred { .. } => "lease.shares_not_hundred",
+            Self::LeaseTenantWithoutShare => "lease.tenant_without_share",
+            Self::LeasePartiesLocked => "lease.parties_locked",
             Self::InvitationAlreadyAccepted | Self::AcceptedInvitationCannotBeRevoked => {
                 "invitation.already_accepted"
             }

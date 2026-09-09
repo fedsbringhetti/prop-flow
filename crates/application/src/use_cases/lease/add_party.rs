@@ -56,6 +56,10 @@ impl AddLeaseParty {
             .await?
             .ok_or(AppError::not_found(Entity::Lease))?;
 
+        // Il client offriva già il bottone solo in bozza, ma quella è una scelta
+        // di **che cosa offrire** e non un confine: la regola vive qui.
+        lease.ensure_accepts_parties()?;
+
         let party = LeaseParty::new(
             NewLeaseParty {
                 id: LeasePartyId::generate(),

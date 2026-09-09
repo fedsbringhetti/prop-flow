@@ -1,24 +1,27 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::NaiveDate;
+use propflow_application::error::AppError;
 use propflow_application::use_cases::lease::{
-    ActivateLeaseCommand, AddLeasePartyCommand, DraftLeaseCommand, LeaseDetail, LeaseView,
-    ListLeasesQuery, TerminateLeaseCommand,
+    ActivateLeaseCommand, AddLeasePartyCommand, CancelLeaseCommand, CorrectLeasePartyCommand,
+    DraftLeaseCommand, LeaseDetail, LeaseView, ListLeasesQuery, RemoveLeasePartyCommand,
+    TerminateLeaseCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::lease::{
-    Lease, LeaseParty, LeasePartyRole, LeaseStatus, LeaseType, RentFrequency,
+    Lease, LeaseParty, LeasePartyChanges, LeasePartyRole, LeaseStatus, LeaseType, RentFrequency,
 };
-use propflow_domain::shared::{Currency, Email, LeaseId, Money, PropertyId, RoomId};
+use propflow_domain::property::Patch;
+use propflow_domain::shared::{Currency, Email, LeaseId, LeasePartyId, Money, PropertyId, RoomId};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::Authenticated;
-use crate::routes::{amount, format_amount};
+use crate::routes::{amount, explicit_null, format_amount};
 use crate::state::AppState;
 
 /// Attivazione e disdetta sono sotto-risorse e non un `PATCH` sullo stato: hanno
@@ -31,6 +34,15 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/leases/{id}/parties", post(add_party))
         .route("/api/v1/leases/{id}/activate", post(activate))
         .route("/api/v1/leases/{id}/terminate", post(terminate))
+        .route("/api/v1/leases/{id}/cancel", post(cancel))
+        // Le parti si creano annidate e si correggono da una rotta propria: è la
+        // forma delle stanze, che nascono sotto l'immobile e vivono sotto
+        // `/rooms/{id}`. Una `PATCH` annidata chiederebbe due identificatori per
+        // raggiungere una riga che ne ha già uno.
+        .route(
+            "/api/v1/lease-parties/{id}",
+            patch(correct_party).delete(remove_party),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +257,52 @@ pub struct AddLeasePartyRequest {
     pub is_primary: Option<bool>,
 }
 
+/// La correzione di una parte, con la semantica `PATCH` del progetto: campo
+/// assente = invariato, `null` = azzerato, valore = impostato.
+///
+/// **`user_id` non c'è**: collegare un utente è l'accettazione di un invito, non
+/// una modifica amministrativa. **`left_at` nemmeno**: far uscire un inquilino è
+/// un fatto con conseguenze proprie, e non è questa operazione.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CorrectLeasePartyRequest {
+    #[serde(default)]
+    pub role: Option<LeasePartyRoleDto>,
+    #[serde(default)]
+    pub full_name: Option<String>,
+    /// Correggibile **solo finché la parte non è collegata a un utente**: dopo,
+    /// cambiarla sposterebbe sotto i piedi il rapporto di chi ha accettato.
+    #[serde(default, deserialize_with = "explicit_null")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub email: Patch<String>,
+    #[serde(default, deserialize_with = "explicit_null")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub phone: Patch<String>,
+    /// Quota di ripartizione del canone, 0–100.
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    pub share_percent: Option<Decimal>,
+    #[serde(default)]
+    pub is_primary: Option<bool>,
+}
+
+impl CorrectLeasePartyRequest {
+    fn into_changes(self) -> Result<LeasePartyChanges, DomainError> {
+        let email = match self.email {
+            None => None,
+            Some(None) => Some(None),
+            Some(Some(raw)) => Some(Some(Email::parse(&raw)?)),
+        };
+        Ok(LeasePartyChanges {
+            full_name: self.full_name,
+            email,
+            phone: self.phone,
+            role: self.role.map(Into::into),
+            share_percent: self.share_percent,
+            is_primary: self.is_primary,
+        })
+    }
+}
+
 const fn default_party_role() -> LeasePartyRoleDto {
     LeasePartyRoleDto::Tenant
 }
@@ -354,8 +412,15 @@ pub struct LeasePartyResponse {
     pub full_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    #[schema(value_type = String)]
-    pub share_percent: Decimal,
+    /// Serve alla correzione: un campo che si può cambiare e non si può leggere
+    /// si corregge alla cieca.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    /// Sempre due decimali, come ogni altro numero sul filo. La scala di un
+    /// `Decimal` dipende da come è stato costruito: senza normalizzare, la stessa
+    /// quota usciva `"100"` nella risposta alla correzione e `"100.00"` alla
+    /// lettura successiva, che è una differenza che un client può notare.
+    pub share_percent: String,
     pub is_primary: bool,
     pub joined_at: Option<NaiveDate>,
     pub left_at: Option<NaiveDate>,
@@ -370,7 +435,8 @@ impl LeasePartyResponse {
             role: party.role().into(),
             full_name: party.full_name().to_owned(),
             email: party.email().map(|email| email.as_str().to_owned()),
-            share_percent: party.share_percent(),
+            phone: party.phone().map(str::to_owned),
+            share_percent: format_amount(party.share_percent()),
             is_primary: party.is_primary(),
             joined_at: party.joined_at(),
             left_at: party.left_at(),
@@ -611,4 +677,103 @@ async fn terminate(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(LeaseResponse::from_view(&view)))
+}
+
+/// Nessun corpo, a differenza della disdetta: annullare non registra un fatto
+/// datato — non c'è stato alcun rapporto — quindi non c'è una ragione da
+/// conservare accanto a una data che non esiste.
+#[utoipa::path(
+    post, path = "/api/v1/leases/{id}/cancel", tag = "contratti",
+    params(("id" = Uuid, Path, description = "Identificatore del contratto")),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Contratto annullato", body = LeaseResponse),
+        (status = 404, description = "Non trovato o non visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "Solo una bozza o un contratto in attesa di firma si annulla", body = crate::error::ProblemDetails),
+    )
+)]
+async fn cancel(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<LeaseResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let view = state
+        .cancel_lease
+        .execute(
+            &context,
+            CancelLeaseCommand {
+                id: LeaseId::from_uuid(id),
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+    Ok(Json(LeaseResponse::from_view(&view)))
+}
+
+#[utoipa::path(
+    patch, path = "/api/v1/lease-parties/{id}", tag = "contratti",
+    params(("id" = Uuid, Path, description = "Identificatore della parte")),
+    request_body = CorrectLeasePartyRequest,
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Parte corretta", body = LeasePartyResponse),
+        (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "Email bloccata da un utente collegato, o intestatario già presente", body = crate::error::ProblemDetails),
+        (status = 422, description = "Quota fuori da 0–100, o email non valida", body = crate::error::ProblemDetails),
+    )
+)]
+async fn correct_party(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+    Json(request): Json<CorrectLeasePartyRequest>,
+) -> ApiResult<Json<LeasePartyResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let changes = request.into_changes().map_err(|error| {
+        ApiError::from(AppError::from(error)).with_request_id(request_id.clone())
+    })?;
+    let party = state
+        .correct_lease_party
+        .execute(
+            &context,
+            CorrectLeasePartyCommand {
+                id: LeasePartyId::from_uuid(id),
+                changes,
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+    Ok(Json(LeasePartyResponse::from_domain(&party)))
+}
+
+/// `204`, e non è una cancellazione vera: la riga resta con `deleted_at`, come
+/// ovunque nel progetto.
+#[utoipa::path(
+    delete, path = "/api/v1/lease-parties/{id}", tag = "contratti",
+    params(("id" = Uuid, Path, description = "Identificatore della parte")),
+    security(("bearer" = [])),
+    responses(
+        (status = 204, description = "Parte tolta"),
+        (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "La parte è collegata a un utente: non si toglie", body = crate::error::ProblemDetails),
+    )
+)]
+async fn remove_party(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let request_id = context.request_id().map(str::to_owned);
+    state
+        .remove_lease_party
+        .execute(
+            &context,
+            RemoveLeasePartyCommand {
+                id: LeasePartyId::from_uuid(id),
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+    Ok(StatusCode::NO_CONTENT)
 }

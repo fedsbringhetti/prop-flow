@@ -222,6 +222,7 @@ export interface LeaseParty {
   role: LeasePartyRole
   full_name: string
   email?: string
+  phone?: string
   share_percent: Amount
   is_primary: boolean
   joined_at: IsoDate | null

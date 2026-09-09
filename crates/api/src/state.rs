@@ -22,7 +22,8 @@ use propflow_application::use_cases::invitation::{
     AcceptInvitation, InviteTenant, RevokeInvitation,
 };
 use propflow_application::use_cases::lease::{
-    ActivateLease, AddLeaseParty, DraftLease, GetLease, ListLeases, TerminateLease,
+    ActivateLease, AddLeaseParty, CancelLease, CorrectLeaseParty, DraftLease, GetLease, ListLeases,
+    RemoveLeaseParty, TerminateLease,
 };
 use propflow_application::use_cases::organization::ListOrganizations;
 use propflow_application::use_cases::payment::{
@@ -80,6 +81,9 @@ pub struct AppState {
     pub add_lease_party: Arc<AddLeaseParty>,
     pub activate_lease: Arc<ActivateLease>,
     pub terminate_lease: Arc<TerminateLease>,
+    pub cancel_lease: Arc<CancelLease>,
+    pub correct_lease_party: Arc<CorrectLeaseParty>,
+    pub remove_lease_party: Arc<RemoveLeaseParty>,
 
     pub upload_document: Arc<UploadDocument>,
     pub list_documents: Arc<ListDocuments>,
@@ -311,6 +315,18 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             terminate_lease: Arc::new(TerminateLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            cancel_lease: Arc::new(CancelLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            correct_lease_party: Arc::new(CorrectLeaseParty::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            remove_lease_party: Arc::new(RemoveLeaseParty::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),

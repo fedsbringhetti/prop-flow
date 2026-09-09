@@ -2636,3 +2636,77 @@ ancora membri fa rispondere `403` a una richiesta legittima. `acceptInvitation` 
 con `withoutOrganization`, ed è verificato da un test che guarda **l'header vero** e non
 il codice che lo scrive — perché la prossima persona che passa di lì vedrà un'eccezione
 alla regola «`X-Org-Id` sempre» e sarà tentata di toglierla.
+
+<a id="adr-046"></a>
+
+## ADR-046 — L'attivazione guarda il senso delle quote, non solo la somma
+
+**9 settembre 2026.** Passo `U4` della sezione 3. È la regola che impedisce di
+riprodurre il danno che la stessa sezione consegna gli strumenti per riparare.
+
+### Il fatto
+
+In database sono esistiti contratti **attivi** con due parti così:
+
+| parte | quota | intestatario | ha accettato |
+|---|---|---|---|
+| `inq2` | **100,00** | sì | **no** |
+| `inq3` | **0,00** | no | sì |
+
+Cioè: l'inquilino entrato davvero non doveva niente, e il 100% era di qualcuno che non
+aveva mai accettato l'invito. Il contratto era `active`, quindi aveva superato ogni
+controllo — perché il controllo che c'era è `100 + 0 = 100`, e quella somma è giusta.
+
+Il difetto nasceva dal concorso di quattro cose, e nessuna delle quattro è sbagliata da
+sola: il form propone `100` e *intestatario principale* alla prima parte; ogni invito
+successivo riceve `remaining_share`, che a quel punto è **zero**, e nessuno lo dice;
+l'attivazione verifica la somma; e niente di tutto questo si correggeva
+([`R17`](12-da-fare.md#lelenco), chiuso da questa sezione).
+
+### Decisione
+
+**Un inquilino con quota zero impedisce l'attivazione**, accanto all'invariante che
+esisteva già sulla somma. Una quota a zero non è un caso d'uso che sappiamo nominare: un
+inquilino che non deve niente non è un inquilino, è una riga rimasta indietro.
+
+**Aggiungere una parte è ammesso solo finché il contratto è in bozza o in attesa di
+firma.** `AddLeaseParty` non guardava lo stato — controllava il ruolo, caricava il
+contratto e inseriva — quindi si poteva aggiungere una parte a un contratto **attivo**, e
+da quel momento le quote non sommavano più a 100 senza che niente protestasse:
+l'invariante è verificata *al momento* dell'attivazione, e nessuno la riverificava dopo.
+Il client offriva già il bottone solo in bozza, ma quella è una scelta di che cosa
+offrire, non un confine — la stessa distinzione di [ADR-042](#adr-042).
+
+### Che cosa questa regola **non** garantisce, e va detto
+
+**Non pretende che l'intestatario principale abbia accettato l'invito.** Un contratto si
+firma sulla carta prima che l'inquilino apra un account, e pretenderlo bloccherebbe un
+giro legittimo: si attiva, poi si invita. È la seconda faccia del difetto osservato — il
+100% era di chi non aveva accettato — e resta possibile. La si accetta perché il rimedio
+costerebbe più del danno: impedirebbe di attivare un contratto vero in attesa che una
+persona si registri.
+
+**Non sana i contratti già rotti.** Le invarianti valgono sulle transizioni future: un
+contratto già attivo con una quota a zero resta com'è, e si corregge a mano con
+`PATCH /lease-parties/{id}`, che questa sezione introduce. Non esiste una migration di
+bonifica, e non è una dimenticanza: quale sia la quota giusta lo sa solo chi amministra.
+
+**Non impedisce che le quote smettano di sommare a 100 dopo l'attivazione.** La
+correzione di una parte non ricontrolla la somma, ed è deliberato: per portare due parti
+da `100 / 0` a `50 / 50` bisogna passare da uno stato intermedio in cui la somma non fa
+100. Su un contratto attivo la responsabilità è di chi corregge.
+
+### Alternative scartate
+
+**Ricontrollare la somma a ogni correzione.** Renderebbe impossibile il rimedio, per la
+ragione qui sopra: non si possono cambiare due righe in una richiesta.
+
+**Ammettere l'aggiunta su un contratto attivo ricontrollando la somma dopo.** Non si può
+fare in una richiesta sola — per aggiungere un terzo inquilino bisogna prima abbassare le
+quote degli altri due — quindi o si rifiuta, o si inventa una richiesta che porta tutte le
+parti insieme. Quella è il **subentro**, che è un'operazione a sé e non è progettata: sta
+in [12](12-da-fare.md) come voce nuova.
+
+**Un valore minimo di quota diverso da zero** (per esempio l'1%). Sarebbe una soglia
+arbitraria travestita da regola: zero è l'unico valore che significa qualcosa — «questa
+persona non paga niente» — e gli altri sono decisioni di chi amministra.

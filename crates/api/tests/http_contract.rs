@@ -766,6 +766,89 @@ async fn full_lease_lifecycle() {
     assert_eq!(status, StatusCode::CONFLICT);
 }
 
+/// **Annullare una bozza**, e le due metà che rendono utile l'operazione.
+///
+/// La transizione esisteva nel dominio da sempre e non la esponeva nessuna rotta:
+/// un contratto redatto per sbaglio restava lì, perché l'unica uscita sarebbe
+/// stata attivarlo e disdirlo — che è ciò che non riesce quando le quote sono
+/// sbagliate.
+///
+/// Il test guarda **tre** cose, e la seconda è quella che una cancellazione soft
+/// avrebbe superato in silenzio fallendo lo scopo:
+///
+/// 1. la bozza diventa `cancelled`;
+/// 2. **resta leggibile**, e il filtro per quello stato la trova. Con `deleted_at`
+///    sarebbe sparita da ogni elenco, e il filtro sarebbe rimasto quello che era:
+///    un'opzione che non può corrispondere a niente;
+/// 3. il periodo **torna libero**, perché i vincoli di esclusione della `0005`
+///    coprono `pending_signature`, `active` ed `expiring`, e `cancelled` non è
+///    fra questi.
+#[tokio::test]
+async fn a_cancelled_draft_stays_readable_and_frees_its_period() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "annullamento").await;
+    let property = create_property(&app, &token, "Immobile ripensato").await;
+
+    let wrong = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    let (status, cancelled) = app
+        .post_auth(
+            &format!("/api/v1/leases/{wrong}/cancel"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cancelled}");
+    assert_eq!(cancelled["status"], "cancelled");
+
+    // Resta negli elenchi: è la metà che distingue «annullare» da «cancellare».
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases?property_id={property}&status=cancelled"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let items = page["items"].as_array().expect("elenco");
+    assert_eq!(items.len(), 1, "corpo: {page}");
+    assert_eq!(items[0]["id"], serde_json::json!(wrong));
+
+    // Annullarlo due volte non è ammesso.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{wrong}/cancel"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Lo stesso periodo si può rifare, ed è il motivo per cui si annulla.
+    let good = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &good, "Inquilino Vero", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{good}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    // E un contratto in vigore non si annulla: per quello c'è la disdetta, che
+    // registra un fatto invece di dire che non è mai successo niente.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{good}/cancel"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.invalid_transition");
+}
+
 #[tokio::test]
 async fn an_overlapping_activation_says_what_is_occupied() {
     let app = require_app!();
@@ -924,6 +1007,299 @@ async fn a_room_of_another_property_cannot_be_let() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
     assert_eq!(problem["code"], "validation.failed", "corpo: {problem}");
     assert_eq!(problem["errors"][0]["field"], "room_id");
+}
+
+/// **Il vicolo cieco, percorso da capo a fondo.**
+///
+/// Era questo: una parte inserita con la quota sbagliata non si correggeva, quindi
+/// il contratto non si attivava — le quote degli inquilini devono sommare a 100 —
+/// e non si poteva nemmeno rifare, perché annullarlo non era esposto. Il contratto
+/// restava lì per sempre, non attivabile e non rimovibile, e l'unico rimedio era
+/// crearne un altro lasciando in elenco quello rotto.
+///
+/// Il test cammina l'uscita: si sbaglia, si toglie ciò che è di troppo, si
+/// corregge, si attiva.
+#[tokio::test]
+async fn a_wrong_share_can_be_corrected_and_the_lease_activates() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "correzione").await;
+    let property = create_property(&app, &token, "Immobile con le quote sbagliate").await;
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    let (status, first) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({
+                "full_name": "Inquilino Uno",
+                "share_percent": "30",
+                "is_primary": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first}");
+    let first_party = first["id"].as_str().expect("id").to_owned();
+
+    // Il muro: la somma non fa 100, e prima non c'era modo di uscirne.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.shares_not_hundred");
+
+    // Una parte aggiunta per sbaglio, che va tolta e non corretta.
+    let (status, second) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({ "full_name": "Aggiunta Per Sbaglio", "share_percent": "70" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second}");
+    let second_party = second["id"].as_str().expect("id").to_owned();
+
+    // Un contratto ha un solo intestatario principale, e il vincolo parziale lo
+    // dice con il suo codice invece che come "vincolo violato".
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{second_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "is_primary": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.primary_party_exists");
+
+    let (status, _) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/lease-parties/{second_party}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Tolta davvero: l'elenco delle parti torna a una.
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        detail["parties"].as_array().map(Vec::len),
+        Some(1),
+        "corpo: {detail}"
+    );
+
+    // La correzione, che è l'operazione che mancava.
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{first_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "share_percent": "100", "phone": "+39 011 0000000" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["share_percent"], "100.00");
+    assert_eq!(corrected["phone"], "+39 011 0000000");
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    assert_eq!(activated["status"], "active");
+}
+
+/// **Le due regole che impediscono di rifare il danno.** Vedi ADR-046.
+///
+/// La prima: `100 + 0` fa 100, e passava. Era il caso osservato in database — il
+/// 100% su una parte che non aveva mai accettato, e l'inquilino vero a zero — e la
+/// somma non ha nulla da eccepire, perché il difetto non è nella somma.
+///
+/// La seconda: aggiungere una parte a un contratto **attivo** era ammesso, e da lì
+/// le quote smettevano di sommare a 100 senza che niente protestasse. Il client
+/// offriva il bottone solo in bozza, ma quella è una scelta di che cosa offrire.
+#[tokio::test]
+async fn a_zero_share_blocks_activation_and_an_active_lease_takes_no_new_parties() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "quota-zero").await;
+    let property = create_property(&app, &token, "Immobile in coabitazione").await;
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    // Il concorso che produceva il danno: il primo si prende tutto, al secondo
+    // resta zero, e la somma torna.
+    let (status, first) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({
+                "full_name": "Primo Inquilino",
+                "share_percent": "100",
+                "is_primary": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first}");
+    let first_party = first["id"].as_str().expect("id").to_owned();
+
+    let (status, second) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({ "full_name": "Secondo Inquilino", "share_percent": "0" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second}");
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.tenant_without_share");
+
+    // Corrette le due quote, l'attivazione passa.
+    let (status, _) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{first_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "share_percent": "50" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let second_party = second["id"].as_str().expect("id").to_owned();
+    let (status, _) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{second_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "share_percent": "50" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    // E da qui non si aggiungono parti: la somma non verrebbe più riverificata.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({ "full_name": "Terzo Inquilino", "share_percent": "10" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.parties_locked");
+}
+
+/// **Una parte con una persona dietro non è una riga sbagliata.**
+///
+/// Due rifiuti, e sono la ragione per cui correggere e togliere non sono la stessa
+/// operazione: l'email è ciò a cui l'invito è intestato, e cambiarla dopo
+/// l'accettazione sposterebbe il rapporto sotto i piedi di chi l'ha usata;
+/// togliere una parte collegata farebbe sparire un inquilino vero senza traccia,
+/// mentre uscire di casa è un fatto con una data.
+///
+/// La quota invece **si corregge anche a contratto attivo**, ed è deliberato: i
+/// contratti con le quote sbagliate che esistono già sono attivi, e rifiutare lì
+/// lascerebbe irreparabili proprio quelli.
+#[tokio::test]
+async fn a_party_with_a_user_keeps_its_email_and_its_place() {
+    let app = require_app!();
+    let (owner, _org) = common::register_and_login(&app, "parte-collegata").await;
+    let property = create_property(&app, &owner, "Immobile con inquilino vero").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("inquilino-collegato");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, _tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let party = detail["parties"][0]["id"].as_str().expect("id").to_owned();
+
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{party}"),
+            Some(&owner),
+            Some(serde_json::json!({ "email": "un-altro@example.it" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_email_locked");
+
+    let (status, problem) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/lease-parties/{party}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_has_user");
+
+    // Il contratto si attiva — la quota dell'invito è 100 — e la correzione
+    // continua a funzionare da lì in avanti.
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{party}"),
+            Some(&owner),
+            Some(serde_json::json!({ "full_name": "Nome Corretto" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["full_name"], "Nome Corretto");
 }
 
 /// Emette un invito su un contratto e restituisce (`invitation_id`, `token`).

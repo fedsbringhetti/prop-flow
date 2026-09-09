@@ -38,6 +38,18 @@ macro_rules! select_lease_party {
 
 #[async_trait]
 impl LeasePartyRepository for PgUnitOfWork {
+    async fn find_by_id(&mut self, id: LeasePartyId) -> RepositoryResult<Option<LeaseParty>> {
+        let row = sqlx::query(concat!(
+            select_lease_party!(),
+            " WHERE id = $1 AND deleted_at IS NULL"
+        ))
+        .bind(id.as_uuid())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        row.map(map_party).transpose()
+    }
+
     async fn list_for_lease(&mut self, lease_id: LeaseId) -> RepositoryResult<Vec<LeaseParty>> {
         let rows = sqlx::query(concat!(
             select_lease_party!(),
@@ -105,6 +117,28 @@ impl LeasePartyRepository for PgUnitOfWork {
         .bind(party.is_primary())
         .bind(party.joined_at())
         .bind(party.left_at())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::RowLevelSecurity);
+        }
+        Ok(())
+    }
+
+    async fn soft_delete(&mut self, party: &LeaseParty) -> RepositoryResult<()> {
+        // Gli indici unici `lease_parties_primary_uk` e `lease_parties_lease_user_uk`
+        // sono parziali su `deleted_at IS NULL`: scrivere questa colonna **libera**
+        // il posto di intestatario principale e il legame con l'utente. È voluto —
+        // si toglie una parte per rifarla — e va saputo prima di stupirsene.
+        let result = sqlx::query(
+            "UPDATE app.lease_parties
+                SET deleted_at = $2
+              WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(party.id().as_uuid())
+        .bind(party.archived_at())
         .execute(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;

@@ -8,4 +8,4 @@ mod aggregate;
 mod party;
 
 pub use aggregate::{Lease, LeaseDraft, LeaseParts, LeaseStatus, LeaseType, RentFrequency};
-pub use party::{LeaseParty, LeasePartyParts, LeasePartyRole, NewLeaseParty};
+pub use party::{LeaseParty, LeasePartyChanges, LeasePartyParts, LeasePartyRole, NewLeaseParty};
