@@ -167,6 +167,14 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     solo `org_id`. Una segnalazione aperta sull'immobile sbagliato si annulla e
 --     si riapre, non si sposta.
 --
+--     **`title` e `description` erano in questo elenco e non ci sono più**, ed è
+--     una revoca deliberata e non una riga persa: la migration `0036` le
+--     riconcede perché correggere un refuso è un motivo legittimo di cambiare, e
+--     ADR-048 emenda ADR-026 su quelle due colonne sole. Il criterio non è
+--     cambiato — «una colonna che non ha un motivo legittimo di cambiare» — è
+--     cambiato il fatto. Le altre sei restano, e per loro «si annulla e si
+--     riapre» è ancora l'unica via.
+--
 --     Per gli **addebiti**: la `WITH CHECK` di `charges_update` ha lo stesso
 --     difetto, e qui l'elenco è quasi la tabella intera perché un addebito è una
 --     **pretesa verso una persona** — riscriverne l'importo dopo averlo comunicato
@@ -194,7 +202,6 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
     VALUES ('tickets', 'property_id'), ('tickets', 'room_id'),
            ('tickets', 'lease_id'),    ('tickets', 'reported_by'),
            ('tickets', 'reported_by_kind'),
-           ('tickets', 'title'),       ('tickets', 'description'),
            ('tickets', 'reference'),   ('tickets', 'currency'),
            ('charges', 'lease_id'),        ('charges', 'charge_type'),
            ('charges', 'amount'),          ('charges', 'currency'),

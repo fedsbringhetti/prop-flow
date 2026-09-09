@@ -504,6 +504,60 @@ impl Ticket {
         Ok(())
     }
 
+    /// Corregge ciò che è stato dichiarato aprendo: titolo, descrizione e la
+    /// scelta sulla visibilità. `true` se qualcosa è cambiato.
+    ///
+    /// **I tre campi stanno insieme perché hanno la stessa autorizzazione**, non
+    /// per comodità: sono tutti e tre ciò che chi ha segnalato ha detto, e chi può
+    /// correggerne uno può correggerli tutti. Categoria e priorità **non** sono
+    /// qui: sono il lavoro del triage, e lasciarle modificabili altrove renderebbe
+    /// `triaged` una dichiarazione non verificabile.
+    ///
+    /// Il dominio verifica lo **stato**; *chi* può correggere è autorizzazione
+    /// applicativa — lo staff sempre, chi ha segnalato solo finché è `open` — con
+    /// la stessa forma dell'annullamento.
+    ///
+    /// Rifiuta su `cancelled`, come [`Ticket::apply_costs`]: una segnalazione
+    /// annullata non si tocca più. Su una **chiusa** si corregge, e serve: la si
+    /// rilegge mesi dopo, e un titolo sbagliato lì è sbagliato per sempre.
+    ///
+    /// Nessun campo è azzerabile — titolo e descrizione non hanno un valore vuoto
+    /// che significhi qualcosa — quindi la semantica è la sola metà del `PATCH`:
+    /// assente = invariato.
+    ///
+    /// Fino alla migration `0036` titolo e descrizione non erano nemmeno
+    /// scrivibili dal ruolo applicativo: la revoca di quel privilegio è in
+    /// ADR-048, e senza quella migration questo metodo compilerebbe e la
+    /// scrittura fallirebbe con `permission denied`.
+    pub fn correct(&mut self, changes: TicketCorrection, now: DateTime<Utc>) -> DomainResult<bool> {
+        if matches!(self.status, TicketStatus::Cancelled) {
+            return Err(DomainError::Invariant(Invariant::TicketCancelled));
+        }
+
+        let TicketCorrection {
+            title,
+            description,
+            visible_to_residents,
+        } = changes;
+
+        let title = title.unwrap_or_else(|| self.title.clone());
+        let description = description.unwrap_or_else(|| self.description.clone());
+        let visible = visible_to_residents.unwrap_or(self.visible_to_residents);
+
+        let changed = title != self.title
+            || description != self.description
+            || visible != self.visible_to_residents;
+        if !changed {
+            return Ok(false);
+        }
+
+        self.title = title;
+        self.description = description;
+        self.visible_to_residents = visible;
+        self.updated_at = now;
+        Ok(true)
+    }
+
     /// Applica una modifica parziale ai costi. `true` se qualcosa è cambiato.
     ///
     /// I costi sono l'unico attributo che il `PATCH` tocca: tutto il resto o è
@@ -712,6 +766,17 @@ impl Ticket {
             archived_at,
         }
     }
+}
+
+/// Correzione parziale di ciò che è stato dichiarato aprendo.
+///
+/// `None` = invariato. Non c'è il doppio `Option` della [`Patch`] perché nessuno
+/// dei tre campi è azzerabile: un titolo vuoto non è un titolo.
+#[derive(Debug, Clone, Default)]
+pub struct TicketCorrection {
+    pub title: Option<TicketTitle>,
+    pub description: Option<TicketDescription>,
+    pub visible_to_residents: Option<bool>,
 }
 
 /// Modifica parziale dei costi.

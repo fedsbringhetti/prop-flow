@@ -12,12 +12,14 @@
 //!
 //! Il perimetro della fetta è in `docs/09-stato-e-roadmap.md`.
 
+mod correct;
 mod costs;
 mod open;
 mod read;
 mod thread;
 mod transition;
 
+pub use correct::{CorrectTicketReport, CorrectTicketReportCommand};
 pub use costs::{UpdateTicketCosts, UpdateTicketCostsCommand};
 pub use open::{OpenTicket, OpenTicketCommand};
 pub use read::{

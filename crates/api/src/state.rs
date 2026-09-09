@@ -36,9 +36,9 @@ use propflow_application::use_cases::property::{
 use propflow_application::use_cases::reporting::GetOwnerDashboard;
 use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
 use propflow_application::use_cases::ticket::{
-    AssignTicket, CancelTicket, CloseTicket, GetTicket, ListTicketMessages, ListTickets,
-    OpenTicket, PostTicketMessage, ReopenTicket, StartTicketWork, SuspendTicket, TriageTicket,
-    UpdateTicketCosts,
+    AssignTicket, CancelTicket, CloseTicket, CorrectTicketReport, GetTicket, ListTicketMessages,
+    ListTickets, OpenTicket, PostTicketMessage, ReopenTicket, StartTicketWork, SuspendTicket,
+    TriageTicket, UpdateTicketCosts,
 };
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_infrastructure::DatabasePools;
@@ -94,6 +94,11 @@ pub struct AppState {
     pub get_ticket: Arc<GetTicket>,
     pub list_tickets: Arc<ListTickets>,
     pub update_ticket_costs: Arc<UpdateTicketCosts>,
+    /// La correzione del testo è **un caso d'uso a sé** e non un ramo di
+    /// `UpdateTicketCosts`: le due hanno autorizzazioni diverse — i costi allo
+    /// staff, il testo anche a chi ha segnalato finché è aperta — e un'unica rotta
+    /// che scegliesse in base ai campi presenti nel corpo sbaglierebbe in silenzio.
+    pub correct_ticket_report: Arc<CorrectTicketReport>,
     pub post_ticket_message: Arc<PostTicketMessage>,
     pub list_ticket_messages: Arc<ListTicketMessages>,
     /// Una transizione per caso d'uso: ognuna autorizza in modo proprio — la
@@ -354,6 +359,10 @@ impl AppState {
             get_ticket: Arc::new(GetTicket::new(Arc::clone(&unit_of_work))),
             list_tickets: Arc::new(ListTickets::new(Arc::clone(&unit_of_work))),
             update_ticket_costs: Arc::new(UpdateTicketCosts::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            correct_ticket_report: Arc::new(CorrectTicketReport::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),

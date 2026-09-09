@@ -2795,6 +2795,123 @@ async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
     assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
 }
 
+/// La correzione del testo è una rotta a sé, con **una sola** autorizzazione.
+///
+/// `PATCH /tickets/{id}` resta i costi e resta solo staff; `PATCH
+/// /tickets/{id}/report` è il testo e la casella di visibilità, e vale per lo
+/// staff sempre e per chi ha segnalato finché è aperta. Sono due rotte perché una
+/// sola avrebbe due autorizzazioni secondo i campi presenti nel corpo, che è la
+/// cosa che si sbaglia in silenzio (ADR-048).
+#[tokio::test]
+async fn the_report_is_corrected_from_a_route_of_its_own() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-correzione").await;
+    let property = create_property(&app, &owner, "Casa da correggere").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let email = common::unique_email("inquilino-correzione");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    app.post_auth(
+        "/api/v1/auth/accept-invitation",
+        &tenant,
+        serde_json::json!({ "token": accept_token }),
+    )
+    .await;
+
+    let (ticket, _) = open_ticket(
+        &app,
+        &tenant,
+        Some(&owner_org),
+        &property,
+        Some(&lease),
+        "Il bolier perde",
+    )
+    .await;
+
+    // Chi ha segnalato corregge il refuso e dichiara la segnalazione di interesse
+    // comune, nella stessa richiesta: i tre campi hanno la stessa autorizzazione.
+    let (status, fixed) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}/report"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "title": "Il boiler perde",
+                "visible_to_residents": true
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {fixed}");
+    assert_eq!(fixed["title"], "Il boiler perde");
+    assert_eq!(fixed["visible_to_residents"], true);
+    assert_eq!(
+        fixed["description"], "Descrizione del guasto",
+        "assente = invariato: il campo non nominato non si azzera, {fixed}"
+    );
+
+    // Il `PATCH` dei costi resta solo staff, e non ha imparato a scrivere il testo.
+    let (status, problem) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "actual_cost": "10.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "org.staff_role_required");
+
+    // Preso in carico, il testo passa a chi amministra. L'assegnatario è chi ha
+    // segnalato — l'unico identificatore che questa risposta porta — e basta a
+    // far uscire la segnalazione da `open`, che è ciò che il test misura.
+    let reporter_id = fixed["reported_by"]
+        .as_str()
+        .map(str::to_owned)
+        .expect("chi ha segnalato");
+    let (status, assigned) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/assign"),
+            &owner,
+            serde_json::json!({ "assignee_id": reporter_id }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {assigned}");
+
+    let (status, problem) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}/report"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "title": "Troppo tardi" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "org.staff_role_required",
+        "la segnalazione è sua, ma qualcuno ci ha messo mano: {problem}"
+    );
+
+    let (status, corrected) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}/report"),
+            Some(&owner),
+            None,
+            Some(serde_json::json!({ "description": "Riformulata da chi amministra" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["description"], "Riformulata da chi amministra");
+    assert_eq!(
+        corrected["title"], "Il boiler perde",
+        "il titolo non era nel corpo e non doveva cambiare: {corrected}"
+    );
+}
+
 /// Il riferimento riparte da uno in ogni organizzazione, e non dice quante
 /// segnalazioni esistono sulla piattaforma.
 #[tokio::test]

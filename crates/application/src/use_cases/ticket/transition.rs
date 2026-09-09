@@ -117,20 +117,30 @@ fn reporter_or_staff(context: &RequestContext, ticket: &Ticket) -> AppResult<()>
     Err(AppError::Forbidden(Denial::TicketNotYours))
 }
 
-/// Annullare tocca allo staff sempre, a chi ha segnalato **solo finché nessuno ci
-/// ha messo mano**: un inquilino che annullasse una segnalazione già in
-/// lavorazione butterebbe via il lavoro di qualcun altro.
-fn canceller(context: &RequestContext, ticket: &Ticket) -> AppResult<()> {
+/// Lo staff sempre, chi ha segnalato **solo finché nessuno ci ha messo mano**.
+///
+/// **Serve a due operazioni e vive in una funzione sola.** L'annullamento la usa
+/// da sempre — un inquilino che annullasse una segnalazione già in lavorazione
+/// butterebbe via il lavoro di qualcun altro — e la correzione del testo la usa da
+/// [ADR-048](../../../../../docs/08-decisioni.md), che sceglie deliberatamente la
+/// stessa forma. Copiarla darebbe due regole che divergono alla prima modifica di
+/// una delle due, ed è precisamente la cosa che nessuno si accorgerebbe di aver
+/// rotto.
+///
+/// I due codici di rifiuto **non sono intercambiabili**, e la distinzione è tutto
+/// il valore di questa funzione: vedi i commenti dentro.
+pub(super) fn reporter_while_open(context: &RequestContext, ticket: &Ticket) -> AppResult<()> {
     if context.is_staff() {
         return Ok(());
     }
     if !is_reporter(context, ticket) {
+        // Non gli manca un ruolo — nessun ruolo gli darebbe questa operazione —
+        // gli manca l'essere stato lui a segnalare.
         return Err(AppError::Forbidden(Denial::TicketNotYours));
     }
     if !matches!(ticket.status(), TicketStatus::Open) {
-        // Qui il primo codice è invece **vero**: la segnalazione è sua, ma
-        // annullarne una già in lavorazione richiede davvero lo staff, perché
-        // butterebbe via il lavoro di qualcun altro.
+        // Qui il primo codice è invece **vero**: la segnalazione è sua, ma da qui
+        // in poi l'operazione richiede davvero lo staff.
         return Err(AppError::Forbidden(Denial::StaffRoleRequired));
     }
     Ok(())
@@ -388,7 +398,7 @@ impl CancelTicket {
             &self.clock,
             context,
             command.id,
-            canceller,
+            reporter_while_open,
             |ticket, now| ticket.cancel(now),
             no_extra_events,
         )
@@ -463,19 +473,19 @@ mod tests {
     fn a_ticket_without_a_reporter_is_not_everyones() {
         let ticket = ticket(None);
         assert!(reporter_or_staff(&tenant(UserId::generate()), &ticket).is_err());
-        assert!(canceller(&tenant(UserId::generate()), &ticket).is_err());
+        assert!(reporter_while_open(&tenant(UserId::generate()), &ticket).is_err());
     }
 
     #[test]
     fn the_reporter_can_only_cancel_before_anyone_touched_it() {
         let reporter = UserId::generate();
         let mut ticket = ticket(Some(reporter));
-        assert!(canceller(&tenant(reporter), &ticket).is_ok());
+        assert!(reporter_while_open(&tenant(reporter), &ticket).is_ok());
 
         ticket
             .assign(UserId::generate(), Utc::now())
             .expect("assegnato");
-        let refused = canceller(&tenant(reporter), &ticket).expect_err(
+        let refused = reporter_while_open(&tenant(reporter), &ticket).expect_err(
             "annullare una segnalazione già in lavorazione butta via il lavoro di un altro",
         );
         assert_eq!(
@@ -484,7 +494,7 @@ mod tests {
             "qui il ruolo serve davvero: la segnalazione è sua, ma è in lavorazione"
         );
         assert!(
-            canceller(&owner(), &ticket).is_ok(),
+            reporter_while_open(&owner(), &ticket).is_ok(),
             "lo staff annulla da qualunque stato di lavorazione"
         );
     }

@@ -215,11 +215,21 @@ impl TicketRepository for PgUnitOfWork {
         // fallire la scrittura con `permission denied`, e fallisce nei test di
         // integrazione, che girano come `propflow_app`.
         //
-        // `property_id`, `room_id`, `lease_id`, `title`, `description`,
-        // `reported_by` e `reference` non ci sono e non possono esserci: il ruolo
-        // applicativo non ha più il privilegio di scriverle. `resolution_notes`
-        // invece sì, ed è la migration `0021` a concederla. Una segnalazione
-        // aperta sull'immobile sbagliato si annulla e si riapre.
+        // `property_id`, `room_id`, `lease_id`, `reported_by` e `reference` non ci
+        // sono e non possono esserci: il ruolo applicativo non ha più il
+        // privilegio di scriverle. Una segnalazione aperta sull'immobile sbagliato
+        // si annulla e si riapre.
+        //
+        // `resolution_notes` invece sì, ed è la migration `0021` a concederla;
+        // `visible_to_residents` la `0035`; **`title` e `description` la `0036`**,
+        // che revoca su quelle due colonne sole la scelta della `0020` — vedi
+        // ADR-048. Fino a quella migration questa `UPDATE` sarebbe fallita con
+        // `permission denied`.
+        //
+        // Le due colonne di testo compaiono in **questa** `UPDATE` e non in una
+        // sua: la scrittura è una sola per l'aggregato, e ogni transizione le
+        // riscrive con il valore che ha già in mano. Una `UPDATE` a parte per la
+        // correzione sarebbe un secondo posto da tenere allineato ai privilegi.
         //
         // `updated_at` non compare perché la scrive il trigger `set_updated_at`.
         let result = sqlx::query(
@@ -233,7 +243,10 @@ impl TicketRepository for PgUnitOfWork {
                     actual_cost    = $8::app.money_amount,
                     resolved_at    = $9,
                     closed_at      = $10,
-                    resolution_notes = $11
+                    resolution_notes = $11,
+                    title          = $12,
+                    description    = $13,
+                    visible_to_residents = $14
               WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(ticket.id().as_uuid())
@@ -247,6 +260,9 @@ impl TicketRepository for PgUnitOfWork {
         .bind(ticket.resolved_at())
         .bind(ticket.closed_at())
         .bind(ticket.resolution_notes())
+        .bind(ticket.title().as_str())
+        .bind(ticket.description().as_str())
+        .bind(ticket.visible_to_residents())
         .execute(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;

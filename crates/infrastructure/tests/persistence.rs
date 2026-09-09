@@ -50,9 +50,10 @@ use propflow_application::use_cases::property::{
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_application::use_cases::ticket::{
     AssignTicket, AssignTicketCommand, CancelTicket, CancelTicketCommand, CloseTicket,
-    CloseTicketCommand, GetTicket, ListTicketMessages, ListTicketMessagesCommand, ListTickets,
-    ListTicketsQuery, OpenTicket, OpenTicketCommand, PostTicketMessage, PostTicketMessageCommand,
-    ReopenTicket, ReopenTicketCommand, StartTicketWork, StartTicketWorkCommand, SuspendTicket,
+    CloseTicketCommand, CorrectTicketReport, CorrectTicketReportCommand, GetTicket,
+    ListTicketMessages, ListTicketMessagesCommand, ListTickets, ListTicketsQuery, OpenTicket,
+    OpenTicketCommand, PostTicketMessage, PostTicketMessageCommand, ReopenTicket,
+    ReopenTicketCommand, StartTicketWork, StartTicketWorkCommand, SuspendTicket,
     SuspendTicketCommand, TriageTicket, TriageTicketCommand,
 };
 use propflow_domain::RequestContext;
@@ -73,8 +74,8 @@ use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
 use propflow_domain::ticket::{
-    MessageBody, TicketCategory, TicketDescription, TicketPriority, TicketReference, TicketStatus,
-    TicketStatusChange, TicketTitle, WaitingOn,
+    MessageBody, TicketCategory, TicketCorrection, TicketDescription, TicketPriority,
+    TicketReference, TicketStatus, TicketStatusChange, TicketTitle, WaitingOn,
 };
 use propflow_infrastructure::db::PgWorkerUnitOfWorkFactory;
 use propflow_infrastructure::security::OpaqueTokenGenerator;
@@ -1579,6 +1580,12 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
 /// Il precedente è
 /// `the_application_role_cannot_repoint_a_lease_party_to_another_lease`.
 ///
+/// **`title` e `description` sono passate dai rifiuti alle concessioni con la
+/// migration `0036`**, ed è la revoca di ADR-026 su quelle due sole colonne
+/// (ADR-048). Il test le tiene qui e non le toglie: che siano scrivibili è
+/// un'affermazione tanto quanto che non lo fossero, e chi togliesse la `GRANT`
+/// per prudenza vedrebbe fallire questo test invece di scoprirlo dal client.
+///
 #[tokio::test]
 async fn the_application_role_cannot_move_a_ticket_to_another_property() {
     let env = require_db!();
@@ -1601,13 +1608,13 @@ async fn the_application_role_cannot_move_a_ticket_to_another_property() {
         );
     }
 
-    // Nemmeno il testo con cui una persona ha descritto il guasto: il thread
-    // esiste apposta per correggere il tiro.
+    // Nemmeno il riferimento, che lo assegna il trigger della `0021`, né chi ha
+    // segnalato.
     for statement in [
-        "UPDATE app.tickets SET title = 'riscritto' WHERE id = $1",
-        "UPDATE app.tickets SET description = 'riscritta' WHERE id = $1",
         "UPDATE app.tickets SET reference = 'TK-999999' WHERE id = $1",
         "UPDATE app.tickets SET reported_by = NULL WHERE id = $1",
+        "UPDATE app.tickets SET reported_by_kind = 'owner' WHERE id = $1",
+        "UPDATE app.tickets SET currency = 'USD' WHERE id = $1",
     ] {
         let error = sqlx::query(statement)
             .bind(uuid::Uuid::now_v7())
@@ -1628,6 +1635,17 @@ async fn the_application_role_cannot_move_a_ticket_to_another_property() {
         "UPDATE app.tickets SET assigned_to = NULL WHERE id = $1",
         // Concessa dalla 0021: la chiusura registra come è stata risolta.
         "UPDATE app.tickets SET resolution_notes = 'fatto' WHERE id = $1",
+        // Concessa dalla 0035: la visibilità è una scelta di chi apre, e si può
+        // cambiare idea dopo.
+        "UPDATE app.tickets SET visible_to_residents = true WHERE id = $1",
+        // **Concesse dalla 0036, ed erano negate fino a quella migration.** È la
+        // revoca di ADR-026 su queste due colonne sole, documentata in ADR-048:
+        // un refuso nel titolo è un motivo legittimo di cambiare, e annullare e
+        // riaprire costerebbe il riferimento già comunicato. Il limite «finché è
+        // `open`» non è qui e non può esserci — una policy non confronta la riga
+        // nuova con quella vecchia — ed è applicativo, come per `status`.
+        "UPDATE app.tickets SET title = 'riscritto' WHERE id = $1",
+        "UPDATE app.tickets SET description = 'riscritta' WHERE id = $1",
     ] {
         let allowed = sqlx::query(statement)
             .bind(uuid::Uuid::now_v7())
@@ -5848,6 +5866,137 @@ async fn seeing_a_shared_ticket_does_not_make_it_writable() {
         .await
         .expect_err("il coinquilino non annulla");
     assert_eq!(refused.code(), "ticket.not_yours");
+
+    let refused = CorrectTicketReport::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            y,
+            CorrectTicketReportCommand {
+                id: shared.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Riscritto da un altro").expect("titolo")),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect_err("il coinquilino non corregge il testo di un altro");
+    assert_eq!(
+        refused.code(),
+        "ticket.not_yours",
+        "non gli manca un ruolo: non è stato lui a segnalare"
+    );
+}
+
+/// **La correzione ha la forma dell'annullamento, e non è una copia.**
+///
+/// Chi ha segnalato corregge finché è `open`; da `assigned` in poi il rifiuto è
+/// `org.staff_role_required`, perché lì il ruolo serve davvero. Lo staff corregge
+/// sempre. Su una annullata non corregge nessuno.
+///
+/// Fino alla migration `0036` la scrittura sarebbe fallita con `permission
+/// denied` prima ancora di arrivare qui: questo test è anche la prova che quel
+/// privilegio è stato concesso.
+#[tokio::test]
+async fn the_reporter_corrects_the_report_only_while_nobody_has_touched_it() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-correzione").await;
+    let x = &stage.first[0];
+
+    let correct = CorrectTicketReport::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let ticket = open_shared_ticket(&env, x, stage.home_one, "Il bolier perde", false).await;
+
+    let fixed = correct
+        .execute(
+            x,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Il boiler perde").expect("titolo")),
+                    visible_to_residents: Some(true),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect("chi ha segnalato corregge finché è aperta");
+    assert_eq!(fixed.ticket.title().as_str(), "Il boiler perde");
+    assert!(
+        fixed.ticket.visible_to_residents(),
+        "la casella si cambia anche dopo l'apertura: è uno dei tre campi della rotta"
+    );
+
+    // La descrizione non è stata nominata: resta com'era.
+    assert_eq!(
+        fixed.ticket.description().as_str(),
+        "La caldaia condominiale non parte",
+        "assente = invariato, che è la metà di PATCH che questa rotta usa"
+    );
+
+    AssignTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &stage.owner,
+            AssignTicketCommand {
+                id: ticket.id(),
+                assignee: user_of(&stage.owner),
+            },
+        )
+        .await
+        .expect("presa in carico");
+
+    let refused = correct
+        .execute(
+            x,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Troppo tardi").expect("titolo")),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect_err("da qui in poi corregge chi amministra");
+    assert_eq!(
+        refused.code(),
+        "org.staff_role_required",
+        "la segnalazione è sua, ma qualcuno ci ha messo mano"
+    );
+
+    correct
+        .execute(
+            &stage.owner,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    description: Some(
+                        TicketDescription::parse("Riformulata da chi amministra")
+                            .expect("descrizione"),
+                    ),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect("lo staff corregge sempre");
+
+    CancelTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&stage.owner, CancelTicketCommand { id: ticket.id() })
+        .await
+        .expect("annullata");
+    let refused = correct
+        .execute(
+            &stage.owner,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Su una annullata no").expect("titolo")),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect_err("una segnalazione annullata non si tocca più");
+    assert_eq!(refused.code(), "ticket.cancelled");
 }
 
 /// **I nomi arrivano dalla policy `users_select`, e questa query è il suo primo

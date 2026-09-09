@@ -131,6 +131,7 @@ pub enum DomainEventPayload {
     TicketStatusChanged(TicketStatusChanged),
     TicketAssigned(TicketAssigned),
     TicketCostsUpdated(TicketCostsUpdated),
+    TicketReportCorrected(TicketReportCorrected),
     TicketMessagePosted(TicketMessagePosted),
     UtilityBillRegistered(UtilityBillRegistered),
     UtilityBillUpdated(UtilityBillUpdated),
@@ -178,6 +179,7 @@ impl DomainEventPayload {
             Self::TicketStatusChanged(_) => "ticket.status_changed",
             Self::TicketAssigned(_) => "ticket.assigned",
             Self::TicketCostsUpdated(_) => "ticket.costs_updated",
+            Self::TicketReportCorrected(_) => "ticket.report_corrected",
             Self::TicketMessagePosted(_) => "ticket.message.posted",
             Self::UtilityBillRegistered(_) => "billing.utility_bill.registered",
             Self::UtilityBillUpdated(_) => "billing.utility_bill.updated",
@@ -227,6 +229,7 @@ impl DomainEventPayload {
             | Self::TicketStatusChanged(_)
             | Self::TicketAssigned(_)
             | Self::TicketCostsUpdated(_)
+            | Self::TicketReportCorrected(_)
             | Self::TicketMessagePosted(_) => "Ticket",
             Self::UtilityBillRegistered(_)
             | Self::UtilityBillUpdated(_)
@@ -292,6 +295,7 @@ impl DomainEventPayload {
             Self::TicketStatusChanged(event) => event.ticket_id.as_uuid(),
             Self::TicketAssigned(event) => event.ticket_id.as_uuid(),
             Self::TicketCostsUpdated(event) => event.ticket_id.as_uuid(),
+            Self::TicketReportCorrected(event) => event.ticket_id.as_uuid(),
             Self::TicketMessagePosted(event) => event.ticket_id.as_uuid(),
             Self::UtilityBillRegistered(event) => event.utility_bill_id.as_uuid(),
             Self::UtilityBillUpdated(event) => event.utility_bill_id.as_uuid(),
@@ -339,6 +343,7 @@ impl DomainEventPayload {
             Self::TicketStatusChanged(event) => Some(event.org_id),
             Self::TicketAssigned(event) => Some(event.org_id),
             Self::TicketCostsUpdated(event) => Some(event.org_id),
+            Self::TicketReportCorrected(event) => Some(event.org_id),
             Self::TicketMessagePosted(event) => Some(event.org_id),
             Self::UtilityBillRegistered(event) => Some(event.org_id),
             Self::UtilityBillUpdated(event) => Some(event.org_id),
@@ -732,6 +737,25 @@ pub struct TicketAssigned {
 /// ([02 — Architettura](../../../../docs/02-architettura.md)).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TicketCostsUpdated {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub changed_fields: Vec<&'static str>,
+}
+
+/// Correzione di ciò che chi ha segnalato aveva dichiarato.
+///
+/// **Nomi dei campi, non valori**, come [`TicketCostsUpdated`] — e qui la regola
+/// morde più che altrove: i due campi correggibili sono il **titolo** e la
+/// **descrizione**, cioè testo scritto da una persona, che non deve finire su un
+/// broker. È la stessa ragione per cui [`TicketMessagePosted`] non porta il corpo
+/// del messaggio.
+///
+/// `visible_to_residents` è invece un booleano e non racconta niente di nessuno:
+/// compare fra i nomi dei campi come gli altri due, e chi consuma sa che la
+/// visibilità è cambiata senza sapere in che verso — leggere la riga lo dice, e
+/// leggerla passa dalla Row Level Security.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketReportCorrected {
     pub ticket_id: TicketId,
     pub org_id: OrgId,
     pub changed_fields: Vec<&'static str>,

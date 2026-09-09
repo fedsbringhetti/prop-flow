@@ -1,20 +1,21 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use propflow_application::authorization::discloses_estimated_cost;
 use propflow_application::use_cases::ticket::{
-    AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, ListTicketMessagesCommand,
-    ListTicketsQuery, OpenTicketCommand, People, PostTicketMessageCommand, ReopenTicketCommand,
-    StartTicketWorkCommand, SuspendTicketCommand, TicketDetail, TriageTicketCommand,
-    UpdateTicketCostsCommand,
+    AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, CorrectTicketReportCommand,
+    ListTicketMessagesCommand, ListTicketsQuery, OpenTicketCommand, People,
+    PostTicketMessageCommand, ReopenTicketCommand, StartTicketWorkCommand, SuspendTicketCommand,
+    TicketDetail, TriageTicketCommand, UpdateTicketCostsCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::property::Patch;
 use propflow_domain::shared::{LeaseId, PropertyId, RoomId, TicketId, TicketMessageId, UserId};
 use propflow_domain::ticket::{
-    MessageBody, Ticket, TicketActor, TicketCategory, TicketCosts, TicketDescription,
-    TicketMessage, TicketPriority, TicketStatus, TicketStatusChange, TicketTitle, WaitingOn,
+    MessageBody, Ticket, TicketActor, TicketCategory, TicketCorrection, TicketCosts,
+    TicketDescription, TicketMessage, TicketPriority, TicketStatus, TicketStatusChange,
+    TicketTitle, WaitingOn,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -41,6 +42,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/properties/{property_id}/tickets", post(open))
         .route("/api/v1/tickets", get(list))
         .route("/api/v1/tickets/{id}", get(detail).patch(update_costs))
+        // La correzione del testo è una rotta **a sé** e non un allargamento del
+        // `PATCH` dei costi: quello avrebbe due autorizzazioni diverse secondo i
+        // campi presenti nel JSON — i costi allo staff, il testo a chi ha
+        // segnalato — che è il genere di cosa che si sbaglia in silenzio, perché
+        // dipende da quali chiavi il corpo porta. Qui l'autorizzazione è una sola
+        // per l'intera rotta. Vedi ADR-048.
+        .route("/api/v1/tickets/{id}/report", patch(correct_report))
         .route(
             "/api/v1/tickets/{id}/messages",
             post(post_message).get(list_messages),
@@ -311,6 +319,49 @@ pub struct UpdateTicketCostsRequest {
     #[serde(default, deserialize_with = "explicit_null")]
     #[schema(value_type = Option<String>, nullable)]
     pub actual_cost: Patch<Decimal>,
+}
+
+/// Correzione di ciò che chi ha segnalato aveva dichiarato.
+///
+/// **Non è il `PATCH` dei costi allargato**, ed è una rotta a sé apposta: qui
+/// l'autorizzazione è una sola per l'intera richiesta — lo staff sempre, chi ha
+/// segnalato finché la segnalazione è `open` — mentre un `PATCH` unico dovrebbe
+/// decidere in base a quali chiavi il corpo porta. Vedi ADR-048.
+///
+/// Semantica del `PATCH`, metà: **assente = invariato**. Nessuno dei tre campi è
+/// azzerabile — un titolo vuoto non è un titolo — quindi `null` non ha qui il
+/// significato che ha altrove nel progetto, e mandarlo è un `422`.
+///
+/// **Categoria e priorità non ci sono**: sono il lavoro del triage, e lasciarle
+/// modificabili qui renderebbe `triaged` una dichiarazione non verificabile.
+/// **Immobile, stanza e contratto nemmeno**: non sono scrivibili dal ruolo
+/// applicativo, e una segnalazione aperta sull'immobile sbagliato si annulla e si
+/// riapre ([ADR-026](../../../../../docs/08-decisioni.md)).
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct CorrectTicketReportRequest {
+    #[serde(default)]
+    #[schema(example = "Il boiler perde")]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// La casella «visibile a chi abita qui», che si può cambiare anche dopo
+    /// l'apertura.
+    #[serde(default)]
+    pub visible_to_residents: Option<bool>,
+}
+
+impl CorrectTicketReportRequest {
+    fn into_correction(self) -> Result<TicketCorrection, DomainError> {
+        Ok(TicketCorrection {
+            title: self.title.as_deref().map(TicketTitle::parse).transpose()?,
+            description: self
+                .description
+                .as_deref()
+                .map(TicketDescription::parse)
+                .transpose()?,
+            visible_to_residents: self.visible_to_residents,
+        })
+    }
 }
 
 /// Corpo della chiusura.
@@ -702,6 +753,50 @@ async fn update_costs(
                     estimated: request.estimated_cost,
                     actual: request.actual_cost,
                 },
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(TicketResponse::from_domain(
+        &view.ticket,
+        discloses_estimated_cost(&context),
+        &view.people,
+    )))
+}
+
+#[utoipa::path(
+    patch, path = "/api/v1/tickets/{id}/report", tag = "segnalazioni",
+    params(("id" = Uuid, Path, description = "Identificatore della segnalazione")),
+    request_body = CorrectTicketReportRequest,
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Segnalazione corretta", body = TicketResponse),
+        (status = 403, description = "Corregge lo staff, o chi ha segnalato finché è aperta", body = crate::error::ProblemDetails),
+        (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "Segnalazione annullata", body = crate::error::ProblemDetails),
+        (status = 422, description = "Titolo o descrizione non validi", body = crate::error::ProblemDetails),
+    )
+)]
+async fn correct_report(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+    Json(request): Json<CorrectTicketReportRequest>,
+) -> ApiResult<Json<TicketResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let correction = request.into_correction().map_err(|error| {
+        ApiError::from(propflow_application::AppError::Validation(error))
+            .with_request_id(request_id.clone())
+    })?;
+
+    let view = state
+        .correct_ticket_report
+        .execute(
+            &context,
+            CorrectTicketReportCommand {
+                id: TicketId::from_uuid(id),
+                correction,
             },
         )
         .await
