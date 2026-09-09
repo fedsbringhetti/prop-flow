@@ -1,13 +1,14 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Diciassette voci**, con un identificatore stabile ciascuna.
+**Quattordici voci**, con un identificatore stabile ciascuna.
 
-Undici sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
+Quattordici sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
 [sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
-la [sezione 3](11-piani-conclusi.md#esito-sezione-3). Tre sono entrate — `R26`, `R27`,
-`R28` — e **due delle tre le ha trovate l'uso del prodotto**, non la lettura del codice.
+la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
+[sezione 4](11-piani-conclusi.md#esito-sezione-4). Tre sono entrate — `R26`, `R27`, `R28` —
+e **due delle tre le ha trovate l'uso del prodotto**, non la lettura del codice.
 
 ## Perché un file a sé
 
@@ -79,7 +80,7 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | ~~**1**~~ | ~~Ritocchi visibili~~ — **conclusa** l'8 settembre 2026 | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-1) · [esito](11-piani-conclusi.md#esito-sezione-1). La riga resta perché l'ordine si legge per intero, e perché l'esito dice una cosa che serve alle sezioni dopo: la navigazione richiedeva **tre** modifiche e non due |
 | ~~**2**~~ | ~~Le pendenze della fetta C~~ — **conclusa** il 9 settembre 2026, **senza il collaudo** | `R2` `R3` | doc + una stringa di backend | [Esito](11-piani-conclusi.md#esito-sezione-2). `R2` ha corretto il punto 10 e, rileggendo gli altri dieci, ha trovato **il punto 4** con lo stesso difetto; `R3` era in **otto** posti e non in due. Il collaudo si è staccato ed è diventato la **5-bis** |
 | ~~**3**~~ | ~~Contratti: correggere gli errori~~ — **conclusa** il 9 settembre 2026 | `R13` `R17` `R18` `R12` `R14` | backend | Era il nodo e il danno peggiore che esistesse: contratti attivi con le quote sbagliate e nessun modo di correggerli. [Piano](11-piani-conclusi.md#piano-sezione-3) · [esito](11-piani-conclusi.md#esito-sezione-3). Eseguirla ha chiuso **un buco che non era in elenco** — si poteva aggiungere una parte a un contratto attivo — e ne ha aperto uno nuovo: `R28`, il subentro |
-| **4** | Stati che nessuno aggiorna — **pianificata**, vedi [09](09-stato-e-roadmap.md#piano-sezione-4) | `R1` `R11` `R25` | migration + dominio + client | Tre volte la stessa domanda — **derivato o scritto a mano?** — e la risposta è quella di [ADR-019](08-decisioni.md#adr-019): le conseguenze si derivano. Pianificarla ha trovato che **`v_property_occupancy` dice zero a tutti**, perché conta una colonna che nessuno scrive |
+| ~~**4**~~ | ~~Stati che nessuno aggiorna~~ — **conclusa** il 9 settembre 2026 | `R1` `R11` `R25` | migration + dominio + client | [Piano](11-piani-conclusi.md#piano-sezione-4) · [esito](11-piani-conclusi.md#esito-sezione-4). La risposta era già in [ADR-019](08-decisioni.md#adr-019): le conseguenze si derivano. Ha corretto **un numero falso che nessuno guardava** — `v_property_occupancy` diceva zero a tutti — e ha lasciato in un test la prova che un trigger sarebbe stato sbagliato |
 | **5** | Segnalazioni | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Tre voci su sei sono già **decise**. Porta una migration (`R19`), due regole di dominio che mancano (`R23`, `R24`) e il primo pezzo del problema dei nomi (`R21`, `R22`) |
 | **5-bis** | **Il collaudo in undici punti** | — | a mano, due account | **Rinviato qui il 9 settembre 2026**, dopo averne percorsi due punti. Sei degli undici attraversano schermate che le sezioni 3, 4, 5, 8 e 9 riscrivono: camminarli prima vuol dire camminarli due volte. Dopo la 5 ne restano fermi nove su undici — l'1 e il 5 dipendono da `R9`, che è la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per cinque sezioni. **Il piano è già scritto**: passi `T3`–`T7` dell'[esito della sezione 2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta. Il costo del rinvio è che il giro **alimenta i piani** e non solo li verifica: `R26` è entrata così |
 | **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. Dopo la 5, che avrà già affrontato come si risolve un nome |
@@ -87,7 +88,7 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | **8** | Il perimetro dei ruoli | `R9` | modello + ADR | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di sicurezza. **ADR prima del codice** |
 | **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
 
-**Concluse la 1, la 2 e la 3: si continua dalla 4.**
+**Concluse la 1, la 2, la 3 e la 4: si continua dalla 5.**
 
 Il **collaudo** non è in fondo alla fila per dimenticanza: è la **5-bis**, e la riga dice
 perché. Va percorso lì e non dopo, o si pianificano cinque sezioni senza che nessuno abbia
@@ -103,7 +104,6 @@ alla conversazione successiva un contesto che non può ricostruire.
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R1 | aperta | **Un immobile non esce mai da `draft`** | `PATCH /properties/{id}` accetta `status` (`UpdatePropertyRequest`), e **nessuna schermata lo manda**: né la creazione né `EditPropertyDialog`. Niente lo deriva, quindi l'etichetta resta sbagliata per sempre. **Non blocca nulla** — nessun use case guarda lo stato dell'immobile. Da chiudere è un `<Select>` nel dialogo. Nota di metodo: l'audit della fetta C non poteva trovarlo, perché confronta quali *funzioni* nessuno chiama e `updateProperty` **è** chiamata, solo mai con quel campo |
 
 ### Interfaccia e prodotto
 
@@ -116,7 +116,6 @@ alla conversazione successiva un contesto che non può ricostruire.
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R11 | aperta | **Una stanza occupata resta «Disponibile»** | Osservato dalla scheda di un immobile: *Chi ci abita* mostra la persona **con la sua stanza**, e la tabella delle stanze accanto dice `available`. La causa non è di presentazione: `RoomStatus::Occupied` esiste nell'enum del dominio e in `app.room_status`, e **nessuno lo scrive mai** — nessun use case, nessun trigger. Il commento di `Room::create` in `crates/domain/src/property/room.rs` dichiara «lo stato passa a `Occupied` quando un contratto la impegna», e quella transizione **non è implementata**: è un invariante scritto e non mantenuto, che è peggio di uno assente perché chi legge il dominio lo dà per vero |
 
 **R11 e [R1](#lelenco) sono la stessa famiglia** — un campo di stato che l'API accetta e che nessuno aggiorna — ma il rimedio non è lo stesso, e vale la pena non trattarli insieme senza deciderlo.
 
@@ -155,7 +154,6 @@ che adesso lo impedisce è [ADR-046](08-decisioni.md#adr-046).
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R25 | aperta | **Una bolletta pagata non risulta pagata** | `app.bill_status` contiene già `'paid'` e `'disputed'`, e **nessuno li scrive**: le transizioni esposte sono validazione, riaddebito e annullamento. È la stessa famiglia di [R11](#lelenco) — uno stato che l'enum prevede e che niente aggiorna — ma qui manca una **capacità**, non un aggiornamento: pagare la bolletta **al fornitore** non è modellato affatto, ed è registrato da tre fette fra ciò che resta fuori dal modulo dei pagamenti. Da decidere se sia una transizione a mano di chi amministra («l'ho pagata»), o un pagamento vero con la sua riga: `app.payments` è polimorfico ma oggi punta agli addebiti, cioè al denaro che entra, mentre questo è denaro che esce |
 
 ### Cancellare, in generale
 

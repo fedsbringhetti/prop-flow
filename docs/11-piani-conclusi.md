@@ -7611,10 +7611,13 @@ vedono usando.
 
 ### Che cosa resta pronto per chi riprende
 
-- l'ambiente è quello che `T3` ha preparato, e nel database di sviluppo c'è **il giro
-  interrotto**: un utente, due immobili di cui uno archiviato, due stanze, un contratto in
-  bozza con due parti **entrambe al 100%** — cioè fermo esattamente sul vicolo cieco che
-  la sezione 3 ha poi aperto;
+- ~~nel database di sviluppo c'è il giro interrotto~~ — **non c'è più**: la sezione 4 ha
+  eseguito `just down-hard` per provare la migration `0033` su un database pulito, e i
+  volumi se ne sono andati con esso. Era un utente, due immobili di cui uno archiviato, due
+  stanze e un contratto in bozza con due parti **entrambe al 100%** — fermo esattamente sul
+  vicolo cieco che la sezione 3 ha poi aperto. **La lezione è che una migration si prova
+  sul container effimero di `ops/ci/test-integration.sh`**, che esiste apposta, e non sul
+  database di sviluppo di qualcun altro;
 - il piano del giro è quello qui sopra, passi `T3`–`T7`, con le sette trappole e la finta
   bolletta;
 - **l'API in esecuzione va riavviata** prima di riprendere: il binario è precedente alle
@@ -8006,3 +8009,363 @@ Tutto: questa sezione è stata scritta e verificata **solo con i test**. Il giro
 punti attraversa esattamente queste schermate — i punti 3, 4 e 5 — ed è il momento in cui
 il lavoro qui si vede davvero: è rinviato alla sezione **5-bis**, dopo la 4 e la 5, e la
 ragione sta nell'[esito della sezione 2](#esito-sezione-2).
+
+---
+
+<a id="piano-sezione-4"></a>
+
+## Piano — Sezione 4: gli stati che nessuno aggiorna
+
+Pianificata il **9 settembre 2026**. È la quarta dell'
+[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione) e chiude `R1`, `R11` e `R25`.
+
+Le tre voci sono **la stessa domanda posta tre volte** — *derivato o scritto a mano?* — e
+stanno insieme per questo. Ma le tre risposte **non sono uguali**, e il piano esiste
+soprattutto per dire perché.
+
+### Il criterio c'è già, e non va inventato
+
+[ADR-019](08-decisioni.md#adr-019) ha risposto a questa domanda una volta, per i
+contratti, e la formula che usa è il criterio di tutta la sezione:
+
+> La scadenza non è una decisione: è una conseguenza, e le conseguenze si derivano.
+
+Lo stato memorizzato cambia **solo su azioni esplicite**; ciò che discende da altri fatti
+si calcola al momento della lettura. `expiring` ed `expired` restano nell'enum — una riga
+scritta a mano potrebbe contenerli — ma l'applicazione non li scrive mai, e il filtro li
+rifiuta con `422` invece di restituire zero righe.
+
+Applicare quel criterio alle tre voci le separa da sole:
+
+| Valore | Che cos'è | Risposta |
+|---|---|---|
+| stanza `unavailable` | una stanza in ristrutturazione: **un giudizio** | memorizzato |
+| stanza `occupied` | c'è un contratto in essere su di essa: **una conseguenza** | derivato |
+| immobile `draft`, `available`, `maintenance` | **giudizi** di chi amministra | memorizzati |
+| immobile `rented`, `partially_rented` | quante stanze sono occupate: **una conseguenza** | derivati |
+| bolletta `paid` | «l'ho pagata al fornitore»: un fatto **fuori dal sistema** | memorizzato, e la capacità manca |
+| bolletta `disputed` | l'inizio di un **processo**, non uno stato | resta fuori |
+
+### Il fatto che il piano ha trovato, e che nessuno aveva in elenco
+
+**`v_property_occupancy` conta una colonna che nessuno scrive, quindi dice sempre zero.**
+
+```sql
+count(r.id) FILTER (WHERE r.status = 'occupied')  AS rooms_occupied,
+CASE WHEN count(r.id) > 0
+     THEN round(100.0 * count(r.id) FILTER (WHERE r.status = 'occupied') / count(r.id), 2)
+END                                               AS occupancy_percent,
+```
+
+`RoomStatus::Occupied` non lo scrive nessun use case e nessun trigger — è `R11` — quindi
+`rooms_occupied` è **0** e `occupancy_percent` è **0,00** per ogni immobile del sistema,
+sempre. È esattamente il difetto che [ADR-019](08-decisioni.md#adr-019) ha corretto sui
+contratti — una vista che conta uno stato che mente — nella direzione opposta: là lo stato
+era stantio, qui non viene scritto affatto.
+
+**Nessuno se n'era accorto perché quella vista la legge solo un test**, e legge
+`active_leases`, che è calcolata da `lease_in_force` e quindi è giusta. Le due colonne
+sbagliate non le guarda nessuno: è un numero falso che aspetta il primo che lo mostri.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Come si sa se una stanza è occupata | **derivata alla lettura**, da `app.lease_in_force` | una colonna aggiornata da un trigger |
+| Dove vive la derivazione | nel **modello di lettura**, in SQL | in un metodo dell'aggregato, come `Lease::effective_status` |
+| Lo stato dell'immobile | `status` memorizzato **più** `effective_status` derivato | un solo campo, con il derivato che vince |
+| Filtrare per uno stato derivato | `422`, come per i contratti, più un filtro booleano | far finta che si possa, restituendo zero righe |
+| La bolletta pagata | una **transizione a mano**: `POST /utility-bills/{id}/pay` | una riga in `app.payments` |
+| `disputed` | **non si espone**, e l'opzione esce dal filtro | esporlo come secondo flag |
+
+### Decisioni, con il perché
+
+#### 1. L'occupazione è derivata, e un trigger andrebbe stantio a mezzanotte
+
+È la decisione che regge tutta la sezione, e l'argomento non è di eleganza.
+
+Un trigger su attivazione e disdetta sembra la via ovvia: due eventi, due `UPDATE`, e la
+colonna resta vera. Non resta vera, perché **l'occupazione dipende dal calendario**: un
+contratto attivato oggi che comincia il primo del mese prossimo non occupa niente adesso,
+e un contratto in essere fino a domani smette di occupare **senza che nessuno tocchi
+niente**. Un trigger non scatta al passare del tempo. Servirebbe uno scheduler notturno —
+che è precisamente ciò che [ADR-019](08-decisioni.md#adr-019) ha già scartato: un
+componente da far girare, monitorare e recuperare dopo un fermo, che apre comunque una
+finestra in cui il database dice una cosa e il calendario un'altra.
+
+**La definizione di «in essere» è già una sola**, `app.lease_in_force`, e la `0030` porta
+già scritto perché non se ne scrivono altre. La derivazione dell'occupazione la usa e non
+la riscrive.
+
+#### 2. Questa derivazione **non è pura**, e quindi non sta nell'aggregato
+
+`Lease::effective_status` si calcola dalle date che il contratto ha addosso: è una funzione
+pura dell'aggregato, e per questo vive nel dominio.
+
+L'occupazione di una stanza no: dipende da **altre righe** — i contratti che la citano — e
+lo stato di un immobile dipende dalle sue stanze. Un metodo sull'aggregato dovrebbe
+ricevere in ingresso ciò che l'aggregato non ha, e chi lo chiama dovrebbe ricordarsi di
+caricarlo: è il modo in cui una regola diventa vera in un punto e falsa in un altro.
+
+Vive quindi nel **modello di lettura**, in SQL accanto a `lease_in_force` e
+`property_residents`, ed esce dal repository insieme alla riga — come i nomi dei contratti
+della sezione 3, che hanno già questa forma.
+
+*Alternativa scartata: copiare `effective_status` di `Lease` alla lettera.* Sembra
+coerenza, e sarebbe una firma che mente: `Room::effective_status(&self)` non può rispondere
+senza i contratti.
+
+#### 3. Due campi sul filo, non uno
+
+`status` resta ciò che qualcuno ha deciso; `effective_status` è ciò che è vero adesso. È la
+forma che i contratti hanno già, e chi legge l'API la riconosce.
+
+*Alternativa scartata: un campo solo, con il derivato che copre il memorizzato.* Perde
+l'informazione che serve a chi amministra: una stanza `unavailable` **e** occupata è un
+errore da vedere — qualcuno l'ha messa in ristrutturazione mentre ci abita una persona — e
+con un campo solo diventa invisibile.
+
+#### 4. Un filtro su uno stato derivato risponde `422`, e accanto c'è un booleano
+
+Identico ai contratti: `?status=rented` non può funzionare, perché in database quel valore
+non c'è, e **restituire zero righe è il modo peggiore di dirlo**. Il codice esiste già —
+`lease.derived_status_filter` — e ne serve uno per famiglia.
+
+Accanto si offre il filtro che serve davvero, come `in_force` fa per i contratti:
+`?occupied=true`. Quello è esprimibile in SQL, perché la derivazione è in SQL.
+
+**Ne segue che due terzi di [`R26`](12-da-fare.md#lelenco) si chiudono qui**: le quattro
+opzioni morte del filtro degli immobili diventano tre valide e due rifiutate con un
+messaggio, e la voce va aggiornata invece di essere tolta — resta il terzo delle bollette,
+che questa sezione chiude a sua volta togliendo `disputed` dal filtro.
+
+#### 5. La bolletta pagata è una transizione a mano, non un pagamento
+
+`app.payments` non è il posto, e ci sono tre ragioni concrete:
+
+- `app.payable_type` è un **enum** con tre valori — `charge`, `expense_share`,
+  `settlement` — e aggiungerne un quarto è una migration più il trigger polimorfico;
+- un pagamento ha `payer_user_id` e `payee_user_id`: **un fornitore non è un utente**, e
+  metterlo a `NULL` significherebbe una riga di pagamento che non dice a chi sono andati i
+  soldi;
+- tutto quel modulo è **denaro che entra** — un addebito che viene saldato — e questo è
+  denaro che esce. È registrato da tre fette fra ciò che resta fuori, e non è questa
+  sezione a deciderlo.
+
+Quindi: `POST /utility-bills/{id}/pay`, che scrive lo stato e la data. È la stessa forma di
+`validate` e `void`, che sono già sotto-risorse e non un `PATCH` sullo stato.
+
+**Da `allocated` e da `validated`**, non da qualunque stato: una bolletta in bozza o in
+revisione non è ancora una bolletta, e una annullata non si paga. Se una bolletta si può
+pagare *prima* di riaddebitarla è la domanda da porsi eseguendo — la risposta probabile è
+sì, perché il fornitore non aspetta il riaddebito.
+
+#### 6. `disputed` non si espone, e l'opzione esce dal filtro
+
+Una contestazione non è uno stato: è un **processo** con una ragione, una data di apertura,
+un esito e — se va bene — una nota di credito. Esporla come flag darebbe un'etichetta senza
+nessuna delle cose che la rendono utile, e la prima persona che la usa si aspetta di poter
+dire *perché*.
+
+Il valore resta nell'enum, come `expiring` per i contratti. Ciò che si toglie è l'opzione
+dal filtro del client, che oggi non può corrispondere a niente.
+
+### Decomposizione
+
+##### `V1` — La migration: la vista che mente, e la derivazione che manca
+
+Una migration nuova — **append-only**, la vista si sostituisce con `CREATE OR REPLACE` in
+un file nuovo — che:
+
+- corregge `v_property_occupancy`, che oggi conta `r.status = 'occupied'` e risponde
+  sempre zero;
+- introduce la derivazione dell'occupazione di una stanza, accanto a `lease_in_force` e con
+  la stessa forma: una funzione `STABLE`, con il confine dentro come fa `property_residents`.
+
+**Prima di scrivere**: rileggere la `0030`, che è il precedente più vicino e spiega perché
+la funzione proietta invece di esporre una vista, e perché `security_invoker` e
+`SECURITY DEFINER` non sono intercambiabili.
+
+##### `V2` — Le due letture portano lo stato effettivo
+
+Stanza e immobile escono dal repository con il derivato accanto al memorizzato, e i DTO lo
+espongono come `effective_status` — stessa parola dei contratti, che è già nel vocabolario
+di chi legge l'API.
+
+##### `V3` — I filtri: `422` sul derivato, booleano accanto
+
+Un codice per famiglia — `property.derived_status_filter`, `room.derived_status_filter` —
+e i filtri `?occupied=true` su stanze e immobili. Il messaggio dice **quale filtro usare**,
+come fa già quello dei contratti.
+
+##### `V4` — Il `<Select>` dello stato, dove è un giudizio
+
+`EditPropertyDialog` offre `draft`, `available`, `maintenance` — e **non** `archived`, che
+ha la sua operazione e che il dominio rifiuta via `PATCH`
+(`PropertyArchiveRequiresDedicatedOperation`), né i due derivati.
+
+La stanza prende `available` e `unavailable` nella **sola** modale di modifica: nessuno
+crea una stanza già in ristrutturazione, ed è la ragione per cui la sezione 1 aveva
+lasciato `status` fuori dal form di creazione — quella scelta si conferma, e adesso ha una
+ragione scritta invece di un rinvio.
+
+##### `V5` — La bolletta si dichiara pagata
+
+`POST /utility-bills/{id}/pay`, con la data. Il client lo offre dalla scheda, e l'elenco
+perde l'opzione `disputed` dal filtro.
+
+##### `V6` — Il client mostra il derivato
+
+I badge di stanza e immobile mostrano `effective_status` e, quando i due divergono,
+**dicono entrambi**: «Non disponibile · occupata» è un'anomalia che chi amministra deve
+vedere, non un dettaglio da nascondere dietro la precedenza di un campo sull'altro.
+
+### Trappole
+
+**Il trigger sembra la via ovvia e va stantio con il calendario.** È la trappola numero
+uno di questa sezione: due `UPDATE` su attivazione e disdetta sembrano bastare, e non
+bastano perché nessuno scatta a mezzanotte quando un contratto comincia.
+
+**`app.lease_in_force` è l'unica definizione di «in essere».** Confrontare le date a mano
+crea la seconda definizione che quella funzione esiste per impedire — la `0030` lo dice
+già, e vale identico qui.
+
+**Le migration sono append-only.** La vista non si modifica dove sta: si scrive un file
+nuovo con `CREATE OR REPLACE VIEW`.
+
+**Lo stato derivato non si scrive mai.** `occupied`, `rented` e `partially_rented` restano
+nell'enum e nessuno li mette in una `UPDATE`: è la regola di ADR-019, e il modo in cui si
+viola è «tanto lo aggiorno anche qui, per sicurezza».
+
+**`R26` si chiude per due terzi qui**, non del tutto: la voce va aggiornata, e ciò che
+resta è il filtro «Archiviato» degli immobili — che è vuoto per una ragione diversa da
+tutte queste, cioè perché archiviare mette `deleted_at`.
+
+**Il conteggio delle stanze occupate cambia dei numeri che qualcuno potrebbe già
+guardare.** Oggi `occupancy_percent` è zero ovunque: quando comincia a dire la verità, un
+grafico che lo mostrasse cambierebbe di colpo. Nessuno lo mostra — va verificato prima di
+correggere la vista, non dopo.
+
+### Come si saprà che è finita
+
+- una stanza con un contratto in essere si legge **occupata**, e senza nessuno torna
+  disponibile **senza che nessuno tocchi niente** — un test con due date lo prova;
+- una stanza in ristrutturazione resta `unavailable` anche se occupata, e l'interfaccia
+  mostra tutte e due le cose;
+- un immobile esce da `draft`, e i due stati che dipendono dai contratti non si scrivono a
+  mano;
+- `?status=rented` risponde `422` dicendo quale filtro usare, e `?occupied=true` funziona;
+- `v_property_occupancy` non dice più zero: un test la interroga su un immobile con una
+  stanza occupata;
+- una bolletta si dichiara pagata, e `disputed` non compare più fra i filtri;
+- `just ci` verde, con i test nuovi sulle **date** e non solo sugli stati.
+
+### Che cosa **non** entra
+
+- **il pagamento vero al fornitore**: denaro in uscita è un modulo che non esiste, e
+  `app.payments` è costruito per il denaro che entra;
+- **la contestazione come processo**: ragione, esito, nota di credito. Se serve, è una
+  voce nuova;
+- **il terzo di `R26` sugli immobili archiviati**, che ha una causa sua;
+- **lo stato del contratto**, che è già derivato e non si tocca.
+
+<a id="esito-sezione-4"></a>
+
+## Esito — Sezione 4: gli stati che nessuno aggiorna
+
+Eseguita il **9 settembre 2026**. Chiude `R1`, `R11` e `R25`.
+
+Il criterio non è stato inventato: [ADR-019](08-decisioni.md#adr-019) l'aveva già dato —
+*le conseguenze si derivano, le decisioni si memorizzano* — e applicarlo ha separato le
+tre voci da solo.
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `V1` | Migration `0033`: `app.room_is_occupied`, `app.property_occupancy_status`, e `v_property_occupancy` che **smette di dire zero a tutti** |
+| `V2` | Stanze e immobili escono dalle letture con `effective_status` accanto a `status` |
+| `V3` | `?status=rented` risponde `422` con `property.derived_status_filter`, e accanto c'è `?occupied=true` |
+| `V4` | Le due tendine, dove lo stato è un giudizio: immobile `draft`/`available`/`maintenance`, stanza `available`/`unavailable` |
+| `V5` | Migration `0034` e `POST /utility-bills/{id}/pay`: la bolletta si dichiara pagata, con la data |
+| `V6` | I badge mostrano il derivato **e** il dichiarato quando divergono, come già fanno i contratti |
+
+**Due migration e non una**, ed è la divisione giusta: la `0033` deriva ciò che non si può
+memorizzare, la `0034` memorizza ciò che non si può derivare — una bolletta pagata al
+fornitore è un fatto che accade fuori dal prodotto, e nessuna query lo sa.
+
+I test Rust passano da **428 a 431**.
+
+### Il numero falso che nessuno guardava
+
+`v_property_occupancy` contava `r.status = 'occupied'`, che è la colonna che `R11` dice non
+essere scritta mai: `rooms_occupied` e `occupancy_percent` erano **zero per ogni immobile,
+sempre**, da quando la vista esiste. Nessuno se n'era accorto perché quella vista la legge
+un test solo, e leggeva `active_leases` — l'unica colonna giusta, perché passa da
+`lease_in_force`.
+
+È lo stesso difetto che ADR-019 ha corretto sui contratti, rovesciato: là lo stato era
+stantio, qui non veniva scritto affatto. Adesso un test lo guarda su un immobile con una
+stanza davvero occupata.
+
+### La prova che un trigger sarebbe stato sbagliato
+
+È un test, e vale più di un ragionamento: due contratti **entrambi attivi**, uno in essere
+da dieci giorni e uno che comincia **fra un mese**. La prima stanza risulta occupata, la
+seconda no. Un `UPDATE` all'attivazione le avrebbe marcate tutte e due, e nessun trigger
+sarebbe scattato la notte in cui il secondo contratto comincia davvero.
+
+### Che cosa il piano non aveva previsto
+
+**Il confine dentro la funzione rompe la lettura dal pool privilegiato.**
+`app.room_is_occupied` è `SECURITY DEFINER` e porta `can_access_property` nel corpo, come
+`app.property_residents` della `0030`. Sul pool privilegiato — che non ha contesto — quel
+confine risponde «no» e la vista conta zero: il test che la interroga ha dovuto installare
+`app.current_org_id` **e** `app.current_user_id`, perché `can_access_property` passa da
+`is_org_staff`, che chiede il ruolo di *quella* persona in *quella* organizzazione. Non è
+un difetto: è la ragione per cui una funzione che legge senza policy deve controllare da sé
+chi la chiama, e ora è scritto in un test invece che in un commento.
+
+**Una stanza è occupata anche da un contratto sull'immobile intero.** Non era nel piano e
+sarebbe stato un secondo zero: chi affitta tutto l'appartamento occupa ogni stanza che c'è
+dentro, e contare solo i contratti che nominano la stanza avrebbe detto che un
+appartamento interamente affittato ha zero stanze occupate.
+
+**`app.utility_bills` non aveva una colonna per la data del pagamento.** Il piano diceva
+«scrive lo stato e la data» dandola per esistente. Da qui la seconda migration, con il
+vincolo `utility_bills_paid_ck` che ricalca `utility_bills_validated_ck`: uno stato che
+dichiara un fatto senza la data del fatto non dice quando è successo.
+
+### Decisioni prese eseguendo
+
+**Chi ha dichiarato pagata una bolletta non diventa una colonna.** `validated_by` esiste
+perché la validazione è il momento in cui una persona si prende la responsabilità dei
+numeri che una macchina ha letto — un fatto sul dato. Dichiarare pagata è un fatto sul
+denaro, e chi l'ha fatto sta in `audit_log` come ogni altra scrittura.
+
+**La dichiarazione non si disfa.** Se il pagamento non è mai partito, ciò che va corretto è
+la dichiarazione, e correggere una dichiarazione è un'operazione che questo modulo non ha —
+come non ha la contestazione. Meglio non offrirla che offrirla a metà.
+
+**`archived` resta fra le opzioni del filtro degli immobili**, e continua a non poter
+corrispondere a niente: è il terzo di `R26` che questa sezione non chiude, ed è scritto nel
+codice del client accanto all'elenco delle opzioni perché chi lo legge non lo prenda per
+una svista.
+
+### Che cosa resta aperto
+
+- **`R26` si chiude per due terzi**: le opzioni derivate degli immobili e `disputed` sulle
+  bollette escono dai filtri. Resta «Archiviato», che è vuoto per una ragione tutta sua;
+- **la contestazione come processo** — ragione, esito, nota di credito — non è entrata, e
+  se serve è una voce nuova;
+- **il pagamento vero al fornitore**: denaro in uscita resta un modulo che non esiste;
+- **una data scelta da chi dichiara**: oggi il pagamento è «adesso». Una bolletta pagata la
+  settimana scorsa e registrata oggi è un caso che questo modulo non tratta, e con la data
+  scelta arriverebbe la domanda su quanto indietro si possa andare.
+
+### Che cosa non è stato provato a mano
+
+Tutto, come per la sezione 3: solo test. E qui pesa di più, perché due schermate cambiano
+sotto gli occhi — la scheda dell'immobile e quella della bolletta — e i punti **2** e **6**
+del collaudo le attraversano. Sono anche i due punti che la sezione 5-bis rimetterà in
+piedi.
