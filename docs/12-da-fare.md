@@ -1,12 +1,13 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Diciannove voci**, con un identificatore stabile ciascuna.
+**Diciassette voci**, con un identificatore stabile ciascuna.
 
-`R4`, `R5`, `R6`, `R10` e `R20`, più il bottone del thread, sono uscite con la
-[sezione 1](11-piani-conclusi.md#esito-sezione-1); `R12`, `R13`, `R14`, `R17` e `R18` con
-la [sezione 3](11-piani-conclusi.md#esito-sezione-3). `R26` e `R27` sono entrate con la
-sezione 2, che è il collaudo: **è il posto da cui questo file cresce**, ed è anche l'unico.
+Undici sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
+[sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
+[sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
+la [sezione 3](11-piani-conclusi.md#esito-sezione-3). Tre sono entrate — `R26`, `R27`,
+`R28` — e **due delle tre le ha trovate l'uso del prodotto**, non la lettura del codice.
 
 ## Perché un file a sé
 
@@ -76,16 +77,21 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | | Sezione | Voci | Natura | Perché è lì |
 |---|---|---|---|---|
 | ~~**1**~~ | ~~Ritocchi visibili~~ — **conclusa** l'8 settembre 2026 | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-1) · [esito](11-piani-conclusi.md#esito-sezione-1). La riga resta perché l'ordine si legge per intero, e perché l'esito dice una cosa che serve alle sezioni dopo: la navigazione richiedeva **tre** modifiche e non due |
-| **2** | Le pendenze della fetta C | `R2` `R3` + il collaudo in undici punti | doc + due righe di backend | Chiude la fetta precedente invece di lasciarla a metà. `R2` è una correzione al testo del collaudo che va fatta **prima** di percorrerlo, o il punto 10 non prova ciò che dice |
+| ~~**2**~~ | ~~Le pendenze della fetta C~~ — **conclusa** il 9 settembre 2026, **senza il collaudo** | `R2` `R3` | doc + una stringa di backend | [Esito](11-piani-conclusi.md#esito-sezione-2). `R2` ha corretto il punto 10 e, rileggendo gli altri dieci, ha trovato **il punto 4** con lo stesso difetto; `R3` era in **otto** posti e non in due. Il collaudo si è staccato ed è diventato la **5-bis** |
 | ~~**3**~~ | ~~Contratti: correggere gli errori~~ — **conclusa** il 9 settembre 2026 | `R13` `R17` `R18` `R12` `R14` | backend | Era il nodo e il danno peggiore che esistesse: contratti attivi con le quote sbagliate e nessun modo di correggerli. [Piano](11-piani-conclusi.md#piano-sezione-3) · [esito](11-piani-conclusi.md#esito-sezione-3). Eseguirla ha chiuso **un buco che non era in elenco** — si poteva aggiungere una parte a un contratto attivo — e ne ha aperto uno nuovo: `R28`, il subentro |
 | **4** | Stati che nessuno aggiorna | `R1` `R11` `R25` | da decidere | Tre volte la stessa domanda — **derivato o scritto a mano?** — e conviene rispondere una volta sola. `R11` propende per derivato, `R1` per scritto, `R25` è una capacità che manca del tutto |
 | **5** | Segnalazioni | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Tre voci su sei sono già **decise**. Porta una migration (`R19`), due regole di dominio che mancano (`R23`, `R24`) e il primo pezzo del problema dei nomi (`R21`, `R22`) |
+| **5-bis** | **Il collaudo in undici punti** | — | a mano, due account | **Rinviato qui il 9 settembre 2026**, dopo averne percorsi due punti. Sei degli undici attraversano schermate che le sezioni 3, 4, 5, 8 e 9 riscrivono: camminarli prima vuol dire camminarli due volte. Dopo la 5 ne restano fermi nove su undici — l'1 e il 5 dipendono da `R9`, che è la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per cinque sezioni. **Il piano è già scritto**: passi `T3`–`T7` dell'[esito della sezione 2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta. Il costo del rinvio è che il giro **alimenta i piani** e non solo li verifica: `R26` è entrata così |
 | **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. Dopo la 5, che avrà già affrontato come si risolve un nome |
 | **7** | Cancellare, in generale | `R15` | client trasversale | Dopo la 3, perché finché un contratto non si elimina «elimina» non è un'operazione sola. Ha una decisione sua: che cosa significa il verbo su entità che si archiviano, si annullano o non si toccano, e che cosa vuol dire un esito parziale su N chiamate |
 | **8** | Il perimetro dei ruoli | `R9` | modello + ADR | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di sicurezza. **ADR prima del codice** |
 | **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
 
-**La sezione 1 è conclusa: si continua dalla 2.**
+**Concluse la 1, la 2 e la 3: si continua dalla 4.**
+
+Il **collaudo** non è in fondo alla fila per dimenticanza: è la **5-bis**, e la riga dice
+perché. Va percorso lì e non dopo, o si pianificano cinque sezioni senza che nessuno abbia
+usato il prodotto.
 
 L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
 riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
@@ -98,8 +104,6 @@ alla conversazione successiva un contesto che non può ricostruire.
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R1 | aperta | **Un immobile non esce mai da `draft`** | `PATCH /properties/{id}` accetta `status` (`UpdatePropertyRequest`), e **nessuna schermata lo manda**: né la creazione né `EditPropertyDialog`. Niente lo deriva, quindi l'etichetta resta sbagliata per sempre. **Non blocca nulla** — nessun use case guarda lo stato dell'immobile. Da chiudere è un `<Select>` nel dialogo. Nota di metodo: l'audit della fetta C non poteva trovarlo, perché confronta quali *funzioni* nessuno chiama e `updateProperty` **è** chiamata, solo mai con quel campo |
-| R2 | aperta | **Il punto 10 del collaudo non prova `C2` come è scritto** | Dice «il proprietario in una finestra, un inquilino nell'altra», e due account richiedono due contenitori di cookie: senza cookie condiviso non c'è contesa, e il punto passerebbe anche con il lock rimosso. La versione che lo esercita è **due schede dello stesso account nello stesso profilo, ricaricate insieme**. Correzione al testo in `11-piani-conclusi.md` |
-| R3 | aperta | **Il messaggio di `C6` è invecchiato di un giorno** | Dice «nessuno lo carica da solo: lo fa la shell», e il `justfile` ora lo carica con `set dotenv-load`. Due righe in `crates/api/src/config.rs` |
 
 ### Interfaccia e prodotto
 

@@ -297,17 +297,28 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [sezione 2](#piano-sezione-2)**, che è pianificata qui sotto: il
-[collaudo della fetta C](11-piani-conclusi.md#esito-fetta-c) in undici punti, a mano, con
-due account e senza mai aprire `curl`, più le due correzioni di testo che lo precedono.
-Non è una formalità dopo il lavoro: **è il criterio della fetta**, e il codice di
-`C1`–`C6` è scritto, verde e non ancora attraversato per intero. Comincia correggendo il
-testo del punto 10 (`R2`), che come è scritto non proverebbe ciò che dice.
+**La [sezione 4](12-da-fare.md#lordine-di-esecuzione)** — gli stati che nessuno aggiorna:
+`R1`, `R11` e `R25`. Tre volte la stessa domanda — **derivato o scritto a mano?** — e
+conviene rispondere una volta sola, perché le tre risposte non sono uguali: su un immobile
+lo stato è un giudizio di chi amministra, su una stanza è un *fatto* che discende dai
+contratti, e su una bolletta manca proprio la capacità di dire «l'ho pagata».
 
-**I punti 3, 4 e 5 di quel giro attraversano ciò che la sezione 3 ha appena riscritto** —
-parti, quote, attivazione, inviti — ed è la ragione per cui la 2 è stata lasciata aperta:
-camminarla prima avrebbe prodotto un esito su codice che stava per cambiare. Adesso il
-codice è fermo.
+**Il collaudo in undici punti è rinviato alla sezione 5-bis**, e non è una dimenticanza: la
+riga dell'[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione) porta la ragione, e
+l'[esito della sezione 2](11-piani-conclusi.md#esito-sezione-2) porta anche il costo del
+rinvio. In breve: sei degli undici punti attraversano schermate che le sezioni 3, 4, 5, 8 e
+9 riscrivono, quindi camminarli adesso vuol dire camminarli due volte; dopo la 5 ne restano
+fermi nove.
+
+**Ne segue una cosa che va tenuta presente pianificando la 4 e la 5**: si progetteranno
+leggendo il codice, senza che nessuno abbia usato il prodotto nel frattempo. È
+esattamente il modo in cui `R26` **non** sarebbe stata trovata.
+
+**La [sezione 2](11-piani-conclusi.md#esito-sezione-2) è conclusa quanto alle due
+correzioni**: il punto 10 del collaudo adesso prova ciò che dichiara — vuole due schede
+dello stesso account — e con lui il punto 4, che aveva lo stesso difetto e che nessuno
+sapeva. Il messaggio della configurazione dice che `.env` lo carica `just`, in tutti e otto
+i posti in cui quella frase viveva.
 
 **La [sezione 3](11-piani-conclusi.md#esito-sezione-3) è conclusa**: il vicolo cieco dei
 contratti non esiste più. Una bozza si annulla, una quota sbagliata si corregge — anche a
@@ -375,290 +386,6 @@ esattamente uno staff.
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
 
-
-<a id="piano-sezione-2"></a>
-
-## Piano — Sezione 2: le pendenze della fetta C
-
-Pianificata l'**8 settembre 2026**, subito dopo la [sezione 1](11-piani-conclusi.md#esito-sezione-1).
-È la seconda delle nove dell'[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione), e
-chiude `R2`, `R3` e **il collaudo in undici punti** — cioè la fetta C, che oggi ha un
-[esito aperto](11-piani-conclusi.md#esito-fetta-c).
-
-**Qui il codice è due stringhe.** Tutto il resto è prosa e cammino, ed è il motivo per cui
-questa sezione esiste: il criterio della fetta C non è la suite — che è verde da un giorno
-— ma che **una persona attraversi il prodotto per intero con due account e un browser,
-senza mai aprire `curl`**. Finché quel giro non è stato fatto, «funziona» è
-un'affermazione che nessuno ha verificato.
-
-### Stato di avanzamento, all'8 settembre 2026
-
-**`T1`, `T2` e `T3` sono fatti; il giro no.** Chi riprende parte da `T4`, e l'ambiente è
-già quello che `T3` chiede.
-
-| Passo | Stato |
-|---|---|
-| `T1` | **fatto.** Il punto 10 corretto, e la rilettura ha trovato **il punto 4** con lo stesso difetto: «uno revocato e rifatto» si percorre senza mai presentare il codice revocato. Corretti entrambi in luogo, con le formulazioni vecchie conservate |
-| `T2` | **fatto.** Le otto occorrenze e la nota ad [ADR-023](08-decisioni.md#adr-023); il messaggio riletto davvero, con un ambiente incompleto |
-| `T3` | **fatto.** Volumi cancellati, database ricreato — 32 migration, invarianti tutte rispettate — bucket nuovo, `SECURE_COOKIES=false` già a posto. Che cosa è stato cancellato è annotato qui sotto |
-| `T4`–`T6` | **aperti.** Il giro non è stato percorso |
-| `T7` | **aperto**, perché è l'esito del giro |
-
-**Che cosa il `down-hard` ha portato via**, come la decisione 5 chiede di annotare:
-un'organizzazione (`AuraFact`), un utente, un immobile in bozza con due stanze, un
-contratto in bozza senza parti, una segnalazione aperta. Nessun documento, quindi nel
-bucket non c'era niente. L'evidenza di `R18` non c'era già più.
-
-**Il giro è cominciato e si è fermato al punto 2**, che ha già trovato un difetto —
-[`R26`](12-da-fare.md#lelenco), il filtro «Archiviato» che non può restituire niente — e
-questa è la dimostrazione più corta del perché la sezione esiste: il difetto è saltato
-fuori al secondo punto, camminando.
-
-**Che cosa serve per riprendere:** due account inquilino registrati, e le credenziali dei
-tre. La registrazione è il solo gesto che chi guida non può fare al posto di chi cammina,
-ed è anche il punto 1 e la prima metà del punto 5.
-
-### Che cosa è stato deciso prima di pianificare
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| Il testo del punto 10, che vive nell'archivio | si corregge **in luogo e in modo visibile**, lasciando leggibile ciò che diceva | spostare il collaudo in `09`, o correggerlo solo qui nel piano |
-| Il messaggio della configurazione | nomina **`just`** come via normale e **conserva** `set -a; source .env; set +a` | dire solo `just`, o togliere la frase |
-| [ADR-023](08-decisioni.md#adr-023) | una **nota di aggiornamento**: la decisione non è cambiata | un ADR nuovo sul `justfile` |
-| Lo stato del database su cui si cammina | **vuoto**, ma guardando prima che cosa si cancella | camminare sopra i dati che ci sono |
-| Chi cammina | **chi non ha scritto il codice**, cioè non chi lo ha scritto | far percorrere il giro a chi ha fatto la fetta |
-
-### Decisioni, con il perché
-
-#### 1. Un testo dell'archivio si corregge in luogo, e la correzione si vede
-
-`11` **non si riscrive mai** — nemmeno per aggiustare una previsione che l'esecuzione ha
-smentito, che è la parte più utile da rileggere. Ma la tabella del collaudo è
-un'eccezione dichiarata **dentro** l'archivio stesso: dice «questa sezione si riempie
-percorrendolo, ed è ciò che chiude la fetta». Riempirla è già una scrittura in `11`.
-
-Il punto 10 però non è una previsione sbagliata: è un'**istruzione che non prova ciò che
-dichiara**, e percorrerla com'è scritta produrrebbe una riga verde che non significa
-niente. Si corregge quindi in luogo, **conservando la formulazione vecchia** — barrata, o
-in una riga sotto la tabella — perché il valore dell'archivio è anche che si veda che cosa
-si credeva.
-
-*Alternativa scartata: spostare il collaudo in `09`.* Separerebbe il criterio dalla fetta
-che lo ha prodotto, e `09` si riscrive a ogni fetta: i risultati del giro sparirebbero
-alla successiva.
-
-*Alternativa scartata: correggere solo qui nel piano.* Chi percorre il collaudo legge la
-tabella in `11`, non il piano di una sezione che nel frattempo è finito in archivio.
-
-#### 2. Il punto 10 prova `C2` solo con **due schede dello stesso account**
-
-Com'è scritto — «il proprietario in una finestra, un inquilino nell'altra» — non esercita
-niente: due account sono due contenitori di cookie, quindi due catene di refresh distinte,
-e **non c'è contesa**. Il punto passerebbe anche con il lock rimosso, cioè è un test che
-non può fallire.
-
-Quello che `C2` protegge è la corsa di **due schede della stessa sessione** con l'access
-token scaduto insieme: la seconda presenta un refresh token già ruotato, e l'API **revoca
-la catena** — entrambe fuori. La versione che lo esercita è quindi: *stesso account,
-stesso profilo del browser, due schede, ricaricate insieme dopo la scadenza*.
-
-Va scritto anche **che cosa si guarda**, o il punto resta ambiguo: il criterio è che
-nessuna delle due schede venga buttata fuori, e prima della fetta C era **certo** che
-fallisse.
-
-#### 3. Il messaggio della configurazione nomina `just`, e non toglie la shell
-
-`R3` sembra una riga e sono **otto occorrenze**: la stessa affermazione — «`.env` lo
-carica la shell» — è ripetuta in `crates/api/src/config.rs` (il messaggio d'errore e il
-commento di `AppConfig`), `CLAUDE.md` §4, `README.md`, `.env.example`, `docs/06-sviluppo.md`
-(due volte: i comandi e la tabella dei sintomi), `docs/07-operazioni.md` (due volte) e
-[ADR-023](08-decisioni.md#adr-023). Dal `justfile` con `set dotenv-load` non è più tutta
-la verità.
-
-Il messaggio d'errore lo legge **chi ha appena visto l'API non partire**, e quella persona
-può averla avviata in due modi. Dice quindi entrambi: `just api` lo carica da sé; chi
-lancia `cargo run` a mano fa `set -a; source .env; set +a`.
-
-*Alternativa scartata: dire solo `just`.* Sarebbe falso per chi lancia il binario, ed è
-esattamente la persona che quel messaggio incontra.
-
-*Alternativa scartata: togliere la frase.* È il rimedio, cioè la ragione per cui il
-messaggio esiste: senza, torna a essere la validazione di figment che dice che manca un
-campo e non da dove debba arrivare.
-
-#### 4. `ADR-023` prende una nota, non un successore
-
-La decisione è «`.env` è un file per la shell, **non una sorgente di configurazione**», e
-**non è cambiata**: nessun crate dipende da `dotenvy`, il processo continua a non leggere
-quel file, e `just` lo carica **fuori** dal processo esattamente come faceva la shell. È
-cambiata l'ergonomia, non la proprietà.
-
-Quindi una nota di aggiornamento in coda all'ADR, datata. Un ADR nuovo direbbe che si è
-deciso qualcosa, e non si è deciso niente: si è aggiunto un modo di digitare meno.
-
-#### 5. Si cammina su un database vuoto, e prima si guarda che cosa si cancella
-
-Il punto 1 è «il proprietario si registra e atterra sul **riepilogo vuoto**»: su un
-database con dei dati quel punto non è osservabile, e i nove successivi partirebbero da uno
-stato che nessuno ha scritto.
-
-Ma cancellare non è gratis, e va fatto **guardando**: `just down-hard` porta via anche i
-volumi di **MinIO**, quindi i documenti caricati, e quello che c'è nel database di sviluppo
-è l'unica prova osservata di alcune voci di [12](12-da-fare.md). Il passo `T3` chiede
-perciò di guardare prima e di annotare ciò che sparisce.
-
-**Un caso è già successo**, ed è la ragione per cui questa decisione è scritta: il
-contratto attivo con le quote `100 / 0` che documenta [`R18`](12-da-fare.md#lelenco)
-**non è più** nel database di sviluppo. La voce resta valida — è descritta in prosa, con
-il meccanismo che la produce — ma la sezione 3 non deve contare di trovarne l'esemplare.
-
-#### 6. Il giro lo percorre chi non ha scritto il codice
-
-È metà del criterio, non un dettaglio organizzativo: chi ha scritto una schermata la
-attraversa come la pensava, non come la incontra chi non sa dov'è il bottone.
-
-Ne segue una divisione pratica del lavoro, e va detta perché altrimenti la sezione si
-ferma: **la registrazione dei due account e i gesti del giro sono di chi collauda**;
-preparare l'ambiente, il testo del punto 10, il messaggio di `R3` e la scrittura dell'esito
-si possono fare prima e dopo. Il piano descrive quindi ogni punto con **che cosa si
-osserva**, non solo che cosa si fa.
-
-### Decomposizione
-
-`T1` e `T2` sono indipendenti da tutto il resto e si possono fare subito. `T3` prepara,
-`T4`–`T6` sono il giro, `T7` lo chiude.
-
-##### `T1` — Il punto 10, e gli altri dieci riletti con lo stesso metro
-
-Correggere il punto 10 in `11-piani-conclusi.md`, conservando la formulazione vecchia.
-
-**E rileggere gli altri dieci con la stessa domanda**: *questo punto, come è scritto,
-prova ciò che dichiara?* Costa dieci minuti ed è l'unico momento in cui conviene farlo —
-dopo, ogni punto sarà stato percorso e la domanda non si porrà più. `R2` è nato così, da
-un solo punto guardato con quella domanda.
-
-##### `T2` — `R3`, le otto occorrenze e la nota all'ADR
-
-Il messaggio in `crates/api/src/config.rs` e il commento di `AppConfig`; poi `CLAUDE.md`
-§4, `README.md`, `.env.example`, `docs/06-sviluppo.md`, `docs/07-operazioni.md`; infine la
-nota in coda ad [ADR-023](08-decisioni.md#adr-023).
-
-**Nessun test asserisce su quel messaggio** — la fetta C lo ha verificato — quindi la
-suite non protegge questo passo: la verifica è rileggerlo dopo averlo cambiato, con
-`cargo run -p propflow-api` e un `.env` incompleto.
-
-##### `T3` — Preparare il giro
-
-Guardare che cosa c'è nel database e annotarlo; poi `just down-hard`, `just up`, `just db`,
-e i tre processi: API, worker, client. **Il worker serve davvero** — vedi le trappole.
-
-Preparare anche le due cose che il giro chiede e che non si improvvisano:
-
-- `PROPFLOW__SERVER__SECURE_COOKIES=false`, o su HTTP il browser non manda il cookie e la
-  sessione dura i quindici minuti dell'access token — e il punto 10 fallirebbe per la
-  ragione sbagliata;
-- **la finta bolletta** che l'OCR sa leggere, che è un file di testo (sotto, nelle
-  trappole, con il contenuto pronto).
-
-##### `T4` — Punti 1–5: dal riepilogo vuoto ai due inquilini dentro
-
-Registrazione e atterraggio; immobile, due stanze **e una corretta**; due contratti per
-stanza con le parti e l'attivazione; due inviti, **uno revocato e rifatto**; i due
-inquilini che si registrano e accettano, **nell'organizzazione giusta**.
-
-Che cosa si osserva, oltre al fatto che non ci siano errori: che l'organizzazione attiva
-dopo l'accettazione sia quella dell'invito e non quella personale (`C1`, ADR-045), e che
-l'invito revocato **non funzioni più**.
-
-##### `T5` — Punti 6–9: il denaro e i guasti
-
-Bolletta con scansione, revisione dell'OCR, validazione e riaddebito; segnalazione **con
-foto** e ciclo completo; dichiarazione di pagamento, conferma, residuo che scende; gruppo
-di spesa, una spesa a testa, rimborso, saldi a zero.
-
-Qui si guarda soprattutto **il verso dei numeri**: l'insoluto che scende della cifra
-giusta, e i saldi co-living che tornano a zero da entrambe le parti.
-
-##### `T6` — Punti 10 e 11: la corsa fra schede, e i 375 px
-
-Il punto 10 nella forma corretta da `T1`. Il punto 11 è il percorso dell'inquilino a
-375 px, **dalla parte sua**: entra, vede quanto deve, dichiara di aver pagato, segnala un
-guasto, guarda le spese.
-
-##### `T7` — L'esito, e la fetta C chiusa
-
-Riempire le undici righe **anche dove è andato tutto bene**, con che cosa si è visto e non
-con un segno di spunta. Ciò che il giro ha trovato entra in [12](12-da-fare.md) con
-identificatori nuovi — **si continua da `R26`**, i numeri chiusi non si riusano — e non si
-corregge qui. Poi l'esito della fetta C smette di essere aperto, e `R2` e `R3` escono da
-`12`.
-
-### Trappole
-
-**Il punto 10 vuole una sola origine.** Il lock del rinnovo è **per origine**: una scheda
-su `http://localhost:5173` e una su `http://localhost:8081` — lo stack dietro il proxy —
-sono due origini diverse, `navigator.locks` non le coordina e nemmeno il ripiego in
-`localStorage`, che è per origine anch'esso. Due schede così proverebbero il **contrario**
-di ciò che si vuole, e in silenzio.
-
-**Senza il worker, la bolletta non arriva mai in revisione, e il sintomo è muto.** Niente
-va in errore: semplicemente non succede niente. È già scritto nel `justfile` e in
-`CLAUDE.md` §4, ed è la trappola che costa di più al punto 6.
-
-**L'OCR di sviluppo non legge né PDF né immagini, e non è un difetto.**
-`DeterministicOcrProvider` tratta il documento come **testo** e cerca righe
-`Etichetta: valore`; un PDF o un JPEG li rifiuta con `UnsupportedDocument`, che è la
-verità — non sa leggerli. Chi carica una scansione vera al punto 6 conclude che il
-prodotto è rotto. La finta bolletta da caricare, con le etichette che riconosce:
-
-```
-Fornitore: Enel Energia
-Partita IVA: 06655971007
-Numero fattura: 2026-000123
-Data emissione: 01/09/2026
-Scadenza: 30/09/2026
-Periodo dal: 01/07/2026
-Periodo al: 31/08/2026
-Imponibile: 96,00
-IVA: 21,12
-Totale: 117,12
-Consumo: 412,5 kWh
-```
-
-**`just down-hard` porta via anche MinIO.** I documenti caricati sono oggetti nel bucket,
-non righe: si perdono con i volumi, e la riga che li cita resta senza byte.
-
-**Non si corregge niente a metà giro.** Ciò che si trova si **annota** e si continua:
-correggere cambia il sistema sotto i piedi, e i punti successivi non provano più lo stato
-che si stava attraversando. Le correzioni sono le sezioni 3–9.
-
-**L'esito si scrive anche se è andato tutto bene.** Una fetta che chiude con «tutto bene»
-dopo un giro come questo è, quasi sempre, una fetta il cui giro non è stato fatto.
-
-**Gli identificatori non si riusano.** `R4`, `R5`, `R6`, `R10` e `R20` sono chiusi: ciò
-che esce dal giro parte da `R26`.
-
-### Come si saprà che è finita
-
-- le **undici righe** hanno un esito scritto, con che cosa si è visto;
-- il punto 10 è stato percorso **nella forma che esercita `C2`**, e nessuna delle due
-  schede è stata buttata fuori;
-- ciò che il giro ha trovato è in [12](12-da-fare.md), con identificatori nuovi e senza
-  essere stato corretto;
-- `R2` e `R3` sono chiusi ed escono da `12`; l'esito della fetta C non è più aperto;
-- `just ci` verde: `R3` tocca una stringa in Rust, e il resto è prosa.
-
-### Che cosa **non** entra
-
-- **correggere i difetti che il giro trova.** Vanno in `12` e nelle sezioni 3–9: una
-  sezione che si allarga a ciò che incontra non finisce mai, e questa deve chiudere la
-  fetta C;
-- **le notifiche**, che restano dopo il collaudo per decisione della fetta C;
-- **il fornitore di OCR vero**: il punto 6 si percorre con l'adattatore deterministico, che
-  esiste apposta per rendere osservabile il percorso prima che un fornitore sia scelto;
-- **qualunque cosa richieda una decisione di prodotto.** Se un punto del giro non si può
-  percorrere perché manca una decisione, quella è una voce di `12`, non un lavoro da fare
-  qui.
 
 <a id="raccolta-da-ordinare"></a>
 
