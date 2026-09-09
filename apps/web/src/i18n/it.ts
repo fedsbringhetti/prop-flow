@@ -229,6 +229,14 @@ export const it = {
     /** Quando l'immobile è archiviato il nome non si legge più: la riga resta e
      *  lo dice, invece di mostrare uno spazio vuoto. */
     unknownProperty: 'Immobile archiviato',
+    /** L'avviso arriva **prima**, ma non vieta: due bozze sullo stesso periodo
+     *  sono ipotesi alternative, e i vincoli del database le ammettono apposta. */
+    overlapTitle: 'Su questo periodo c’è già un contratto',
+    overlapExplain:
+      'La bozza si crea lo stesso — due ipotesi sullo stesso periodo sono ammesse — ma l’attivazione verrà rifiutata finché l’altro contratto è in essere.',
+    overlapAcknowledge: 'L’ho visto: crea la bozza lo stesso.',
+    overlapPeriod: (start: string, end: string) => `In essere dal ${start} al ${end}.`,
+    overlapNoEnd: (start: string) => `In essere dal ${start}, senza scadenza.`,
     startDate: 'Inizio',
     endDate: 'Fine',
     endDateHint: 'Esclusiva: per un contratto valido fino al 31 dicembre indica il 1° gennaio.',
