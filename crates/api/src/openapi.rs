@@ -78,6 +78,7 @@ use utoipa::{Modify, OpenApi};
         crate::routes::billing::bill_ocr_status,
         crate::routes::billing::validate_bill,
         crate::routes::billing::void_bill,
+        crate::routes::billing::pay_bill,
         crate::routes::billing::recharge_bill,
         crate::routes::billing::issue_charge,
         crate::routes::billing::list_charges,

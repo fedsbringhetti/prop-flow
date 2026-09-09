@@ -6,9 +6,9 @@ use propflow_application::ports::{
 use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
 use propflow_application::use_cases::billing::{
-    GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, RechargeUtilityBill,
-    RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge, VoidUtilityBill,
-    WriteOffCharge,
+    GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, MarkUtilityBillPaid,
+    RechargeUtilityBill, RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge,
+    VoidUtilityBill, WriteOffCharge,
 };
 use propflow_application::use_cases::document::{
     ArchiveDocument, DownloadDocument, ListDocuments, UploadDocument,
@@ -114,6 +114,7 @@ pub struct AppState {
     pub update_utility_bill: Arc<UpdateUtilityBill>,
     pub validate_utility_bill: Arc<ValidateUtilityBill>,
     pub void_utility_bill: Arc<VoidUtilityBill>,
+    pub mark_utility_bill_paid: Arc<MarkUtilityBillPaid>,
     /// Il riaddebito è l'**unica** via per cui una bolletta e un addebito si
     /// legano: `POST /leases/{id}/charges` non accetta `utility_bill_id`.
     pub recharge_utility_bill: Arc<RechargeUtilityBill>,
@@ -404,6 +405,10 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             void_utility_bill: Arc::new(VoidUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            mark_utility_bill_paid: Arc::new(MarkUtilityBillPaid::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),

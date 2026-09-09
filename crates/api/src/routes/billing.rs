@@ -53,6 +53,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/utility-bills/{id}/ocr", get(bill_ocr_status))
         .route("/api/v1/utility-bills/{id}/validate", post(validate_bill))
         .route("/api/v1/utility-bills/{id}/void", post(void_bill))
+        .route("/api/v1/utility-bills/{id}/pay", post(pay_bill))
         .route("/api/v1/utility-bills/{id}/recharge", post(recharge_bill))
         .route("/api/v1/leases/{lease_id}/charges", post(issue_charge))
         .route("/api/v1/charges", get(list_charges))
@@ -600,6 +601,10 @@ pub struct UtilityBillResponse {
     /// entrambi: validare è un'affermazione sui numeri, e cambiarli la smentisce.
     pub validated_by: Option<Uuid>,
     pub validated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Quando è stata dichiarata pagata **al fornitore**. Non è un pagamento del
+    /// modulo dei pagamenti, che modella il denaro in entrata: è un fatto avvenuto
+    /// fuori dal prodotto, registrato da chi amministra.
+    pub paid_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -634,6 +639,7 @@ impl UtilityBillResponse {
             consumption: bill.consumption().map(ConsumptionDto::from_domain),
             validated_by: bill.validated_by().map(|id| id.as_uuid()),
             validated_at: bill.validated_at(),
+            paid_at: bill.paid_at(),
             notes: bill.notes().map(str::to_owned),
             created_at: bill.created_at(),
             updated_at: bill.updated_at(),
@@ -1179,6 +1185,36 @@ async fn void_bill(
     let request_id = context.request_id().map(str::to_owned);
     let bill = state
         .void_utility_bill
+        .execute(&context, UtilityBillId::from_uuid(id))
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(UtilityBillResponse::from_domain(&bill)))
+}
+
+/// Nessun corpo: la data è **adesso**, come per la validazione. Una bolletta
+/// pagata la settimana scorsa e registrata oggi è un caso che questo modulo non
+/// tratta — servirebbe una data scelta da chi dichiara, e con essa la domanda su
+/// quanto indietro si possa andare.
+#[utoipa::path(
+    post, path = "/api/v1/utility-bills/{id}/pay", tag = "bollette",
+    params(("id" = Uuid, Path, description = "Identificatore della bolletta")),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Bolletta dichiarata pagata al fornitore", body = UtilityBillResponse),
+        (status = 403, description = "Richiede ruolo proprietario o gestore", body = crate::error::ProblemDetails),
+        (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "Solo una bolletta validata o riaddebitata si dichiara pagata", body = crate::error::ProblemDetails),
+    )
+)]
+async fn pay_bill(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<UtilityBillResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let bill = state
+        .mark_utility_bill_paid
         .execute(&context, UtilityBillId::from_uuid(id))
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;

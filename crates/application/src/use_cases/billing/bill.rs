@@ -332,6 +332,40 @@ impl ValidateUtilityBill {
     }
 }
 
+/// Dichiara pagata al fornitore una bolletta.
+///
+/// **Non è un pagamento del modulo `app.payments`**, ed è la distinzione che
+/// questa fetta non ha modellato: là c'è il denaro che entra — un addebito che
+/// viene saldato, con chi paga e chi riceve — e un fornitore non è un utente del
+/// sistema. Qui si registra un fatto avvenuto fuori dal prodotto, con la sua data,
+/// perché l'elenco delle bollette non distingueva quelle saldate da quelle da
+/// saldare — che è la sola domanda che ci si fa guardandolo.
+pub struct MarkUtilityBillPaid {
+    unit_of_work: Arc<dyn UnitOfWorkFactory>,
+    clock: Arc<dyn Clock>,
+}
+
+impl MarkUtilityBillPaid {
+    #[must_use]
+    pub const fn new(unit_of_work: Arc<dyn UnitOfWorkFactory>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            unit_of_work,
+            clock,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        context: &RequestContext,
+        id: UtilityBillId,
+    ) -> AppResult<UtilityBill> {
+        transition(&self.unit_of_work, &self.clock, context, id, |bill, now| {
+            bill.mark_paid(now)
+        })
+        .await
+    }
+}
+
 /// Annulla una bolletta, che **sparisce**.
 ///
 /// Il soft delete non è un extra: `utility_bills_dedup_uk` è parziale su

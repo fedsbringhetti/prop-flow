@@ -27,8 +27,8 @@ mod recharge;
 mod references;
 
 pub use bill::{
-    RegisterUtilityBill, RegisterUtilityBillCommand, UpdateUtilityBill, UpdateUtilityBillCommand,
-    ValidateUtilityBill, VoidUtilityBill,
+    MarkUtilityBillPaid, RegisterUtilityBill, RegisterUtilityBillCommand, UpdateUtilityBill,
+    UpdateUtilityBillCommand, ValidateUtilityBill, VoidUtilityBill,
 };
 pub use charge::{IssueCharge, IssueChargeCommand, VoidCharge, WriteOffCharge};
 pub use read::{

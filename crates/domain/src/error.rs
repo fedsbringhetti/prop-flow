@@ -241,6 +241,11 @@ pub enum Invariant {
     UtilityBillNotValidatable,
     #[error("Only a validated or already allocated bill can be recharged")]
     UtilityBillNotAllocatable,
+    /// In bozza o in revisione i numeri non li ha confermati nessuno: dichiarare
+    /// pagato un importo che può ancora cambiare registra un fatto su un dato
+    /// provvisorio.
+    #[error("Only a validated or allocated bill can be declared paid")]
+    UtilityBillNotPayable,
     /// Da `allocated` in poi la bolletta è la base di un addebito già emesso:
     /// farla sparire lascerebbe quell'addebito a citare una riga invisibile.
     #[error("A bill that has already been recharged cannot be voided")]
@@ -333,6 +338,7 @@ impl Invariant {
             Self::UtilityBillNotEditable
             | Self::UtilityBillNotValidatable
             | Self::UtilityBillNotAllocatable
+            | Self::UtilityBillNotPayable
             | Self::UtilityBillNotVoidable
             | Self::UtilityBillNotReviewable => "utility_bill.invalid_transition",
             Self::ChargeNotVoidable | Self::ChargeNotWriteOffable | Self::ChargeNotPayable => {

@@ -1481,6 +1481,62 @@ async fn a_property_is_partially_rented_when_one_of_its_rooms_is() {
     assert_eq!(problem["code"], "property.derived_status_filter");
 }
 
+/// **Una bolletta pagata si può dire pagata**, e non è un pagamento.
+///
+/// `app.bill_status` contiene `'paid'` da sempre e nessuna transizione lo
+/// scriveva: l'elenco non distingueva le bollette saldate da quelle da saldare,
+/// che è la sola domanda che ci si fa guardandolo.
+#[tokio::test]
+async fn a_validated_bill_can_be_declared_paid() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "bolletta-pagata").await;
+    let property = create_property(&app, &token, "Immobile con gas").await;
+    let bill = register_bill(&app, &token, &property, None, "PAGATA-1").await;
+
+    // In bozza non si dichiara: i numeri non li ha confermati nessuno.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/pay"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "utility_bill.invalid_transition");
+
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, pagata) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/pay"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {pagata}");
+    assert_eq!(pagata["status"], "paid");
+    // La data è obbligatoria a schema quando lo stato c'è: senza, «pagata» non
+    // direbbe quando.
+    assert!(pagata["paid_at"].is_string(), "corpo: {pagata}");
+
+    // Non si dichiara due volte: una bolletta pagata resta pagata.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/pay"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
 /// Emette un invito su un contratto e restituisce (`invitation_id`, `token`).
 async fn invite_tenant(app: &TestApp, token: &str, lease: &str, email: &str) -> (String, String) {
     let (status, body) = app

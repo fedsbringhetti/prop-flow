@@ -78,6 +78,7 @@ macro_rules! select_bill {
            consumption_unit,
            validated_by,
            validated_at,
+           paid_at,
            notes,
            ai_job_id,
            ocr_confidence::numeric AS ocr_confidence,
@@ -237,7 +238,7 @@ impl UtilityBillRepository for PgUnitOfWork {
                  issue_date, due_date, period_start, period_end,
                  total_amount, taxable_amount, vat_amount,
                  consumption, consumption_unit,
-                 validated_by, validated_at,
+                 validated_by, validated_at, paid_at,
                  notes, created_at, updated_at
              ) VALUES (
                  $1, $2, $3, $4, $5,
@@ -245,9 +246,9 @@ impl UtilityBillRepository for PgUnitOfWork {
                  $8, $9, $10,
                  $11, $12, $13, $14,
                  $15::app.money_amount, $16::app.money_amount, $17::app.money_amount,
-                 $18, $19,
-                 $20, $21,
-                 $22, $23, $24
+                 $18, $19, $20,
+                 $21, $22,
+                 $23, $24, $25
              )",
         )
         .bind(bill.id().as_uuid())
@@ -274,6 +275,7 @@ impl UtilityBillRepository for PgUnitOfWork {
         )
         .bind(bill.validated_by().map(UserId::as_uuid))
         .bind(bill.validated_at())
+        .bind(bill.paid_at())
         .bind(bill.notes())
         .bind(bill.created_at())
         .bind(bill.updated_at())
@@ -326,11 +328,12 @@ impl UtilityBillRepository for PgUnitOfWork {
                     consumption_unit = $17,
                     validated_by     = $18,
                     validated_at     = $19,
-                    notes            = $20,
-                    deleted_at       = $21,
-                    ai_job_id        = $22,
-                    ocr_confidence   = $23::app.confidence,
-                    ocr_extracted    = $24
+                    paid_at          = $20,
+                    notes            = $21,
+                    deleted_at       = $22,
+                    ai_job_id        = $23,
+                    ocr_confidence   = $24::app.confidence,
+                    ocr_extracted    = $25
               WHERE id = $1",
         )
         .bind(bill.id().as_uuid())
@@ -355,6 +358,7 @@ impl UtilityBillRepository for PgUnitOfWork {
         )
         .bind(bill.validated_by().map(UserId::as_uuid))
         .bind(bill.validated_at())
+        .bind(bill.paid_at())
         .bind(bill.notes())
         .bind(bill.deleted_at())
         // Le tre colonne dell'OCR passano da qui e non da un `UPDATE` a parte:
@@ -727,6 +731,7 @@ fn map_bill(row: PgRow) -> RepositoryResult<UtilityBill> {
         consumption,
         validated_by: validated_by.map(UserId::from_uuid),
         validated_at: try_get::<Option<DateTime<Utc>>>(&row, "validated_at")?,
+        paid_at: try_get::<Option<DateTime<Utc>>>(&row, "paid_at")?,
         notes: try_get(&row, "notes")?,
         ai_job_id: try_get::<Option<Uuid>>(&row, "ai_job_id")?.map(AiJobId::from_uuid),
         ocr_confidence: try_get::<Option<Decimal>>(&row, "ocr_confidence")?
