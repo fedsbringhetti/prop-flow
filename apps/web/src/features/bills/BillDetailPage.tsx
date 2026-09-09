@@ -1,9 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Ban, CheckCircle2 } from 'lucide-react'
+import { BadgeEuro, Ban, CheckCircle2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
-import { getBill, listLeases, rechargeBill, validateBill, voidBill } from '@/api/endpoints'
+import {
+  getBill,
+  listLeases,
+  markBillPaid,
+  rechargeBill,
+  validateBill,
+  voidBill,
+} from '@/api/endpoints'
 import { Async, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
@@ -35,6 +42,7 @@ export function BillDetailPage() {
 
   const validate = useMutation({ mutationFn: () => validateBill(client, id), onSuccess: refresh })
   const discard = useMutation({ mutationFn: () => voidBill(client, id), onSuccess: refresh })
+  const pay = useMutation({ mutationFn: () => markBillPaid(client, id), onSuccess: refresh })
 
   return (
     <Async query={bill}>
@@ -76,6 +84,25 @@ export function BillDetailPage() {
                 ) : null}
                 {data.status === 'validated' || data.status === 'allocated' ? (
                   <RechargeDialog billId={id} propertyId={data.property_id} total={data.total_amount} />
+                ) : null}
+                {/* **Dichiarare, non registrare un pagamento.** Il denaro in
+                    uscita non è modellato: `app.payments` è per ciò che entra, e
+                    un fornitore non è un utente del sistema. Si offre da
+                    `validated` e da `allocated`, perché il fornitore non aspetta
+                    il riaddebito. */}
+                {data.status === 'validated' || data.status === 'allocated' ? (
+                  <ConfirmAction
+                    trigger={
+                      <Button>
+                        <BadgeEuro aria-hidden />
+                        {t.bill.pay}
+                      </Button>
+                    }
+                    title={t.bill.payConfirm}
+                    explanation={t.bill.payExplain}
+                    confirmLabel={t.bill.pay}
+                    onConfirm={() => pay.mutateAsync()}
+                  />
                 ) : null}
                 {data.status === 'allocated' || data.status === 'void' ? null : (
                   <ConfirmAction
@@ -133,6 +160,11 @@ export function BillDetailPage() {
                   <DescriptionItem label={t.bill.validatedAt}>
                     {data.validated_at ? formatDate(data.validated_at) : t.common.none}
                   </DescriptionItem>
+                  {data.paid_at ? (
+                    <DescriptionItem label={t.bill.paidAt}>
+                      {formatDate(data.paid_at)}
+                    </DescriptionItem>
+                  ) : null}
                 </DescriptionList>
                 {data.status === 'validated' ? (
                   <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">

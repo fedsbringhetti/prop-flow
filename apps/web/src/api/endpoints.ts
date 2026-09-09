@@ -93,7 +93,14 @@ export function getDashboard(client: ApiClient): Promise<Dashboard> {
 // Immobili
 
 export interface PropertyFilters {
-  status?: PropertyStatus | undefined
+  /**
+   * **Solo stati memorizzati.** `rented` e `partially_rented` sono derivati dai
+   * contratti e rispondono `422` con `property.derived_status_filter`: si filtra
+   * con `occupied`, come si fa con `in_force` sui contratti.
+   */
+  status?: Exclude<PropertyStatus, 'rented' | 'partially_rented'> | undefined
+  /** Immobili con almeno un contratto in essere, o senza nessuno. */
+  occupied?: boolean | undefined
   city?: string | undefined
   after?: Uuid | undefined
 }
@@ -103,7 +110,13 @@ export function listProperties(
   filters: PropertyFilters = {},
 ): Promise<Page<Property>> {
   return client.get<Page<Property>>(
-    `/properties${query({ limit: LIMIT, status: filters.status, city: filters.city, after: filters.after })}`,
+    `/properties${query({
+      limit: LIMIT,
+      status: filters.status,
+      occupied: filters.occupied,
+      city: filters.city,
+      after: filters.after,
+    })}`,
   )
 }
 
@@ -583,6 +596,16 @@ export function updateBill(
 
 export function validateBill(client: ApiClient, id: Uuid): Promise<UtilityBill> {
   return client.post<UtilityBill>(`/utility-bills/${id}/validate`, {})
+}
+
+/**
+ * Dichiara la bolletta pagata **al fornitore**.
+ *
+ * Non è un pagamento del modulo dei pagamenti, che registra il denaro in entrata:
+ * qui si dichiara un fatto avvenuto fuori dal prodotto, e la data è adesso.
+ */
+export function markBillPaid(client: ApiClient, id: Uuid): Promise<UtilityBill> {
+  return client.post<UtilityBill>(`/utility-bills/${id}/pay`, {})
 }
 
 export function voidBill(client: ApiClient, id: Uuid): Promise<UtilityBill> {

@@ -29,8 +29,30 @@ const propertyTone: Record<PropertyStatus, BadgeTone> = {
   archived: 'muted',
 }
 
-export function PropertyStatusBadge({ status }: { status: PropertyStatus }) {
-  return <Badge tone={propertyTone[status]}>{t.property.statuses[status]}</Badge>
+/**
+ * Lo stato di un immobile, **dichiarato ed effettivo insieme**.
+ *
+ * Quando divergono si mostrano tutti e due, con il derivato in evidenza: un
+ * immobile «in manutenzione» che risulta affittato è un'anomalia che chi
+ * amministra deve vedere, e un badge solo la nasconderebbe qualunque dei due
+ * scegliesse. È la stessa forma del badge dei contratti.
+ */
+export function PropertyStatusBadge({
+  status,
+  effectiveStatus,
+}: {
+  status: PropertyStatus
+  effectiveStatus?: PropertyStatus
+}) {
+  if (effectiveStatus === undefined || status === effectiveStatus) {
+    return <Badge tone={propertyTone[status]}>{t.property.statuses[status]}</Badge>
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Badge tone={propertyTone[effectiveStatus]}>{t.property.statuses[effectiveStatus]}</Badge>
+      <span className="text-xs text-ink-muted">({t.property.statuses[status]})</span>
+    </span>
+  )
 }
 
 const roomTone: Record<RoomStatus, BadgeTone> = {
@@ -39,8 +61,29 @@ const roomTone: Record<RoomStatus, BadgeTone> = {
   unavailable: 'muted',
 }
 
-export function RoomStatusBadge({ status }: { status: RoomStatus }) {
-  return <Badge tone={roomTone[status]}>{t.room.statuses[status]}</Badge>
+/**
+ * Lo stato di una stanza, dichiarato ed effettivo.
+ *
+ * «Occupata» non lo dichiara nessuno: discende dal contratto in essere. Una stanza
+ * dichiarata **non disponibile** e insieme occupata è il caso che questo badge
+ * esiste per rendere visibile.
+ */
+export function RoomStatusBadge({
+  status,
+  effectiveStatus,
+}: {
+  status: RoomStatus
+  effectiveStatus?: RoomStatus
+}) {
+  if (effectiveStatus === undefined || status === effectiveStatus) {
+    return <Badge tone={roomTone[status]}>{t.room.statuses[status]}</Badge>
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Badge tone={roomTone[effectiveStatus]}>{t.room.statuses[effectiveStatus]}</Badge>
+      <span className="text-xs text-ink-muted">({t.room.statuses[status]})</span>
+    </span>
+  )
 }
 
 const leaseTone: Record<LeaseStatus, BadgeTone> = {

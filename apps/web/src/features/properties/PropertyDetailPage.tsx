@@ -13,7 +13,7 @@ import {
   updateProperty,
   updateRoom,
 } from '@/api/endpoints'
-import type { EnergyClass, Property, Room } from '@/api/types'
+import type { EnergyClass, Property, PropertyStatus, Room, RoomStatus } from '@/api/types'
 import { Async, Empty, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,6 +31,17 @@ import { RoomStatusBadge } from '../shared/status'
 import { PropertyStatusBadge } from '../shared/status'
 
 const ENERGY_CLASSES: EnergyClass[] = ['A4', 'A3', 'A2', 'A1', 'A', 'B', 'C', 'D', 'E', 'F', 'G']
+
+/**
+ * Gli stati che chi amministra **decide**.
+ *
+ * `rented` e `partially_rented` non ci sono perché non si scelgono: discendono dai
+ * contratti in essere, e offrirli in una tendina chiederebbe a una persona di
+ * ricordarsi di aggiornare a mano qualcosa che il database sa già (ADR-019).
+ * `archived` non c'è perché ha la sua operazione, e il dominio rifiuta di
+ * riceverlo da un `PATCH`.
+ */
+const EDITABLE_STATUSES = ['draft', 'available', 'maintenance'] as const
 
 export function PropertyDetailPage() {
   const { id = '' } = useParams()
@@ -95,7 +106,7 @@ export function PropertyDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{t.property.title}</CardTitle>
-                <PropertyStatusBadge status={data.status} />
+                <PropertyStatusBadge status={data.status} effectiveStatus={data.effective_status} />
               </CardHeader>
               <CardBody>
                 <DescriptionList>
@@ -172,6 +183,7 @@ function EditPropertyDialog({ property }: { property: Property }) {
 
   const [values, setValues] = useState({
     label: property.label,
+    status: property.status,
     size_sqm: property.size_sqm ?? '',
     rooms_count: property.rooms_count?.toString() ?? '',
     floor: property.floor?.toString() ?? '',
@@ -183,6 +195,7 @@ function EditPropertyDialog({ property }: { property: Property }) {
     mutationFn: () =>
       updateProperty(client, property.id, {
         label: values.label,
+        status: values.status,
         // `|| null` e non `|| undefined`: svuotare il campo deve azzerare il
         // valore, non lasciarlo com'era.
         size_sqm: values.size_sqm.trim() || null,
@@ -226,6 +239,36 @@ function EditPropertyDialog({ property }: { property: Property }) {
               value={values.label}
               onChange={(event) => setValues((v) => ({ ...v, label: event.target.value }))}
             />
+          )}
+        </Field>
+        {/* Lo stato dichiarato, e solo quello: gli altri due li calcolano i
+            contratti, e la spiegazione lo dice invece di lasciare che qualcuno
+            cerchi «Affittato» nella tendina. */}
+        <Field label={t.property.statusLabel} hint={t.property.statusHint}>
+          {(props) => (
+            <Select
+              {...props}
+              value={
+                EDITABLE_STATUSES.includes(values.status as (typeof EDITABLE_STATUSES)[number])
+                  ? values.status
+                  : ''
+              }
+              onChange={(event) =>
+                setValues((v) => ({ ...v, status: event.target.value as PropertyStatus }))
+              }
+            >
+              {/* Un immobile già affittato mostra lo stato derivato, che non è
+                  fra le scelte: l'opzione vuota evita che la tendina dica una
+                  cosa falsa finché non si sceglie. */}
+              {EDITABLE_STATUSES.includes(values.status as (typeof EDITABLE_STATUSES)[number]) ? null : (
+                <option value="">{t.property.statuses[values.status]}</option>
+              )}
+              {EDITABLE_STATUSES.map((value) => (
+                <option key={value} value={value}>
+                  {t.property.statuses[value]}
+                </option>
+              ))}
+            </Select>
           )}
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -344,7 +387,7 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
                 <Tr key={room.id}>
                   <Td>{room.name}</Td>
                   <Td>
-                    <RoomStatusBadge status={room.status} />
+                    <RoomStatusBadge status={room.status} effectiveStatus={room.effective_status} />
                   </Td>
                   <Td>{room.has_private_bathroom ? t.common.yes : t.common.no}</Td>
                   <TdNumeric>
@@ -566,6 +609,12 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
   const [error, setError] = useState<unknown>(null)
 
   const [values, setValues] = useState<RoomValues>(roomValuesOf(room))
+  // Lo stato **dichiarato**: `occupied` non è fra le scelte, perché lo dice il
+  // contratto. Sta qui e non nel form di creazione — nessuno crea una stanza già
+  // fuori uso — ed è la ragione per cui la sezione 1 lo aveva lasciato fuori.
+  const [status, setStatus] = useState<RoomStatus>(
+    room.status === 'occupied' ? 'available' : room.status,
+  )
   const [submitted, setSubmitted] = useState(false)
   const shareError = shareProblem(values.utility_share, submitted)
 
@@ -581,6 +630,7 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
         name: values.name,
         // `|| null` e non `|| undefined`: svuotare deve azzerare, non lasciare
         // com'era. È la stessa scelta del `PATCH` dell'immobile.
+        status,
         monthly_rent: decimalOf(values.monthly_rent) || null,
         size_sqm: decimalOf(values.size_sqm) || null,
         floor: values.floor.trim() ? Number(values.floor) : null,
@@ -641,6 +691,18 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
             onChange={(patch) => setValues((v) => ({ ...v, ...patch }))}
             shareError={shareError}
           />
+          <Field label={t.room.statusLabel} hint={t.room.statusHint}>
+            {(props) => (
+              <Select
+                {...props}
+                value={status}
+                onChange={(event) => setStatus(event.target.value as RoomStatus)}
+              >
+                <option value="available">{t.room.statuses.available}</option>
+                <option value="unavailable">{t.room.statuses.unavailable}</option>
+              </Select>
+            )}
+          </Field>
           <div className="flex flex-wrap justify-end gap-2">
             <ConfirmAction
               trigger={

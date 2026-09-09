@@ -181,6 +181,16 @@ export const it = {
       maintenance: 'In manutenzione',
       archived: 'Archiviato',
     },
+    /** Lo stato che chi amministra decide: gli altri due discendono dai contratti
+     *  e non si scelgono (ADR-019). */
+    statusLabel: 'Stato dichiarato',
+    statusHint:
+      'Affittato e parzialmente affittato non si scelgono: li calcolano i contratti in essere.',
+    /** Quando il dichiarato e l'effettivo divergono si mostrano entrambi: un
+     *  immobile in manutenzione che risulta affittato è un'anomalia da vedere. */
+    occupancy: 'Occupazione',
+    filterOccupied: 'Con contratti in essere',
+    filterFree: 'Senza contratti in essere',
   },
 
   room: {
@@ -217,6 +227,10 @@ export const it = {
       occupied: 'Occupata',
       unavailable: 'Non disponibile',
     },
+    /** «Occupata» non è una scelta: discende dai contratti. Quello che si dichiara
+     *  è se la stanza sia fuori uso. */
+    statusLabel: 'Stato dichiarato',
+    statusHint: 'Occupata non si sceglie: lo dice il contratto in essere.',
   },
 
   lease: {
@@ -615,6 +629,14 @@ export const it = {
     validateExplain: 'Stai affermando che questi numeri sono quelli giusti.',
     validated: 'Bolletta validata.',
     validatedAt: 'Validata il',
+    /** Dichiarare, non registrare un pagamento: il denaro in uscita non è
+     *  modellato, e questa è la differenza che la frase deve far capire. */
+    pay: 'Dichiara pagata',
+    payConfirm: 'Dichiarare pagata questa bolletta?',
+    payExplain:
+      'Registra che l’hai pagata al fornitore, con la data di oggi. Non è un pagamento tracciato: è una dichiarazione, e non si disfa.',
+    paid: 'Bolletta dichiarata pagata.',
+    paidAt: 'Pagata il',
     void: 'Annulla',
     voidConfirm: 'Annullare questa bolletta?',
     voidExplain: 'Sparisce dagli elenchi e il numero fattura torna reinseribile. La traccia resta.',
@@ -1146,6 +1168,8 @@ export const it = {
     'room.archived': 'La stanza è archiviata e non è modificabile.',
     'lease.not_found': 'Contratto non trovato.',
     'lease.period_overlap': 'Il periodo si sovrappone a una locazione già attiva.',
+    'property.derived_status_filter':
+      'Affittato e parzialmente affittato si calcolano dai contratti: filtra per occupazione.',
     'lease.party_not_found': 'Questa parte non esiste più.',
     'lease.party_email_locked':
       'L’email non si cambia: questa persona ha già accettato l’invito con quell’indirizzo.',

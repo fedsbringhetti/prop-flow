@@ -2,7 +2,6 @@ import { Plus } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 
 import { listProperties } from '@/api/endpoints'
-import type { PropertyStatus } from '@/api/types'
 import { Async, Empty } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -24,14 +23,17 @@ import { formatDecimal } from '@/lib/format'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { PropertyStatusBadge } from '../shared/status'
 
-const STATUSES: PropertyStatus[] = [
-  'draft',
-  'available',
-  'partially_rented',
-  'rented',
-  'maintenance',
-  'archived',
-]
+/**
+ * Gli stati **memorizzati**, che sono gli unici filtrabili.
+ *
+ * `rented` e `partially_rented` discendono dai contratti in essere e non sono in
+ * database: filtrarli risponde `422` con `property.derived_status_filter`, e per
+ * quella domanda c'è il filtro dell'occupazione qui accanto. `archived` resta
+ * un'opzione che non può corrispondere a niente — archiviare mette `deleted_at` e
+ * la riga esce da ogni elenco — ed è il terzo di `R26` che questa sezione non
+ * chiude.
+ */
+const STATUSES = ['draft', 'available', 'maintenance', 'archived'] as const
 
 export function PropertiesPage() {
   const client = useApi()
@@ -40,12 +42,19 @@ export function PropertiesPage() {
   // indirizzo condivisibile, e il tasto «indietro» torna al filtro precedente
   // invece di uscire dalla schermata.
   const [params, setParams] = useSearchParams()
-  const status = (params.get('stato') ?? '') as PropertyStatus | ''
+  const status = (params.get('stato') ?? '') as (typeof STATUSES)[number] | ''
+  // «Affittato» non è un filtro sullo stato ma sull'occupazione: lo stato
+  // memorizzato non lo porta, e chiederlo all'API risponderebbe `422`.
+  const occupancy = params.get('occupazione') ?? ''
 
   const query = usePagedQuery({
-    queryKey: keys.properties({ status }),
+    queryKey: keys.properties({ status, occupancy }),
     fetchPage: (after) =>
-      listProperties(client, { status: status || undefined, after }),
+      listProperties(client, {
+        status: status || undefined,
+        ...(occupancy ? { occupied: occupancy === 'occupati' } : {}),
+        after,
+      }),
   })
 
   return (
@@ -89,6 +98,28 @@ export function PropertiesPage() {
                 {t.property.statuses[value]}
               </option>
             ))}
+          </Select>
+
+          {/* L'occupazione è un filtro a sé perché **non è uno stato**: discende
+              dai contratti in essere, e il valore corrispondente non esiste in
+              database. È la stessa forma di `in_force` sui contratti. */}
+          <label htmlFor="filtro-occupazione" className="text-xs font-medium text-ink-muted">
+            {t.property.occupancy}
+          </label>
+          <Select
+            id="filtro-occupazione"
+            className="w-auto min-w-40"
+            value={occupancy}
+            onChange={(event) => {
+              const next = new URLSearchParams(params)
+              if (event.target.value) next.set('occupazione', event.target.value)
+              else next.delete('occupazione')
+              setParams(next, { replace: true })
+            }}
+          >
+            <option value="">{t.common.all}</option>
+            <option value="occupati">{t.property.filterOccupied}</option>
+            <option value="liberi">{t.property.filterFree}</option>
           </Select>
         </div>
 
@@ -140,7 +171,10 @@ export function PropertiesPage() {
                     <Td>{t.property.types[property.property_type]}</Td>
                     <Td>{property.address.city}</Td>
                     <Td>
-                      <PropertyStatusBadge status={property.status} />
+                      <PropertyStatusBadge
+                        status={property.status}
+                        effectiveStatus={property.effective_status}
+                      />
                     </Td>
                     <TdNumeric>
                       {property.size_sqm ? `${formatDecimal(property.size_sqm)} m²` : t.common.none}

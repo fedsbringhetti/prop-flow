@@ -120,7 +120,17 @@ export interface Property {
   label: string
   code?: string
   property_type: PropertyType
+  /** Lo stato **memorizzato**: un giudizio di chi amministra. */
   status: PropertyStatus
+  /**
+   * Lo stato **alla data odierna**, che tiene conto dei contratti in essere: può
+   * valere `rented` o `partially_rented` mentre `status` resta `draft`.
+   *
+   * Non si filtra — `?stato=rented` risponde `422` — e quando diverge da `status`
+   * si mostrano **entrambi**: un immobile «in manutenzione» che risulta affittato
+   * è un'anomalia da vedere.
+   */
+  effective_status: PropertyStatus
   is_coliving: boolean
   address: Address
   size_sqm: Amount | null
@@ -149,7 +159,15 @@ export interface Room {
   property_id: Uuid
   organization_id: Uuid
   name: string
+  /** Memorizzato: `available`, o `unavailable` se dichiarata fuori uso. */
   status: RoomStatus
+  /**
+   * Derivato dai contratti in essere: `occupied` quando qualcuno ci abita.
+   *
+   * Non lo scrive nessuno, e non potrebbe restare vero: l'occupazione dipende dal
+   * calendario.
+   */
+  effective_status: RoomStatus
   size_sqm: Amount | null
   floor: number | null
   has_private_bathroom: boolean
@@ -418,6 +436,8 @@ export interface UtilityBill {
   consumption?: Consumption
   validated_by: Uuid | null
   validated_at: IsoDateTime | null
+  /** Quando è stata dichiarata pagata al fornitore. */
+  paid_at?: IsoDateTime | null
   notes?: string
   created_at: IsoDateTime
   updated_at: IsoDateTime

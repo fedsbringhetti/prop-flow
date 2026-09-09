@@ -16,14 +16,17 @@ import { formatAmount, formatDate } from '@/lib/format'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { BillStatusBadge } from '../shared/status'
 
-const STATUSES: BillStatus[] = [
-  'draft',
-  'pending_review',
-  'validated',
-  'allocated',
-  'paid',
-  'disputed',
-]
+/**
+ * Gli stati che una bolletta può davvero avere.
+ *
+ * **`disputed` non c'è**, e non è una dimenticanza: nessuna transizione lo scrive,
+ * quindi quell'opzione non poteva corrispondere a niente — è la forma di `R26`.
+ * Contestare una bolletta non è uno stato ma un processo, con una ragione, una
+ * data e un esito, e offrirlo come etichetta darebbe meno di quanto chi lo usa si
+ * aspetta. `void` resta fuori per un'altra ragione: una bolletta annullata
+ * sparisce dagli elenchi.
+ */
+const STATUSES: BillStatus[] = ['draft', 'pending_review', 'validated', 'allocated', 'paid']
 
 const TYPES: UtilityType[] = [
   'electricity',
