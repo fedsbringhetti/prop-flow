@@ -1,16 +1,17 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Otto voci**, con un identificatore stabile ciascuna.
+**Nove voci**, con un identificatore stabile ciascuna.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
 [sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
 la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
 [sezione 4](11-piani-conclusi.md#esito-sezione-4); `R19`, `R19-bis`, `R21`, `R22`, `R23` e
-`R24` con la [sezione 5](11-piani-conclusi.md#esito-sezione-5). Tre sono entrate — `R26`,
-`R27`, `R28` — e **due delle tre le ha trovate l'uso del prodotto**, non la lettura del
-codice.
+`R24` con la [sezione 5](11-piani-conclusi.md#esito-sezione-5). Quattro sono entrate —
+`R26`, `R27`, `R28`, `R29` — e **tre delle quattro le ha trovate l'uso del prodotto**, non
+la lettura del codice. `R29` è entrata **preparando** il collaudo, prima che cominciasse:
+seminare dei dati veri è già usare il prodotto.
 
 ## Perché un file a sé
 
@@ -164,6 +165,12 @@ sezione è il primo client che legge un nome da `app.users`
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
+
+### Addebiti e pagamenti
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R29 | aperta | **A chi abita, un incasso non attribuito fa vedere un residuo più alto del vero** — e la riga si contraddice da sola | Trovato seminando i dati del collaudo, e **misurato**: il proprietario registra 150,00 su un addebito da 420,00 con `POST /charges/{id}/payments` senza `payer_user_id`, e sulla **stessa riga** l'inquilino legge `status: partially_paid` con `paid_amount: 0.00` e `outstanding_amount: 420.00`. Pagherebbe due volte. La causa è a due piani: `payments_select` mostra la riga a staff, `payer_user_id` e `payee_user_id`, quindi un incasso non attribuito è invisibile a chi lo ha fatto — e questo è **documentato e voluto** (`submit.rs`: «un bonifico da un conto che non si sa a chi ricondurre esiste»); ma `app.v_charge_balances` è `security_invoker = true`, quindi **somma i pagamenti sotto la Row Level Security di chi legge**, e il totale scende con essa. Il commento di `RecordPaymentRequest` promette il contrario — «il totale incassato gli resta comunque visibile in `paid_amount` sul saldo dell'addebito» — ed è **falso**: quella frase è la cosa da correggere per prima, perché è ciò che farebbe concludere a chi passa di lì che il difetto non esiste. Da decidere il rimedio, e sono tre strade diverse: rendere `payer_user_id` obbligatorio quando l'addebito ha un contratto con un solo inquilino registrato; oppure far sommare i pagamenti a una funzione `SECURITY DEFINER` che proietta il solo totale, come `app.property_residents` proietta tre colonne ([ADR-036](08-decisioni.md#adr-036)); oppure accettare che il totale sia parziale e **non mostrarlo affatto** a chi non vede tutte le righe, che è preferibile a mostrarne uno falso. La prima è la più piccola e non chiude il caso del bonifico anonimo; la seconda lo chiude e tocca una vista contabile; la terza è la sola che non richiede di scegliere adesso |
 
 ### Cancellare, in generale
 
