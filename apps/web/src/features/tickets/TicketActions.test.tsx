@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -37,6 +38,7 @@ function ticketWith(status: TicketStatus, assignedTo: string | null): Ticket {
     category: 'plumbing',
     priority: 'medium',
     status,
+    visible_to_residents: false,
     reported_by: 'utente-inquilino',
     reported_by_kind: 'tenant',
     assigned_to: assignedTo,
@@ -55,9 +57,15 @@ function ticketWith(status: TicketStatus, assignedTo: string | null): Ticket {
  * mostra. `auth/refresh` risponde con il ruolo `owner` e con `ME` come utente
  * corrente, che è il confronto su cui tutta la voce si regge.
  */
-function renderActions(ticket: Ticket) {
+function renderActions(ticket: Ticket): { calls: string[] } {
+  // Le rotte chiamate, per poter dire che una **non** lo è stata: `vi.stubGlobal`
+  // con una funzione qualunque non produce una spia, e `toHaveBeenCalledWith`
+  // fallirebbe dicendo che l'oggetto non è una spia invece di dire cosa è
+  // successo.
+  const calls: string[] = []
   vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
     const url = String(input)
+    calls.push(url)
     if (url.endsWith('/auth/refresh')) {
       return new Response(
         JSON.stringify({
@@ -85,6 +93,8 @@ function renderActions(ticket: Ticket) {
       </SessionProvider>
     </MemoryRouter>,
   )
+
+  return { calls }
 }
 
 beforeEach(() => {
@@ -114,5 +124,60 @@ describe('«Prendi in carico»', () => {
   it('compare su ciò che è in carico a qualcun altro, perché è la riassegnazione', async () => {
     renderActions(ticketWith('assigned', SOMEONE_ELSE))
     expect(await screen.findByRole('button', { name: /prendi in carico/i })).toBeInTheDocument()
+  })
+})
+
+/**
+ * **Riaprire chiede il motivo, e non è un campo di comodo.**
+ *
+ * Da quando un thread chiuso non riceve più messaggi, riaprire è l'unica via per
+ * dire «non è risolto»: senza il motivo non resterebbe scritto da nessuna parte
+ * perché la segnalazione è tornata viva, e l'API risponde `422`.
+ *
+ * Il test verifica che il bottone **apra un form** e non esegua la riapertura al
+ * primo clic: la regressione da temere è che qualcuno lo riporti a una conferma
+ * secca, che chiamerebbe l'API con un corpo vuoto e prenderebbe un `422` che
+ * l'utente non sa come risolvere.
+ */
+describe('la riapertura', () => {
+  it('chiede il motivo invece di riaprire al primo clic', async () => {
+    const user = userEvent.setup()
+    const { calls } = renderActions(ticketWith('closed', ME))
+
+    await user.click(await screen.findByRole('button', { name: /^riapri$/i }))
+
+    expect(await screen.findByLabelText(/perché la riapri/i)).toBeInTheDocument()
+    expect(calls.some((url) => url.includes('/reopen'))).toBe(false)
+  })
+})
+
+/**
+ * **La correzione ha la stessa condizione dell'annullamento.**
+ *
+ * Non è una coincidenza da semplificare: nell'API è la stessa funzione — lo staff
+ * sempre, chi ha segnalato finché nessuno ci ha messo mano — e due condizioni
+ * scritte due volte sono due regole che divergeranno.
+ */
+describe('«Correggi»', () => {
+  it('compare allo staff su una chiusa, perché un titolo sbagliato lì lo resta per sempre', async () => {
+    renderActions(ticketWith('closed', ME))
+    expect(await screen.findByRole('button', { name: /^correggi$/i })).toBeInTheDocument()
+    // Accanto ai costi, che su una chiusa ci sono anch'essi: la fattura del
+    // fornitore arriva dopo. È la coppia che dice che la condizione è quella
+    // giusta e non «solo finché è in lavorazione».
+    expect(screen.getByRole('button', { name: /modifica i costi/i })).toBeInTheDocument()
+  })
+
+  it('non compare su una annullata, che non si tocca più — e non compare nemmeno il resto', async () => {
+    renderActions(ticketWith('cancelled', null))
+
+    // Su una annullata `TicketActions` non offre **niente**: nessuna transizione
+    // parte da lì e nemmeno i costi si toccano (`409 ticket.cancelled`). Non c'è
+    // quindi un bottone a cui appendersi per aspettare la sessione, e si aspetta
+    // che l'unica cosa che la sessione potrebbe far comparire continui a mancare.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /^correggi$/i })).not.toBeInTheDocument()
+    })
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 })

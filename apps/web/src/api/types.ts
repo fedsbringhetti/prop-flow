@@ -324,9 +324,29 @@ export interface Ticket {
   category: TicketCategory
   priority: TicketPriority
   status: TicketStatus
+  /**
+   * `true` se la leggono anche i **residenti dell'immobile**, oltre a chi la vede
+   * per contratto — e con essa il thread e le fotografie.
+   *
+   * Il confine è `app.can_access_ticket` e non questo campo: qui viaggia perché la
+   * casella si mostra e si corregge. Non concede nessuna scrittura — un residente
+   * non riapre, non annulla, non corregge.
+   */
+  visible_to_residents: boolean
   reported_by: Uuid | null
   reported_by_kind: TicketActor
+  /**
+   * Come si chiama chi ha segnalato.
+   *
+   * **Assente non è un errore**: la policy `users_select` non concede a chiunque la
+   * riga di chiunque, e allora si mette un'etichetta neutra dal catalogo — mai
+   * l'identificatore. Va mostrato **accanto** a `reported_by_kind`: il ruolo dice
+   * da che parte del rapporto sta la persona, il nome dice chi è.
+   */
+  reported_by_name?: string
   assigned_to: Uuid | null
+  /** Come si chiama chi ha in carico. Stessa regola sull'assenza. */
+  assigned_to_name?: string
   assigned_at: IsoDateTime | null
   /**
    * **`null` per chi non è staff, anche quando un valore c'è.**
@@ -373,6 +393,14 @@ export interface TicketMessage {
   ticket_id: Uuid
   author_id: Uuid | null
   author_kind: TicketActor
+  /**
+   * Come si chiama chi ha scritto.
+   *
+   * **Il ruolo da solo non basta in un co-living**: due coinquilini sono entrambi
+   * `tenant`, e «me lo dice il proprietario o un coinquilino?» ha già risposta
+   * mentre «quale coinquilino?» non ne ha. I due si mostrano insieme.
+   */
+  author_name?: string
   body: string
   /**
    * Nota interna, visibile al solo staff.

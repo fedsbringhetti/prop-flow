@@ -352,6 +352,16 @@ export interface OpenTicketInput {
   category?: TicketCategory
   /** Assente vale `medium`. */
   priority?: TicketPriority
+  /**
+   * Dichiara la segnalazione di **interesse comune per la casa**.
+   *
+   * Assente vale `false`, che è il comportamento di sempre. Con `true` la leggono
+   * anche i residenti dell'immobile — la caldaia condominiale interessa a tutti —
+   * e con essa il thread e le fotografie, perché il confine è
+   * `app.can_access_ticket`, che serve quattro policy. Non concede nessuna
+   * scrittura.
+   */
+  visible_to_residents?: boolean
 }
 
 /**
@@ -498,9 +508,15 @@ export function closeTicket(client: ApiClient, id: Uuid, resolutionNotes?: strin
  * Spetta a **chi ha segnalato**, oltre che allo staff, e a un coinquilino l'API
  * risponde `403 ticket.not_yours` — non `org.staff_role_required`: non gli manca
  * un ruolo, gli manca l'essere stato lui a segnalare, e i due rimedi sono diversi.
+ *
+ * **Il motivo è obbligatorio**, e senza l'API risponde `422`. Da quando un thread
+ * chiuso non riceve più messaggi, riaprire è l'unica via per dire «non è risolto»:
+ * il motivo è l'unica cosa che spiega perché la segnalazione è tornata viva, e
+ * finisce **nel thread** come primo messaggio del giro nuovo — dove sopravvive
+ * alla chiusura successiva, che invece cancella `resolution_notes`.
  */
-export function reopenTicket(client: ApiClient, id: Uuid): Promise<Ticket> {
-  return client.post<Ticket>(`/tickets/${id}/reopen`, {})
+export function reopenTicket(client: ApiClient, id: Uuid, reason: string): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/reopen`, { reason })
 }
 
 /**
@@ -531,6 +547,34 @@ export function updateTicketCosts(
   patch: Record<string, unknown>,
 ): Promise<Ticket> {
   return client.patch<Ticket>(`/tickets/${id}`, patch)
+}
+
+export interface CorrectTicketReportInput {
+  title?: string
+  description?: string
+  visible_to_residents?: boolean
+}
+
+/**
+ * Corregge ciò che chi ha segnalato aveva dichiarato: titolo, descrizione e la
+ * casella della visibilità.
+ *
+ * **È una rotta a sé e non il `PATCH` dei costi allargato.** Quello avrebbe due
+ * autorizzazioni diverse secondo i campi presenti nel corpo — i costi allo staff,
+ * il testo a chi ha segnalato — che è il genere di cosa che si sbaglia in
+ * silenzio. Qui l'autorizzazione è una sola: lo staff sempre, chi ha segnalato
+ * finché la segnalazione è `open`, con la forma dell'annullamento.
+ *
+ * **Categoria e priorità non ci sono**: sono il lavoro del triage. Assente =
+ * invariato; nessuno dei tre campi si azzera, quindi `null` qui non significa
+ * niente.
+ */
+export function correctTicketReport(
+  client: ApiClient,
+  id: Uuid,
+  input: CorrectTicketReportInput,
+): Promise<Ticket> {
+  return client.patch<Ticket>(`/tickets/${id}/report`, input)
 }
 
 // ---------------------------------------------------------------------------

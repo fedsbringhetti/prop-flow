@@ -549,6 +549,35 @@ export const it = {
      *  spiega **prima** il caso in cui il bottone non compare affatto. */
     onlyOpenCancelledByReporter:
       'Puoi annullarla finché nessuno ci ha messo mano. Da qui in poi la annulla chi amministra.',
+    /** La visibilità è una scelta di chi apre, e il default resta «privata».
+     *  Il confine è nel database — `app.can_access_ticket`, migration `0035` — e
+     *  non una preferenza di interfaccia. */
+    visibleToResidents: 'Riguarda tutta la casa',
+    visibleToResidentsHint:
+      'La leggono anche gli altri che abitano in questo immobile, con la conversazione e le foto. Senza la casella la vedi solo tu e chi amministra.',
+    visibility: 'Visibilità',
+    visibilityShared: 'Visibile a chi abita qui',
+    visibilityPrivate: 'Solo tu e chi amministra',
+    /** La correzione è una rotta a sé — `PATCH /tickets/{id}/report` — perché ha
+     *  un'autorizzazione sola: lo staff sempre, chi ha segnalato finché nessuno
+     *  ci ha messo mano. */
+    correct: 'Correggi',
+    correctTitle: 'Correggi la segnalazione',
+    correctExplain:
+      'Puoi sistemare il testo e cambiare idea sulla visibilità. Categoria e priorità no: le decide chi amministra classificandola.',
+    onlyOpenCorrectedByReporter:
+      'Puoi correggerla finché nessuno ci ha messo mano. Da qui in poi la corregge chi amministra.',
+    /** Un thread terminato si **legge** e non si scrive: è una regola di dominio,
+     *  e il client dice perché invece di far sparire la casella in silenzio. */
+    threadClosed: 'La conversazione è chiusa.',
+    threadClosedHintReporter:
+      'Se il guasto non è risolto, riapri la segnalazione: il motivo che scrivi diventa il primo messaggio.',
+    threadClosedHint: 'Riaprendo la segnalazione la conversazione riprende.',
+    /** Il motivo è obbligatorio perché è l'unica cosa che spiega perché la
+     *  segnalazione è tornata viva: dopo la chiusura non si scrive più. */
+    reopenReason: 'Perché la riapri',
+    reopenReasonHint: 'Finisce nella conversazione, e resta anche dopo la prossima chiusura.',
+    reopenReasonPlaceholder: 'Ha ricominciato a perdere due giorni dopo…',
     onlyOpen: 'Solo quelle aperte',
     /** `?open=true` non è `status <> 'closed'`: l'indice parziale
      *  `tickets_open_ix` è definito su esattamente sei valori. */
@@ -598,6 +627,10 @@ export const it = {
       system: 'Sistema',
       ai: 'Assistente automatico',
     },
+    /** Quando l'API non manda il nome perché `users_select` non concede quella
+     *  riga a chi guarda. **Mai l'UUID**: un identificatore in faccia a chi legge
+     *  non è informazione, è una resa — stessa regola di `expense.memberUnknown`. */
+    personUnknown: 'Persona non più visibile',
   },
 
   bill: {
@@ -1159,6 +1192,11 @@ export const it = {
     'ticket.not_found': 'Segnalazione non trovata.',
     'ticket.invalid_transition': 'Non si può fare da questo stato.',
     'ticket.cancelled': 'La segnalazione è annullata e non si modifica più.',
+    /** Codice proprio e non `ticket.invalid_transition`: non è una transizione
+     *  rifiutata — nessuno stava chiedendo di muovere la segnalazione — e il
+     *  rimedio è diverso, cioè riaprire. */
+    'ticket.thread_closed':
+      'Questa segnalazione è chiusa: per riprendere la conversazione va riaperta.',
     'org.staff_role_required': 'Serve il ruolo di proprietario o gestore.',
     'validation.failed': 'Controlla i campi segnalati.',
     'property.not_found': 'Immobile non trovato.',

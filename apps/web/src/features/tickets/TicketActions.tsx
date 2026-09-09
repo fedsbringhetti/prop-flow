@@ -1,17 +1,19 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Check, Hand, Pause, Play, RotateCcw, Tag, X } from 'lucide-react'
+import { Check, Hand, Pause, Pencil, Play, RotateCcw, Tag, X } from 'lucide-react'
 import { useState } from 'react'
 
 import {
   assignTicket,
   cancelTicket,
   closeTicket,
+  correctTicketReport,
   reopenTicket,
   startTicket,
   triageTicket,
   updateTicketCosts,
   waitTicket,
 } from '@/api/endpoints'
+import type { CorrectTicketReportInput } from '@/api/endpoints'
 import type { Ticket, TicketCategory, TicketPriority, WaitingOn } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { ConfirmAction, FormDialog } from '@/components/ui/confirm'
@@ -89,10 +91,6 @@ export function TicketActions({ ticket }: { ticket: Ticket }) {
     onSuccess: refresh,
   })
   const start = useMutation({ mutationFn: () => startTicket(client, ticket.id), onSuccess: refresh })
-  const reopen = useMutation({
-    mutationFn: () => reopenTicket(client, ticket.id),
-    onSuccess: refresh,
-  })
   const discard = useMutation({
     mutationFn: () => cancelTicket(client, ticket.id),
     onSuccess: refresh,
@@ -181,19 +179,15 @@ export function TicketActions({ ticket }: { ticket: Ticket }) {
           un guasto ricorrente diventa una segnalazione nuova ogni volta e lo
           storico si frantuma proprio dove servirebbe intero. */}
       {(isStaff || isReporter) && ticket.status === 'closed' ? (
-        <ConfirmAction
-          trigger={
-            <Button variant="primary">
-              <RotateCcw aria-hidden />
-              {t.ticket.reopen}
-            </Button>
-          }
-          title={t.ticket.reopenTitle}
-          explanation={t.ticket.reopenExplain}
-          confirmLabel={t.ticket.reopen}
-          variant="primary"
-          onConfirm={() => reopen.mutateAsync()}
-        />
+        <ReopenDialog ticket={ticket} onDone={refresh} />
+      ) : null}
+
+      {/* Correggere ha la stessa condizione dell'annullamento, e non è un caso:
+          è la stessa regola — lo staff sempre, chi ha segnalato finché nessuno ci
+          ha messo mano — e nell'API è la stessa funzione. Su una annullata non
+          corregge nessuno: l'API risponde `409 ticket.cancelled`. */}
+      {(isStaff || (isReporter && ticket.status === 'open')) && ticket.status !== 'cancelled' ? (
+        <CorrectDialog ticket={ticket} onDone={refresh} />
       ) : null}
 
       {/* Chi ha segnalato può annullare **finché è `open`**. Oltre, l'API gli
@@ -216,7 +210,9 @@ export function TicketActions({ ticket }: { ticket: Ticket }) {
       ) : null}
 
       {isReporter && !isStaff && working && ticket.status !== 'open' ? (
-        <p className="max-w-xs text-xs text-ink-muted">{t.ticket.onlyOpenCancelledByReporter}</p>
+        <p className="max-w-xs text-xs text-ink-muted">
+          {t.ticket.onlyOpenCancelledByReporter} {t.ticket.onlyOpenCorrectedByReporter}
+        </p>
       ) : null}
     </>
   )
@@ -534,4 +530,205 @@ function amountProblem(raw: string, submitted: boolean): string | undefined {
   if (!parseDecimal(value)) return t.validation.amount
   if (!isPositive(value)) return t.validation.positiveAmount
   return undefined
+}
+
+/**
+ * La riapertura, che ora **chiede perché**.
+ *
+ * Non è una conferma con un campo di comodo: da quando un thread chiuso non
+ * riceve più messaggi, riaprire è l'unica via per dire «non è risolto», e senza il
+ * motivo non resterebbe da nessuna parte scritto perché la segnalazione è tornata
+ * viva. L'API risponde `422` a un corpo senza `reason`, quindi il campo è
+ * obbligatorio anche qui — e la verifica scatta **solo dopo un tentativo di
+ * invio**, che è la regola del progetto sui form.
+ *
+ * Il testo finisce **nel thread**, e va detto prima di scriverlo: chi lo legge
+ * deve sapere che sta parlando a qualcuno, non compilando un campo.
+ */
+function ReopenDialog({ ticket, onDone }: { ticket: Ticket; onDone: () => Promise<void> }) {
+  const client = useApi()
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+
+  const mutation = useMutation({
+    mutationFn: () => reopenTicket(client, ticket.id, reason.trim()),
+    onSuccess: async () => {
+      setOpen(false)
+      setReason('')
+      setSubmitted(false)
+      await onDone()
+    },
+  })
+
+  const error = submitted && reason.trim() === '' ? t.validation.required : undefined
+
+  return (
+    <FormDialog
+      trigger={
+        <Button variant="primary">
+          <RotateCcw aria-hidden />
+          {t.ticket.reopen}
+        </Button>
+      }
+      title={t.ticket.reopenTitle}
+      description={t.ticket.reopenExplain}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) mutation.reset()
+      }}
+    >
+      <form
+        noValidate
+        className="flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setSubmitted(true)
+          if (reason.trim() === '') return
+          mutation.mutate()
+        }}
+      >
+        <InlineError error={mutation.error} />
+
+        <Field label={t.ticket.reopenReason} hint={t.ticket.reopenReasonHint} error={error} required>
+          {(props) => (
+            <Textarea
+              {...props}
+              rows={3}
+              placeholder={t.ticket.reopenReasonPlaceholder}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          )}
+        </Field>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" onClick={() => setOpen(false)} disabled={mutation.isPending}>
+            {t.common.cancel}
+          </Button>
+          <Button type="submit" variant="primary" disabled={mutation.isPending}>
+            {mutation.isPending ? t.common.saving : t.ticket.reopen}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
+}
+
+/**
+ * La correzione del testo e della visibilità.
+ *
+ * **Tre campi e una sola autorizzazione**, che è la ragione per cui l'API li tiene
+ * su una rotta a sé (`PATCH /tickets/{id}/report`) invece di allargare il `PATCH`
+ * dei costi: sono tutti e tre ciò che chi ha segnalato ha dichiarato.
+ *
+ * Si manda **solo ciò che è cambiato**, perché assente = invariato: rimandare
+ * indietro un testo non toccato lo sovrascriverebbe con la copia che questa
+ * schermata aveva in mano, che può essere vecchia.
+ */
+function CorrectDialog({ ticket, onDone }: { ticket: Ticket; onDone: () => Promise<void> }) {
+  const client = useApi()
+  const [open, setOpen] = useState(false)
+  const [title, setTitle] = useState(ticket.title)
+  const [description, setDescription] = useState(ticket.description)
+  const [shared, setShared] = useState(ticket.visible_to_residents)
+  const [submitted, setSubmitted] = useState(false)
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      const input: CorrectTicketReportInput = {}
+      if (title.trim() !== ticket.title) input.title = title.trim()
+      if (description.trim() !== ticket.description) input.description = description.trim()
+      if (shared !== ticket.visible_to_residents) input.visible_to_residents = shared
+      return correctTicketReport(client, ticket.id, input)
+    },
+    onSuccess: async () => {
+      setOpen(false)
+      setSubmitted(false)
+      await onDone()
+    },
+  })
+
+  const titleError = submitted && title.trim() === '' ? t.validation.required : undefined
+  const descriptionError = submitted && description.trim() === '' ? t.validation.required : undefined
+
+  return (
+    <FormDialog
+      trigger={
+        <Button>
+          <Pencil aria-hidden />
+          {t.ticket.correct}
+        </Button>
+      }
+      title={t.ticket.correctTitle}
+      description={t.ticket.correctExplain}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) {
+          // Si riparte da ciò che la scheda ha in mano: la modale si riapre dopo
+          // una correzione riuscita e non deve mostrare il testo di prima.
+          setTitle(ticket.title)
+          setDescription(ticket.description)
+          setShared(ticket.visible_to_residents)
+          setSubmitted(false)
+        } else {
+          mutation.reset()
+        }
+      }}
+    >
+      <form
+        noValidate
+        className="flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setSubmitted(true)
+          if (title.trim() === '' || description.trim() === '') return
+          mutation.mutate()
+        }}
+      >
+        <InlineError error={mutation.error} />
+
+        <Field label={t.ticket.ticketTitle} error={titleError} required>
+          {(props) => (
+            <Input {...props} value={title} onChange={(event) => setTitle(event.target.value)} />
+          )}
+        </Field>
+
+        <Field label={t.ticket.description} error={descriptionError} required>
+          {(props) => (
+            <Textarea
+              {...props}
+              rows={4}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          )}
+        </Field>
+
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4"
+            checked={shared}
+            onChange={(event) => setShared(event.target.checked)}
+          />
+          <span>
+            {t.ticket.visibleToResidents}
+            <span className="block text-xs text-ink-muted">{t.ticket.visibleToResidentsHint}</span>
+          </span>
+        </label>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" onClick={() => setOpen(false)} disabled={mutation.isPending}>
+            {t.common.cancel}
+          </Button>
+          <Button type="submit" variant="primary" disabled={mutation.isPending}>
+            {mutation.isPending ? t.common.saving : t.common.save}
+          </Button>
+        </div>
+      </form>
+    </FormDialog>
+  )
 }
