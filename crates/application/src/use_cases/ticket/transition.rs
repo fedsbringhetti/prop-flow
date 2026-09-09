@@ -416,6 +416,7 @@ mod tests {
             description: TicketDescription::parse("Perde da ieri").expect("descrizione"),
             category: TicketCategory::Other,
             priority: TicketPriority::Medium,
+            visible_to_residents: false,
             reported_by: reporter,
             reported_by_kind: TicketActor::Tenant,
             now: Utc::now(),

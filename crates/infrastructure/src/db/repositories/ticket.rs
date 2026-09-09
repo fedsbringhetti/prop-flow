@@ -65,6 +65,7 @@ macro_rules! select_ticket {
            category::text       AS category,
            priority::text       AS priority,
            status::text         AS status,
+           visible_to_residents,
            reported_by,
            reported_by_kind::text AS reported_by_kind,
            assigned_to,
@@ -169,12 +170,14 @@ impl TicketRepository for PgUnitOfWork {
             "INSERT INTO app.tickets (
                  id, org_id, property_id, room_id, lease_id,
                  title, description, category, priority, status,
+                 visible_to_residents,
                  reported_by, reported_by_kind, created_at, updated_at
              ) VALUES (
                  $1, $2, $3, $4, $5,
                  $6, $7, $8::app.ticket_category, $9::app.ticket_priority,
                  $10::app.ticket_status,
-                 $11, $12::app.ticket_actor, $13, $14
+                 $11,
+                 $12, $13::app.ticket_actor, $14, $15
              )",
         )
         .bind(ticket.id().as_uuid())
@@ -187,6 +190,7 @@ impl TicketRepository for PgUnitOfWork {
         .bind(db_enums::ticket_category_to_db(ticket.category()))
         .bind(db_enums::ticket_priority_to_db(ticket.priority()))
         .bind(db_enums::ticket_status_to_db(ticket.status()))
+        .bind(ticket.visible_to_residents())
         .bind(ticket.reported_by().map(UserId::as_uuid))
         .bind(db_enums::ticket_actor_to_db(ticket.reported_by_kind()))
         .bind(ticket.created_at())
@@ -409,6 +413,7 @@ fn map_ticket(row: PgRow) -> RepositoryResult<Ticket> {
         category: db_enums::ticket_category_from_db(&category)?,
         priority: db_enums::ticket_priority_from_db(&priority)?,
         status: db_enums::ticket_status_from_db(&status)?,
+        visible_to_residents: try_get(&row, "visible_to_residents")?,
         reported_by: reported_by.map(UserId::from_uuid),
         reported_by_kind: db_enums::ticket_actor_from_db(&reported_by_kind)?,
         assigned_to: assigned_to.map(UserId::from_uuid),

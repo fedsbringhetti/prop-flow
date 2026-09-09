@@ -49,10 +49,11 @@ use propflow_application::use_cases::property::{
 };
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_application::use_cases::ticket::{
-    AssignTicket, AssignTicketCommand, CloseTicket, CloseTicketCommand, GetTicket, ListTickets,
-    ListTicketsQuery, OpenTicket, OpenTicketCommand, ReopenTicket, ReopenTicketCommand,
-    StartTicketWork, StartTicketWorkCommand, SuspendTicket, SuspendTicketCommand, TriageTicket,
-    TriageTicketCommand,
+    AssignTicket, AssignTicketCommand, CancelTicket, CancelTicketCommand, CloseTicket,
+    CloseTicketCommand, GetTicket, ListTicketMessages, ListTicketMessagesCommand, ListTickets,
+    ListTicketsQuery, OpenTicket, OpenTicketCommand, PostTicketMessage, PostTicketMessageCommand,
+    ReopenTicket, ReopenTicketCommand, StartTicketWork, StartTicketWorkCommand, SuspendTicket,
+    SuspendTicketCommand, TriageTicket, TriageTicketCommand,
 };
 use propflow_domain::RequestContext;
 use propflow_domain::ai::{AiJobErrorCode, AiJobStatus, AiTask};
@@ -72,7 +73,7 @@ use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
 use propflow_domain::ticket::{
-    TicketCategory, TicketDescription, TicketPriority, TicketReference, TicketStatus,
+    MessageBody, TicketCategory, TicketDescription, TicketPriority, TicketReference, TicketStatus,
     TicketStatusChange, TicketTitle, WaitingOn,
 };
 use propflow_infrastructure::db::PgWorkerUnitOfWorkFactory;
@@ -1362,6 +1363,7 @@ async fn open_ticket(
                     .expect("descrizione valida"),
                 category: None,
                 priority: None,
+                visible_to_residents: None,
             },
         )
         .await
@@ -1789,6 +1791,7 @@ async fn a_ticket_refuses_a_room_or_a_lease_of_another_property() {
             .expect("descrizione"),
         category: None,
         priority: None,
+        visible_to_residents: None,
     };
 
     let error = open
@@ -5708,5 +5711,205 @@ async fn a_job_of_another_organization_is_out_of_reach() {
     assert!(
         job_of(&env, &stranger, bill.id()).await.is_none(),
         "il job di un'altra organizzazione non deve essere visibile"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Sezione 5 — le segnalazioni: visibilità, correzione, nomi, thread chiuso
+// ---------------------------------------------------------------------------
+
+/// Apre una segnalazione **sull'immobile intero**, senza contratto indicato.
+///
+/// Senza `lease_id` il quarto ramo di `app.can_access_ticket` non può concedere
+/// niente a nessuno: è la forma che rende il test una prova del **quinto** ramo e
+/// non di un altro.
+async fn open_shared_ticket(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+    title: &str,
+    shared: bool,
+) -> propflow_domain::ticket::Ticket {
+    OpenTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            OpenTicketCommand {
+                property_id,
+                room_id: None,
+                lease_id: None,
+                title: TicketTitle::parse(title).expect("titolo valido"),
+                description: TicketDescription::parse("La caldaia condominiale non parte")
+                    .expect("descrizione valida"),
+                category: None,
+                priority: None,
+                visible_to_residents: Some(shared),
+            },
+        )
+        .await
+        .expect("segnalazione aperta")
+        .ticket
+}
+
+/// **Il quinto ramo di `app.can_access_ticket`, sul binario vero.**
+///
+/// X apre una segnalazione sull'immobile intero — nessun contratto indicato,
+/// quindi il ramo `lease_id` è fuori gioco per costruzione — e la dichiara di
+/// interesse comune. Y, che abita la stessa casa con un **contratto proprio** e
+/// non è né chi ha segnalato né chi ha in carico, deve leggerla.
+///
+/// E deve leggere **anche il thread e lo storico**: è la ragione per cui il ramo
+/// sta nella funzione e non in `tickets_select`. Con la policy allargata da sola,
+/// questo test passerebbe sulla prima riga e fallirebbe sulle altre due — cioè
+/// esattamente la segnalazione che si apre e non si legge.
+#[tokio::test]
+async fn a_shared_ticket_reaches_the_housemates_with_its_thread_and_history() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-condiviso").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+    let a = &stage.second[0];
+
+    let shared = open_shared_ticket(&env, x, stage.home_one, "La caldaia è ferma", true).await;
+
+    PostTicketMessage::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            x,
+            PostTicketMessageCommand {
+                ticket_id: shared.id(),
+                body: MessageBody::parse("Da stamattina niente acqua calda").expect("corpo"),
+                is_internal: false,
+            },
+        )
+        .await
+        .expect("messaggio scritto");
+
+    let get = GetTicket::new(Arc::clone(&env.factory));
+    let detail = get
+        .execute(y, shared.id())
+        .await
+        .expect("il coinquilino legge la segnalazione condivisa");
+    assert_eq!(detail.ticket.id(), shared.id());
+    assert!(detail.ticket.visible_to_residents());
+    assert!(
+        !detail.history.is_empty(),
+        "lo storico passa dalla stessa funzione: se fosse vuoto il ramo sarebbe \
+         finito in `tickets_select` invece che in `can_access_ticket`"
+    );
+
+    let thread = ListTicketMessages::new(Arc::clone(&env.factory))
+        .execute(
+            y,
+            ListTicketMessagesCommand {
+                ticket_id: shared.id(),
+                after: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("il coinquilino legge il thread");
+    assert_eq!(thread.items.len(), 1);
+
+    // L'altra casa non c'entra: A è residente, ma di un immobile diverso.
+    let denied = get
+        .execute(a, shared.id())
+        .await
+        .expect_err("chi abita altrove non deve vederla");
+    assert_eq!(denied.code(), "ticket.not_found");
+
+    // E il default resta quello di sempre.
+    let private =
+        open_shared_ticket(&env, x, stage.home_one, "Perde il mio lavandino", false).await;
+    let denied = get
+        .execute(y, private.id())
+        .await
+        .expect_err("senza la casella, la segnalazione resta privata");
+    assert_eq!(
+        denied.code(),
+        "ticket.not_found",
+        "è il comportamento di prima della migration 0035, e resta il default"
+    );
+}
+
+/// **Condividere non concede una riga di scrittura.**
+///
+/// `tickets_update` ha un predicato in linea — staff, `reported_by`,
+/// `assigned_to` — e **non** passa da `can_access_ticket`: è la ragione per cui la
+/// `0035` è più piccola di quanto sembri. Il coinquilino che ora *vede* la
+/// segnalazione non deve poterla riaprire, annullare o correggere.
+#[tokio::test]
+async fn seeing_a_shared_ticket_does_not_make_it_writable() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-sola-lettura").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+
+    let shared = open_shared_ticket(&env, x, stage.home_one, "Il portone non chiude", true).await;
+
+    let refused = CancelTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(y, CancelTicketCommand { id: shared.id() })
+        .await
+        .expect_err("il coinquilino non annulla");
+    assert_eq!(refused.code(), "ticket.not_yours");
+}
+
+/// **I nomi arrivano dalla policy `users_select`, e questa query è il suo primo
+/// lettore.**
+///
+/// La `0030` aveva scritto che la finestra per restringere quella policy la
+/// avrebbe chiusa il primo client che leggesse un nome da lì. È questo. I due rami
+/// che reggono la sezione si provano insieme: `is_my_staff` — l'inquilino legge il
+/// nome di chi ha in carico la sua segnalazione — e `shares_home_with` — il
+/// coinquilino legge il nome di chi ha segnalato.
+#[tokio::test]
+async fn the_names_come_from_the_policy_that_0030_left_in_place() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-nomi").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+
+    let ticket = open_shared_ticket(&env, x, stage.home_one, "La caldaia è ferma", true).await;
+    AssignTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &stage.owner,
+            AssignTicketCommand {
+                id: ticket.id(),
+                assignee: user_of(&stage.owner),
+            },
+        )
+        .await
+        .expect("presa in carico");
+
+    let get = GetTicket::new(Arc::clone(&env.factory));
+
+    // `is_my_staff`: l'inquilino vede il nome del proprietario.
+    let seen_by_x = get
+        .execute(x, ticket.id())
+        .await
+        .expect("visibile a chi ha segnalato");
+    assert!(
+        seen_by_x
+            .people
+            .name_of(seen_by_x.ticket.assigned_to())
+            .is_some(),
+        "«In carico a» deve dire chi, non solo quando"
+    );
+
+    // `shares_home_with`: il coinquilino vede il nome di chi ha segnalato.
+    let seen_by_y = get.execute(y, ticket.id()).await.expect("condivisa");
+    assert!(
+        seen_by_y
+            .people
+            .name_of(seen_by_y.ticket.reported_by())
+            .is_some(),
+        "in un co-living «Inquilino» non distingue due coinquilini: serve il nome"
+    );
+
+    // E lo staff vede i nomi di entrambi, dal ramo `is_staff_of_user`.
+    let seen_by_owner = get
+        .execute(&stage.owner, ticket.id())
+        .await
+        .expect("visibile allo staff");
+    assert!(
+        seen_by_owner
+            .people
+            .name_of(seen_by_owner.ticket.reported_by())
+            .is_some()
     );
 }

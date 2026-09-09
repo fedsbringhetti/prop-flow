@@ -31,6 +31,15 @@ pub struct OpenTicketCommand {
     /// chiederla a chi segnala un guasto produrrebbe classificazioni a caso.
     pub category: Option<TicketCategory>,
     pub priority: Option<TicketPriority>,
+    /// Dichiara la segnalazione di interesse comune per la casa.
+    ///
+    /// Assente vale `false`, che è il comportamento che il modulo ha sempre avuto:
+    /// la vedono lo staff, chi l'ha aperta, chi ce l'ha in carico e chi è parte
+    /// del contratto indicato. Con `true` la leggono anche i residenti
+    /// dell'immobile — la caldaia condominiale interessa a tutti — e con essa il
+    /// thread e le fotografie, perché `app.can_access_ticket` serve tutte e
+    /// quattro le policy. Il confine è nel database (migration `0035`), non qui.
+    pub visible_to_residents: Option<bool>,
 }
 
 /// Apre una segnalazione.
@@ -119,6 +128,7 @@ impl OpenTicket {
             description: command.description,
             category: command.category.unwrap_or(TicketCategory::Other),
             priority: command.priority.unwrap_or(TicketPriority::Medium),
+            visible_to_residents: command.visible_to_residents.unwrap_or(false),
             reported_by: context.user_id(),
             reported_by_kind: TicketActor::from_role(authorization::effective_role(context)),
             now,

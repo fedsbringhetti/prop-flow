@@ -231,6 +231,14 @@ pub struct NewTicket {
     pub description: TicketDescription,
     pub category: TicketCategory,
     pub priority: TicketPriority,
+    /// Dichiara la segnalazione di interesse comune: la leggono anche i residenti
+    /// dell'immobile, e con essa il thread e le fotografie.
+    ///
+    /// Il default è `false`, cioè il comportamento che il modulo ha sempre avuto,
+    /// e la scelta la fa chi apre. Non è un permesso applicativo: il ramo sta in
+    /// `app.can_access_ticket` (migration `0035`), quindi la riga è illeggibile a
+    /// un residente finché questo è falso.
+    pub visible_to_residents: bool,
     pub reported_by: Option<UserId>,
     pub reported_by_kind: TicketActor,
     pub now: DateTime<Utc>,
@@ -258,6 +266,12 @@ pub struct Ticket {
     category: TicketCategory,
     priority: TicketPriority,
     status: TicketStatus,
+    /// Se vero, la leggono anche i residenti dell'immobile.
+    ///
+    /// Il confine è nel database — `app.can_access_ticket` — e questo campo è la
+    /// sua faccia leggibile: serve a mostrarlo e a lasciarlo correggere, non a
+    /// decidere chi vede che cosa.
+    visible_to_residents: bool,
     reported_by: Option<UserId>,
     reported_by_kind: TicketActor,
     assigned_to: Option<UserId>,
@@ -301,6 +315,7 @@ impl Ticket {
             description,
             category,
             priority,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             now,
@@ -318,6 +333,7 @@ impl Ticket {
             category,
             priority,
             status: TicketStatus::Open,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             assigned_to: None,
@@ -580,6 +596,10 @@ impl Ticket {
         self.status
     }
     #[must_use]
+    pub const fn visible_to_residents(&self) -> bool {
+        self.visible_to_residents
+    }
+    #[must_use]
     pub const fn reported_by(&self) -> Option<UserId> {
         self.reported_by
     }
@@ -649,6 +669,7 @@ impl Ticket {
             category,
             priority,
             status,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             assigned_to,
@@ -675,6 +696,7 @@ impl Ticket {
             category,
             priority,
             status,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             assigned_to,
@@ -730,6 +752,7 @@ pub struct TicketParts {
     pub category: TicketCategory,
     pub priority: TicketPriority,
     pub status: TicketStatus,
+    pub visible_to_residents: bool,
     pub reported_by: Option<UserId>,
     pub reported_by_kind: TicketActor,
     pub assigned_to: Option<UserId>,
@@ -761,6 +784,7 @@ mod tests {
             description: TicketDescription::parse("Perde da ieri sera").expect("valida"),
             category: TicketCategory::Other,
             priority: TicketPriority::Medium,
+            visible_to_residents: false,
             reported_by: Some(UserId::generate()),
             reported_by_kind: TicketActor::Tenant,
             now: Utc::now(),

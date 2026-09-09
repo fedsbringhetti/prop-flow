@@ -251,6 +251,16 @@ pub struct OpenTicketRequest {
     /// Assente vale `medium`.
     #[serde(default)]
     pub priority: Option<TicketPriorityDto>,
+    /// Dichiara la segnalazione di interesse comune per la casa.
+    ///
+    /// Assente vale `false`, che è il comportamento di sempre: la vedono lo staff,
+    /// chi l'ha aperta, chi ce l'ha in carico e chi è parte del contratto
+    /// indicato. Con `true` la leggono anche i **residenti dell'immobile**, e con
+    /// essa il thread e le fotografie — perché il confine è
+    /// `app.can_access_ticket`, che serve tutte e quattro le policy. Non concede
+    /// nessuna scrittura: un residente non riapre, non annulla e non corregge.
+    #[serde(default)]
+    pub visible_to_residents: Option<bool>,
 }
 
 impl OpenTicketRequest {
@@ -263,6 +273,7 @@ impl OpenTicketRequest {
             description: TicketDescription::parse(&self.description)?,
             category: self.category.map(Into::into),
             priority: self.priority.map(Into::into),
+            visible_to_residents: self.visible_to_residents,
         })
     }
 }
@@ -343,6 +354,10 @@ pub struct TicketResponse {
     pub category: TicketCategoryDto,
     pub priority: TicketPriorityDto,
     pub status: TicketStatusDto,
+    /// `true` se la leggono anche i residenti dell'immobile, oltre a chi la vede
+    /// per contratto. Il confine è `app.can_access_ticket` e non questo campo:
+    /// qui viaggia perché la casella si mostra e si corregge.
+    pub visible_to_residents: bool,
     pub reported_by: Option<Uuid>,
     pub reported_by_kind: TicketActorDto,
     /// Come si chiama chi ha segnalato.
@@ -398,6 +413,7 @@ impl TicketResponse {
             category: ticket.category().into(),
             priority: ticket.priority().into(),
             status: ticket.status().into(),
+            visible_to_residents: ticket.visible_to_residents(),
             reported_by: ticket.reported_by().map(|id| id.as_uuid()),
             reported_by_kind: ticket.reported_by_kind().into(),
             reported_by_name: people.name_of(ticket.reported_by()).map(str::to_owned),
