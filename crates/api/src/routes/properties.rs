@@ -3,7 +3,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use propflow_application::use_cases::property::{
-    ArchivePropertyCommand, CreatePropertyCommand, ListPropertiesQuery, UpdatePropertyCommand,
+    ArchivePropertyCommand, CreatePropertyCommand, ListPropertiesQuery, PropertyView,
+    UpdatePropertyCommand,
 };
 use propflow_domain::property::{
     EnergyClass, Patch, Property, PropertyChanges, PropertyResident, PropertyStatus, PropertyType,
@@ -294,7 +295,19 @@ pub struct PropertyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub property_type: PropertyTypeDto,
+    /// Lo stato **memorizzato**: cambia solo su azioni esplicite di chi
+    /// amministra — bozza, disponibile, in manutenzione — e sull'archiviazione,
+    /// che ha la sua operazione.
     pub status: PropertyStatusDto,
+    /// Lo stato **alla data odierna**, che tiene conto dei contratti in essere:
+    /// può valere `rented` o `partially_rented` mentre `status` resta `draft`.
+    ///
+    /// Deriva dalle stanze occupate e dai contratti sull'immobile intero, e non
+    /// si può filtrare — `?status=rented` risponde `422` indicando `occupied`,
+    /// come fa `in_force` per i contratti (ADR-019). Quando i due valori
+    /// divergono **si mostrano entrambi**: un immobile «in manutenzione» che
+    /// risulta affittato è un'anomalia da vedere, non da nascondere.
+    pub effective_status: PropertyStatusDto,
     pub is_coliving: bool,
     pub address: AddressDto,
     /// Stringa decimale: `Decimal` serializza come stringa, non come numero.
@@ -312,6 +325,17 @@ pub struct PropertyResponse {
 }
 
 impl PropertyResponse {
+    fn from_view(view: &PropertyView) -> Self {
+        let mut response = Self::from_domain(&view.property);
+        // Il derivato **non copre** il memorizzato: lo affianca. `None` significa
+        // che non c'era niente da derivare, e allora l'ultima parola resta a ciò
+        // che qualcuno ha deciso.
+        if let Some(status) = view.occupancy_status {
+            response.effective_status = status.into();
+        }
+        response
+    }
+
     fn from_domain(property: &Property) -> Self {
         Self {
             id: property.id().as_uuid(),
@@ -321,6 +345,9 @@ impl PropertyResponse {
             code: property.code().map(str::to_owned),
             property_type: property.property_type().into(),
             status: property.status().into(),
+            // Senza derivazione i due valori coincidono: `from_view` sovrascrive
+            // il secondo quando c'è qualcosa da derivare.
+            effective_status: property.status().into(),
             is_coliving: property.is_coliving(),
             address: AddressDto::from_domain(property.address()),
             size_sqm: property.size_sqm(),
@@ -346,8 +373,14 @@ pub struct PropertyPageResponse {
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct ListQueryParams {
+    /// **Solo stati memorizzati.** `rented` e `partially_rented` sono derivati dai
+    /// contratti e rispondono `422` con `property.derived_status_filter`: si filtra
+    /// con `occupied`.
     #[serde(default)]
     pub status: Option<PropertyStatusDto>,
+    /// Immobili con almeno un contratto in essere (`true`), o senza (`false`).
+    #[serde(default)]
+    pub occupied: Option<bool>,
     #[serde(default)]
     pub city: Option<String>,
     /// Cursore keyset: ultimo id della pagina precedente.
@@ -419,6 +452,7 @@ async fn list(
             &context,
             ListPropertiesQuery {
                 status: params.status.map(Into::into),
+                occupied: params.occupied,
                 city: params.city,
                 after: params.after.map(PropertyId::from_uuid),
                 limit: params.limit,
@@ -428,11 +462,7 @@ async fn list(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(PropertyPageResponse {
-        items: page
-            .items
-            .iter()
-            .map(PropertyResponse::from_domain)
-            .collect(),
+        items: page.items.iter().map(PropertyResponse::from_view).collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
 }
@@ -457,7 +487,7 @@ async fn detail(
         .execute(&context, PropertyId::from_uuid(id))
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(PropertyResponse::from_domain(&property)))
+    Ok(Json(PropertyResponse::from_view(&property)))
 }
 
 #[utoipa::path(

@@ -171,7 +171,11 @@ async fn row_level_security_isolates_organizations() {
         .execute(&alfa, ListPropertiesQuery::default())
         .await
         .expect("elenco riuscito");
-    assert!(own.items.iter().any(|item| item.id() == property.id()));
+    assert!(
+        own.items
+            .iter()
+            .any(|item| item.property.id() == property.id())
+    );
 
     // L'organizzazione Beta non vede nulla di Alfa.
     let other = list
@@ -179,7 +183,10 @@ async fn row_level_security_isolates_organizations() {
         .await
         .expect("elenco riuscito");
     assert!(
-        !other.items.iter().any(|item| item.id() == property.id()),
+        !other
+            .items
+            .iter()
+            .any(|item| item.property.id() == property.id()),
         "l'organizzazione Beta ha visto un immobile di Alfa"
     );
 
@@ -401,22 +408,27 @@ async fn rooms_are_written_and_read_back_through_their_property() {
         .expect("elenco riuscito");
     let stored = rooms
         .iter()
-        .find(|item| item.id() == room.id())
+        .find(|item| item.room.id() == room.id())
         .expect("stanza presente nell'elenco");
-    assert_eq!(stored.name(), "Camera A");
+    assert_eq!(stored.room.name(), "Camera A");
     assert_eq!(
         stored
+            .room
             .monthly_rent()
             .map(|money| money.amount().to_string()),
         Some("450.00".to_owned())
     );
     assert_eq!(
         stored
+            .room
             .utility_share_percent()
             .map(|value| value.to_string()),
         Some("33.33".to_owned())
     );
-    assert!(stored.has_private_bathroom());
+    assert!(stored.room.has_private_bathroom());
+    // Nessun contratto: la derivazione dice «libera», e lo stato memorizzato
+    // resta quello che è.
+    assert!(!stored.occupied);
 }
 
 #[tokio::test]
@@ -673,6 +685,79 @@ async fn an_expired_lease_keeps_its_stored_state_but_leaves_the_dashboard() {
     .await
     .expect("lettura dell'occupazione");
     assert_eq!(occupancy, 0);
+
+    // **E le stanze occupate non sono più sempre zero.**
+    //
+    // La vista contava `r.status = 'occupied'`, che è la colonna che nessuno
+    // scrive: `rooms_occupied` e `occupancy_percent` erano zero per ogni immobile
+    // del sistema, sempre, e nessuno se n'era accorto perché quella vista la legge
+    // solo questo test — che leggeva l'unica colonna giusta. Qui si guarda un
+    // immobile con una stanza davvero occupata, e la vista lo dice.
+    let abitato = create_property(&env, &context, "Immobile abitato", "Torino").await;
+    let stanza = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &context,
+            CreateRoomCommand {
+                property_id: abitato,
+                name: "Camera occupata".to_owned(),
+                attributes: RoomChanges::default(),
+            },
+        )
+        .await
+        .expect("stanza creata");
+    let in_essere = draft_lease(
+        &env,
+        &context,
+        abitato,
+        Some(stanza.id()),
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    // `draft_lease` aggiunge già l'inquilino al 100%: senza, l'attivazione
+    // rifiuterebbe.
+    activate(&env, &context, in_essere.id())
+        .await
+        .expect("attivazione riuscita");
+
+    // **Il contesto va installato a mano**, e il motivo è la forma della funzione:
+    // `app.room_is_occupied` è `SECURITY DEFINER` e porta il confine nel corpo —
+    // `can_access_property` — come `app.property_residents` della `0030`. Sul pool
+    // privilegiato, che non ha contesto, quel confine risponde «no» e la vista
+    // conta zero. Non è un difetto della vista: è la ragione per cui una funzione
+    // che legge senza policy deve controllare da sé chi la chiama.
+    let mut conn = env
+        .pools
+        .privileged()
+        .acquire()
+        .await
+        .expect("connessione privilegiata");
+    // Servono **tutti e due**: `can_access_property` passa da `is_org_staff`, che
+    // chiede il ruolo di *questa* persona in *quella* organizzazione.
+    sqlx::query("SELECT set_config('app.current_org_id', $1, false)")
+        .bind(org_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .expect("organizzazione installata");
+    sqlx::query("SELECT set_config('app.current_user_id', $1, false)")
+        .bind(context.user_id().expect("utente").as_uuid().to_string())
+        .execute(&mut *conn)
+        .await
+        .expect("utente installato");
+
+    let (occupate, percentuale): (i64, Option<rust_decimal::Decimal>) = sqlx::query_as(
+        "SELECT rooms_occupied, occupancy_percent
+           FROM app.v_property_occupancy WHERE property_id = $1",
+    )
+    .bind(abitato.as_uuid())
+    .fetch_one(&mut *conn)
+    .await
+    .expect("lettura dell'occupazione");
+    assert_eq!(occupate, 1, "la vista conta le stanze davvero occupate");
+    assert_eq!(
+        percentuale.map(|value| value.to_string()),
+        Some("100.00".to_owned())
+    );
 
     // Il filtro `in_force` dell'elenco usa la stessa funzione delle viste.
     let list = ListLeases::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);

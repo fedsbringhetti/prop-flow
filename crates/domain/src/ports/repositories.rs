@@ -137,6 +137,12 @@ pub trait SessionRepository: Send {
 #[derive(Debug, Clone)]
 pub struct PropertyQuery {
     pub status: Option<PropertyStatus>,
+    /// Immobili con almeno un contratto in essere, o senza nessuno.
+    ///
+    /// È il filtro che sostituisce `?status=rented`: quello non può funzionare,
+    /// perché in database quel valore non c'è. Stessa forma di `in_force` sui
+    /// contratti.
+    pub occupied: Option<bool>,
     pub city: Option<String>,
     /// Ultimo identificatore della pagina precedente. Gli id sono UUIDv7, quindi
     /// ordinarli equivale a ordinarli per data di creazione.
@@ -153,6 +159,7 @@ impl Default for PropertyQuery {
     fn default() -> Self {
         Self {
             status: None,
+            occupied: None,
             city: None,
             after: None,
             limit: Self::DEFAULT_LIMIT,
@@ -177,6 +184,15 @@ pub trait PropertyRepository: Send {
     /// portato ad archiviato in un solo statement. Il ruolo applicativo non ha
     /// nemmeno il privilegio `DELETE`.
     async fn soft_delete(&mut self, property: &Property) -> RepositoryResult<()>;
+
+    /// Lo stato che discende dai contratti, per un'intera pagina.
+    ///
+    /// Vale la stessa ragione dell'occupazione delle stanze: `rented` e
+    /// `partially_rented` sono **conseguenze**, e le conseguenze si derivano
+    /// (ADR-019). La derivazione non è pura — dipende dalle stanze e dai
+    /// contratti — quindi non può stare sull'aggregato, dove la firma
+    /// prometterebbe una risposta che l'aggregato non ha.
+    async fn occupancy(&mut self, ids: &[PropertyId]) -> RepositoryResult<Vec<PropertyOccupancy>>;
 
     /// Chi abita l'immobile, **letto da `app.property_residents`**.
     ///
@@ -204,11 +220,41 @@ pub trait PropertyRepository: Send {
 pub trait RoomRepository: Send {
     async fn find_by_id(&mut self, id: RoomId) -> RepositoryResult<Option<Room>>;
     async fn list_for_property(&mut self, property_id: PropertyId) -> RepositoryResult<Vec<Room>>;
+    /// Quali di queste stanze sono **occupate adesso**.
+    ///
+    /// Derivata e non memorizzata: `RoomStatus::Occupied` non lo scrive nessuno, e
+    /// non potrebbe restare vero, perché l'occupazione dipende dal calendario —
+    /// un contratto che comincia domani occupa domani, e nessun trigger scatta al
+    /// passare del tempo (ADR-019). La definizione sta in
+    /// `app.room_is_occupied`, che usa `app.lease_in_force` e non ne inventa una
+    /// seconda.
+    ///
+    /// Una query per l'intero elenco e non una per riga, come `LeaseRepository::labels`.
+    async fn occupancy(&mut self, ids: &[RoomId]) -> RepositoryResult<Vec<RoomOccupancy>>;
     async fn insert(&mut self, room: &Room) -> RepositoryResult<()>;
     async fn update(&mut self, room: &Room) -> RepositoryResult<()>;
     /// Soft delete: la riga resta con `deleted_at` valorizzato, perché i
     /// contratti per stanza continuano a riferirsi a essa.
     async fn soft_delete(&mut self, room: &Room) -> RepositoryResult<()>;
+}
+
+/// Se una stanza è occupata adesso, derivato dai contratti in essere.
+#[derive(Debug, Clone, Copy)]
+pub struct RoomOccupancy {
+    pub room_id: RoomId,
+    pub occupied: bool,
+}
+
+/// Lo stato di un immobile che **discende dai contratti**, quando ce n'è uno.
+///
+/// `None` quando non c'è niente da derivare, ed è la parte che conta: nessuna
+/// stanza occupata **non** significa «disponibile»: potrebbe essere una bozza o un
+/// immobile in manutenzione, che sono giudizi di chi amministra. Chi legge ripiega
+/// sullo stato memorizzato.
+#[derive(Debug, Clone, Copy)]
+pub struct PropertyOccupancy {
+    pub property_id: PropertyId,
+    pub status: Option<PropertyStatus>,
 }
 
 /// Filtro di elenco dei contratti con paginazione keyset.

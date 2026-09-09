@@ -95,6 +95,16 @@ pub enum UnsupportedQuery {
     /// il modo peggiore di dirlo.
     #[error("`overdue` is derived from the due date: filter by `outstanding` instead")]
     ChargeDerivedStatusFilter,
+    /// `?status=rented` o `?status=partially_rented` sugli immobili.
+    ///
+    /// Terza occorrenza della stessa forma, e la ragione non cambia: quei due
+    /// valori discendono dai contratti in essere e **nessuna riga li porta
+    /// memorizzati**, quindi il filtro darebbe sempre zero risultati. Il filtro
+    /// che serve davvero è `occupied`, come `in_force` per i contratti.
+    #[error(
+        "`rented` and `partially_rented` are derived from the leases: filter by `occupied` instead"
+    )]
+    PropertyDerivedStatusFilter,
 }
 
 impl UnsupportedQuery {
@@ -102,6 +112,7 @@ impl UnsupportedQuery {
     pub const fn code(self) -> &'static str {
         match self {
             Self::LeaseDerivedStatusFilter => "lease.derived_status_filter",
+            Self::PropertyDerivedStatusFilter => "property.derived_status_filter",
             Self::ChargeDerivedStatusFilter => "charge.derived_status_filter",
         }
     }
@@ -111,7 +122,9 @@ impl UnsupportedQuery {
     #[must_use]
     pub const fn field(self) -> &'static str {
         match self {
-            Self::LeaseDerivedStatusFilter | Self::ChargeDerivedStatusFilter => "status",
+            Self::LeaseDerivedStatusFilter
+            | Self::ChargeDerivedStatusFilter
+            | Self::PropertyDerivedStatusFilter => "status",
         }
     }
 }

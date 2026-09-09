@@ -1302,6 +1302,185 @@ async fn a_party_with_a_user_keeps_its_email_and_its_place() {
     assert_eq!(corrected["full_name"], "Nome Corretto");
 }
 
+/// **L'occupazione la decide il calendario, e per questo non è una colonna.**
+///
+/// È la prova che un trigger su attivazione e disdetta sarebbe sbagliato: il
+/// secondo contratto è **attivo** e comincia fra un mese, quindi la sua stanza
+/// oggi è libera. Un `UPDATE` all'attivazione l'avrebbe già marcata occupata, e
+/// nessun trigger scatterebbe la notte in cui il contratto comincia davvero.
+///
+/// Guarda anche la seconda metà della decisione: lo stato **dichiarato** resta
+/// quello che qualcuno ha scritto, e i due valori viaggiano insieme — una stanza
+/// dichiarata fuori uso mentre ci abita una persona è un'anomalia da vedere, non
+/// da nascondere dietro la precedenza di un campo sull'altro.
+#[tokio::test]
+async fn a_room_is_occupied_by_the_calendar_and_not_by_a_column() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "occupazione").await;
+    let property = create_property(&app, &token, "Immobile in co-living").await;
+
+    let mut ids = Vec::new();
+    for nome in ["Stanza abitata", "Stanza che lo sarà"] {
+        let (status, room) = app
+            .post_auth(
+                &format!("/api/v1/properties/{property}/rooms"),
+                &token,
+                serde_json::json!({ "name": nome, "monthly_rent": "400.00" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "corpo: {room}");
+        // Appena creata, nessuna stanza è occupata.
+        assert_eq!(room["status"], "available");
+        assert_eq!(room["effective_status"], "available");
+        ids.push(room["id"].as_str().expect("id").to_owned());
+    }
+    let (abitata, futura) = (&ids[0], &ids[1]);
+
+    // Il primo contratto è in essere adesso.
+    let ora = draft_lease(&app, &token, &property, Some(abitata), -10, Some(355)).await;
+    add_tenant(&app, &token, &ora, "Inquilino Presente", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{ora}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Il secondo è attivo e comincia **fra un mese**.
+    let domani = draft_lease(&app, &token, &property, Some(futura), 30, Some(395)).await;
+    add_tenant(&app, &token, &domani, "Inquilino Futuro", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{domani}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}/rooms"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let rooms = page["items"].as_array().expect("stanze");
+    let occupata = rooms
+        .iter()
+        .find(|room| room["id"] == serde_json::json!(abitata))
+        .expect("stanza abitata");
+    let libera = rooms
+        .iter()
+        .find(|room| room["id"] == serde_json::json!(futura))
+        .expect("stanza futura");
+
+    assert_eq!(occupata["effective_status"], "occupied", "corpo: {page}");
+    // Lo stato dichiarato **non** è cambiato: nessuno lo ha scritto.
+    assert_eq!(occupata["status"], "available", "corpo: {page}");
+    // E la stanza del contratto che comincia fra un mese è libera oggi.
+    assert_eq!(libera["effective_status"], "available", "corpo: {page}");
+}
+
+/// **Lo stato dell'immobile segue le sue stanze**, e il filtro che serve è
+/// l'occupazione.
+///
+/// `?status=rented` non può funzionare — quel valore non è memorizzato — e
+/// restituire zero righe sarebbe il modo peggiore di dirlo: risponde `422`
+/// indicando il filtro giusto, come fanno i contratti con `in_force` e gli
+/// addebiti con `outstanding`.
+#[tokio::test]
+async fn a_property_is_partially_rented_when_one_of_its_rooms_is() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "occupazione-immobile").await;
+    let property = create_property(&app, &token, "Immobile a metà").await;
+
+    let mut ids = Vec::new();
+    for nome in ["Prima stanza", "Seconda stanza"] {
+        let (_, room) = app
+            .post_auth(
+                &format!("/api/v1/properties/{property}/rooms"),
+                &token,
+                serde_json::json!({ "name": nome }),
+            )
+            .await;
+        ids.push(room["id"].as_str().expect("id").to_owned());
+    }
+
+    let lease = draft_lease(&app, &token, &property, Some(&ids[0]), -1, Some(364)).await;
+    add_tenant(&app, &token, &lease, "Inquilino", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["status"], "draft", "lo stato dichiarato non cambia");
+    assert_eq!(
+        detail["effective_status"], "partially_rented",
+        "corpo: {detail}"
+    );
+
+    // Il filtro che funziona.
+    let (status, page) = app
+        .send(
+            "GET",
+            "/api/v1/properties?occupied=true",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "corpo: {page}"
+    );
+
+    let (status, page) = app
+        .send(
+            "GET",
+            "/api/v1/properties?occupied=false",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(0),
+        "corpo: {page}"
+    );
+
+    // E quello che non può funzionare, che lo dice invece di rispondere vuoto.
+    let (status, problem) = app
+        .send(
+            "GET",
+            "/api/v1/properties?status=rented",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.derived_status_filter");
+}
+
 /// Emette un invito su un contratto e restituisce (`invitation_id`, `token`).
 async fn invite_tenant(app: &TestApp, token: &str, lease: &str, email: &str) -> (String, String) {
     let (status, body) = app

@@ -5,7 +5,8 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use propflow_domain::ports::{
-    PropertyPage, PropertyQuery, PropertyRepository, RepositoryError, RepositoryResult,
+    PropertyOccupancy, PropertyPage, PropertyQuery, PropertyRepository, RepositoryError,
+    RepositoryResult,
 };
 use propflow_domain::property::{Property, PropertyParts, PropertyResident};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, OrgId, PropertyId, UserId};
@@ -76,6 +77,12 @@ impl PropertyRepository for PgUnitOfWork {
                 AND ($1::text IS NULL OR status = $1::app.property_status)
                 AND ($2::text IS NULL OR city = $2)
                 AND ($3::uuid IS NULL OR id > $3)
+                -- `occupied` è il filtro che sostituisce `?status=rented`, che non
+                -- può funzionare: quel valore non è memorizzato. La funzione
+                -- risponde `NULL` quando non c'è niente da derivare, e «niente da
+                -- derivare» è esattamente «non occupato».
+                AND ($5::boolean IS NULL
+                     OR (app.property_occupancy_status(id) IS NOT NULL) = $5)
               ORDER BY id
               LIMIT $4"
         ))
@@ -83,6 +90,7 @@ impl PropertyRepository for PgUnitOfWork {
         .bind(query.city.as_deref())
         .bind(query.after.map(|id| id.as_uuid()))
         .bind(fetch_limit)
+        .bind(query.occupied)
         .fetch_all(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -219,6 +227,40 @@ impl PropertyRepository for PgUnitOfWork {
             return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
+    }
+
+    async fn occupancy(&mut self, ids: &[PropertyId]) -> RepositoryResult<Vec<PropertyOccupancy>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // `app.property_occupancy_status` restituisce `NULL` quando non c'è niente
+        // da derivare, e quel `NULL` è informazione: significa «lo stato memorizzato
+        // è ancora l'ultima parola», non «disponibile».
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT id,
+                    app.property_occupancy_status(id)::text AS occupancy_status
+               FROM app.properties
+              WHERE id = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let id: Uuid = try_get(&row, "id")?;
+                let status: Option<String> = try_get(&row, "occupancy_status")?;
+                let status = status
+                    .map(|value| db_enums::property_status_from_db(&value))
+                    .transpose()?;
+                Ok(PropertyOccupancy {
+                    property_id: PropertyId::from_uuid(id),
+                    status,
+                })
+            })
+            .collect()
     }
 
     async fn list_residents(
