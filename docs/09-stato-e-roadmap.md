@@ -643,6 +643,20 @@ Due test, e provano i due lati: una persona già inquilina di un contratto scadu
 l'invito al contratto nuovo e **vede tutti e due**; e chi non è membro continua a
 diventarlo, che è il caso che non deve rompersi.
 
+**La riproduzione esiste già** ed è il criterio di accettazione, misurato prima di
+pianificare:
+
+```
+CASO 1 — inquilino nuovo invitato su un contratto in bozza
+  invito 201 · accettazione 200 · l'inquilino vede 1 contratto ('draft')
+CASO 2 — lo stesso inquilino invitato su un secondo contratto
+  invito 201  ← il proprietario riceve un codice che sembra buono
+  accettazione 409 membership.already_exists
+  l'inquilino vede ancora 1 contratto, non 2
+```
+
+Il caso 2 deve finire `200` e con **due** contratti; il caso 1 deve restare identico.
+
 **Prima di scrivere**: rileggere il commento in testa a `AcceptInvitation` sull'ordine
 delle tre scritture — `app.has_pending_invitation` abilita le prime due e diventa falso
 appena l'invito è marcato accettato. Saltare la prima non cambia l'ordine delle altre, e
@@ -722,10 +736,14 @@ scritto e voluto: qui si aggiunge un numero che aiuta, non un vincolo.
 
 ### Che cosa **non** entra
 
-- **`R35`**, che cosa vede l'inquilino di un contratto non ancora attivo. Le letture
-  possibili sono tre e portano a lavori opposti — non vederlo, vederlo senza la parola
-  «Bozza», o va bene così — e sceglierne una a intuito è precisamente ciò che
-  `CLAUDE.md` §1 dice di non fare. **La domanda va posta prima**;
+- **`R35` non entra perché non esiste più.** Posta la domanda, la risposta è arrivata da
+  una riproduzione e non da un'opinione: un inquilino invitato su un contratto **in bozza**
+  accetta e **lo vede**. Non c'è nessuna regola che nasconda le bozze; il contratto che non
+  compariva non compariva perché la persona non era collegata, che è `R31` visto
+  dall'altro lato. Ne resta una domanda di sola presentazione — se «Bozza» sia la parola
+  giusta per chi abiterà lì — che va con [`R8`](12-da-fare.md#interfaccia-e-prodotto).
+  **Vale la pena tenerne il ricordo**: la voce era stata scritta come una scelta di
+  prodotto con tre letture, ed era il sintomo di un difetto già in elenco;
 - **una richiesta che riaddebiti a più contratti insieme**: è l'esito parziale di `R15`,
   che ha una voce sua;
 - **il vincolo sulla somma dei riaddebiti**, che è scritto come deliberato;
