@@ -248,6 +248,11 @@ export const it = {
     addParty: 'Aggiungi una parte',
     partyAdded: 'Parte aggiunta.',
     partyPhone: 'Telefono',
+    /** Il residuo detto **prima** di digitare: proponendo 100 a tutti, il primo si
+     *  prendeva tutto e all'invito successivo restava zero (ADR-046). */
+    partyShareRemaining: (remaining: string) => `Resta da assegnare: ${remaining} %.`,
+    partyPrimaryTaken:
+      'L’intestatario principale c’è già: è uno solo per contratto. Per cambiarlo, correggi la parte che lo è adesso.',
     editParty: 'Correggi',
     editPartyTitle: 'Correggi la parte',
     /** La correzione esiste perché una quota sbagliata bloccava tutto: il
@@ -356,6 +361,10 @@ export const it = {
     inviteTitle: 'Invita un inquilino',
     email: 'Email dell’invitato',
     fullName: 'Nome e cognome',
+    /** Che quota riceverà, detto prima di generare l'invito: è il passo in cui una
+     *  quota a zero passava inosservata. */
+    shareOnAccept: (share: string) =>
+      `Alla parte creata da questo invito andrà il ${share} % del canone. Si corregge dopo, dall’elenco delle parti.`,
     send: 'Genera l’invito',
     revoke: 'Revoca',
     revoked: 'Invito revocato.',

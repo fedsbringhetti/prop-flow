@@ -29,6 +29,7 @@ import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
+import { hasPrimary, remainingShare } from './shares'
 import { ChargeStatusBadge, LeaseStatusBadge } from '../shared/status'
 
 const PARTY_ROLES: LeasePartyRole[] = ['tenant', 'cotenant', 'guarantor']
@@ -83,7 +84,7 @@ export function LeaseDetailPage() {
                  esce. */
               !isStaff ? null : (
               <>
-                <InviteTenantDialog leaseId={id} />
+                <InviteTenantDialog leaseId={id} parties={data.parties} />
                 {data.status === 'draft' || data.status === 'pending_signature' ? (
                   <ConfirmAction
                     trigger={<Button variant="primary">{t.lease.activate}</Button>}
@@ -158,7 +159,7 @@ export function LeaseDetailPage() {
               <CardHeader>
                 <CardTitle>{t.lease.parties}</CardTitle>
                 {isStaff && (data.status === 'draft' || data.status === 'pending_signature') ? (
-                  <AddPartyDialog leaseId={id} />
+                  <AddPartyDialog leaseId={id} parties={data.parties} />
                 ) : null}
               </CardHeader>
               {data.parties.length === 0 ? (
@@ -435,17 +436,28 @@ function PartyDialog({ party, leaseId }: { party: LeaseParty; leaseId: string })
   )
 }
 
-function AddPartyDialog({ leaseId }: { leaseId: string }) {
+/**
+ * Aggiungere una parte, **con la quota che resta**.
+ *
+ * Proponeva `100` e *intestatario principale* a chiunque, ed è la prima delle
+ * quattro cose che producevano il difetto di ADR-046: chi aggiungeva la prima
+ * parte si prendeva tutto, e nel co-living la prima parte non è l'unica. Adesso
+ * propone il residuo — la stessa aritmetica del server — e offre l'intestatario
+ * solo se il posto è libero, perché è uno solo per contratto.
+ */
+function AddPartyDialog({ leaseId, parties }: { leaseId: string; parties: LeaseParty[] }) {
   const client = useApi()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const remaining = remainingShare(parties)
+  const primaryTaken = hasPrimary(parties)
   const [values, setValues] = useState({
     full_name: '',
     email: '',
     role: 'tenant' as LeasePartyRole,
-    share_percent: '100',
-    is_primary: true,
+    share_percent: remaining,
+    is_primary: !primaryTaken,
   })
 
   const mutation = useMutation({
@@ -459,7 +471,7 @@ function AddPartyDialog({ leaseId }: { leaseId: string }) {
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: keys.lease(leaseId) })
-      setValues({ full_name: '', email: '', role: 'tenant', share_percent: '100', is_primary: false })
+      setValues({ full_name: '', email: '', role: 'tenant', share_percent: '0.00', is_primary: false })
       setOpen(false)
       setError(null)
     },
@@ -528,7 +540,7 @@ function AddPartyDialog({ leaseId }: { leaseId: string }) {
               </Select>
             )}
           </Field>
-          <Field label={t.lease.partyShare}>
+          <Field label={t.lease.partyShare} hint={t.lease.partyShareRemaining(remaining)}>
             {(props) => (
               <Input
                 {...props}
@@ -539,15 +551,22 @@ function AddPartyDialog({ leaseId }: { leaseId: string }) {
             )}
           </Field>
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={values.is_primary}
-            onChange={(event) => setValues((v) => ({ ...v, is_primary: event.target.checked }))}
-          />
-          {t.lease.partyPrimary}
-        </label>
+        {/* L'intestatario è **uno solo** per contratto — lo impone il vincolo
+            parziale `lease_parties_primary_uk` — quindi quando il posto è preso la
+            casella non si offre: spuntarla darebbe un `409`. */}
+        {primaryTaken ? (
+          <p className="text-xs text-ink-muted">{t.lease.partyPrimaryTaken}</p>
+        ) : (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={values.is_primary}
+              onChange={(event) => setValues((v) => ({ ...v, is_primary: event.target.checked }))}
+            />
+            {t.lease.partyPrimary}
+          </label>
+        )}
         <div className="flex justify-end gap-2">
           <Button onClick={() => setOpen(false)}>{t.common.cancel}</Button>
           <Button type="submit" variant="primary" disabled={mutation.isPending}>
@@ -586,7 +605,7 @@ function AddPartyDialog({ leaseId }: { leaseId: string }) {
  * dietro. Qui la modale cambia corpo e torna al form, che è anche il gesto
  * successivo — rifare l'invito con l'indirizzo giusto.
  */
-function InviteTenantDialog({ leaseId }: { leaseId: string }) {
+function InviteTenantDialog({ leaseId, parties }: { leaseId: string; parties: LeaseParty[] }) {
   const client = useApi()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -730,6 +749,13 @@ function InviteTenantDialog({ leaseId }: { leaseId: string }) {
               />
             )}
           </Field>
+          {/* **La quota che questa persona riceverà, detta prima.** L'invito crea
+              la parte con il residuo, e quando le quote sono già complete la crea
+              a zero: era il passo in cui il difetto di ADR-046 diventava invisibile
+              — nessuno lo diceva, e si scopriva quando l'attivazione rifiutava. */}
+          <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">
+            {t.invitation.shareOnAccept(remainingShare(parties))}
+          </p>
           <div className="flex justify-end gap-2">
             <Button onClick={() => setOpen(false)}>{t.common.cancel}</Button>
             <Button type="submit" variant="primary" disabled={mutation.isPending}>
