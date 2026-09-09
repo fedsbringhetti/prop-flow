@@ -3,13 +3,28 @@ use std::sync::Arc;
 use propflow_domain::events::{
     DomainEvent, DomainEventPayload, EventMetadata, TicketMessagePosted,
 };
-use propflow_domain::ports::{Clock, TicketMessagePage, TicketMessageQuery, UnitOfWorkFactory};
+use propflow_domain::ports::{Clock, TicketMessageQuery, UnitOfWorkFactory};
 use propflow_domain::shared::{TicketId, TicketMessageId};
 use propflow_domain::ticket::{MessageBody, NewTicketMessage, TicketActor, TicketMessage};
 use propflow_domain::{Denial, Entity, RequestContext};
 
+use super::read::{People, resolve_people};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
+
+/// Una pagina di thread, con i nomi di chi ha scritto.
+///
+/// **Il ruolo era già sul filo e non basta**: `author_kind` distingue il
+/// proprietario dall'inquilino, e in un co-living due coinquilini sono tutti e due
+/// *Inquilino*. Il nome è l'altra metà, e le due si mostrano **insieme** —
+/// *Proprietario · Mario Rossi* — perché dicono cose diverse: da che parte del
+/// rapporto sta chi scrive, e chi è.
+#[derive(Debug)]
+pub struct TicketThreadPage {
+    pub items: Vec<TicketMessage>,
+    pub next_cursor: Option<TicketMessageId>,
+    pub people: People,
+}
 
 #[derive(Debug, Clone)]
 pub struct PostTicketMessageCommand {
@@ -118,7 +133,7 @@ impl ListTicketMessages {
         &self,
         context: &RequestContext,
         command: ListTicketMessagesCommand,
-    ) -> AppResult<TicketMessagePage> {
+    ) -> AppResult<TicketThreadPage> {
         authorization::ensure_member(context)?;
 
         let limit = command
@@ -144,6 +159,19 @@ impl ListTicketMessages {
                 limit,
             })
             .await?;
-        Ok(page)
+
+        let people = resolve_people(
+            &mut *uow,
+            page.items
+                .iter()
+                .map(propflow_domain::ticket::TicketMessage::author_id),
+        )
+        .await?;
+
+        Ok(TicketThreadPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            people,
+        })
     }
 }

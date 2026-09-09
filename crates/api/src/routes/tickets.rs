@@ -5,7 +5,7 @@ use axum::{Json, Router};
 use propflow_application::authorization::discloses_estimated_cost;
 use propflow_application::use_cases::ticket::{
     AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, ListTicketMessagesCommand,
-    ListTicketsQuery, OpenTicketCommand, PostTicketMessageCommand, ReopenTicketCommand,
+    ListTicketsQuery, OpenTicketCommand, People, PostTicketMessageCommand, ReopenTicketCommand,
     StartTicketWorkCommand, SuspendTicketCommand, TicketDetail, TriageTicketCommand,
     UpdateTicketCostsCommand,
 };
@@ -345,7 +345,20 @@ pub struct TicketResponse {
     pub status: TicketStatusDto,
     pub reported_by: Option<Uuid>,
     pub reported_by_kind: TicketActorDto,
+    /// Come si chiama chi ha segnalato.
+    ///
+    /// **Assente non è un errore**: la policy `users_select` non concede a
+    /// chiunque la riga di chiunque, e chi legge mette un'etichetta neutra — mai
+    /// l'identificatore ([ADR-043](../../../../../docs/08-decisioni.md)). Va
+    /// mostrato **accanto** a `reported_by_kind` e non al suo posto: il ruolo dice
+    /// da che parte del rapporto sta la persona, il nome dice chi è.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_by_name: Option<String>,
     pub assigned_to: Option<Uuid>,
+    /// Come si chiama chi ha in carico la lavorazione. Stessa regola del
+    /// precedente sull'assenza.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_to_name: Option<String>,
     pub assigned_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stringhe decimali, come tutti gli importi dell'API.
     ///
@@ -366,7 +379,11 @@ pub struct TicketResponse {
 impl TicketResponse {
     /// `discloses_estimated_cost` arriva dal service layer, che è dove la regola
     /// è scritta: qui la si applica alla proiezione, non la si decide.
-    fn from_domain(ticket: &Ticket, discloses_estimated_cost: bool) -> Self {
+    ///
+    /// `people` è il modello di lettura dei nomi, risolto dallo stesso caso d'uso
+    /// che ha letto la segnalazione: **ogni** risposta ne porta uno, transizioni
+    /// comprese, così i due campi del nome non ci sono a volte sì e a volte no.
+    fn from_domain(ticket: &Ticket, discloses_estimated_cost: bool, people: &People) -> Self {
         Self {
             id: ticket.id().as_uuid(),
             organization_id: ticket.org_id().as_uuid(),
@@ -383,7 +400,9 @@ impl TicketResponse {
             status: ticket.status().into(),
             reported_by: ticket.reported_by().map(|id| id.as_uuid()),
             reported_by_kind: ticket.reported_by_kind().into(),
+            reported_by_name: people.name_of(ticket.reported_by()).map(str::to_owned),
             assigned_to: ticket.assigned_to().map(|id| id.as_uuid()),
+            assigned_to_name: people.name_of(ticket.assigned_to()).map(str::to_owned),
             assigned_at: ticket.assigned_at(),
             estimated_cost: discloses_estimated_cost
                 .then(|| {
@@ -458,6 +477,15 @@ pub struct TicketMessageResponse {
     pub ticket_id: Uuid,
     pub author_id: Option<Uuid>,
     pub author_kind: TicketActorDto,
+    /// Come si chiama chi ha scritto.
+    ///
+    /// **Il ruolo da solo non basta in un co-living**: due coinquilini sono tutti
+    /// e due `tenant`, e «me lo dice il proprietario o un coinquilino?» ha già
+    /// risposta mentre «quale coinquilino?» non ne ha. I due si mostrano insieme.
+    /// Assente quando la policy `users_select` non concede quella riga a chi
+    /// legge: allora un'etichetta neutra, mai l'identificatore.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<String>,
     pub body: String,
     /// Le note interne non compaiono affatto a un inquilino: le filtra la policy
     /// `ticket_messages_select`, non questo campo.
@@ -466,12 +494,13 @@ pub struct TicketMessageResponse {
 }
 
 impl TicketMessageResponse {
-    fn from_domain(message: &TicketMessage) -> Self {
+    fn from_domain(message: &TicketMessage, people: &People) -> Self {
         Self {
             id: message.id().as_uuid(),
             ticket_id: message.ticket_id().as_uuid(),
             author_id: message.author_id().map(|id| id.as_uuid()),
             author_kind: message.author_kind().into(),
+            author_name: people.name_of(message.author_id()).map(str::to_owned),
             body: message.body().as_str().to_owned(),
             is_internal: message.is_internal(),
             created_at: message.created_at(),
@@ -539,7 +568,7 @@ async fn open(
                 .with_request_id(request_id.clone())
         })?;
 
-    let ticket = state
+    let view = state
         .open_ticket
         .execute(&context, command)
         .await
@@ -548,8 +577,9 @@ async fn open(
     Ok((
         StatusCode::CREATED,
         Json(TicketResponse::from_domain(
-            &ticket,
+            &view.ticket,
             discloses_estimated_cost(&context),
+            &view.people,
         )),
     ))
 }
@@ -586,7 +616,7 @@ async fn list(
         items: page
             .items
             .iter()
-            .map(|ticket| TicketResponse::from_domain(ticket, discloses))
+            .map(|ticket| TicketResponse::from_domain(ticket, discloses, &page.people))
             .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
@@ -607,14 +637,18 @@ async fn detail(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketDetailResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let TicketDetail { ticket, history } = state
+    let TicketDetail {
+        ticket,
+        history,
+        people,
+    } = state
         .get_ticket
         .execute(&context, TicketId::from_uuid(id))
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(TicketDetailResponse {
-        ticket: TicketResponse::from_domain(&ticket, discloses_estimated_cost(&context)),
+        ticket: TicketResponse::from_domain(&ticket, discloses_estimated_cost(&context), &people),
         history: history
             .iter()
             .map(TicketStatusChangeResponse::from_domain)
@@ -642,7 +676,7 @@ async fn update_costs(
     Json(request): Json<UpdateTicketCostsRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .update_ticket_costs
         .execute(
             &context,
@@ -658,8 +692,9 @@ async fn update_costs(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -700,9 +735,15 @@ async fn post_message(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
+    // Il nome di chi scrive è **il proprio**, e non serve una query per saperlo:
+    // la risposta torna a chi ha appena scritto. Il campo resta comunque assente
+    // quando non c'è un utente in contesto, che è il caso che il tipo ammette.
     Ok((
         StatusCode::CREATED,
-        Json(TicketMessageResponse::from_domain(&message)),
+        Json(TicketMessageResponse::from_domain(
+            &message,
+            &People::default(),
+        )),
     ))
 }
 
@@ -739,7 +780,7 @@ async fn list_messages(
         items: page
             .items
             .iter()
-            .map(TicketMessageResponse::from_domain)
+            .map(|message| TicketMessageResponse::from_domain(message, &page.people))
             .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
@@ -764,7 +805,7 @@ async fn triage(
     Json(request): Json<TriageTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .triage_ticket
         .execute(
             &context,
@@ -777,8 +818,9 @@ async fn triage(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -801,7 +843,7 @@ async fn assign(
     Json(request): Json<AssignTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .assign_ticket
         .execute(
             &context,
@@ -813,8 +855,9 @@ async fn assign(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -835,7 +878,7 @@ async fn start(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .start_ticket_work
         .execute(
             &context,
@@ -846,8 +889,9 @@ async fn start(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -870,7 +914,7 @@ async fn suspend(
     Json(request): Json<SuspendTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .suspend_ticket
         .execute(
             &context,
@@ -882,8 +926,9 @@ async fn suspend(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -906,7 +951,7 @@ async fn close(
     Json(request): Json<CloseTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .close_ticket
         .execute(
             &context,
@@ -918,8 +963,9 @@ async fn close(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -940,7 +986,7 @@ async fn reopen(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .reopen_ticket
         .execute(
             &context,
@@ -951,8 +997,9 @@ async fn reopen(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }
 
@@ -973,7 +1020,7 @@ async fn cancel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .cancel_ticket
         .execute(
             &context,
@@ -984,7 +1031,8 @@ async fn cancel(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(TicketResponse::from_domain(
-        &ticket,
+        &view.ticket,
         discloses_estimated_cost(&context),
+        &view.people,
     )))
 }

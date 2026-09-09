@@ -9,6 +9,7 @@ use propflow_domain::shared::{OrgId, TicketId, UserId};
 use propflow_domain::ticket::{Ticket, TicketCategory, TicketPriority, TicketStatus, WaitingOn};
 use propflow_domain::{Denial, DomainResult, Entity, RequestContext};
 
+use super::read::{TicketView, resolve_one};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -31,7 +32,7 @@ async fn run<A, T, E>(
     authorize: A,
     apply: T,
     extra_events: E,
-) -> AppResult<Ticket>
+) -> AppResult<TicketView>
 where
     A: FnOnce(&RequestContext, &Ticket) -> AppResult<()>,
     T: FnOnce(&mut Ticket, DateTime<Utc>) -> DomainResult<()>,
@@ -77,9 +78,14 @@ where
             ))
             .await?;
     }
+
+    // I nomi si risolvono **prima** del commit, perché dopo l'unità di lavoro non
+    // c'è più. Costa una query su al più due identificatori, ed è ciò che tiene
+    // uniforme la risposta: vedi `TicketView`.
+    let people = resolve_one(&mut *uow, &ticket).await?;
     uow.commit().await?;
 
-    Ok(ticket)
+    Ok(TicketView { ticket, people })
 }
 
 /// Lo staff guida la lavorazione. Vale per triage, assegnazione, avvio,
@@ -179,7 +185,7 @@ impl TriageTicket {
         &self,
         context: &RequestContext,
         command: TriageTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -213,7 +219,7 @@ impl AssignTicket {
         &self,
         context: &RequestContext,
         command: AssignTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -250,7 +256,7 @@ impl StartTicketWork {
         &self,
         context: &RequestContext,
         command: StartTicketWorkCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -280,7 +286,7 @@ impl SuspendTicket {
         &self,
         context: &RequestContext,
         command: SuspendTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -313,7 +319,7 @@ impl CloseTicket {
         &self,
         context: &RequestContext,
         command: CloseTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -347,7 +353,7 @@ impl ReopenTicket {
         &self,
         context: &RequestContext,
         command: ReopenTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -376,7 +382,7 @@ impl CancelTicket {
         &self,
         context: &RequestContext,
         command: CancelTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,

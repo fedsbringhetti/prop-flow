@@ -1,12 +1,61 @@
 use std::sync::Arc;
 
-use propflow_domain::ports::{TicketPage, TicketQuery, UnitOfWorkFactory};
-use propflow_domain::shared::{PropertyId, TicketId};
+use propflow_domain::ports::{PersonName, TicketQuery, UnitOfWorkFactory};
+use propflow_domain::shared::{PropertyId, TicketId, UserId};
 use propflow_domain::ticket::{Ticket, TicketStatus, TicketStatusChange};
 use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
+
+/// I nomi delle persone citate da una pagina.
+///
+/// **Un modello di lettura, non un pezzo dell'aggregato.** Il nome di una persona
+/// appartiene alla persona: una segnalazione che se lo portasse dietro avrebbe due
+/// fonti di verità che divergono alla prima correzione. È la stessa forma di
+/// `LeaseLabels`, che la sezione 3 ha introdotto per i nomi degli immobili.
+///
+/// Si costruisce **una volta per pagina** e non una per riga: risolvere venticinque
+/// identificatori uno alla volta sarebbe il problema `N+1` scritto a mano.
+///
+/// Un identificatore che non torna **non è un errore**: la policy `users_select`
+/// non concede quella riga a chi guarda, e chi legge mette un'etichetta neutra —
+/// mai l'UUID ([ADR-043](../../../../../docs/08-decisioni.md)).
+#[derive(Debug, Clone, Default)]
+pub struct People(Vec<PersonName>);
+
+impl People {
+    #[must_use]
+    pub fn name_of(&self, id: Option<UserId>) -> Option<&str> {
+        let id = id?;
+        self.0
+            .iter()
+            .find(|person| person.user_id == id)
+            .map(|person| person.full_name.as_str())
+    }
+}
+
+/// Una segnalazione e i nomi delle persone che vi compaiono.
+///
+/// **Ogni caso d'uso che restituisce una segnalazione restituisce questo**, le
+/// transizioni comprese, e costa una query in più su al più due identificatori.
+/// L'alternativa — risolvere i nomi solo in lettura — darebbe una risposta in cui
+/// i campi del nome a volte ci sono e a volte no, e un client non potrebbe
+/// distinguere «non leggibile» da «non risolto»: mostrerebbe l'etichetta neutra
+/// subito dopo un'azione riuscita.
+#[derive(Debug)]
+pub struct TicketView {
+    pub ticket: Ticket,
+    pub people: People,
+}
+
+/// Pagina di segnalazioni, con i nomi delle persone che vi compaiono.
+#[derive(Debug)]
+pub struct TicketListPage {
+    pub items: Vec<Ticket>,
+    pub next_cursor: Option<TicketId>,
+    pub people: People,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ListTicketsQuery {
@@ -38,7 +87,7 @@ impl ListTickets {
         &self,
         context: &RequestContext,
         query: ListTicketsQuery,
-    ) -> AppResult<TicketPage> {
+    ) -> AppResult<TicketListPage> {
         authorization::ensure_member(context)?;
 
         // Il limite si tronca invece di essere rifiutato: un client che chiede
@@ -59,8 +108,49 @@ impl ListTickets {
                 limit,
             })
             .await?;
-        Ok(page)
+
+        let people = resolve_people(
+            &mut *uow,
+            page.items
+                .iter()
+                .flat_map(|ticket| [ticket.reported_by(), ticket.assigned_to()]),
+        )
+        .await?;
+
+        Ok(TicketListPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            people,
+        })
     }
+}
+
+/// Risolve in una query sola i nomi di tutti gli identificatori citati.
+///
+/// Deduplica prima di chiedere: in un thread la stessa persona scrive spesso più
+/// volte, e in un elenco chi ha segnalato è spesso anche chi ha in carico.
+pub(super) async fn resolve_one(
+    uow: &mut dyn propflow_domain::ports::UnitOfWork,
+    ticket: &Ticket,
+) -> AppResult<People> {
+    resolve_people(
+        uow,
+        [ticket.reported_by(), ticket.assigned_to()].into_iter(),
+    )
+    .await
+}
+
+pub(super) async fn resolve_people(
+    uow: &mut dyn propflow_domain::ports::UnitOfWork,
+    ids: impl Iterator<Item = Option<UserId>>,
+) -> AppResult<People> {
+    let mut wanted: Vec<UserId> = Vec::new();
+    for id in ids.flatten() {
+        if !wanted.contains(&id) {
+            wanted.push(id);
+        }
+    }
+    Ok(People(uow.users().names(&wanted).await?))
 }
 
 /// Segnalazione con il suo storico degli stati.
@@ -74,6 +164,13 @@ impl ListTickets {
 pub struct TicketDetail {
     pub ticket: Ticket,
     pub history: Vec<TicketStatusChange>,
+    /// Chi ha segnalato e chi ha in carico, per nome.
+    ///
+    /// **Non lo storico**: `changed_by` di ogni transizione resterebbe un
+    /// identificatore in più da risolvere, e la riga dello storico dice già la cosa
+    /// che serve — che cosa è cambiato e quando. Aggiungere lì i nomi è un'altra
+    /// domanda, e la si fa quando qualcuno la pone.
+    pub people: People,
 }
 
 /// Legge una segnalazione con lo storico delle sue transizioni.
@@ -97,7 +194,12 @@ impl GetTicket {
             .await?
             .ok_or(AppError::not_found(Entity::Ticket))?;
         let history = uow.tickets().list_status_history(ticket.id()).await?;
+        let people = resolve_one(&mut *uow, &ticket).await?;
 
-        Ok(TicketDetail { ticket, history })
+        Ok(TicketDetail {
+            ticket,
+            history,
+            people,
+        })
     }
 }

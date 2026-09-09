@@ -8,6 +8,7 @@ use propflow_domain::ticket::{
 };
 use propflow_domain::{DomainError, Entity, RequestContext};
 
+use super::read::{TicketView, resolve_one};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -56,7 +57,7 @@ impl OpenTicket {
         &self,
         context: &RequestContext,
         command: OpenTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         let org_id = authorization::ensure_member(context)?;
         let now = self.clock.now();
 
@@ -138,8 +139,10 @@ impl OpenTicket {
                 EventMetadata::from_context(context),
             ))
             .await?;
+
+        let people = resolve_one(&mut *uow, &ticket).await?;
         uow.commit().await?;
 
-        Ok(ticket)
+        Ok(TicketView { ticket, people })
     }
 }

@@ -86,6 +86,34 @@ pub trait UserRepository: Send {
     async fn find_by_email(&mut self, email: &Email) -> RepositoryResult<Option<User>>;
     async fn insert(&mut self, user: &User) -> RepositoryResult<()>;
     async fn update(&mut self, user: &User) -> RepositoryResult<()>;
+    /// I nomi di un insieme di persone, per chi ha in mano i loro identificatori.
+    ///
+    /// **Una query e non una per riga**: un thread ne mostra venticinque, e
+    /// risolverli uno alla volta sarebbe il problema `N+1` scritto a mano. È la
+    /// stessa nota che porta [`LeaseRepository::labels`].
+    ///
+    /// **Non restituisce un utente, restituisce un nome.** La distinzione è
+    /// [ADR-036](../../../../docs/08-decisioni.md) e non una sfumatura: nessuna
+    /// rotta proietta un utente per identificatore, e questo modello di lettura
+    /// non è il primo passo verso una — è la proiezione di una colonna sola,
+    /// mostrata dove serve.
+    ///
+    /// **Il confine è la policy `users_select` e non il `WHERE`.** Chi il
+    /// chiamante non può vedere semplicemente non torna, e il nome mancante è un
+    /// caso normale che chi legge deve trattare: mai un identificatore in faccia a
+    /// chi guarda ([ADR-043](../../../../docs/08-decisioni.md)).
+    async fn names(&mut self, ids: &[UserId]) -> RepositoryResult<Vec<PersonName>>;
+}
+
+/// Come si chiama una persona.
+///
+/// Modello di lettura, come [`LeaseLabels`]: non è l'aggregato `User`, che porta
+/// email, telefono e stato dell'account, e che nessuno deve leggere per mostrare
+/// un nome accanto a un messaggio.
+#[derive(Debug, Clone)]
+pub struct PersonName {
+    pub user_id: UserId,
+    pub full_name: String,
 }
 
 #[async_trait]

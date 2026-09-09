@@ -1366,6 +1366,7 @@ async fn open_ticket(
         )
         .await
         .expect("segnalazione aperta")
+        .ticket
 }
 
 /// Crea un immobile e restituisce il suo identificatore.
@@ -1512,19 +1513,22 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
         )
         .await
         .expect("chiusa");
-    assert!(closed.closed_at().is_some());
-    assert_eq!(closed.resolution_notes(), Some("sostituita la valvola"));
+    assert!(closed.ticket.closed_at().is_some());
+    assert_eq!(
+        closed.ticket.resolution_notes(),
+        Some("sostituita la valvola")
+    );
 
     let reopened = ReopenTicket::new(factory(), clock())
         .execute(&context, ReopenTicketCommand { id: ticket.id() })
         .await
         .expect("riaperta");
-    assert_eq!(reopened.status(), TicketStatus::Open);
+    assert_eq!(reopened.ticket.status(), TicketStatus::Open);
     // La trappola: `tickets_closed_ck` vincola una sola direzione, quindi il
     // database accetterebbe senza dire niente una segnalazione `open` con una data
     // di chiusura nel passato. Deve azzerarla il dominio, e la riga riletta lo
     // conferma — non solo l'aggregato in memoria.
-    assert_eq!(reopened.closed_at(), None);
+    assert_eq!(reopened.ticket.closed_at(), None);
 
     let mut uow = env.factory.begin(&context).await.expect("transazione");
     let read = uow
@@ -1572,6 +1576,7 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
 /// esiste: non serve costruire il caso reale per provare che la porta è chiusa.
 /// Il precedente è
 /// `the_application_role_cannot_repoint_a_lease_party_to_another_lease`.
+///
 #[tokio::test]
 async fn the_application_role_cannot_move_a_ticket_to_another_property() {
     let env = require_db!();

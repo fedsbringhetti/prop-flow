@@ -3,9 +3,10 @@ use std::sync::Arc;
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, TicketCostsUpdated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::TicketId;
-use propflow_domain::ticket::{Ticket, TicketCosts};
+use propflow_domain::ticket::TicketCosts;
 use propflow_domain::{Entity, RequestContext};
 
+use super::read::{TicketView, resolve_one};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -44,7 +45,7 @@ impl UpdateTicketCosts {
         &self,
         context: &RequestContext,
         command: UpdateTicketCostsCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         let org_id = authorization::ensure_staff(context)?;
         let now = self.clock.now();
         let changed_fields = command.costs.changed_field_names();
@@ -60,8 +61,10 @@ impl UpdateTicketCosts {
         if !changed {
             // Nessun campo toccato: niente UPDATE, niente evento, niente riga di
             // audit. Un PATCH vuoto non è un errore, ma non è nemmeno una
-            // modifica.
-            return Ok(ticket);
+            // modifica. I nomi si risolvono lo stesso: la risposta è quella di
+            // sempre, e un `PATCH` a vuoto non deve restituirne una più povera.
+            let people = resolve_one(&mut *uow, &ticket).await?;
+            return Ok(TicketView { ticket, people });
         }
 
         uow.tickets().update(&ticket).await?;
@@ -76,8 +79,10 @@ impl UpdateTicketCosts {
                 EventMetadata::from_context(context),
             ))
             .await?;
+
+        let people = resolve_one(&mut *uow, &ticket).await?;
         uow.commit().await?;
 
-        Ok(ticket)
+        Ok(TicketView { ticket, people })
     }
 }

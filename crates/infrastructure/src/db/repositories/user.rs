@@ -5,7 +5,7 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use propflow_domain::identity::{PasswordHash, User};
-use propflow_domain::ports::{RepositoryError, RepositoryResult, UserRepository};
+use propflow_domain::ports::{PersonName, RepositoryError, RepositoryResult, UserRepository};
 use propflow_domain::shared::{Email, UserId};
 
 use crate::db::db_enums;
@@ -131,6 +131,46 @@ impl UserRepository for PgUnitOfWork {
             });
         }
         Ok(())
+    }
+
+    async fn names(&mut self, ids: &[UserId]) -> RepositoryResult<Vec<PersonName>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **Non passa da `select_user!`, ed è il punto.** Quella macro legge
+        // l'aggregato — email, telefono, hash della password, stato dell'account —
+        // e qui serve una colonna sola. Proiettare invece di selezionare è la
+        // forma di `app.property_residents` (ADR-036): ciò che non si nomina non
+        // può uscire per sbaglio.
+        //
+        // **Il confine è `users_select` e non questo `WHERE`.** La policy ammette
+        // sé stessi, chi abita la stessa casa (`shares_home_with`), le persone
+        // delle proprie organizzazioni (`is_staff_of_user`) e lo staff della
+        // propria (`is_my_staff`): un identificatore che nessuno di quei rami
+        // copre semplicemente non torna, e chi chiama mostra un'etichetta neutra.
+        // Questa query è il primo lettore di quella policy — la `0030` aveva
+        // scritto che la finestra per restringerla si chiudeva col primo client
+        // che leggesse un nome da lì, ed è questo (ADR-049).
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT id, full_name
+               FROM app.users
+              WHERE id = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let id: Uuid = try_get(&row, "id")?;
+                Ok(PersonName {
+                    user_id: UserId::from_uuid(id),
+                    full_name: try_get(&row, "full_name")?,
+                })
+            })
+            .collect()
     }
 }
 

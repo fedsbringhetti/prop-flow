@@ -20,9 +20,12 @@ mod transition;
 
 pub use costs::{UpdateTicketCosts, UpdateTicketCostsCommand};
 pub use open::{OpenTicket, OpenTicketCommand};
-pub use read::{GetTicket, ListTickets, ListTicketsQuery, TicketDetail};
+pub use read::{
+    GetTicket, ListTickets, ListTicketsQuery, People, TicketDetail, TicketListPage, TicketView,
+};
 pub use thread::{
     ListTicketMessages, ListTicketMessagesCommand, PostTicketMessage, PostTicketMessageCommand,
+    TicketThreadPage,
 };
 pub use transition::{
     AssignTicket, AssignTicketCommand, CancelTicket, CancelTicketCommand, CloseTicket,
