@@ -902,6 +902,12 @@ Restano fuori `property_id`, `room_id`, `lease_id`, `reported_by`,
 `set_updated_at`, che è `BEFORE UPDATE` e non è soggetto ai privilegi di colonna del
 chiamante.
 
+> **`title` e `description` non sono più fuori.** La migration `0036` le riconcede, e il
+> perché è in [ADR-048](#adr-048), che **emenda questa sezione invece di riscriverla**: il
+> criterio dichiarato più sotto non cambia — cambia il fatto, perché ora quelle due
+> colonne hanno un motivo legittimo di cambiare. Tutte le altre restano fuori, e per loro
+> vale ancora «si annulla e si riapre».
+
 **Il criterio, dichiarato.** Lo strumento serve in due casi, non in uno:
 
 1. quando una policy concede scrittura **oltre il confine** di isolamento (ADR-021);
@@ -911,7 +917,9 @@ chiamante.
 
 Il secondo caso è quello delle segnalazioni, ed è quello che rende la scelta quasi
 gratuita: una segnalazione aperta sull'immobile sbagliato **si annulla e si riapre** —
-`cancelled` esiste per questo — e non si corregge spostandola.
+`cancelled` esiste per questo — e non si corregge spostandola. Resta vero per l'immobile,
+la stanza e il contratto; **non** per il testo, che [ADR-048](#adr-048) ha reso
+correggibile perché un refuso non è una riga incoerente.
 
 **Conseguenza sul dove va fatto il controllo.** L'incoerenza strutturale può ora
 nascere **solo all'apertura**. Il controllo applicativo sta lì, una volta sola
@@ -2710,3 +2718,452 @@ in [12](12-da-fare.md) come voce nuova.
 **Un valore minimo di quota diverso da zero** (per esempio l'1%). Sarebbe una soglia
 arbitraria travestita da regola: zero è l'unico valore che significa qualcosa — «questa
 persona non paga niente» — e gli altri sono decisioni di chi amministra.
+
+---
+
+<a id="adr-047"></a>
+
+## ADR-047 — Una segnalazione può essere di interesse comune, e il ramo sta nella funzione
+
+**9 settembre 2026.** Nasce da [`R19`](12-da-fare.md#lelenco), pianificata come sezione 5
+delle segnalazioni.
+
+### Il fatto, che non è un difetto
+
+Una segnalazione aperta sull'immobile intero — la caldaia condominiale, la serratura del
+portone — **non la vede nessun altro inquilino**. Non è una svista: è ciò che
+`app.can_access_ticket` dice dalla `0014`. Concede l'accesso allo staff, a chi ha
+segnalato, a chi è assegnato, e poi a `t.lease_id IS NOT NULL AND can_access_lease(...)`
+— quindi il quarto ramo passa dal **contratto**, e una segnalazione senza contratto resta
+privata.
+
+Quel default è giusto e **resta**: un guasto dentro casa propria non riguarda i vicini di
+pianerottolo, e la maggior parte delle segnalazioni è di quel tipo.
+
+### La decisione
+
+Una colonna `app.tickets.visible_to_residents BOOLEAN NOT NULL DEFAULT false`, una
+casella nel form di apertura, e **un quinto ramo in `app.can_access_ticket`**:
+
+```sql
+OR (t.visible_to_residents
+    AND EXISTS (SELECT 1 FROM app.property_residents(t.property_id) pr
+                 WHERE pr.user_id = app.current_user_id()))
+```
+
+Migration `0035_a_ticket_can_be_shared_with_residents.sql`. La visibilità è un **confine
+del database** e non un filtro applicativo: metterla nel service layer lascerebbe la riga
+leggibile a una query scritta a mano, che è la constatazione della `0029` e della `0030`.
+
+### Perché nella funzione e non in `tickets_select`
+
+È la parte che si sbaglia, ed è la ragione principale per cui questa voce esiste.
+`app.can_access_ticket` non serve una policy sola: la chiamano `tickets_select`,
+`ticket_messages_select`, `ticket_status_history_select` e
+`can_access_attachment('ticket', …)`. Allargare la sola policy di riga darebbe a un
+coinquilino una segnalazione **che si apre e non si legge** — senza thread, senza
+storico, senza le fotografie del guasto, e senza un errore che spieghi perché.
+
+La funzione si sostituisce con `CREATE OR REPLACE FUNCTION` e la stessa firma: le policy
+la referenziano per oid, quindi non vanno toccate né ricreate.
+
+### Che cosa la condivisione dà, e che cosa non dà
+
+**Dà anche il thread e le fotografie**, ed è voluto: una visibilità che permetta di
+leggere «ho chiamato il tecnico» ma non di rispondere «da me non funziona ancora»
+sarebbe una bacheca, non una segnalazione condivisa. `ticket_messages_insert` passa dalla
+stessa funzione, quindi un residente può scrivere nel thread.
+
+**Non dà nessuna scrittura sulla segnalazione.** `tickets_update` ha un predicato **in
+linea** — staff, `reported_by`, `assigned_to` — e non passa da `can_access_ticket`: un
+residente non riapre, non annulla, non corregge, non chiude. È la stessa asimmetria che
+il modulo ha già per il coinquilino sullo stesso contratto, e la ragione per cui questa
+migration è più piccola di quanto sembri.
+
+**Le note interne restano invisibili**: `ticket_messages_select` ha un `AND` a parte su
+`is_internal`, che questo ramo non tocca.
+
+### Il predicato è `app.property_residents`, e la scelta non è di gusto
+
+La `0030` ha introdotto due predicati sul perimetro della casa, e vanno scelti e non
+riscritti — una terza definizione di «chi abita qui» è la trappola che quel file
+documenta alla sua terza occorrenza.
+
+`app.shares_home_with(p_user_id)` è **utente↔utente**: userebbe `reported_by` come
+termine di confronto, e ne verrebbero due difetti. `reported_by` è
+`ON DELETE SET NULL`, quindi la condivisione sparirebbe da sé il giorno in cui l'autore
+viene cancellato; e quella funzione **non filtra `app.lease_in_force`** — è deliberato,
+il suo commento lo dice, perché è un *pavimento* per la leggibilità dei nomi e non un
+elenco di chi ci abita adesso. Un inquilino uscito due anni fa vedrebbe le segnalazioni
+nuove della casa in cui non vive più.
+
+`app.property_residents(p_property_id)` è **ancorata all'immobile**, che è la dimensione
+giusta perché `property_id` è obbligatorio su ogni segnalazione. Filtra `lease_in_force`,
+filtra `left_at IS NULL`, esclude i garanti, e ha già `can_access_property` come confine
+nel corpo.
+
+### Conseguenze
+
+- **il booleano va scritto per primo**, e il ramo per ultimo nell'`OR`.
+  `can_access_ticket` è `COST 500` e viene valutata **per riga** nell'elenco: con il
+  booleano davanti, la funzione che restituisce righe non viene chiamata affatto sulle
+  segnalazioni private, che sono il default;
+- **la funzione ha il confine dentro**, quindi sul pool privilegiato — che non ha
+  contesto — risponde «no». È la lezione che la sezione 4 ha lasciato scritta in un test
+  su `v_property_occupancy`: chi verifica questo ramo deve installare
+  `app.current_org_id` **e** `app.current_user_id`;
+- la colonna entra nella `GRANT UPDATE` di `propflow_app` — si può cambiare idea dopo
+  l'apertura, vedi [ADR-048](#adr-048) — e **non** entra fra le colonne strutturali del
+  controllo `colonna-strutturale-scrivibile`;
+- il nome della colonna dice **residenti** e non «tutti gli inquilini»: quest'ultima
+  formula si legge come «dell'organizzazione», che sarebbe un confine più largo e
+  sbagliato — un inquilino di un'altra casa dello stesso proprietario non c'entra. La
+  casella nel form usa invece la parola comune, perché lì il confine è già chiaro dal
+  contesto.
+
+### Alternative scartate
+
+**Un `ALTER POLICY tickets_select` con il ramo in più.** È la via che il backlog
+indicava, e produce la segnalazione che si apre e non si legge.
+
+**Una terza funzione, `app.lives_in_property(uuid)`.** Sarebbe più leggibile di un
+`EXISTS` su una funzione tabellare, e sarebbe la seconda definizione di «chi abita qui»
+che la `0030` esiste per impedire.
+
+**Un filtro applicativo.** Lascia la riga leggibile a chi non passa dal service layer, e
+questo progetto ha già una migration — la `0029` — dedicata a smettere di fidarsi di
+regole applicative su confini che il database lascia aperti.
+
+---
+
+<a id="adr-048"></a>
+
+## ADR-048 — Il testo di una segnalazione si corregge, e questo emenda ADR-026
+
+**9 settembre 2026.** Nasce da [`R19-bis`](12-da-fare.md#lelenco). **Revoca in parte
+[ADR-026](#adr-026)**, e va letta con quella davanti.
+
+### Il fatto: oggi non è una scelta applicativa, è un privilegio
+
+Chi apre una segnalazione con un refuso nel titolo non può correggerlo, e non perché
+manchi una rotta: `title` e `description` **non sono scrivibili dal ruolo applicativo**.
+La `0020` gliele ha tolte, e a difendere quella scelta ci sono tre cose oltre alla
+migration:
+
+| Dove | Che cosa |
+|---|---|
+| `ops/sql/checks/schema_invariants.sql` | il controllo `colonna-strutturale-scrivibile` fallisce se `propflow_app` acquista l'`UPDATE` su quelle colonne |
+| `crates/infrastructure/tests/persistence.rs` | `the_application_role_cannot_move_a_ticket_to_another_property` asserisce il `permission denied` |
+| `docs/05-api.md`, i commenti del dominio, il catalogo del client | la frase «di una segnalazione si modificano solo i costi» |
+
+Ne segue che questa non è una capacità da aggiungere: è una decisione da **revocare**, e
+il posto per farlo è qui, prima del codice.
+
+### Che cosa cambia, e che cosa no
+
+**Il criterio di ADR-026 non cambia.** Diceva che il privilegio di colonna serve *«quando
+una colonna non ha un motivo legittimo di cambiare»*. Quello che cambia è il fatto: ora
+ce l'ha. La `0020` teneva `title` e `description` fuori con l'argomento «una segnalazione
+sbagliata si annulla e si riapre», che vale per l'**immobile** — dove riaprire è l'unico
+modo di rimettere insieme una riga coerente — e non per un refuso, dove costa a chi
+segnala di rifare tutto e di perdere il riferimento `TK-000042` che ha già comunicato.
+
+**Restano fuori** `property_id`, `room_id`, `lease_id`, `reported_by`,
+`reported_by_kind`, `reference` e `currency`, e per loro la frase della `0020` resta vera
+alla lettera. La causa radice che ADR-026 descrive — lo schema non ha **alcun vincolo**
+fra `room_id`, `lease_id` e `property_id` — non è stata rimossa, e il privilegio resta la
+sola difesa che copre quella porta.
+
+### La decisione
+
+Migration `0036_a_report_can_be_corrected.sql`:
+`GRANT UPDATE (title, description) ON app.tickets TO propflow_app`, insieme a
+`visible_to_residents` che la [`0035`](#adr-047) ha appena introdotto.
+
+E una rotta a sé: **`PATCH /api/v1/tickets/{id}/report`**, con `title`, `description` e
+`visible_to_residents` facoltativi e la semantica generale del `PATCH` (assente =
+invariato; nessuno dei tre è azzerabile). L'autorizzazione è **una sola per l'intera
+rotta**: lo staff sempre, chi ha segnalato finché la segnalazione è `open`.
+
+### Perché una rotta a sé e non `PATCH /tickets/{id}`
+
+Allargare il `PATCH` dei costi darebbe una rotta con **due autorizzazioni diverse a
+seconda dei campi presenti** — i costi allo staff, il testo a chi ha segnalato. Il modo
+in cui si sbaglia è concreto: con la semantica del `PATCH` i campi sono *assenti*, quindi
+l'autorizzazione dipenderebbe da quali chiavi ci sono nel JSON, e un campo aggiunto un
+anno dopo senza toccare quel ramo sarebbe scrivibile da chi non deve. È un difetto muto,
+che non compare in nessun test finché qualcuno non manda quella combinazione.
+
+`report` è un **sostantivo** e non un verbo perché non è una transizione: le sotto-risorse
+di questo modulo — `/triage`, `/assign`, `/close` — sono `POST` e hanno effetti propri,
+mentre questa è la correzione di un attributo e resta `PATCH`. I tre campi stanno insieme
+perché sono tutti e tre **ciò che chi ha segnalato ha dichiarato**, e hanno per questo la
+stessa autorizzazione.
+
+### Chi corregge, e fino a quando
+
+**Lo staff sempre, chi ha segnalato finché è `open`.** È la forma che l'annullamento ha
+già — «finché nessuno ci ha messo mano» — e la regola vive in **una sola funzione**
+condivisa con `cancel`: due copie della stessa condizione sono due regole che
+divergeranno alla prima modifica di una delle due.
+
+I codici di rifiuto restano quelli in catalogo, con la distinzione che già esiste:
+`ticket.not_yours` a chi non ha segnalato — non gli manca un ruolo, gli manca l'aver
+segnalato — e `org.staff_role_required` a chi ha segnalato ma la segnalazione è già in
+lavorazione, dove il ruolo serve davvero.
+
+Il dominio rifiuta su `cancelled` con `ticket.cancelled`, come fa già `apply_costs`. Su
+una **chiusa** si corregge, e serve: la si rilegge mesi dopo, e un titolo sbagliato lì è
+sbagliato per sempre.
+
+### Che cosa il privilegio smette di garantire
+
+Va detto per intero, perché è il pezzo che si perde revocando. Dal momento del `GRANT`,
+un inquilino che sia `reported_by` può riscrivere titolo e descrizione **da qualunque
+stato** con una `UPDATE` scritta a mano sotto RLS: il limite «finché è `open`» è
+applicativo, e una policy non può esprimerlo perché **non può confrontare la riga nuova
+con quella vecchia** — la constatazione di ADR-021 e ADR-026, qui a proprio sfavore.
+
+Resta vero ciò che la `0020` aveva **misurato** e non dedotto: il confine di isolamento
+tiene — dopo la scrittura quell'inquilino non vede una riga in più — e ogni `UPDATE`
+finisce in `audit_log`. È esattamente il compromesso che già vale per `status`,
+`assigned_to` e `actual_cost`, che sono concesse e la cui disciplina è applicativa,
+transizione per transizione.
+
+**Non si prova a stringere il confine nella `USING` di `tickets_update`.** Restringerla a
+`status = 'open'` per chi ha segnalato romperebbe la **riapertura**, che parte proprio da
+`closed`.
+
+### Conseguenze
+
+- il controllo `colonna-strutturale-scrivibile` perde due righe, e il commento che lo
+  accompagna cambia con esse: continua a dire perché le altre sei ci sono;
+- il test dei privilegi sposta due `UPDATE` dal blocco dei rifiuti a quello delle
+  concessioni. **L'emendamento del controllo e del test è il documento della revoca**, e
+  va fatto nello stesso passo della migration — non è un fastidio da togliere di mezzo
+  per far passare `just ci`;
+- `docs/05-api.md` cambia in due punti: la tabella delle rotte e la sezione «Perché le
+  transizioni sono sotto-risorse e il `PATCH` è solo per i costi», che resta vera per
+  categoria, priorità, immobile, stanza e contratto;
+- **categoria e priorità non diventano correggibili**: sono il lavoro del triage, e
+  lasciarle modificabili altrove renderebbe `triaged` una dichiarazione non verificabile.
+
+### Alternative scartate
+
+**`PUT /tickets/{id}/report` con i tre campi obbligatori.** Toglie il problema dei campi
+assenti alla radice, e obbliga chi cambia solo la casella di visibilità a rimandare
+indietro un testo che non ha toccato, cioè a sovrascriverlo con una copia possibilmente
+vecchia. Il progetto non usa `PUT` da nessuna parte e non è questo il caso per
+introdurlo.
+
+**Nessuna rotta: la correzione passa dall'annullamento**, che è ciò che la `0020`
+prescrive oggi. Su un refuso costa il riferimento già comunicato e tutto il testo.
+
+**Solo chi ha segnalato, senza lo staff.** Lascerebbe un refuso incorreggibile appena la
+segnalazione passa ad `assigned`, e romperebbe la simmetria con l'annullamento senza
+comprare niente: ogni scrittura è comunque in `audit_log`.
+
+---
+
+<a id="adr-049"></a>
+
+## ADR-049 — I nomi delle persone viaggiano nella risposta, ed è il primo lettore di `users_select`
+
+**9 settembre 2026.** Nasce da [`R21`](12-da-fare.md#lelenco) e
+[`R22`](12-da-fare.md#lelenco). Applica il criterio di [ADR-043](#adr-043) a un modulo in
+cui la fonte del nome è diversa, e **chiude una finestra** che la
+[`0030`](#adr-036) aveva lasciato aperta per iscritto.
+
+### Il fatto
+
+`TicketResponse` porta `assigned_to` come UUID e `assigned_at`, e nessun nome: la scheda
+mostra **la data al posto della persona**. `TicketMessageResponse` porta `author_id` e
+`author_kind`, quindi il thread dice il **ruolo** — *Inquilino*, *Proprietario* — e non
+chi.
+
+Il ruolo è già a schermo e non va rifatto. Il caso che resta scoperto è il **co-living**:
+due coinquilini nel thread compaiono tutti e due come *Inquilino*, e «me lo dice il
+proprietario o un coinquilino?» ha già risposta mentre «quale coinquilino?» non ne ha
+nessuna.
+
+### La decisione
+
+Un **modello di lettura**, con la forma che la sezione 3 ha già stabilito per i nomi degli
+immobili: una porta, **una query per pagina**, la composizione nello use case, campi
+opzionali nel DTO. `TicketResponse` guadagna `reported_by_name` e `assigned_to_name`;
+`TicketMessageResponse` guadagna `author_name`.
+
+La fonte è `app.users.full_name`, letta **sotto Row Level Security**. Il precedente è
+`list_organizations_for_user` ([ADR-041](#adr-041)), che si affida alla policy invece di
+ripetere il confine nel `WHERE`: la RLS restringe il join, e ciò che il chiamante non
+può vedere semplicemente non torna.
+
+**Quando il nome non torna, il campo è assente e il client mette un'etichetta neutra dal
+catalogo. Mai l'UUID**: è la regola di [ADR-043](#adr-043), ed è la stessa forma di
+«Immobile archiviato» che la sezione 3 usa quando un `LEFT JOIN` non trova il nome.
+
+### Perché non una rotta che risolva le persone
+
+Perché è già stata scartata due volte. [ADR-036](#adr-036) ha deciso che il perimetro è
+la casa e che nessuna rotta proietta un utente per identificatore; [ADR-043](#adr-043)
+l'ha riconfermato, e con parole che valgono identiche qui: *«è la domanda di ADR-036 —
+quali colonne un membro possa vedere di un'altra persona — riaperta per un problema di
+presentazione»*.
+
+I nomi viaggiano quindi **dentro** la risposta della segnalazione, che è la via che la
+sezione 3 ha percorso per gli immobili, e non da una rotta che risolva le persone.
+
+### Perché non si denormalizza il nome sulla riga
+
+Lo schema denormalizza i nomi **dove si mostrano** — `lease_parties.full_name`,
+`expense_group_members.display_name` — e sarebbe stata la terza occorrenza. Si scarta per
+due ragioni. Costerebbe due colonne, una migration e due `GRANT` per un dato che la
+policy già concede. E soprattutto **congelerebbe il nome al momento della scrittura**: su
+una membership è la proprietà che serve — [ADR-043](#adr-043) esiste perché quel nome
+sopravviva a chi se ne va — mentre su una segnalazione aperta ieri il nome giusto è
+quello di adesso.
+
+### La finestra che si chiude
+
+La `0030` aveva ristretto `users_select` dall'organizzazione alla casa, e nel farlo aveva
+scritto una cosa che questa voce viene a incassare:
+
+> Il verde della suite non è la prova che sia giusto. Restringendo, **nessun test
+> fallisce**. […] prova che la capacità per cui `shares_org_with` esiste — «mostrare i
+> nomi delle controparti» — **non è mai stata costruita**. La finestra per restringere è
+> aperta e la chiude il primo client che legga un nome da lì.
+
+**Questa sezione è quel primo client.** Da qui in avanti `users_select` è portante:
+restringerla non è più gratuito, e i suoi quattro rami vanno letti come contratto e non
+come pavimento. In particolare:
+
+| Ramo | Che cosa tiene in piedi qui |
+|---|---|
+| `shares_home_with(id)` | un coinquilino legge il nome dell'altro nel thread — **il caso di `R22`** |
+| `is_my_staff(id)` | l'inquilino legge il nome di chi ha in carico la sua segnalazione — **il caso di `R21`** |
+| `is_staff_of_user(id)` | il proprietario legge i nomi dei propri inquilini |
+| `id = current_user_id()` | il proprio nome |
+
+`shares_home_with` **non filtra `lease_in_force`**, ed è quello che rende leggibile il
+nome dell'autore di un messaggio su una segnalazione vecchia di chi si è nel frattempo
+trasferito. Era già scritto nel suo commento come una scelta; qui diventa una dipendenza.
+
+### Conseguenze
+
+- **`reported_by_name` entra pur non essendo nella lettera di `R21` né di `R22`**: è lo
+  stesso identificatore, risolto dalla stessa query, mostrato nella stessa scheda tre
+  righe più su di «In carico a». Lasciarlo fuori consegnerebbe una schermata in cui un
+  nome compare e l'altro no;
+- il ruolo resta **accanto** al nome e non al suo posto — *Proprietario · Mario Rossi* —
+  perché dice una cosa che il nome non dice: da che parte del rapporto sta chi scrive;
+- una **query per pagina** e non una per riga: l'elenco ne mostra venticinque, e
+  risolverli uno alla volta sarebbe il problema `N+1` scritto a mano. È la stessa nota
+  che porta `LeaseRepository::labels`;
+- la [sezione 6](12-da-fare.md#lordine-di-esecuzione) — `R7`, il proprio account —
+  eredita questo modo di risolvere un nome, ed è la ragione per cui l'ordine di
+  esecuzione mette la 5 prima della 6.
+
+---
+
+<a id="adr-050"></a>
+
+## ADR-050 — Un thread chiuso non riceve messaggi, e riaprire dice perché
+
+**9 settembre 2026.** Nasce da [`R23`](12-da-fare.md#lelenco) e
+[`R24`](12-da-fare.md#lelenco), che sono **una decisione sola**: la seconda esiste perché
+la prima chiude una porta.
+
+### Il fatto
+
+`PostTicketMessage` fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo
+vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture: una
+conversazione continua sotto uno stato che dice «finita», e nessuno la legge più perché
+la segnalazione è fuori da ogni coda.
+
+E `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un
+corpo. Una segnalazione torna viva e non c'è niente, da nessuna parte, che dica perché.
+
+### La decisione, parte prima: si scrive nei sei stati di lavorazione
+
+Un invariante di dominio legato a `TicketStatus::is_working()`. È lo stesso predicato che
+`close` e `cancel` usano già come guardia, e riusarlo invece di enumerare «non `closed` e
+non `cancelled`» copre da sé il terzo caso: `resolved`, che l'applicazione non scrive mai
+ma che una riga scritta a mano può contenere ([ADR-019](#adr-019)).
+
+**È una regola di dominio e non un controllo di interfaccia**: nasconderla nel client
+lascerebbe la rotta aperta. **Leggere resta permesso**, e un thread chiuso si rilegge per
+intero: ciò che finisce è la scrittura.
+
+### La decisione, parte seconda: il motivo della riapertura è obbligatorio
+
+Con la parte prima, riaprire diventa **l'unico modo** di dire «non è risolto». Il motivo
+smette quindi di essere un di più: è l'unica cosa che spiega perché la segnalazione è
+tornata viva, e `POST /tickets/{id}/reopen` acquista un corpo con `reason` non vuoto.
+
+**È un'asimmetria con `resolution_notes`, che resta facoltativo**, e ha una ragione: la
+chiusura lascia comunque `closed_at` e una riga di storico, mentre la riapertura senza
+motivo non lascia niente — e la parte prima ha appena tolto il canale alternativo.
+
+### Dove va il motivo: nel thread
+
+`ReopenTicket` scrive, **nella stessa transazione** della transizione, un messaggio
+pubblico con quel testo, di chi ha riaperto. Tre ragioni:
+
+- **il thread non si riscrive mai** — `app.ticket_messages` ha due sole policy, `_select`
+  e `_insert` — quindi il motivo sopravvive alla chiusura successiva. `resolution_notes`
+  invece viene **cancellato dalla riapertura stessa**, e una colonna simmetrica lo
+  sarebbe a sua volta alla chiusura dopo;
+- una segnalazione si riapre **più volte**, e tre riaperture hanno tre motivi. Una colonna
+  ne tiene uno;
+- chiude il cerchio della parte prima invece di lasciarlo aperto: chi vuole dire «non è
+  risolto» lo dice riaprendo, e le sue parole finiscono dove finiscono tutte le altre.
+
+### `ticket_status_history.reason` resta non scritta, e non è una svista
+
+È la colonna fatta apposta — esiste dalla `0007`, `TicketStatusChange::reason()` la legge,
+il DTO la serializza e il client la **renderizza già** — ed è sempre `null`. Riempirla
+avrebbe chiuso un campo morto, e costa un **secondo canale verso il trigger**: la riga la
+scrive `tg_ticket_status_history`, che è `SECURITY DEFINER` perché quella tabella non ha
+policy di `INSERT`, quindi il motivo dovrebbe arrivargli da una `set_config`
+transazionale — il meccanismo di `app.current_user_id()`, che esiste e funziona.
+
+Si scarta per due ragioni. Una `set_config` locale vale per **tutta la transazione**,
+quindi una seconda transizione nella stessa richiesta erediterebbe il motivo della prima,
+e il rimedio — un trigger che consuma il valore azzerandolo — è macchina nuova per un
+campo di testo. E `TicketRepository::update` prende `&Ticket`: il motivo **non è un
+attributo dell'aggregato**, e farcelo passare vorrebbe dire o un campo che non appartiene
+alla segnalazione, o una firma diversa per una transizione sola.
+
+**La differenza con il numero falso della sezione 4 va detta**, perché le due cose si
+somigliano: là `v_property_occupancy` **mostrava** uno zero non vero, qui un campo vuoto
+non compare affatto — `HistoryRow` lo renderizza già condizionalmente. Un campo non
+riempito è un debito; un numero falso è un difetto.
+
+### Conseguenze
+
+- la guardia della parte prima sta nello use case che **pubblica**, non nel costruttore
+  del messaggio: la riapertura scrive il proprio messaggio dopo aver riportato lo stato a
+  `open`, e con la guardia nel costruttore inciamperebbe nella propria regola;
+- la sequenza comune delle transizioni vive in `run()` (`transition.rs`), che esiste
+  perché nessuna dimentichi `TicketStatusChanged`. **Non si duplica per la riapertura**:
+  acquista un punto in cui inserire un messaggio dentro la stessa unità di lavoro, e le
+  altre sei lo lasciano vuoto;
+- il client toglie la casella di scrittura sugli stati terminali e **dice perché**,
+  indicando la riapertura a chi ha segnalato; il dialogo di riapertura passa da conferma a
+  form con un campo obbligatorio, e il testo avverte che quello che si scrive finisce
+  nella conversazione;
+- un invariante nuovo, un codice nuovo, un messaggio nel catalogo.
+
+### Alternative scartate
+
+**Ammettere le repliche su `closed`** e vietarle solo su `cancelled` e `resolved`.
+Lascerebbe la riapertura facoltativa, e con essa il caso che il modulo è fatto per
+evitare: una conversazione che continua sotto uno stato che dice «finita».
+
+**Il motivo facoltativo.** Con la parte prima è l'unica traccia che resta, e un campo
+facoltativo che è anche l'unica traccia è un campo che resterà vuoto proprio quando
+serve.
+
+**Una colonna `reopen_reason` su `app.tickets`.** Simmetrica a `resolution_notes` e con lo
+stesso difetto: ne tiene uno solo, e la chiusura successiva dovrebbe cancellarlo — cioè
+perderebbe esattamente ciò per cui esiste.
