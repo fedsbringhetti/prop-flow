@@ -43,6 +43,17 @@ pub struct PostTicketMessageCommand {
 /// `403 auth.denied_by_policy`, che è il codice riservato ai **nostri** difetti:
 /// un inquilino che tenta di scrivere una nota interna non è un nostro difetto, è
 /// una richiesta da rifiutare dicendogli cosa gli manca.
+///
+/// # Su una segnalazione terminata non si scrive
+///
+/// La regola è del **dominio** e non dell'interfaccia — nasconderla nel client
+/// lascerebbe la rotta aperta — e il predicato è
+/// [`Ticket::ensure_open_to_messages`]: si scrive nei sei stati di lavorazione e
+/// in nessun altro. Chi vuole dire «non è risolto» **riapre**, e il motivo della
+/// riapertura diventa il primo messaggio del giro nuovo (ADR-050).
+///
+/// Il rifiuto arriva **dopo** la lettura della segnalazione, come il `404`: chi non
+/// vede la riga non deve scoprire da un `409` che esiste ed è chiusa.
 pub struct PostTicketMessage {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
     clock: Arc<dyn Clock>,
@@ -78,6 +89,8 @@ impl PostTicketMessage {
             .find_by_id(command.ticket_id)
             .await?
             .ok_or(AppError::not_found(Entity::Ticket))?;
+
+        ticket.ensure_open_to_messages()?;
 
         let message = TicketMessage::post(NewTicketMessage {
             id: TicketMessageId::generate(),

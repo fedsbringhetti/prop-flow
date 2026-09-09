@@ -380,6 +380,23 @@ pub struct CloseTicketRequest {
     pub resolution_notes: Option<String>,
 }
 
+/// Corpo della riapertura.
+///
+/// **`reason` è obbligatorio**, ed è l'asimmetria con `resolution_notes`, che è
+/// facoltativo. La ragione: da quando un thread terminato non riceve più messaggi,
+/// riaprire è l'**unico** modo di dire «non è risolto», e una riapertura senza
+/// motivo non lascerebbe niente che spieghi perché la segnalazione è tornata viva
+/// — mentre la chiusura lascia comunque `closed_at` e una riga di storico.
+///
+/// Il motivo **diventa il primo messaggio del thread**, pubblico e di chi ha
+/// riaperto: il thread non si riscrive mai, quindi sopravvive alla chiusura
+/// successiva, e una segnalazione riaperta tre volte ha tre motivi. Vedi ADR-050.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ReopenTicketRequest {
+    #[schema(example = "Ha ricominciato a perdere due giorni dopo")]
+    pub reason: String,
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PostTicketMessageRequest {
     pub body: String,
@@ -1083,26 +1100,35 @@ async fn close(
 #[utoipa::path(
     post, path = "/api/v1/tickets/{id}/reopen", tag = "segnalazioni",
     params(("id" = Uuid, Path, description = "Identificatore della segnalazione")),
+    request_body = ReopenTicketRequest,
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "Segnalazione riaperta", body = TicketResponse),
+        (status = 200, description = "Segnalazione riaperta, con il motivo scritto nel thread", body = TicketResponse),
         (status = 403, description = "Riapre chi ha segnalato, o lo staff", body = crate::error::ProblemDetails),
         (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
         (status = 409, description = "Solo una segnalazione chiusa si riapre", body = crate::error::ProblemDetails),
+        (status = 422, description = "Motivo assente o vuoto", body = crate::error::ProblemDetails),
     )
 )]
 async fn reopen(
     State(state): State<AppState>,
     Authenticated(context): Authenticated,
     Path(id): Path<Uuid>,
+    Json(request): Json<ReopenTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
+    let reason = MessageBody::parse(&request.reason).map_err(|error| {
+        ApiError::from(propflow_application::AppError::Validation(error))
+            .with_request_id(request_id.clone())
+    })?;
+
     let view = state
         .reopen_ticket
         .execute(
             &context,
             ReopenTicketCommand {
                 id: TicketId::from_uuid(id),
+                reason,
             },
         )
         .await

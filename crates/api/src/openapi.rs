@@ -162,6 +162,7 @@ use utoipa::{Modify, OpenApi};
         crate::routes::tickets::CloseTicketRequest,
         crate::routes::tickets::UpdateTicketCostsRequest,
         crate::routes::tickets::CorrectTicketReportRequest,
+        crate::routes::tickets::ReopenTicketRequest,
         crate::routes::tickets::PostTicketMessageRequest,
         crate::routes::tickets::TicketResponse,
         crate::routes::tickets::TicketDetailResponse,

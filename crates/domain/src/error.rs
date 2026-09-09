@@ -226,6 +226,18 @@ pub enum Invariant {
     TicketNotCancellable,
     #[error("A cancelled ticket cannot be modified")]
     TicketCancelled,
+    /// Il thread di una segnalazione terminata non riceve messaggi.
+    ///
+    /// Codice proprio e non `ticket.invalid_transition`, perché **non è una
+    /// transizione rifiutata**: nessuno stava chiedendo di muovere la
+    /// segnalazione. E non è `ticket.cancelled`, che vale solo per l'annullata,
+    /// mentre qui i casi sono tre — `closed`, `cancelled` e `resolved`, che
+    /// l'applicazione non scrive ma una riga può contenere.
+    ///
+    /// Il rimedio è preciso e diverso da entrambi: **riaprire**, che chiede il
+    /// motivo e lo scrive come primo messaggio del giro nuovo (ADR-050).
+    #[error("A ticket that is no longer being handled does not take messages")]
+    TicketThreadClosed,
 
     #[error("Only a draft or a validated bill can be corrected")]
     UtilityBillNotEditable,
@@ -331,6 +343,7 @@ impl Invariant {
             | Self::TicketNotReopenable
             | Self::TicketNotCancellable => "ticket.invalid_transition",
             Self::TicketCancelled => "ticket.cancelled",
+            Self::TicketThreadClosed => "ticket.thread_closed",
             // Stesso trattamento delle transizioni di contratto e di
             // segnalazione: il rimedio è lo stesso — rileggere lo stato attuale e
             // chiedere una transizione ammessa — e i due aggregati restano
@@ -493,6 +506,7 @@ mod tests {
             Invariant::TicketNotReopenable.code(),
             Invariant::TicketNotCancellable.code(),
             Invariant::TicketCancelled.code(),
+            Invariant::TicketThreadClosed.code(),
             Invariant::UtilityBillNotEditable.code(),
             Invariant::UtilityBillNotValidatable.code(),
             Invariant::UtilityBillNotAllocatable.code(),
@@ -568,6 +582,17 @@ mod tests {
         assert_ne!(
             Invariant::TicketCancelled.code(),
             Invariant::TicketNotClosable.code()
+        );
+        // Nemmeno il thread chiuso lo condivide, e per una ragione ulteriore: non
+        // è una transizione rifiutata, perché nessuno stava chiedendo di muovere
+        // la segnalazione. Il rimedio è riaprire, e va detto con un codice suo.
+        assert_ne!(
+            Invariant::TicketThreadClosed.code(),
+            Invariant::TicketNotClosable.code()
+        );
+        assert_ne!(
+            Invariant::TicketThreadClosed.code(),
+            Invariant::TicketCancelled.code()
         );
     }
 

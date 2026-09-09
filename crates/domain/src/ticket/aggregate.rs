@@ -558,6 +558,30 @@ impl Ticket {
         Ok(true)
     }
 
+    /// Verifica che il thread accetti ancora scritture.
+    ///
+    /// **Si scrive nei sei stati di lavorazione e in nessun altro.** Il predicato
+    /// è [`TicketStatus::is_working`], lo stesso che guardano `close` e `cancel`,
+    /// e riusarlo invece di enumerare «non `closed` e non `cancelled`» copre da sé
+    /// il terzo caso: `resolved`, che l'applicazione non scrive mai ma che una
+    /// riga scritta a mano può contenere.
+    ///
+    /// **Leggere resta permesso**: un thread chiuso si rilegge per intero. Ciò che
+    /// finisce è la scrittura, e con essa la conversazione che continuava sotto
+    /// uno stato che dice «finita». Chi vuole dire «non è risolto» **riapre**, e
+    /// il motivo della riapertura diventa il primo messaggio del giro nuovo
+    /// (ADR-050).
+    ///
+    /// Sta qui e non nel costruttore di `TicketMessage` di proposito: la
+    /// riapertura scrive un messaggio nella stessa transizione, e con la guardia
+    /// nel costruttore inciamperebbe nella propria regola.
+    pub const fn ensure_open_to_messages(&self) -> DomainResult<()> {
+        if self.status.is_working() {
+            return Ok(());
+        }
+        Err(DomainError::Invariant(Invariant::TicketThreadClosed))
+    }
+
     /// Applica una modifica parziale ai costi. `true` se qualcosa è cambiato.
     ///
     /// I costi sono l'unico attributo che il `PATCH` tocca: tutto il resto o è

@@ -2566,13 +2566,31 @@ async fn the_relationship_runs_in_both_directions() {
 
     // 7. Il guasto torna: **l'inquilino** riapre. È la sola transizione che può
     //    eseguire, ed è ciò che rende la segnalazione un rapporto.
-    let (status, reopened) = app
+    //    E **dice perché**: il motivo è obbligatorio da quando un thread chiuso non
+    //    riceve più messaggi, perché riaprire è l'unica via per dire «non è
+    //    risolto». Senza, l'API risponde `422`.
+    let (status, problem) = app
         .send_in_org(
             "POST",
             &format!("/api/v1/tickets/{ticket}/reopen"),
             Some(&tenant),
             Some(&owner_org),
             Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "una riapertura senza motivo non lascia niente che la spieghi: {problem}"
+    );
+
+    let (status, reopened) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "reason": "Ha ricominciato a perdere due giorni dopo" })),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
@@ -2776,23 +2794,58 @@ async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
             &format!("/api/v1/tickets/{ticket}/reopen"),
             Some(cotenant),
             Some(&owner_org),
-            Some(serde_json::json!({})),
+            Some(serde_json::json!({ "reason": "Secondo me non è risolto" })),
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
     assert_eq!(problem["code"], "ticket.not_yours", "corpo: {problem}");
 
-    // Chi ha segnalato invece sì.
+    // Chi ha segnalato invece sì, e il suo motivo finisce nel thread.
     let (status, reopened) = app
         .send_in_org(
             "POST",
             &format!("/api/v1/tickets/{ticket}/reopen"),
             Some(reporter),
             Some(&owner_org),
-            Some(serde_json::json!({})),
+            Some(serde_json::json!({ "reason": "Perde ancora, sotto il lavello" })),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
+
+    let (status, thread) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(cotenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {thread}");
+    let bodies: Vec<&str> = thread["items"]
+        .as_array()
+        .expect("messaggi")
+        .iter()
+        .filter_map(|message| message["body"].as_str())
+        .collect();
+    assert!(
+        bodies.contains(&"Perde ancora, sotto il lavello"),
+        "il motivo della riapertura vive nel thread, che non si riscrive mai: {thread}"
+    );
+
+    // E il thread dice **chi** ha scritto, non solo con che ruolo: in un
+    // co-living i due inquilini sono entrambi `tenant`.
+    let author = thread["items"]
+        .as_array()
+        .expect("messaggi")
+        .iter()
+        .find(|message| message["body"] == "Perde ancora, sotto il lavello")
+        .expect("il messaggio della riapertura");
+    assert_eq!(author["author_kind"], "tenant", "corpo: {thread}");
+    assert!(
+        author["author_name"].is_string(),
+        "il coinquilino legge il nome dell'altro dal ramo `shares_home_with` di          `users_select`, che la 0030 aveva lasciato in piedi: {thread}"
+    );
 }
 
 /// La correzione del testo è una rotta a sé, con **una sola** autorizzazione.
@@ -2909,6 +2962,60 @@ async fn the_report_is_corrected_from_a_route_of_its_own() {
     assert_eq!(
         corrected["title"], "Il boiler perde",
         "il titolo non era nel corpo e non doveva cambiare: {corrected}"
+    );
+}
+
+/// Su una segnalazione chiusa il thread **si legge e non si scrive**.
+///
+/// È una regola di dominio e non un controllo di interfaccia: nasconderla nel
+/// client lascerebbe la rotta aperta, e questo test bussa direttamente alla rotta.
+#[tokio::test]
+async fn a_closed_ticket_does_not_take_messages_but_still_gives_them() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "proprietario-thread-chiuso").await;
+    let property = create_property(&app, &owner, "Casa chiusa").await;
+    let (ticket, _) = open_ticket(&app, &owner, None, &property, None, "Guasto risolto").await;
+
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/messages"),
+        &owner,
+        serde_json::json!({ "body": "Passo domani" }),
+    )
+    .await;
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/close"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            &owner,
+            serde_json::json!({ "body": "Un'altra cosa" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "ticket.thread_closed",
+        "codice proprio: non è una transizione rifiutata, e il rimedio è riaprire — {problem}"
+    );
+
+    let (status, thread) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(&owner),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {thread}");
+    assert_eq!(
+        thread["items"].as_array().expect("messaggi").len(),
+        1,
+        "leggere resta permesso: {thread}"
     );
 }
 
@@ -3053,12 +3160,14 @@ async fn a_transition_that_is_not_allowed_is_a_conflict() {
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
     assert_eq!(problem["code"], "ticket.invalid_transition");
 
-    // Né si riapre ciò che non è chiuso.
+    // Né si riapre ciò che non è chiuso. Il motivo va mandato lo stesso: la
+    // validazione del corpo viene **prima** dello stato, quindi senza si otterrebbe
+    // un `422` e la transizione rifiutata non si vedrebbe affatto.
     let (status, problem) = app
         .post_auth(
             &format!("/api/v1/tickets/{ticket}/reopen"),
             &owner,
-            serde_json::json!({}),
+            serde_json::json!({ "reason": "Non è mai stata chiusa" }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");

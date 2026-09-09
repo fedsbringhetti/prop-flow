@@ -1523,7 +1523,13 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
     );
 
     let reopened = ReopenTicket::new(factory(), clock())
-        .execute(&context, ReopenTicketCommand { id: ticket.id() })
+        .execute(
+            &context,
+            ReopenTicketCommand {
+                id: ticket.id(),
+                reason: MessageBody::parse("Ha ricominciato a perdere").expect("motivo"),
+            },
+        )
         .await
         .expect("riaperta");
     assert_eq!(reopened.ticket.status(), TicketStatus::Open);
@@ -1585,7 +1591,6 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
 /// (ADR-048). Il test le tiene qui e non le toglie: che siano scrivibili è
 /// un'affermazione tanto quanto che non lo fossero, e chi togliesse la `GRANT`
 /// per prudenza vedrebbe fallire questo test invece di scoprirlo dal client.
-///
 #[tokio::test]
 async fn the_application_role_cannot_move_a_ticket_to_another_property() {
     let env = require_db!();
@@ -5997,6 +6002,124 @@ async fn the_reporter_corrects_the_report_only_while_nobody_has_touched_it() {
         .await
         .expect_err("una segnalazione annullata non si tocca più");
     assert_eq!(refused.code(), "ticket.cancelled");
+}
+
+/// **Un thread terminato si legge e non si scrive, e riaprire dice perché.**
+///
+/// Le due metà sono una decisione sola: se dopo la chiusura non si scrive più,
+/// riaprire è l'unico modo di dire «non è risolto», e allora il motivo è l'unica
+/// cosa che spiega perché la segnalazione è tornata viva. Il motivo finisce nel
+/// thread, che non si riscrive mai — e questo test lo va a rileggere lì.
+#[tokio::test]
+async fn a_closed_thread_is_read_but_not_written_and_reopening_says_why() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-thread-chiuso").await;
+    let x = &stage.first[0];
+
+    let ticket =
+        open_shared_ticket(&env, x, stage.home_one, "Il termosifone è freddo", false).await;
+    let post = PostTicketMessage::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let list = ListTicketMessages::new(Arc::clone(&env.factory));
+
+    post.execute(
+        x,
+        PostTicketMessageCommand {
+            ticket_id: ticket.id(),
+            body: MessageBody::parse("Non scalda da lunedì").expect("corpo"),
+            is_internal: false,
+        },
+    )
+    .await
+    .expect("finché è aperta si scrive");
+
+    CloseTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &stage.owner,
+            CloseTicketCommand {
+                id: ticket.id(),
+                resolution_notes: Some("spurgato".to_owned()),
+            },
+        )
+        .await
+        .expect("chiusa");
+
+    let refused = post
+        .execute(
+            x,
+            PostTicketMessageCommand {
+                ticket_id: ticket.id(),
+                body: MessageBody::parse("Non è risolto").expect("corpo"),
+                is_internal: false,
+            },
+        )
+        .await
+        .expect_err("su una chiusa non si scrive");
+    assert_eq!(
+        refused.code(),
+        "ticket.thread_closed",
+        "codice proprio: non è una transizione rifiutata, e il rimedio è riaprire"
+    );
+
+    // **Leggere resta permesso.** È metà della regola, ed è quella che si
+    // romperebbe mettendo la guardia nel posto sbagliato.
+    let thread = list
+        .execute(
+            x,
+            ListTicketMessagesCommand {
+                ticket_id: ticket.id(),
+                after: None,
+                limit: Some(50),
+            },
+        )
+        .await
+        .expect("un thread chiuso si rilegge per intero");
+    assert_eq!(thread.items.len(), 1);
+
+    ReopenTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            x,
+            ReopenTicketCommand {
+                id: ticket.id(),
+                reason: MessageBody::parse("Non è risolto: è tornato freddo").expect("motivo"),
+            },
+        )
+        .await
+        .expect("chi ha segnalato riapre");
+
+    let thread = list
+        .execute(
+            x,
+            ListTicketMessagesCommand {
+                ticket_id: ticket.id(),
+                after: None,
+                limit: Some(50),
+            },
+        )
+        .await
+        .expect("thread riletto");
+    assert_eq!(
+        thread.items.len(),
+        2,
+        "il motivo della riapertura è il primo messaggio del giro nuovo"
+    );
+    let last = thread.items.last().expect("il messaggio c'è");
+    assert_eq!(last.body().as_str(), "Non è risolto: è tornato freddo");
+    assert!(
+        !last.is_internal(),
+        "il punto del motivo è che lo legga l'altra parte"
+    );
+
+    // E da riaperta si torna a scrivere.
+    post.execute(
+        x,
+        PostTicketMessageCommand {
+            ticket_id: ticket.id(),
+            body: MessageBody::parse("Aggiungo una foto").expect("corpo"),
+            is_internal: false,
+        },
+    )
+    .await
+    .expect("riaperta, il thread riprende");
 }
 
 /// **I nomi arrivano dalla policy `users_select`, e questa query è il suo primo
