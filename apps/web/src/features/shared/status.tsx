@@ -20,6 +20,34 @@ import type {
  * colore di ripiego renderebbe muto proprio ciò che è cambiato.
  */
 
+/**
+ * **Quando lo stato dichiarato va mostrato accanto al derivato.**
+ *
+ * La regola vecchia era «ogni volta che differiscono», ed era scritta per
+ * l'anomalia — una stanza in ristrutturazione e insieme occupata. Ma la divergenza
+ * è **garantita** nel caso normale: nessuno riscrive `active` quando un contratto
+ * scade, `occupied` non lo scrive nessuno mai, `rented` nemmeno. La parentesi
+ * compariva quindi su quasi ogni riga, che è il modo di rendere invisibile proprio
+ * il caso per cui esisteva.
+ *
+ * La regola nuova, in una riga: **il dichiarato compare solo quando è un giudizio
+ * che il fatto contraddice.** `available` su una stanza e `active` su un contratto
+ * sono il default che la derivazione esiste per superare, non una decisione di
+ * qualcuno; `unavailable` e `maintenance` sì.
+ *
+ * `judgements` elenca quindi gli stati memorizzati che **qualcuno ha scelto**. È
+ * un elenco e non un'esclusione perché la domanda giusta è «chi l'ha deciso», e un
+ * elenco di ciò che si esclude si riempirebbe da sé di ogni valore nuovo.
+ */
+function isAnomaly<S extends string>(
+  status: S,
+  effectiveStatus: S | undefined,
+  judgements: readonly S[],
+): boolean {
+  if (effectiveStatus === undefined || status === effectiveStatus) return false
+  return judgements.includes(status)
+}
+
 const propertyTone: Record<PropertyStatus, BadgeTone> = {
   draft: 'neutral',
   available: 'info',
@@ -30,12 +58,19 @@ const propertyTone: Record<PropertyStatus, BadgeTone> = {
 }
 
 /**
- * Lo stato di un immobile, **dichiarato ed effettivo insieme**.
+ * Gli stati di un immobile che **qualcuno ha scelto**.
  *
- * Quando divergono si mostrano tutti e due, con il derivato in evidenza: un
- * immobile «in manutenzione» che risulta affittato è un'anomalia che chi
- * amministra deve vedere, e un badge solo la nasconderebbe qualunque dei due
- * scegliesse. È la stessa forma del badge dei contratti.
+ * `draft`, `maintenance` e `archived` sono giudizi di chi amministra: un immobile
+ * in manutenzione che risulta affittato è l'anomalia che il doppio badge esiste per
+ * far vedere. `available` no — è il default da cui si parte, e la derivazione
+ * esiste per superarlo. `rented` e `partially_rented` nemmeno: non si scelgono
+ * dalla tendina (ADR-019), quindi una riga che li porti è un residuo, non una
+ * decisione.
+ */
+const propertyJudgements = ['draft', 'maintenance', 'archived'] as const satisfies readonly PropertyStatus[]
+
+/**
+ * Lo stato di un immobile: **il fatto**, e il dichiarato solo se lo smentisce.
  */
 export function PropertyStatusBadge({
   status,
@@ -44,12 +79,13 @@ export function PropertyStatusBadge({
   status: PropertyStatus
   effectiveStatus?: PropertyStatus
 }) {
-  if (effectiveStatus === undefined || status === effectiveStatus) {
-    return <Badge tone={propertyTone[status]}>{t.property.statuses[status]}</Badge>
+  const shown = effectiveStatus ?? status
+  if (!isAnomaly(status, effectiveStatus, propertyJudgements)) {
+    return <Badge tone={propertyTone[shown]}>{t.property.statuses[shown]}</Badge>
   }
   return (
     <span className="inline-flex items-center gap-1">
-      <Badge tone={propertyTone[effectiveStatus]}>{t.property.statuses[effectiveStatus]}</Badge>
+      <Badge tone={propertyTone[shown]}>{t.property.statuses[shown]}</Badge>
       <span className="text-xs text-ink-muted">({t.property.statuses[status]})</span>
     </span>
   )
@@ -62,11 +98,17 @@ const roomTone: Record<RoomStatus, BadgeTone> = {
 }
 
 /**
- * Lo stato di una stanza, dichiarato ed effettivo.
+ * L'unico stato di una stanza che sia una decisione: **fuori uso**.
  *
- * «Occupata» non lo dichiara nessuno: discende dal contratto in essere. Una stanza
- * dichiarata **non disponibile** e insieme occupata è il caso che questo badge
- * esiste per rendere visibile.
+ * `available` è il default, e `occupied` non lo scrive nessuno — discende dal
+ * contratto in essere. Una stanza dichiarata *non disponibile* e insieme occupata è
+ * il caso che questo badge esiste per rendere visibile: qualcuno l'ha messa in
+ * ristrutturazione mentre ci abita una persona.
+ */
+const roomJudgements = ['unavailable'] as const satisfies readonly RoomStatus[]
+
+/**
+ * Lo stato di una stanza: **il fatto**, e il dichiarato solo se lo smentisce.
  */
 export function RoomStatusBadge({
   status,
@@ -75,12 +117,13 @@ export function RoomStatusBadge({
   status: RoomStatus
   effectiveStatus?: RoomStatus
 }) {
-  if (effectiveStatus === undefined || status === effectiveStatus) {
-    return <Badge tone={roomTone[status]}>{t.room.statuses[status]}</Badge>
+  const shown = effectiveStatus ?? status
+  if (!isAnomaly(status, effectiveStatus, roomJudgements)) {
+    return <Badge tone={roomTone[shown]}>{t.room.statuses[shown]}</Badge>
   }
   return (
     <span className="inline-flex items-center gap-1">
-      <Badge tone={roomTone[effectiveStatus]}>{t.room.statuses[effectiveStatus]}</Badge>
+      <Badge tone={roomTone[shown]}>{t.room.statuses[shown]}</Badge>
       <span className="text-xs text-ink-muted">({t.room.statuses[status]})</span>
     </span>
   )
@@ -97,13 +140,33 @@ const leaseTone: Record<LeaseStatus, BadgeTone> = {
 }
 
 /**
+ * **Nessuno**, ed è un fatto del dominio e non una svista.
+ *
+ * `Lease::effective_status` restituisce lo stato memorizzato per ogni valore che
+ * non sia `active`: la divergenza esiste **solo** a partire da `active`, che è il
+ * default da cui si parte e non un giudizio. Un contratto non può quindi essere in
+ * uno stato scelto che il calendario smentisce, e la parentesi qui non ha mai un
+ * caso da mostrare.
+ *
+ * L'elenco resta scritto — vuoto — perché la regola sia leggibile qui come sugli
+ * altri due, e perché il giorno in cui nascesse uno stato derivato da qualcosa che
+ * non è `active` la domanda si ponga in questo punto.
+ */
+const leaseJudgements = [] as const satisfies readonly LeaseStatus[]
+
+/**
  * Lo stato **effettivo**, non quello memorizzato.
  *
- * `effective_status` può valere `expiring` o `expired` mentre `status` resta
- * `active`, perché nessuno scheduler riscrive le righe: mostrare `status`
- * direbbe «attivo» di un contratto scaduto ieri. Quando i due divergono si
- * mostrano entrambi — chi guarda deve poter capire perché il filtro «attivo»
- * restituisce un contratto marcato «scaduto».
+ * `effective_status` vale `expiring` o `expired` mentre `status` resta `active`,
+ * perché nessuno scheduler riscrive le righe: mostrare `status` direbbe «attivo» di
+ * un contratto scaduto ieri.
+ *
+ * **La ragione per cui il dichiarato non sparisce dal prodotto.** Chi filtra per
+ * «attivo» e si vede tornare un contratto marcato «Scaduto» deve poter capire
+ * perché: l'informazione serve, ed era il *posto* a essere sbagliato. Adesso vive
+ * in due punti — l'avviso accanto al filtro in `LeasesPage`, dove la domanda nasce,
+ * e il campo «Stato dichiarato» nella scheda del contratto, dove chi amministra lo
+ * cerca — invece che ripetuta su venticinque righe.
  */
 export function LeaseStatusBadge({
   status,
@@ -112,8 +175,8 @@ export function LeaseStatusBadge({
   status: LeaseStatus
   effectiveStatus: LeaseStatus
 }) {
-  if (status === effectiveStatus) {
-    return <Badge tone={leaseTone[status]}>{t.lease.statuses[status]}</Badge>
+  if (!isAnomaly(status, effectiveStatus, leaseJudgements)) {
+    return <Badge tone={leaseTone[effectiveStatus]}>{t.lease.statuses[effectiveStatus]}</Badge>
   }
   return (
     <span className="inline-flex items-center gap-1">
@@ -147,7 +210,17 @@ const chargeTone: Record<ChargeStatus, BadgeTone> = {
   written_off: 'muted',
 }
 
-/** Come per i contratti: `overdue` è derivato e non è mai memorizzato. */
+/**
+ * `overdue` è derivato e non è mai memorizzato, come `expired` sui contratti.
+ *
+ * **La coppia resta**, e non per dimenticanza: `Charge::effective_status` diverge
+ * solo da uno stato `is_outstanding()`, cioè da `issued` **o da
+ * `partially_paid`** — e «parzialmente pagato» non si ricostruisce da «scaduto».
+ * La regola di `isAnomaly` qui non si applica pari pari: sugli altri tre il
+ * dichiarato è un giudizio o un default, qui è un fatto contabile che il derivato
+ * nasconderebbe. Con `issued` la parentesi è invece lo stesso rumore che `R30`
+ * descrive, e sistemarla è una voce a sé in `docs/12-da-fare.md`.
+ */
 export function ChargeStatusBadge({
   status,
   effectiveStatus,

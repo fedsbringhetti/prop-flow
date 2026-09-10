@@ -13,7 +13,7 @@ use propflow_domain::ticket::{
 };
 use propflow_domain::{Denial, DomainResult, Entity, RequestContext};
 
-use super::read::{TicketView, resolve_one};
+use super::read::{TicketView, view_of};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -104,12 +104,12 @@ where
     }
 
     // I nomi si risolvono **prima** del commit, perché dopo l'unità di lavoro non
-    // c'è più. Costa una query su al più due identificatori, ed è ciò che tiene
-    // uniforme la risposta: vedi `TicketView`.
-    let people = resolve_one(&mut *uow, &ticket).await?;
+    // c'è più. Costa due query corte, ed è ciò che tiene uniforme la risposta: vedi
+    // `TicketView`.
+    let view = view_of(&mut *uow, ticket).await?;
     uow.commit().await?;
 
-    Ok(TicketView { ticket, people })
+    Ok(view)
 }
 
 /// Lo staff guida la lavorazione. Vale per triage, assegnazione, avvio,

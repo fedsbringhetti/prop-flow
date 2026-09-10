@@ -110,6 +110,13 @@ export function PropertyDetailPage() {
               </CardHeader>
               <CardBody>
                 <DescriptionList>
+                  {/* Come per i contratti: il badge dice ciò che i contratti in
+                      essere producono, e lo stato *scelto* resta leggibile qui —
+                      accanto a quello effettivo, e non ripetuto su ogni riga
+                      dell'elenco. */}
+                  <DescriptionItem label={t.property.statusLabel}>
+                    {t.property.statuses[data.status]}
+                  </DescriptionItem>
                   <DescriptionItem label={t.property.type}>
                     {t.property.types[data.property_type]}
                   </DescriptionItem>
@@ -486,12 +493,16 @@ function shareProblem(raw: string, submitted: boolean): string | undefined {
  * che chiedono le stesse cose divergono alla prima aggiunta, e la seconda finisce
  * in uno solo dei due — che è esattamente com'è andata.
  *
- * **`status` resta fuori, e non è una dimenticanza.** Che stato abbia una stanza è
- * una domanda aperta: `Occupied` non lo scrive nessuno, e il dominio dichiara una
- * transizione — «passa a occupata quando un contratto la impegna» — che non è
- * implementata. Offrire una tendina qui anticiperebbe quella decisione nel posto
- * sbagliato, e se si concludesse che lo stato va **derivato** dai contratti
- * andrebbe tolta subito dopo essere stata aggiunta.
+ * **`status` resta fuori da questo elenco condiviso, e non è una dimenticanza.**
+ * La domanda si è chiusa: `occupied` è **derivato** dai contratti in essere e non
+ * lo scrive nessuno (ADR-019), quindi ciò che si dichiara è soltanto se la stanza
+ * sia fuori uso. La tendina a due valori vive perciò nella sola modifica —
+ * `RoomDialog` — e non alla creazione, dove una stanza appena inserita è
+ * disponibile per definizione.
+ *
+ * Quella tendina è anche **il posto in cui lo stato dichiarato di una stanza si
+ * legge**, ora che il badge mostra il fatto e non più la coppia: le stanze non
+ * hanno una scheda propria dove metterlo, e chi lo cerca lo cerca per cambiarlo.
  */
 function RoomFields({
   values,

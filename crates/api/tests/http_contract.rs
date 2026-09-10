@@ -1922,6 +1922,400 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
     );
 }
 
+/// **Il recupero della password, da capo a fondo**, che è `Z2`.
+///
+/// Prima di questo passo le rotte di autenticazione erano quattro e il primo «non mi
+/// ricordo la password» di un utente vero finiva in una `UPDATE` scritta a mano sul
+/// database di produzione.
+///
+/// Le tre cose che il test fissa sono le tre che si perdono, e nessuna delle tre si
+/// vede guardando la schermata:
+///
+/// 1. **la conferma revoca le sessioni**, comprese quelle aperte prima. Senza,
+///    cambiare la password non butta fuori chi era entrato con quella vecchia — e un
+///    refresh token vive trenta giorni;
+/// 2. **un indirizzo sconosciuto riceve la stessa risposta di uno noto**, e non manda
+///    niente: distinguerli sarebbe un oracolo per sapere chi ha un account;
+/// 3. **un codice già usato non vale due volte.**
+#[tokio::test]
+async fn a_forgotten_password_can_be_recovered_and_the_old_sessions_die() {
+    let app = require_app!();
+    let email = common::unique_email("smemorato");
+    let vecchia = "cavallo batteria graffetta";
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/register",
+            serde_json::json!({
+                "email": email,
+                "full_name": "Proprietario Test",
+                "password": vecchia,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // La sessione di prima, con il **cookie di refresh**: è ciò che la revoca
+    // uccide, e l'unica cosa che si possa verificare subito. L'access token è un
+    // JWT e resta valido i suoi quindici minuti — vedi l'asserzione più sotto.
+    let (status, _, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("cookie di refresh");
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+
+    let code = match app.mail.sent().last() {
+        Some((
+            recipient,
+            propflow_application::ports::NotificationContent::PasswordReset {
+                code,
+                valid_minutes,
+            },
+        )) => {
+            assert_eq!(recipient, &email);
+            // La durata è nel testo perché chi legge deve sapere quanto ha: un
+            // codice che scade senza dirlo è un codice che scade addosso.
+            assert!(*valid_minutes > 0);
+            code.clone()
+        }
+        other => panic!("il codice di recupero non è partito: {other:?}"),
+    };
+
+    // Una password debole viene rifiutata **prima** di consumare il codice: chi
+    // sbaglia la password non deve doversi rifare mandare il codice.
+    let (status, problem) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": "corta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let nuova = "cavallo batteria graffetta nuova";
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // 1. **La sessione di prima è morta**: il refresh non rinnova più. È la parte
+    //    che si dimentica, ed è quella che rende il recupero una difesa invece di
+    //    una comodità — un refresh token vive trenta giorni.
+    //
+    //    Quello che **non** muore è l'access token già emesso, che è un JWT e non è
+    //    revocabile: chi ce l'ha resta dentro fino alla scadenza, quindici minuti.
+    //    È il baratto di ADR-013 e va saputo, perché «revoca tutte le sessioni» si
+    //    legge come «lo butta fuori adesso» e non è vero.
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&cookie), None)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "il refresh della vecchia sessione funziona ancora: {body}"
+    );
+
+    // La password nuova funziona, la vecchia no.
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 3. Lo stesso codice non vale due volte, e la risposta non dice perché.
+    let (status, problem) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": "un altro cavallo lungo" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {problem}");
+
+    // 2. Un indirizzo che non esiste riceve **la stessa** risposta, e non fa partire
+    //    niente: è la regola di ADR-017 applicata al recupero.
+    let prima = app.mail.sent().len();
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": common::unique_email("mai-registrato") }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+    assert_eq!(
+        app.mail.sent().len(),
+        prima,
+        "un indirizzo sconosciuto ha fatto partire un'email"
+    );
+}
+
+/// **Il limite agli invii è per email**, e rifiuta in silenzio.
+///
+/// Un recupero senza freno è un modo per far arrivare cinquanta email a un indirizzo
+/// altrui. Il rifiuto è silenzioso — `202` come sempre — perché dirlo sarebbe di
+/// nuovo l'oracolo: «troppo presto» conferma che l'account esiste.
+#[tokio::test]
+async fn asking_for_a_second_code_too_soon_sends_nothing_and_says_nothing() {
+    let app = require_app!();
+    let email = common::unique_email("insistente");
+    common::register_and_login_with_email(&app, &email).await;
+
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let dopo_il_primo = app.mail.sent().len();
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    // Stessa risposta del primo, e nessuna seconda email.
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+    assert_eq!(
+        app.mail.sent().len(),
+        dopo_il_primo,
+        "il limite agli invii non ha fermato il secondo codice"
+    );
+}
+
+/// **L'invito parte per posta**, che è il criterio di fine di `Z1`.
+///
+/// Prima di questo passo il token tornava solo nella risposta HTTP e il
+/// proprietario lo consegnava a mano: era deliberato finché `Notifier` era una porta
+/// senza adattatore, e smette di bastare quando la posta diventa l'unico canale
+/// verso chi è chiuso fuori dal proprio account.
+///
+/// Il test guarda **il contenuto** e non il fatto che qualcosa sia partito: nel corpo
+/// c'è lo stesso codice che la risposta consegna, e c'è il nome dell'organizzazione,
+/// senza cui chi riceve un codice non sa da chi arriva.
+///
+/// **Il token resta anche nella risposta**, ed è la metà che si toglierebbe
+/// «pulendo»: l'invio è best-effort dopo il commit, quindi con il relay fermo quella
+/// è l'unica copia che esiste.
+#[tokio::test]
+async fn inviting_a_tenant_sends_the_code_by_mail() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "invito-per-posta").await;
+    let property = create_property(&app, &owner, "Immobile con posta").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let email = common::unique_email("destinatario");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+
+    let sent = app.mail.sent();
+    assert_eq!(sent.len(), 1, "l'invito non è stato recapitato per posta");
+    let (recipient, content) = &sent[0];
+    assert_eq!(recipient, &email);
+    match content {
+        propflow_application::ports::NotificationContent::TenantInvitation {
+            organization_name,
+            accept_token: sent_token,
+        } => {
+            // Lo **stesso** codice della risposta: se fossero due, uno dei due non
+            // funzionerebbe e nessuno saprebbe quale.
+            assert_eq!(sent_token, &accept_token);
+            assert_eq!(
+                organization_name, "Proprietario Test",
+                "l'email non dice da chi arriva l'invito"
+            );
+        }
+        other => panic!("notifica inattesa: {other:?}"),
+    }
+
+    // La risposta continua a portarlo: con il relay fermo è l'unica copia.
+    assert!(!accept_token.is_empty());
+}
+
+/// **L'inquilino che torna**, che è `R31`: il ciclo di vita normale del prodotto.
+///
+/// Un contratto finisce, con la stessa persona se ne fa un altro. Prima di questo
+/// test la seconda accettazione rispondeva `409 membership.already_exists` — su un
+/// codice che il proprietario aveva appena ricevuto senza un avviso — e siccome
+/// `lease_parties.user_id` lo scrive **solo** l'accettazione, l'inquilino restava
+/// fuori dal contratto nuovo senza nessun modo di rientrare.
+///
+/// **Nessun test poteva trovarlo**, e la ragione va tenuta: ogni altro test
+/// costruisce un inquilino **nuovo**. Il difetto viveva nella *seconda* volta che
+/// qualcosa succede alla stessa persona, che è lo spazio che una suite verde non
+/// attraversa. Questo test è quella seconda volta.
+#[tokio::test]
+async fn a_returning_tenant_can_accept_a_second_invitation() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "inquilino-che-torna").await;
+    let property = create_property(&app, &owner, "Casa con due stagioni").await;
+
+    let (_, first_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera del primo anno", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let first_room = first_room["id"].as_str().expect("id").to_owned();
+    let (_, second_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera del secondo anno", "monthly_rent": "450.00" }),
+        )
+        .await;
+    let second_room = second_room["id"].as_str().expect("id").to_owned();
+
+    // CASO 1 — l'inquilino nuovo. È il lato che non deve rompersi.
+    let first_lease = draft_lease(&app, &owner, &property, Some(&first_room), 0, Some(365)).await;
+    let tenant_email = common::unique_email("torna");
+    let (_, first_token) = invite_tenant(&app, &owner, &first_lease, &tenant_email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": first_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["organization_id"], owner_org);
+    assert_eq!(accepted["role"], "tenant");
+    assert_eq!(visible_leases(&app, &tenant, &owner_org).await.len(), 1);
+
+    // CASO 2 — la stessa persona, un contratto nuovo. Qui rispondeva `409`.
+    let second_lease =
+        draft_lease(&app, &owner, &property, Some(&second_room), 400, Some(730)).await;
+    let (_, second_token) = invite_tenant(&app, &owner, &second_lease, &tenant_email).await;
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": second_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["lease_id"], second_lease, "corpo: {accepted}");
+
+    // **Tutti e due**, non l'ultimo: il primo contratto non si perde per strada.
+    let mut visible = visible_leases(&app, &tenant, &owner_org).await;
+    visible.sort();
+    let mut expected = vec![first_lease, second_lease.clone()];
+    expected.sort();
+    assert_eq!(
+        visible, expected,
+        "l'inquilino non vede entrambi i contratti"
+    );
+
+    // La parte contrattuale del secondo è collegata: è ciò che rende visibile il
+    // contratto, e la ragione per cui il `409` era irreparabile.
+    let (_, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{second_lease}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert!(
+        detail["parties"][0]["user_id"].is_string(),
+        "la parte del secondo contratto non è stata collegata: {detail}"
+    );
+
+    // Una sola appartenenza, non due: la membership non è stata reinserita.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let in_owner_org = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .count();
+    assert_eq!(in_owner_org, 1, "appartenenza duplicata: {orgs}");
+}
+
+/// **Il ruolo non si tocca.** Chi è già staff e viene invitato come inquilino
+/// resta staff.
+///
+/// È il caso vero di chi affitta una casa e ne abita un'altra, ed è anche l'assert
+/// che qualcuno toglierebbe «uniformando» il ramo: far coincidere il ruolo con
+/// quello dell'invito retrocederebbe il proprietario a `tenant`
+/// nella **propria** organizzazione.
+#[tokio::test]
+async fn accepting_a_tenant_invitation_does_not_demote_an_existing_member() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-inquilino");
+    let (owner, owner_org, _) = common::register_and_login_with_email(&app, &email).await;
+    let property = create_property(&app, &owner, "Casa dove abita chi la possiede").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &owner,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let membership = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .expect("la propria organizzazione");
+    assert_eq!(
+        membership["role"], "owner",
+        "l'invito ha retrocesso il proprietario: {orgs}"
+    );
+}
+
+/// Gli identificatori dei contratti che un utente vede in un'organizzazione.
+async fn visible_leases(app: &TestApp, token: &str, org: &str) -> Vec<String> {
+    let (status, page) = app
+        .send_in_org("GET", "/api/v1/leases", Some(token), Some(org), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Documenti
 // ---------------------------------------------------------------------------
@@ -3348,6 +3742,429 @@ async fn register_bill(
     assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
     assert_eq!(created["status"], "draft", "corpo: {created}");
     created["id"].as_str().expect("id").to_owned()
+}
+
+/// **I nomi di ciò a cui una risposta porta**, che è `R32` — terza occorrenza dello
+/// stesso difetto dopo `R14` sui contratti e `R21`/`R22` sulle persone.
+///
+/// Tre schede portavano un collegamento etichettato con il nome della *categoria*
+/// — «Immobili», «Contratti» — invece che con quello della cosa. Il test guarda le
+/// tre risposte insieme, perché è insieme che il difetto si vede: chi ne sistemasse
+/// una sola lascerebbe una schermata in cui un nome compare e l'altro no.
+///
+/// Copre anche i due modi in cui un nome **manca**, che sono diversi fra loro: la
+/// stanza assente è il caso normale di un contratto sull'immobile intero, il nome
+/// dell'immobile assente è un immobile archiviato — e sono due assenze che il
+/// client racconta in modo diverso.
+#[tokio::test]
+async fn tickets_charges_and_bills_carry_the_names_of_what_they_point_at() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "i-nomi").await;
+    let property = create_property(&app, &owner, "Villa Aurora").await;
+
+    let (_, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera azzurra", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let room = room["id"].as_str().expect("id").to_owned();
+    let lease = draft_lease(&app, &owner, &property, Some(&room), -10, Some(355)).await;
+
+    // --- la segnalazione: l'immobile e, quando c'è, la stanza ---
+    let (status, ticket) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({
+                "title": "La caldaia perde",
+                "description": "Perde dal raccordo.",
+                "room_id": room,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {ticket}");
+    // **Anche sulla creazione**, non solo in lettura: una risposta che portasse i
+    // nomi a volte sì e a volte no non permetterebbe di distinguere «non
+    // risolto» da «archiviato».
+    assert_eq!(ticket["property_label"], "Villa Aurora", "corpo: {ticket}");
+    assert_eq!(ticket["room_name"], "Camera azzurra", "corpo: {ticket}");
+    let ticket_id = ticket["id"].as_str().expect("id").to_owned();
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["property_label"], "Villa Aurora", "corpo: {detail}");
+
+    let (status, page) = app.send("GET", "/api/v1/tickets", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(ticket_id.clone()))
+        .expect("la segnalazione appena aperta");
+    assert_eq!(listed["property_label"], "Villa Aurora", "corpo: {page}");
+
+    // Una transizione risponde con gli stessi campi: è la ragione per cui i nomi
+    // si risolvono in `view_of` e non nel solo caso d'uso di lettura.
+    let (status, triaged) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket_id}/triage"),
+            &owner,
+            serde_json::json!({ "category": "plumbing", "priority": "high" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {triaged}");
+    assert_eq!(
+        triaged["property_label"], "Villa Aurora",
+        "corpo: {triaged}"
+    );
+    assert_eq!(triaged["room_name"], "Camera azzurra", "corpo: {triaged}");
+
+    // --- l'addebito: il contratto si nomina con la casa e la stanza ---
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "400.00",
+                "due_date": day(5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    assert_eq!(charge["property_label"], "Villa Aurora", "corpo: {charge}");
+    assert_eq!(charge["room_name"], "Camera azzurra", "corpo: {charge}");
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["property_label"], "Villa Aurora", "corpo: {detail}");
+    assert_eq!(detail["room_name"], "Camera azzurra", "corpo: {detail}");
+
+    // --- la bolletta: il **contratto imputato**, e il riaddebito ---
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/N/1").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["property_label"], "Villa Aurora", "corpo: {read}");
+    assert_eq!(read["room_name"], "Camera azzurra", "corpo: {read}");
+
+    // Una bolletta **senza contratto imputato** non ha niente da nominare, e il
+    // campo resta assente invece di prendere il nome dell'immobile della bolletta:
+    // ciò che il collegamento nomina è il contratto, e lì non ce n'è uno.
+    let orphan = register_bill(&app, &owner, &property, None, "2026/N/2").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{orphan}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert!(read.get("property_label").is_none(), "corpo: {read}");
+
+    let (status, validated) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {validated}");
+    assert_eq!(
+        validated["property_label"], "Villa Aurora",
+        "una transizione risponde senza i nomi: {validated}"
+    );
+
+    let (status, recharged) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": lease, "amount": "90.00", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {recharged}");
+    assert_eq!(
+        recharged["charge"]["property_label"], "Villa Aurora",
+        "corpo: {recharged}"
+    );
+    assert_eq!(
+        recharged["utility_bill"]["room_name"], "Camera azzurra",
+        "corpo: {recharged}"
+    );
+}
+
+/// **Quanto resta da riaddebitare**, che è la metà di `R33` che riguarda i numeri.
+///
+/// Riaddebitare una bolletta d'immobile a tre contratti erano tre sottrazioni a
+/// mente. Il test fissa le tre regole che quel numero deve rispettare, e la terza è
+/// quella che si perde: **un addebito annullato non conta**, perché `void` dice «non
+/// doveva essere chiesto» e quella quota torna disponibile.
+///
+/// Fissa anche ciò che **non** cambia: superare il totale resta possibile. È scritto
+/// come deliberato — lo schema non ha il vincolo e uno applicativo cadrebbe fra due
+/// riaddebiti concorrenti — e un test che lo vietasse trasformerebbe un aiuto in un
+/// cancello.
+#[tokio::test]
+async fn a_bill_says_how_much_of_it_has_already_been_recharged() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "quanto-resta").await;
+    let property = create_property(&app, &owner, "Casa da dividere").await;
+
+    let (_, first_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera uno", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let first_room = first_room["id"].as_str().expect("id").to_owned();
+    let (_, second_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera due", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let second_room = second_room["id"].as_str().expect("id").to_owned();
+
+    let first = draft_lease(&app, &owner, &property, Some(&first_room), -10, Some(355)).await;
+    let second = draft_lease(&app, &owner, &property, Some(&second_room), -10, Some(355)).await;
+    let email = common::unique_email("intestatario");
+    add_tenant(&app, &owner, &first, "Giulia Neri", Some(&email)).await;
+
+    // **L'intestatario viaggia con i nomi del posto**: è ciò che distingue due
+    // contratti sulla stessa stanza in due anni diversi, e senza di lui una tendina
+    // di contratti resta un elenco di date.
+    let (status, page) = app.send("GET", "/api/v1/leases", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(first.clone()))
+        .expect("il primo contratto");
+    assert_eq!(listed["primary_tenant"], "Giulia Neri", "corpo: {page}");
+    assert_eq!(listed["room_name"], "Camera uno", "corpo: {page}");
+    // Un contratto senza parti non ha un intestatario, e il campo manca.
+    let bare = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(second.clone()))
+        .expect("il secondo contratto");
+    assert!(bare.get("primary_tenant").is_none(), "corpo: {page}");
+
+    // La bolletta è dell'immobile intero: non è imputata a nessun contratto, ed è
+    // il caso in cui il residuo serve davvero.
+    let bill = register_bill(&app, &owner, &property, None, "2026/Q/1").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["total_amount"], "184.20", "corpo: {read}");
+    assert_eq!(read["recharged_amount"], "0.00", "mai riaddebitata: {read}");
+
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, first_recharge) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": first, "amount": "92.10", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first_recharge}");
+    assert_eq!(
+        first_recharge["utility_bill"]["recharged_amount"], "92.10",
+        "corpo: {first_recharge}"
+    );
+    let first_charge = first_recharge["charge"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    let (status, second_recharge) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": second, "amount": "92.10", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second_recharge}");
+    assert_eq!(
+        second_recharge["utility_bill"]["recharged_amount"], "184.20",
+        "la somma non torna: {second_recharge}"
+    );
+
+    // Annullare il primo addebito **libera la sua quota**: era una richiesta che non
+    // doveva essere fatta, e il residuo torna a coprirla.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/charges/{first_charge}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(
+        read["recharged_amount"], "92.10",
+        "un addebito annullato non deve contare: {read}"
+    );
+
+    // Superare il totale resta ammesso: è scritto come deliberato, e qui il numero
+    // lo dice invece di impedirlo.
+    let (status, over) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": first, "amount": "1000.00", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {over}");
+    assert_eq!(
+        over["utility_bill"]["recharged_amount"], "1092.10",
+        "corpo: {over}"
+    );
+
+    // **Per chi abita, il campo non c'è.** La somma si legge sotto RLS e a lui
+    // tornerebbe parziale: un numero sbagliato che sembra un totale.
+    let tenant_bill = register_bill(&app, &owner, &property, Some(&first), "2026/Q/2").await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{first}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    let (_, accept_token) = invite_tenant(&app, &owner, &first, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (status, read) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/utility-bills/{tenant_bill}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert!(
+        read["recharged_amount"].is_null(),
+        "l'inquilino non deve ricevere una somma parziale: {read}"
+    );
+}
+
+/// **Un immobile archiviato lascia il campo assente, e la riga resta.**
+///
+/// È la trappola che la sezione 3 aveva già pagato con un `LEFT JOIN`: la query dei
+/// nomi filtra `deleted_at IS NULL` come impone la regola 10, quindi con un `INNER`
+/// sparirebbero dall'elenco *tutte* le righe di ogni immobile archiviato. Il campo
+/// manca, e chi legge dice «Immobile archiviato» invece di mostrare uno spazio.
+#[tokio::test]
+async fn an_archived_property_leaves_the_name_out_without_hiding_the_charge() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "immobile-archiviato").await;
+    let property = create_property(&app, &owner, "Casa che sparirà").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "500.00",
+                "due_date": day(5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    assert_eq!(charge["property_label"], "Casa che sparirà");
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    // La riga c'è ancora — è la cosa che l'`INNER JOIN` avrebbe rotto — e il nome
+    // non c'è più.
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["id"], charge_id, "corpo: {detail}");
+    assert!(
+        detail.get("property_label").is_none(),
+        "il nome di un immobile archiviato non deve tornare: {detail}"
+    );
 }
 
 /// Il mese del proprietario, dal bordo HTTP: registra, corregge, valida,

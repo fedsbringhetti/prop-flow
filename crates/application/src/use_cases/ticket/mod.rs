@@ -23,7 +23,8 @@ pub use correct::{CorrectTicketReport, CorrectTicketReportCommand};
 pub use costs::{UpdateTicketCosts, UpdateTicketCostsCommand};
 pub use open::{OpenTicket, OpenTicketCommand};
 pub use read::{
-    GetTicket, ListTickets, ListTicketsQuery, People, TicketDetail, TicketListPage, TicketView,
+    GetTicket, ListTickets, ListTicketsQuery, People, Places, TicketDetail, TicketListPage,
+    TicketView,
 };
 pub use thread::{
     ListTicketMessages, ListTicketMessagesCommand, PostTicketMessage, PostTicketMessageCommand,

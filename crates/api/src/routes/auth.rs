@@ -3,8 +3,10 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::post;
 use axum::{Json, Router};
 use propflow_application::use_cases::auth::{
-    AuthenticatedSession, LoginCommand, LogoutCommand, RefreshSessionCommand, RegisterOwnerCommand,
+    AuthenticatedSession, ConfirmPasswordResetCommand, LoginCommand, LogoutCommand,
+    RefreshSessionCommand, RegisterOwnerCommand, RequestPasswordResetCommand,
 };
+use propflow_domain::shared::Email;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -25,6 +27,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh))
         .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/password-reset", post(request_password_reset))
+        .route(
+            "/api/v1/auth/password-reset/confirm",
+            post(confirm_password_reset),
+        )
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
@@ -39,6 +46,25 @@ pub struct RegisterRequest {
     /// Nome dell'organizzazione personale. Se omesso si usa il nome dell'utente.
     #[serde(default)]
     pub organization_name: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct PasswordResetRequest {
+    #[schema(example = "mario.rossi@example.it")]
+    pub email: String,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct PasswordResetConfirmRequest {
+    /// Il codice ricevuto per email, da incollare.
+    ///
+    /// **Un codice e non un link**, come per l'invito: un token nell'URL finisce
+    /// nella cronologia, nel `Referer` e nei log di ogni proxy davanti al client
+    /// (ADR-045, ADR-052).
+    pub code: String,
+    /// Almeno 12 caratteri, come alla registrazione.
+    #[schema(example = "cavallo batteria graffetta")]
+    pub new_password: String,
 }
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
@@ -254,4 +280,66 @@ async fn logout(
         clear_refresh_cookie(state.secure_cookies)?,
     );
     Ok((StatusCode::NO_CONTENT, response))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/auth/password-reset", tag = "autenticazione",
+    request_body = PasswordResetRequest,
+    responses(
+        (status = 202, description = "Se quell'indirizzo ha un account, riceverà un codice. **La risposta è la stessa in ogni caso**"),
+        (status = 422, description = "Indirizzo non valido", body = crate::error::ProblemDetails),
+    )
+)]
+async fn request_password_reset(
+    State(state): State<AppState>,
+    Anonymous(context): Anonymous,
+    Json(request): Json<PasswordResetRequest>,
+) -> ApiResult<StatusCode> {
+    let request_id = context.request_id().map(str::to_owned);
+    let email = Email::parse(&request.email).map_err(|error| {
+        ApiError::from(propflow_application::AppError::Validation(error))
+            .with_request_id(request_id.clone())
+    })?;
+
+    state
+        .request_password_reset
+        .execute(RequestPasswordResetCommand { email })
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    // **`202` e nient'altro, sempre.** Un indirizzo noto e uno sconosciuto ricevono
+    // la stessa cosa: distinguerli sarebbe un oracolo per sapere chi ha un account
+    // (ADR-017). Nemmeno un corpo, che sarebbe un posto in cui far entrare una
+    // differenza per distrazione.
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/auth/password-reset/confirm", tag = "autenticazione",
+    request_body = PasswordResetConfirmRequest,
+    responses(
+        (status = 204, description = "Password sostituita. **Tutte le sessioni aperte sono revocate**, compresa quella di chi recupera"),
+        (status = 401, description = "Codice sconosciuto, scaduto o già usato: i tre casi non si distinguono", body = crate::error::ProblemDetails),
+        (status = 422, description = "Password troppo debole", body = crate::error::ProblemDetails),
+    )
+)]
+async fn confirm_password_reset(
+    State(state): State<AppState>,
+    Anonymous(context): Anonymous,
+    Json(request): Json<PasswordResetConfirmRequest>,
+) -> ApiResult<StatusCode> {
+    let request_id = context.request_id().map(str::to_owned);
+    state
+        .confirm_password_reset
+        .execute(ConfirmPasswordResetCommand {
+            code: request.code,
+            new_password: request.new_password,
+        })
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    // Nessun cookie da ripulire: chi recupera non aveva una sessione, e quelle che
+    // esistevano sono state revocate in database — un cookie che sopravvivesse
+    // presenterebbe un token che non vale più.
+    Ok(StatusCode::NO_CONTENT)
 }

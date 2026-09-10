@@ -3,10 +3,11 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::NaiveDate;
+use propflow_application::authorization::discloses_recharged_total;
 use propflow_application::use_cases::ai::BillOcrStatus;
 use propflow_application::use_cases::billing::{
-    IssueChargeCommand, ListChargesQuery, ListUtilityBillsQuery, Recharge,
-    RechargeUtilityBillCommand, RegisterUtilityBillCommand, UpdateUtilityBillCommand,
+    IssueChargeCommand, ListChargesQuery, ListUtilityBillsQuery, Placed, Places, Recharge,
+    RechargeUtilityBillCommand, Recharged, RegisterUtilityBillCommand, UpdateUtilityBillCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::ai::{AiJob, AiJobStatus, ExtractedField, ExtractedValue, OcrReading};
@@ -607,12 +608,44 @@ pub struct UtilityBillResponse {
     pub paid_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Come si chiama l'immobile del **contratto imputato**, quando ce n'è uno.
+    ///
+    /// Nomina ciò a cui il collegamento porta — il contratto — e il nome di un
+    /// contratto è la casa più la stanza: senza, la scheda mostrava la parola
+    /// «Contratti» al posto di dove e di chi (`R32`). Non è l'immobile *della
+    /// bolletta*, che è una colonna sua e resta in `property_id`.
+    ///
+    /// **Assente non è un errore** e ha due cause distinte: la bolletta non è
+    /// imputata a nessun contratto — il caso della bolletta d'immobile intero — o
+    /// l'immobile del contratto è archiviato. In entrambi i casi chi legge mette
+    /// un'etichetta neutra, **mai l'identificatore** (ADR-043, ADR-049).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_label: Option<String>,
+    /// La stanza del contratto imputato, quando il contratto ne nomina una.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
+    /// Quanto della bolletta è **già stato riaddebitato**, come stringa decimale.
+    ///
+    /// Il residuo è `total_amount - recharged_amount`, e chi riaddebita una bolletta
+    /// d'immobile a tre contratti lo legge invece di calcolarlo a mente. **Non è un
+    /// vincolo**: riaddebitare più del totale resta possibile e voluto, quindi il
+    /// residuo può essere negativo.
+    ///
+    /// **`null` per chi non è staff**, come `estimated_cost` sulle segnalazioni e
+    /// per una ragione più stringente: la somma si legge sotto Row Level Security,
+    /// e un inquilino vede solo le proprie quote — il numero che riceverebbe
+    /// sarebbe parziale e sembrerebbe totale. Un numero sbagliato è peggio di un
+    /// numero assente.
+    ///
+    /// Gli addebiti annullati non contano; gli stornati sì.
+    pub recharged_amount: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl UtilityBillResponse {
-    fn from_domain(bill: &UtilityBill) -> Self {
+    fn from_domain(bill: &UtilityBill, places: &Places, recharged: Option<&Recharged>) -> Self {
+        let labels = places.of(bill.lease_id());
         Self {
             id: bill.id().as_uuid(),
             organization_id: bill.org_id().as_uuid(),
@@ -641,9 +674,24 @@ impl UtilityBillResponse {
             validated_at: bill.validated_at(),
             paid_at: bill.paid_at(),
             notes: bill.notes().map(str::to_owned),
+            property_label: labels.and_then(|labels| labels.property_label.clone()),
+            room_name: labels.and_then(|labels| labels.room_name.clone()),
+            recharged_amount: recharged.map(|recharged| format_amount(recharged.of(bill.id()))),
             created_at: bill.created_at(),
             updated_at: bill.updated_at(),
         }
+    }
+
+    /// La proiezione di ciò che un caso d'uso restituisce, senza scomporlo.
+    ///
+    /// `discloses_recharged_total` arriva dal service layer, che è dove la regola è
+    /// scritta: qui la si applica alla proiezione, non la si decide.
+    fn from_placed(placed: &Placed<UtilityBill>, discloses_recharged: bool) -> Self {
+        Self::from_domain(
+            &placed.value,
+            &placed.places,
+            discloses_recharged.then_some(&placed.recharged),
+        )
     }
 }
 
@@ -691,6 +739,18 @@ pub struct ChargeResponse {
     pub utility_bill_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Come si chiama l'immobile del contratto a cui l'addebito è emesso.
+    ///
+    /// Nomina ciò a cui il collegamento porta: prima la scheda diceva «Contratti»,
+    /// che è lo stesso difetto che `R14` aveva corretto nell'elenco dei contratti.
+    /// **Assente** quando l'immobile è archiviato — il contratto resta, il nome no —
+    /// e chi legge mette un'etichetta neutra, mai l'identificatore (ADR-043).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_label: Option<String>,
+    /// La stanza, quando il contratto ne nomina una. Assente sui contratti
+    /// sull'immobile intero, che è il caso normale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -702,8 +762,8 @@ impl ChargeResponse {
     /// `paid_amount` è zero e `outstanding_amount` è l'intero importo, il che in
     /// questa fetta coincide con ciò che la vista direbbe — non ci sono pagamenti.
     /// `effective_status` si calcola qui con la stessa formula della vista.
-    fn from_charge(charge: &Charge, today: NaiveDate) -> Self {
-        let mut response = Self::project(charge);
+    fn from_charge(charge: &Charge, today: NaiveDate, places: &Places) -> Self {
+        let mut response = Self::project(charge, places);
         response.paid_amount = format_amount(Decimal::ZERO);
         response.outstanding_amount = format_amount(charge.amount().amount());
         response.effective_status = charge.effective_status(today, Decimal::ZERO).into();
@@ -715,15 +775,21 @@ impl ChargeResponse {
     /// `effective_status` usa `is_past_due` della vista e non ricalcola la data: se
     /// le due definizioni divergessero per un fuso orario, vince quella che ha
     /// prodotto il numero mostrato accanto.
-    fn from_balance(balance: &ChargeBalance) -> Self {
-        let mut response = Self::project(&balance.charge);
+    fn from_balance(balance: &ChargeBalance, places: &Places) -> Self {
+        let mut response = Self::project(&balance.charge, places);
         response.paid_amount = format_amount(balance.paid_amount.amount());
         response.outstanding_amount = format_amount(balance.outstanding_amount.amount());
         response.effective_status = balance.effective_status().into();
         response
     }
 
-    fn project(charge: &Charge) -> Self {
+    /// Come [`ChargeResponse::from_charge`], da ciò che un caso d'uso restituisce.
+    fn from_placed(placed: &Placed<Charge>, today: NaiveDate) -> Self {
+        Self::from_charge(&placed.value, today, &placed.places)
+    }
+
+    fn project(charge: &Charge, places: &Places) -> Self {
+        let labels = places.of(Some(charge.lease_id()));
         Self {
             id: charge.id().as_uuid(),
             organization_id: charge.org_id().as_uuid(),
@@ -742,6 +808,8 @@ impl ChargeResponse {
             issued_at: charge.issued_at(),
             utility_bill_id: charge.utility_bill_id().map(|id| id.as_uuid()),
             notes: charge.notes().map(str::to_owned),
+            property_label: labels.and_then(|labels| labels.property_label.clone()),
+            room_name: labels.and_then(|labels| labels.room_name.clone()),
             created_at: charge.created_at(),
             updated_at: charge.updated_at(),
         }
@@ -1015,7 +1083,10 @@ async fn register_bill(
 
     Ok((
         StatusCode::CREATED,
-        Json(UtilityBillResponse::from_domain(&bill)),
+        Json(UtilityBillResponse::from_placed(
+            &bill,
+            discloses_recharged_total(&context),
+        )),
     ))
 }
 
@@ -1047,13 +1118,16 @@ async fn list_bills(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
+    let recharged = discloses_recharged_total(&context).then_some(&page.recharged);
+
     Ok(Json(UtilityBillPageResponse {
         items: page
+            .value
             .items
             .iter()
-            .map(UtilityBillResponse::from_domain)
+            .map(|bill| UtilityBillResponse::from_domain(bill, &page.places, recharged))
             .collect(),
-        next_cursor: page.next_cursor.map(|id| id.as_uuid()),
+        next_cursor: page.value.next_cursor.map(|id| id.as_uuid()),
     }))
 }
 
@@ -1078,7 +1152,10 @@ async fn bill_detail(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(UtilityBillResponse::from_domain(&bill)))
+    Ok(Json(UtilityBillResponse::from_placed(
+        &bill,
+        discloses_recharged_total(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -1112,7 +1189,10 @@ async fn update_bill(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(UtilityBillResponse::from_domain(&bill)))
+    Ok(Json(UtilityBillResponse::from_placed(
+        &bill,
+        discloses_recharged_total(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -1163,7 +1243,10 @@ async fn validate_bill(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(UtilityBillResponse::from_domain(&bill)))
+    Ok(Json(UtilityBillResponse::from_placed(
+        &bill,
+        discloses_recharged_total(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -1189,7 +1272,10 @@ async fn void_bill(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(UtilityBillResponse::from_domain(&bill)))
+    Ok(Json(UtilityBillResponse::from_placed(
+        &bill,
+        discloses_recharged_total(&context),
+    )))
 }
 
 /// Nessun corpo: la data è **adesso**, come per la validazione. Una bolletta
@@ -1219,7 +1305,10 @@ async fn pay_bill(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(UtilityBillResponse::from_domain(&bill)))
+    Ok(Json(UtilityBillResponse::from_placed(
+        &bill,
+        discloses_recharged_total(&context),
+    )))
 }
 
 #[utoipa::path(
@@ -1248,17 +1337,22 @@ async fn recharge_bill(
     })?;
 
     let today = state.clock.now().date_naive();
-    let Recharge { bill, charge } = state
+    let recharge = state
         .recharge_utility_bill
         .execute(&context, UtilityBillId::from_uuid(id), command)
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+    let Recharge { bill, charge } = &recharge.value;
 
     Ok((
         StatusCode::CREATED,
         Json(RechargeResponse {
-            charge: ChargeResponse::from_charge(&charge, today),
-            utility_bill: UtilityBillResponse::from_domain(&bill),
+            charge: ChargeResponse::from_charge(charge, today, &recharge.places),
+            utility_bill: UtilityBillResponse::from_domain(
+                bill,
+                &recharge.places,
+                discloses_recharged_total(&context).then_some(&recharge.recharged),
+            ),
         }),
     ))
 }
@@ -1298,7 +1392,7 @@ async fn issue_charge(
 
     Ok((
         StatusCode::CREATED,
-        Json(ChargeResponse::from_charge(&charge, today)),
+        Json(ChargeResponse::from_placed(&charge, today)),
     ))
 }
 
@@ -1335,11 +1429,12 @@ async fn list_charges(
 
     Ok(Json(ChargePageResponse {
         items: page
+            .value
             .items
             .iter()
-            .map(ChargeResponse::from_balance)
+            .map(|balance| ChargeResponse::from_balance(balance, &page.places))
             .collect(),
-        next_cursor: page.next_cursor.map(|id| id.as_uuid()),
+        next_cursor: page.value.next_cursor.map(|id| id.as_uuid()),
     }))
 }
 
@@ -1364,7 +1459,10 @@ async fn charge_detail(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(ChargeResponse::from_balance(&balance)))
+    Ok(Json(ChargeResponse::from_balance(
+        &balance.value,
+        &balance.places,
+    )))
 }
 
 #[utoipa::path(
@@ -1391,7 +1489,7 @@ async fn void_charge(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(ChargeResponse::from_charge(&charge, today)))
+    Ok(Json(ChargeResponse::from_placed(&charge, today)))
 }
 
 #[utoipa::path(
@@ -1418,5 +1516,5 @@ async fn write_off_charge(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(ChargeResponse::from_charge(&charge, today)))
+    Ok(Json(ChargeResponse::from_placed(&charge, today)))
 }

@@ -74,6 +74,21 @@ export function sumAmounts(values: readonly string[]): string {
   return toFixedString(total, 2)
 }
 
+/**
+ * Differenza di due importi, sempre a due decimali.
+ *
+ * Esiste perché una sottrazione a mano è esattamente il posto in cui `parseFloat`
+ * rientra dalla finestra: `184.20 - 90` scritto con i numeri di JavaScript dà
+ * `94.19999999999999`, e quel valore finirebbe **nel campo di un form** e da lì
+ * nella richiesta. Un valore non decimale vale zero, come in `sumAmounts`.
+ */
+export function subtractAmounts(left: string, right: string): string {
+  const a = parseDecimal(left) ?? { units: 0n, scale: 2 }
+  const b = parseDecimal(right) ?? { units: 0n, scale: 2 }
+  const [x, y, scale] = align(a, b)
+  return toFixedString({ units: x - y, scale }, 2)
+}
+
 /** `-1`, `0` o `1`. Confronta senza passare da un float. */
 export function compareDecimals(left: string, right: string): number {
   const a = parseDecimal(left)

@@ -14,7 +14,9 @@
 
 ```bash
 # MinIO è lo storage oggetti dei documenti; `minio-setup` crea il bucket una volta.
-docker compose up -d postgres minio minio-setup
+# `mailpit` è il raccoglitore di posta: l'API non parte senza una configurazione
+# della posta, e i messaggi che manda si leggono su http://localhost:8025.
+docker compose up -d postgres minio minio-setup mailpit
 ./ops/dev/generate-jwt-keys.sh        # crea .secrets/, che è ignorato da git
 cp .env.example .env                  # adattare se serve
 set -a; source .env; set +a           # non serve con `just`, che lo carica da sé
@@ -202,8 +204,10 @@ dell'astrazione **prima** di scrivere il primo adattatore.
 
 `ObjectStorage` è l'esempio completo: porta dichiarata dal primo giorno, adattatore
 scritto molto dopo in `crates/infrastructure/src/storage/`, e nessuna riga della porta
-riscritta per accomodarlo — che è il punto di deciderne la forma prima. `Notifier` è
-ancora dichiarata e senza adattatore: è la prossima.
+riscritta per accomodarlo — che è il punto di deciderne la forma prima. `Notifier` ha
+seguito la stessa strada: dichiarata alla fetta 1, adattatore SMTP scritto molto dopo in
+`crates/infrastructure/src/notify/`, e della porta è cambiata una cosa sola — l'aggiunta
+di `probe`, che serviva a rendere visibile un canale caduto e non ad accomodare lettre.
 
 ### Aggiungere una schermata al client
 

@@ -5,7 +5,7 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use propflow_domain::ports::{
-    RepositoryError, RepositoryResult, TicketMessagePage, TicketMessageQuery,
+    RepositoryError, RepositoryResult, TicketLabels, TicketMessagePage, TicketMessageQuery,
     TicketMessageRepository, TicketPage, TicketQuery, TicketRepository,
 };
 use propflow_domain::shared::{
@@ -302,6 +302,47 @@ impl TicketRepository for PgUnitOfWork {
         .map_err(map_sqlx_error)?;
 
         rows.into_iter().map(map_status_change).collect()
+    }
+
+    async fn labels(&mut self, ids: &[TicketId]) -> RepositoryResult<Vec<TicketLabels>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **`LEFT JOIN` su entrambi**, come in `LeaseRepository::labels`: con un
+        // `INNER` sparirebbe dall'elenco ogni segnalazione sull'immobile intero —
+        // che non ha stanza — e ogni segnalazione di un immobile archiviato. Due
+        // modi di far scomparire righe che esistono, per andare a prendere un nome.
+        //
+        // `deleted_at IS NULL` sulle righe collegate è la regola 10: un immobile
+        // archiviato lascia il campo assente, e il client dice che cosa è successo
+        // invece di mostrare uno spazio vuoto.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT t.id     AS ticket_id,
+                    p.label  AS property_label,
+                    r.name   AS room_name
+               FROM app.tickets t
+               LEFT JOIN app.properties p
+                      ON p.id = t.property_id AND p.deleted_at IS NULL
+               LEFT JOIN app.rooms r
+                      ON r.id = t.room_id AND r.deleted_at IS NULL
+              WHERE t.id = ANY($1) AND t.deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let ticket_id: Uuid = try_get(&row, "ticket_id")?;
+                Ok(TicketLabels {
+                    ticket_id: TicketId::from_uuid(ticket_id),
+                    property_label: try_get(&row, "property_label")?,
+                    room_name: try_get(&row, "room_name")?,
+                })
+            })
+            .collect()
     }
 }
 

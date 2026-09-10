@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rust_decimal::Decimal;
 
 use crate::ai::{AiJob, AiTask};
 use crate::billing::{
@@ -11,7 +12,8 @@ use crate::expense::{
     SettlementStatus,
 };
 use crate::identity::{
-    Invitation, OrgMember, Organization, OrganizationMembership, RefreshSession, TokenHash, User,
+    Invitation, OrgMember, Organization, OrganizationMembership, PasswordResetCode, RefreshSession,
+    TokenHash, User,
 };
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
@@ -142,6 +144,33 @@ pub trait OrgMemberRepository: Send {
         user_id: UserId,
     ) -> RepositoryResult<Vec<OrganizationMembership>>;
     async fn insert(&mut self, member: &OrgMember) -> RepositoryResult<()>;
+}
+
+/// Codici di recupero della password.
+///
+/// La ricerca è per **hash del codice** e non per utente: chi lo presenta prova di
+/// possederlo, e cercare per email vorrebbe dire fidarsi di chi chiede. È la stessa
+/// forma di [`InvitationRepository::find_by_token_hash`].
+///
+/// **Niente `delete`**: un codice usato o scaduto è inerte e resta, come ogni altra
+/// riga di questo schema ([ADR-003](../../../../docs/08-decisioni.md)). La potatura
+/// è un'operazione del runbook, con il ruolo del migratore.
+#[async_trait]
+pub trait PasswordResetCodeRepository: Send {
+    async fn find_by_code_hash(
+        &mut self,
+        code_hash: &TokenHash,
+    ) -> RepositoryResult<Option<PasswordResetCode>>;
+    /// L'ultimo codice emesso per quell'utente, per il limite agli invii.
+    ///
+    /// Il limite non ha una colonna sua: è il `created_at` della riga più recente, e
+    /// `password_reset_codes_user_ix` lo rende una lettura sola. Una colonna che
+    /// duplicasse quel valore avrebbe due fonti di verità per lo stesso fatto.
+    async fn last_issued(&mut self, user_id: UserId)
+    -> RepositoryResult<Option<PasswordResetCode>>;
+    async fn insert(&mut self, code: &PasswordResetCode) -> RepositoryResult<()>;
+    /// Consuma il codice. L'unica colonna scrivibile è `used_at`.
+    async fn mark_used(&mut self, code: &PasswordResetCode) -> RepositoryResult<()>;
 }
 
 #[async_trait]
@@ -353,6 +382,15 @@ pub struct LeaseLabels {
     pub lease_id: LeaseId,
     pub property_label: Option<String>,
     pub room_name: Option<String>,
+    /// Il nome dell'**intestatario**, cioè della parte marcata `is_primary`.
+    ///
+    /// Assente su un contratto che non ne ha una — una bozza a cui non si è ancora
+    /// aggiunto nessuno — e su uno le cui parti non sono leggibili da chi chiede.
+    /// È lo stesso `full_name` denormalizzato su `lease_parties`, che sopravvive a
+    /// chi se ne va ([ADR-043](../../../../docs/08-decisioni.md)); qui viaggia
+    /// perché *dove* non basta a dire *a chi*: due contratti sulla stessa stanza in
+    /// due anni diversi si distinguono solo così.
+    pub primary_tenant: Option<String>,
 }
 
 /// Parti di un contratto.
@@ -529,6 +567,26 @@ pub trait TicketRepository: Send {
         &mut self,
         ticket_id: TicketId,
     ) -> RepositoryResult<Vec<TicketStatusChange>>;
+
+    /// I nomi di ciò a cui le segnalazioni si riferiscono, per un'intera pagina.
+    ///
+    /// Stessa forma di [`LeaseRepository::labels`], e per le stesse ragioni: una
+    /// query e non una per riga, e fuori dall'aggregato perché il nome di un
+    /// immobile appartiene all'immobile.
+    async fn labels(&mut self, ids: &[TicketId]) -> RepositoryResult<Vec<TicketLabels>>;
+}
+
+/// Dove sta ciò che una segnalazione riguarda.
+///
+/// L'**immobile** manca quando la sua riga è archiviata — la segnalazione resta, il
+/// nome no — e la **stanza** manca quando la segnalazione riguarda l'immobile
+/// intero, che è il caso normale. Chi legge mette un'etichetta neutra: mai
+/// l'identificatore (ADR-043).
+#[derive(Debug, Clone)]
+pub struct TicketLabels {
+    pub ticket_id: TicketId,
+    pub property_label: Option<String>,
+    pub room_name: Option<String>,
 }
 
 /// Filtro di elenco dei messaggi di una segnalazione, con paginazione keyset.
@@ -641,6 +699,31 @@ pub trait UtilityBillRepository: Send {
     /// L'immutabilità della bolletta è quindi un'invariante di **dominio**
     /// (`UtilityBill::apply` rifiuta da `allocated` in poi) e non un privilegio.
     async fn update(&mut self, bill: &UtilityBill) -> RepositoryResult<()>;
+
+    /// Quanto di ciascuna bolletta è **già stato riaddebitato**.
+    ///
+    /// Non è un campo dell'aggregato e non ci deve entrare: è la somma di righe di
+    /// un altro aggregato — gli addebiti che citano la bolletta — e memorizzarla
+    /// darebbe due fonti di verità che divergono al primo annullamento. Modello di
+    /// lettura, come [`LeaseLabels`], e **una query per pagina**.
+    ///
+    /// Serve a dire quanto **resta**: riaddebitare una bolletta d'immobile a tre
+    /// contratti sono tre sottrazioni a mente, e a mente si sbagliano. Non è un
+    /// vincolo — riaddebitare più del totale resta possibile e voluto
+    /// ([ADR-015](../../../../docs/08-decisioni.md) sul perché un'invariante del
+    /// genere starebbe nel database o da nessuna parte) — è un numero che aiuta.
+    ///
+    /// Gli addebiti **annullati non contano**: `void` dice «non doveva essere
+    /// chiesto», quindi quella quota torna disponibile. Gli **stornati sì**: erano
+    /// dovuti, e rinunciare a incassarli non disfa il riaddebito.
+    async fn recharged(&mut self, ids: &[UtilityBillId]) -> RepositoryResult<Vec<RechargedAmount>>;
+}
+
+/// Quanto di una bolletta è già stato riaddebitato.
+#[derive(Debug, Clone)]
+pub struct RechargedAmount {
+    pub utility_bill_id: UtilityBillId,
+    pub amount: Decimal,
 }
 
 /// I job AI **visti da una richiesta**: si accodano e si leggono, non si toccano.

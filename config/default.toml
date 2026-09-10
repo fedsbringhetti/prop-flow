@@ -45,6 +45,17 @@ presign_ttl_seconds = 300
 request_timeout_seconds = 30
 # access_key_id e secret_access_key arrivano dall'ambiente: vedi la nota in testa.
 
+[mail]
+# 587 con STARTTLS è il caso normale di un relay vero; il raccoglitore locale del
+# compose ascolta su 1025 e non cifra niente — vedi `.env.example`.
+port = 587
+from_name = "PropFlow"
+encryption = "starttls"
+timeout_seconds = 10
+# host e from_address arrivano dall'ambiente: non hanno un default sensato, e
+# inventarne uno sposterebbe il fallimento dall'avvio al primo invio — cioè al
+# momento in cui qualcuno non riceve il codice per rientrare nel proprio account.
+
 [telemetry]
 service_name = "propflow-api"
 filter = "info,propflow_api=debug,propflow_application=debug"

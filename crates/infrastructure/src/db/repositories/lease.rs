@@ -228,12 +228,20 @@ impl LeaseRepository for PgUnitOfWork {
         let rows = sqlx::query(
             "SELECT l.id                AS lease_id,
                     p.label             AS property_label,
-                    r.name              AS room_name
+                    r.name              AS room_name,
+                    t.full_name         AS primary_tenant
                FROM app.leases l
                LEFT JOIN app.properties p
                       ON p.id = l.property_id AND p.deleted_at IS NULL
                LEFT JOIN app.rooms r
                       ON r.id = l.room_id AND r.deleted_at IS NULL
+               -- L'intestatario è al più uno: `lease_parties_primary_uk` è unico
+               -- su `(lease_id) WHERE is_primary AND deleted_at IS NULL`, quindi il
+               -- join non può moltiplicare le righe. Senza quel vincolo servirebbe
+               -- un `LATERAL … LIMIT 1`, che nasconderebbe il problema invece di
+               -- appoggiarsi alla garanzia che c'è.
+               LEFT JOIN app.lease_parties t
+                      ON t.lease_id = l.id AND t.is_primary AND t.deleted_at IS NULL
               WHERE l.id = ANY($1) AND l.deleted_at IS NULL",
         )
         .bind(&uuids)
@@ -248,6 +256,7 @@ impl LeaseRepository for PgUnitOfWork {
                     lease_id: LeaseId::from_uuid(lease_id),
                     property_label: try_get(&row, "property_label")?,
                     room_name: try_get(&row, "room_name")?,
+                    primary_tenant: try_get(&row, "primary_tenant")?,
                 })
             })
             .collect()

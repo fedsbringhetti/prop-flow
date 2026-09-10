@@ -373,6 +373,18 @@ pub struct LeaseResponse {
     /// Assente sui contratti sull'immobile intero, che non hanno una stanza.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_name: Option<String>,
+    /// Il nome dell'**intestatario**, cioè della parte marcata `is_primary`.
+    ///
+    /// Viaggia con gli altri due e per la stessa ragione, che *dove* non completa:
+    /// due contratti sulla stessa stanza in due anni diversi hanno lo stesso
+    /// immobile e la stessa stanza, e a distinguerli è chi ci abita. Serve a
+    /// scegliere un contratto in una tendina senza doverne aprire uno per volta.
+    ///
+    /// **Assente** su un contratto senza intestatario — una bozza a cui non è
+    /// ancora stato aggiunto nessuno — e sulle risposte a una singola operazione,
+    /// come gli altri due.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_tenant: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -388,6 +400,7 @@ impl LeaseResponse {
         if let Some(labels) = labels {
             response.property_label.clone_from(&labels.property_label);
             response.room_name.clone_from(&labels.room_name);
+            response.primary_tenant.clone_from(&labels.primary_tenant);
         }
         response
     }
@@ -421,6 +434,7 @@ impl LeaseResponse {
             // che è l'unica via che li ha caricati.
             property_label: None,
             room_name: None,
+            primary_tenant: None,
             created_at: lease.created_at(),
             updated_at: lease.updated_at(),
         }

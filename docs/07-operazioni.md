@@ -59,6 +59,14 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 | `PROPFLOW__STORAGE__PATH_STYLE` | `true` | bucket nel percorso; `false` solo con un DNS `<bucket>.<host>` |
 | `PROPFLOW__STORAGE__PRESIGN_TTL_SECONDS` | `300` | vita dell'URL di download pre-firmato |
 | `PROPFLOW__STORAGE__REQUEST_TIMEOUT_SECONDS` | `30` | per richiesta verso lo storage |
+| `PROPFLOW__MAIL__HOST` | — | **obbligatoria**, host del relay SMTP |
+| `PROPFLOW__MAIL__PORT` | `587` | `1025` per il raccoglitore locale, `465` con TLS implicito |
+| `PROPFLOW__MAIL__USERNAME` | — | assente sul raccoglitore locale; con la password, o nessuna delle due |
+| `PROPFLOW__MAIL__PASSWORD` | — | dal gestore dei segreti |
+| `PROPFLOW__MAIL__FROM_ADDRESS` | — | **obbligatoria**, il mittente. Su un dominio senza SPF, DKIM e DMARC finisce nello spam senza dare errore |
+| `PROPFLOW__MAIL__FROM_NAME` | `PropFlow` | il nome accanto all'indirizzo |
+| `PROPFLOW__MAIL__ENCRYPTION` | `starttls` | `tls` per la 465, `none` **solo** per il raccoglitore locale |
+| `PROPFLOW__MAIL__TIMEOUT_SECONDS` | `10` | per invio verso il relay |
 | `PROPFLOW__TELEMETRY__SERVICE_NAME` | `propflow-api` | nome del servizio nelle tracce e negli span |
 | `PROPFLOW__TELEMETRY__OTLP_ENDPOINT` | — | assente: solo stdout |
 | `PROPFLOW__TELEMETRY__FILTER` | `info,propflow_api=debug,propflow_application=debug` | direttiva `EnvFilter` |
@@ -70,6 +78,21 @@ ricorda il prefisso `PROPFLOW__`, rimanda a `.env.example` per l'elenco completo
 ricorda che quel file il processo non lo carica da solo — lo fa `just`, o la shell con
 `set -a; source .env; set +a` per chi lancia il binario a mano. Il messaggio di figment,
 che dice quale campo e sotto quale chiave, resta nella catena delle cause.
+
+**Le due obbligatorie della posta sono `HOST` e `FROM_ADDRESS`**, e non hanno un default
+perché non ne esiste uno sensato. La ragione è più stringente di quella dello storage: da
+quando esiste il recupero della password la posta è l'**unico canale** verso una persona
+chiusa fuori dal proprio account, e un'API che parte senza saper spedire risponderebbe
+`202` a una richiesta di recupero senza mandare niente — su chi non ha nessun altro modo
+di rientrare.
+
+**La configurazione ferma un relay mal configurato, non un relay caduto.** Quello lo dice
+`/ready`, che interroga SMTP insieme al database: l'invio è best-effort dopo il commit,
+quindi un relay fermo non produce nessun errore visibile a nessuno. Dirlo al chiamante non
+si può — si tenta l'invio solo per un indirizzo che ha un account, quindi qualunque cosa
+distingua i due rami sarebbe un oracolo sugli account — e il controllo di prontezza è il
+rimedio: rende la posta caduta nota **prima** che qualcuno la incontri. Prova che il
+server risponde, **non** che il messaggio verrebbe recapitato.
 
 Non c'è un default per le credenziali dello storage, ed è deliberato: uno storage
 configurato a caso sposterebbe il fallimento al primo caricamento di un documento, dove
@@ -247,10 +270,23 @@ una partizione che cresce.
 | Endpoint | Uso | Comportamento |
 |---|---|---|
 | `/health` | liveness | Risponde sempre, non tocca il database. Se lo facesse, un'indisponibilità di PostgreSQL riavvierebbe in loop tutti i pod |
-| `/ready` | readiness | Verifica il database. `503` se non raggiungibile: il pod non riceve traffico ma non viene riavviato |
+| `/ready` | readiness | Verifica il database **e la posta**. `503` se una delle due non risponde: il pod non riceve traffico ma non viene riavviato |
 
 All'avvio l'API verifica il database e **esce** se non risponde: meglio non entrare
 mai in servizio che accettare traffico e restituire `500`.
+
+**La posta sta in `/ready` e non nell'avvio**, e la differenza è deliberata. La
+*configurazione* della posta è obbligatoria e ferma l'avvio, perché un'API che non sa
+spedire non deve entrare in servizio. Il *relay*, invece, può cadere in qualunque
+momento dopo, e un'API che uscisse a ogni disservizio SMTP smetterebbe di servire tutto
+il resto — contratti, addebiti, segnalazioni — per una funzione che serve a chi non
+riesce a entrare.
+
+Ma un relay caduto **non produce nessun errore visibile**: l'invio è best-effort dopo il
+commit, e la richiesta di recupero risponde `202` a chiunque per non fare da oracolo
+sugli account. Se non lo dicesse `/ready`, lo scoprirebbe una persona chiusa fuori dal
+proprio account. Il controllo prova che il relay risponde, **non** che il messaggio
+verrebbe recapitato: quello lo dicono SPF, DKIM e DMARC.
 
 Lo shutdown ascolta `SIGTERM` oltre a `SIGINT` — `SIGTERM` è quello che manda
 Kubernetes, e ignorarlo significa farsi terminare a forza dopo il grace period
@@ -343,9 +379,141 @@ cambiamento, e poi "in locale funziona".
   sostituisce i commit che i figli contengono e li costringe a un rebase manuale.
 - Merge commit o rebase, così la ripartizione in commit logici sopravvive.
 
+## Il primo deploy — runbook
+
+**Niente di ciò che segue è stato eseguito.** Gli artefatti esistono e sono validi
+(`docker compose config` passa, gli script passano `bash -n`); la macchina, il dominio e
+le credenziali no. Un runbook non provato è un elenco di intenzioni: la parte in fondo
+dice come si smette di esserlo.
+
+### 0. Che cosa serve prima di cominciare
+
+- una **VPS** con Docker e il plugin `compose`, e le porte **80 e 443** aperte — la 80
+  serve alla convalida del certificato anche se poi tutto va in HTTPS;
+- un **dominio** il cui record `A` punta a quella macchina. Va fatto *prima*: Caddy
+  chiede il certificato alla prima richiesta, e con il DNS non ancora propagato la
+  richiesta fallisce e Let's Encrypt ha un limite che si tocca in fretta;
+- un **relay SMTP** con utenza e password, e sul dominio **SPF, DKIM e DMARC**. Senza,
+  la posta parte e finisce nello spam, e il sintomo è muto: nessun errore, il codice non
+  arriva;
+- `gpg` sulla macchina, per cifrare le copie di sicurezza.
+
+### 1. Il codice e i segreti
+
+```bash
+git clone <repo> /srv/propflow && cd /srv/propflow
+./ops/dev/generate-jwt-keys.sh /srv/propflow/.secrets   # richiede OpenSSL 3
+chmod 700 /srv/propflow/.secrets
+```
+
+Poi `/srv/propflow/.env.prod`, che **non** sta nel repository. Le variabili che il
+compose di produzione pretende sono dichiarate con `:?` in
+`ops/deploy/docker-compose.prod.yml`: se ne manca una, `up` si ferma dicendo quale.
+
+```
+POSTGRES_SUPERUSER_PASSWORD=…
+MINIO_ROOT_USER=…            MINIO_ROOT_PASSWORD=…
+PROPFLOW__DATABASE__MIGRATOR_URL=postgres://propflow_migrator:…@postgres:5432/propflow
+PROPFLOW__DATABASE__APPLICATION_URL=postgres://propflow_app:…@postgres:5432/propflow
+PROPFLOW__DATABASE__PRIVILEGED_URL=postgres://propflow_worker:…@postgres:5432/propflow
+PROPFLOW__MAIL__HOST=…       PROPFLOW__MAIL__USERNAME=…       PROPFLOW__MAIL__PASSWORD=…
+PROPFLOW__MAIL__FROM_ADDRESS=propflow@iltuodominio
+PROPFLOW_DOMAIN=iltuodominio
+PROPFLOW_SECRETS_DIR=/srv/propflow/.secrets
+```
+
+`chmod 600 .env.prod`. **`PROPFLOW__SERVER__SECURE_COOKIES` non si dichiara**: il
+default è `true` ed è quello che serve su HTTPS. Ogni posto in cui compare è un posto da
+cui qualcuno può metterlo a `false` per far funzionare una prova.
+
+### 2. Le immagini e i ruoli del database
+
+```bash
+docker build -t propflow:latest .
+docker build -t propflow-web:latest --target web .
+
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod up -d postgres
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod exec -T postgres   psql -U postgres -d postgres -v db_name=propflow     -v migrator_password=… -v app_password=… -v worker_password=…     -f - < ops/sql/roles.sql
+```
+
+I ruoli si creano **una volta per cluster** e stanno fuori dalle migration: il migratore
+si connette con un ruolo che deve già esistere.
+
+### 3. Su
+
+```bash
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod up -d
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod logs -f migrate
+```
+
+`migrate` è un job che deve uscire `0`. L'API parte solo dopo.
+
+### 4. Quando è deployato
+
+**Non quando i container sono su**: quando succede questo, in quest'ordine.
+
+1. `curl https://<dominio>/api/v1/ready` risponde `200`. Se dice
+   `posta non raggiungibile`, il relay è sbagliato o irraggiungibile — e va sistemato
+   adesso, perché dopo il sintomo diventa muto;
+2. si apre il prodotto **dal telefono, in 4G** — non dalla stessa rete della macchina —
+   e si fa l'accesso. È il passo che trova i certificati a metà, i record DNS
+   propagati solo in locale e i firewall aperti alla rete sbagliata;
+3. si chiede un **recupero della password** con un indirizzo vero e il codice arriva
+   **fuori dalla cartella dello spam**. Il raccoglitore locale non lo prova: accetta
+   tutto e non verifica SPF, DKIM né i rimbalzi;
+4. `https://<dominio>/docs` risponde `404`. In produzione Swagger UI non si espone.
+
+Finché il punto 2 non è successo, non è deployato.
+
+### 5. Il backup, e il ripristino provato
+
+```bash
+# Una volta a mano, per vedere che cosa produce.
+PROPFLOW_BACKUP_PASSPHRASE=… PROPFLOW_BACKUP_REMOTE=… ops/deploy/backup.sh
+
+# Poi da cron, di notte.
+0 3 * * * PROPFLOW_BACKUP_PASSPHRASE=… PROPFLOW_BACKUP_REMOTE=…   /srv/propflow/ops/deploy/backup.sh >> /var/log/propflow-backup.log 2>&1
+```
+
+Due cose e non una: il **database e il bucket**. I documenti sono oggetti in MinIO, non
+righe — un dump del database li lascia fuori, e la riga che li cita resta senza byte. E
+la copia **esce dalla macchina**: un backup sullo stesso disco del database è una seconda
+copia dello stesso guasto.
+
+**Poi il ripristino, una volta, prima che dentro ci siano i dati di qualcun altro**, su
+una macchina di prova e su un database vuoto:
+
+```bash
+PROPFLOW_BACKUP_PASSPHRASE=… ops/deploy/restore.sh /var/backups/propflow/propflow-….tar.gz.gpg
+```
+
+E la parte che conta, che il codice di uscita dello script non dice: si avvia lo stack, si
+entra con un account che **esisteva prima del dump**, si apre un contratto e si **scarica
+un documento**. Il terzo punto è la metà che un dump del solo database non porta, ed è
+quella che si scopre mancante mesi dopo. **Finché non è successo non c'è un backup, c'è
+un file.**
+
+### 6. La privacy
+
+`https://<dominio>/privacy` esiste e si legge **senza sessione**, perché la si deve poter
+leggere prima di consegnare i propri dati. Il contatto del titolare arriva da
+`VITE_PRIVACY_CONTACT` a build time: se la pagina mostra il nome della variabile invece di
+un indirizzo, è quella che manca.
+
+La cancellazione dichiarata è una **richiesta scritta con risposta entro trenta giorni**,
+non un bottone, e la pagina lo dice. Non è una promessa al ribasso: il ruolo applicativo
+non ha il privilegio `DELETE`, tutto passa da `deleted_at`, e `audit_log` e gli eventi
+continuano a citare le righe. La capacità vera è
+[`R37`](12-da-fare.md#cancellare-in-generale).
+
 ## Cosa manca
 
-- Manifest Kubernetes: non ci sono ancora.
-- Backup e restore del database.
+- Manifest Kubernetes: non ci sono ancora, e restano fuori finché la scala è una VPS.
+- **Il runbook qui sopra non è mai stato eseguito**: gli artefatti sono validi, la
+  macchina non esiste.
 - Metriche (esistono log e tracce, non metriche).
-- Alerting.
+- Alerting — compreso quello sul `/ready` che dice `posta non raggiungibile`, che oggi
+  lo vede solo chi guarda.
+- La potatura dei codici di recupero scaduti: restano in tabella, inerti. Il ruolo
+  applicativo non ha `DELETE`, quindi è un'operazione del runbook con il ruolo del
+  migratore, non un trigger.

@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use propflow_application::ports::{
-    ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
+    Notifier, ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
 use propflow_application::use_cases::ai::GetBillOcrStatus;
-use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::auth::{
+    ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase, RegisterOwner, RequestPasswordReset,
+};
 use propflow_application::use_cases::billing::{
     GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, MarkUtilityBillPaid,
     RechargeUtilityBill, RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge,
@@ -54,6 +56,10 @@ pub struct AppState {
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
+    /// Le due rotte del recupero della password: girano sul pool privilegiato,
+    /// perché chi ha dimenticato la password non è autenticato (ADR-052).
+    pub request_password_reset: Arc<RequestPasswordReset>,
+    pub confirm_password_reset: Arc<ConfirmPasswordReset>,
 
     /// L'unica rotta che risponde **senza un'organizzazione attiva**: dire quali
     /// si hanno non appartiene a nessuna di esse.
@@ -190,8 +196,13 @@ pub struct AppState {
     /// Serve al middleware per risolvere il ruolo quando il client cambia
     /// organizzazione con l'header `X-Org-Id`.
     pub unit_of_work: Arc<dyn UnitOfWorkFactory>,
-    /// Usato solo dall'endpoint di prontezza.
+    /// Usati dall'endpoint di prontezza.
+    ///
+    /// Il canale di posta ci sta accanto al database e non per completezza: l'invio
+    /// è best-effort dopo il commit, quindi un relay caduto è **muto** — e la posta
+    /// è l'unica via verso chi non riesce più a entrare. Vedi `Notifier::probe`.
     pub pools: DatabasePools,
+    pub notifier: Arc<dyn Notifier>,
     /// Se il cookie del refresh token debba dichiarare `Secure`.
     ///
     /// Vive nello stato e non nella firma di `router()` perché a leggerlo sono gli
@@ -210,6 +221,11 @@ pub struct Dependencies {
     pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,
     pub clock: Arc<dyn propflow_domain::ports::Clock>,
     pub object_storage: Arc<dyn ObjectStorage>,
+    /// Il canale verso l'esterno. **Obbligatorio**, non facoltativo: da quando
+    /// esiste il recupero della password è l'unica via verso chi è chiuso fuori dal
+    /// proprio account, e un `Notifier` assente produrrebbe una richiesta che
+    /// risponde `202` senza mandare niente.
+    pub notifier: Arc<dyn Notifier>,
     /// Vita dell'URL di download pre-firmato. Vive qui e non dentro l'adattatore
     /// perché è una decisione applicativa — quanto a lungo vale un permesso — e non
     /// un dettaglio del fornitore.
@@ -241,6 +257,7 @@ impl AppState {
             invitation_tokens,
             clock,
             object_storage,
+            notifier,
             presign_ttl_seconds,
             ocr_provider_name,
             pools,
@@ -255,7 +272,7 @@ impl AppState {
             )),
             login: Arc::new(Login::new(
                 Arc::clone(&unit_of_work),
-                hasher,
+                Arc::clone(&hasher),
                 Arc::clone(&tokens),
                 Arc::clone(&refresh_tokens),
                 Arc::clone(&clock),
@@ -500,10 +517,23 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             list_settlements: Arc::new(ListSettlements::new(Arc::clone(&unit_of_work))),
+            request_password_reset: Arc::new(RequestPasswordReset::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&notifier),
+                Arc::clone(&clock),
+            )),
+            confirm_password_reset: Arc::new(ConfirmPasswordReset::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&hasher),
+                Arc::clone(&clock),
+            )),
             invite_tenant: Arc::new(InviteTenant::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),
                 Arc::clone(&clock),
+                Arc::clone(&notifier),
             )),
             revoke_invitation: Arc::new(RevokeInvitation::new(
                 Arc::clone(&unit_of_work),
@@ -517,6 +547,7 @@ impl AppState {
             tokens,
             clock,
             unit_of_work,
+            notifier,
             pools,
             secure_cookies,
         }

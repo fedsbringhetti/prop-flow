@@ -78,17 +78,33 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | **Le risposte dicono chi**: nome di chi ha segnalato, di chi ha in carico e di chi scrive nel thread, letti da `app.users` sotto `users_select` | completo per la sezione 5 |
 | **Un thread terminato si legge e non si scrive**, e riaprire pretende un motivo che finisce nella conversazione | completo per la sezione 5 |
 | Immagine Docker, stack compose | completi |
+| **Posta in uscita**: adattatore SMTP, configurazione obbligatoria all'avvio, raccoglitore locale nel compose, e il relay dentro `/ready` | completo per la 5-quater |
+| **Recupero della password**: un codice da incollare, a uso singolo, che revoca i refresh token ([ADR-052](08-decisioni.md#adr-052)) | completo per la 5-quater |
+| Artefatti di deploy e di backup — Caddyfile di produzione, compose, copia e ripristino | **scritti e mai eseguiti**: vedi il [runbook](07-operazioni.md#il-primo-deploy--runbook) |
 | Pipeline CI | completa |
 
-438 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+449 test: 209 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
 del bordo HTTP, 81 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 91 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+MinIO, 99 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
-I sette nuovi sono della sezione 5, e provano soprattutto **confini**: la segnalazione
-condivisa che arriva al coinquilino *con il thread e lo storico*, quella non condivisa che
-non gli arriva affatto, il coinquilino che la vede e non la scrive, la correzione che si
-chiude ad `assigned`, il thread chiuso che si legge e non si scrive, e il motivo della
-riapertura che si va a rileggere nella conversazione.
+I sette della sezione 5 provano soprattutto **confini**: la segnalazione condivisa che
+arriva al coinquilino *con il thread e lo storico*, quella non condivisa che non gli
+arriva affatto, il coinquilino che la vede e non la scrive, la correzione che si chiude ad
+`assigned`, il thread chiuso che si legge e non si scrive, e il motivo della riapertura
+che si va a rileggere nella conversazione.
+
+**I sei della 5-quater provano la posta e il recupero**, e uno di essi ha trovato il
+confine della decisione che doveva confermare: «revoca tutte le sessioni» revoca i
+**refresh token**, non gli access token, che sono JWT e non sono revocabili. Il test
+asseriva la cosa sbagliata, ed è finita in [ADR-052](08-decisioni.md#adr-052).
+
+**I cinque della sezione 5-ter provano una cosa diversa: la seconda volta.** Due
+percorrono la riproduzione di `R31` — un inquilino invitato due volte, che prima riceveva
+`409` sul secondo invito — e uno di essi verifica che accettare come inquilino non
+retroceda chi è già proprietario. Gli altri tre guardano i nomi su ogni risposta,
+transizioni comprese, l'immobile archiviato che lascia il campo assente **senza far
+sparire la riga**, e il residuo da riaddebitare con la regola che si perde: un addebito
+annullato non conta.
 
 ### Client web — le due metà
 
@@ -119,8 +135,14 @@ dell'API dietro un reverse proxy.
 | **Una bozza sbagliata si annulla e una parte si corregge**: quota, nome, telefono, ruolo, intestatario — l'email solo finché nessuno l'ha usata — e si toglie chi è stato inserito per sbaglio | completo per la sezione 3 |
 | **Il form non produce più quote sbagliate**: propone il residuo, offre l'intestatario solo se libero, e l'invito dice quale quota riceverà chi accetta | completo per la sezione 3 |
 | **L'elenco dei contratti dice quale casa e quale stanza**, e la creazione avverte se il periodo è già occupato | completo per la sezione 3 |
-| **Stato dichiarato ed effettivo, mostrati insieme quando divergono**: una stanza fuori uso e insieme occupata è un'anomalia da vedere. Le tendine offrono solo ciò che si decide, e il filtro dell'occupazione sostituisce quello sullo stato derivato | completo per la sezione 4 |
+| **Stato dichiarato ed effettivo, mostrati insieme quando il dichiarato è un giudizio che il fatto smentisce**: una stanza fuori uso e insieme occupata è l'anomalia da vedere; una stanza disponibile e occupata dice solo «Occupata». Le tendine offrono solo ciò che si decide, e il filtro dell'occupazione sostituisce quello sullo stato derivato | completo per la sezione 4, **regola corretta dalla 5-ter** |
+| **Lo stato dichiarato vive nella scheda e accanto al filtro**, non fra parentesi su ogni riga: è dove nasce la domanda «ho chiesto gli attivi e me ne torna uno scaduto» | completo per la sezione 5-ter |
+| **I collegamenti dicono il nome di dove portano**: segnalazione, addebito e bolletta nominano immobile, stanza e contratto invece di «Immobili» e «Contratti»; un immobile archiviato lo dice | completo per la sezione 5-ter |
+| **Il riaddebito dice a chi e quanto resta**: la tendina elenca *immobile · stanza · intestatario* e i soli contratti in corso, e il dialogo propone il **residuo** invece del totale | completo per la sezione 5-ter |
+| **La data di un pagamento si mostra e non si manda**: il campo parte da oggi, la richiesta tace finché non la si cambia, e l'ora vera non si perde | completo per la sezione 5-ter |
 | **Il bundle è diviso per rotta**, con i confini di `Suspense` dentro il guscio e con il loro stato | completo per la fetta C |
+| **Il recupero della password**, in una schermata e due tempi, con la conseguenza della revoca detta prima di premere | completo per la 5-quater |
+| **L'informativa sulla privacy**, raggiungibile **senza sessione**: la si legge prima di consegnare i propri dati | completo per la 5-quater |
 | I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
 | Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
 | Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
@@ -132,7 +154,7 @@ dell'API dietro un reverse proxy.
 | Pagamenti: registrazione di un incasso con l'attribuzione come scelta esplicita, **coda delle dichiarazioni** con conferma e rifiuto, chiave di idempotenza generata una volta per intento | completo per la fetta A |
 | Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
 
-86 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+104 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
 volo **e quello fra schede, entrambi riprodotti anche al contrario** — 11 sui
 decimali e sulla formattazione, 5
 sulla chiave di idempotenza, 4 sull'accettazione di un invito — l'header che **non**
@@ -146,7 +168,12 @@ ricordata che l'elenco vero corregge — 13 sui contratti, che sono le due aritm
 replicate dal server: la quota che resta da assegnare e la sovrapposizione dei periodi come
 la contano i vincoli di esclusione — e 13 sulle spese co-living: la risoluzione dei
 nomi **compreso chi non è più residente**, la somma dei netti verificata sugli interi, e
-la scheda del gruppo con un membro uscito che ha ancora un conto aperto.
+la scheda del gruppo con un membro uscito che ha ancora un conto aperto. Gli ultimi
+**sedici** sono della sezione 5-ter: 8 sui badge — e quelli che contano sono i tre
+sull'**anomalia che resta doppia**, che è l'assert che qualcuno toglie semplificando — 2
+sull'aritmetica della sottrazione, che è il posto in cui `parseFloat` rientrerebbe dalla
+finestra, e 3 sulla data che si mostra e non si manda, il cui difetto è **invisibile a
+schermo**: le due schermate sono identiche, e solo il corpo della richiesta le distingue.
 
 I test sulla chiave di idempotenza sono stati **verificati contro il difetto**, e non
 una volta sola: sostituendo `intent.current()` con un `randomUUID()` dentro
@@ -306,48 +333,54 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [5-ter](#piano-sezione-5-ter), poi la [5-quater](#piano-utenti-veri).** Il
-[collaudo](11-piani-conclusi.md#esito-sezione-5-bis) è **concluso** — percorso per intero
-il 9 e il 10 settembre 2026, da chi non aveva scritto il codice — e con esso l'[esito
-della fetta C](11-piani-conclusi.md#esito-fetta-c) smette di essere aperto. **Nessuno
-degli undici punti si è fermato**: le sei voci uscite dal giro sono difetti dentro
-percorsi che funzionano, il che dice che ciò che manca è rifinitura e non fondamenta.
+**La [sezione 6](#piano-sezione-6), le persone.** Il deploy è **rinviato in fondo**, ed è
+un rinvio per mancanza di mezzi e non di priorità: il
+[runbook](07-operazioni.md#il-primo-deploy--runbook) è scritto, gli artefatti sono validi
+per quello che si può validare senza una macchina, e servono una VPS, un dominio, un relay
+SMTP con SPF, DKIM e DMARC e delle credenziali che oggi non ci sono. Resta l'ultima voce
+dell'ordine, con il suo criterio di fine intatto: *aprire il prodotto dal telefono, in
+4G*.
 
-Le due sezioni che restano hanno un obiettivo dichiarato che le lega: *un proprietario vero, che non ha scritto il codice, usa
-il prodotto per un mese con i suoi dati*. Il giro dice se il prodotto regge; la 5-ter
-corregge ciò che il giro ha trovato; la 5-quater aggiunge le quattro cose senza cui una
-persona esterna non può cominciare — la posta, il **recupero della password**, il deploy,
-il backup.
+**Che cosa cambia nel criterio d'ordine, e va detto.** Le sezioni 6-9 dovevano venire dopo
+il mese con un proprietario vero, e *quale per prima lo avrebbe detto quel mese*. Quel mese
+slitta, quindi l'ordine 6 → 7 → 8 → 9 resta ma è **scelto senza quella prova**: chi lo
+esegue ha un ragionamento e non una misura. Il rendimento del collaudo — sei voci in mezza
+giornata contro le quattro di cinque sezioni di lettura del codice — dice che il modo più
+economico di riavere quella prova **senza la VPS** è un secondo giro in locale: `mailpit`
+mostra la posta su `localhost:8025`, e l'unica cosa che resta fuori è «arriva fuori dallo
+spam». Nove schermate sono cambiate da quel giro e nessuno le ha viste con gli occhi.
 
-La 5-ter è quella che il collaudo ha prodotto: mezza giornata di
-giro vero, fatto da chi non aveva scritto il codice, ha dato **sei voci** — `R30`–`R35` —
-e una di esse, `R31`, è un buco nel **ciclo di vita normale**. Un inquilino il cui
-contratto scade e che ne firma un altro **non può rientrare**: l'invito è l'unica via che
-scrive `lease_parties.user_id`, e rifiuta chi è già membro. Cinque sezioni di lettura del
-codice non l'avevano visto, e nessun test poteva vederlo — ogni test costruisce un
-inquilino nuovo.
+**«Pronto» è per un proprietario che conosci, non per chiunque si registri.** Ne segue che
+`R9` — il perimetro dei ruoli, per cui oggi chiunque si registri è owner di una propria
+organizzazione — resta in fondo: è tollerabile perché scritto, e smette di esserlo il
+giorno in cui la registrazione è aperta a degli sconosciuti.
 
-**È il rendimento che il rinvio del collaudo aveva sospeso**, e che l'[esito della sezione
-2](11-piani-conclusi.md#esito-sezione-2) aveva scritto come costo: *il giro alimenta i
-piani, non solo li verifica*.
+**Il [collaudo in undici punti](11-piani-conclusi.md#esito-sezione-5-bis), che è la
+5-bis, è concluso** — percorso per intero il 9 e il 10 settembre 2026 da chi non aveva
+scritto il codice — e con esso l'[esito della fetta
+C](11-piani-conclusi.md#esito-fetta-c) smette di essere aperto dopo due giorni e cinque
+sezioni di attesa. **Nessuno degli undici punti si è fermato**: le sei voci uscite dal
+giro sono difetti dentro percorsi che funzionano, il che dice che ciò che manca è
+rifinitura e non fondamenta.
 
-**Il [collaudo in undici punti](12-da-fare.md#lordine-di-esecuzione), che è la 5-bis.**
-Il piano è già scritto — passi `T3`–`T7` dell'[esito della sezione
-2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta — e da
-adesso **nove punti su undici sono su codice fermo**: l'1 e il 5 dipendono da `R9`, che è
-la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per altre tre
-sezioni.
+Quel giro ha anche fatto vedere per la prima volta **con gli occhi** le sezioni 3, 4 e 5,
+che erano state verificate solo con i test. La 5-ter le ha ora rifinite, e resta vera la
+cosa che l'esito della 5-bis segnala come propria mancanza: le undici righe sono state
+riempite alla fine del giro invece che mentre lo si percorreva, e per quattro punti resta
+l'affermazione che sono stati attraversati, senza l'osservazione. **Chi rifarà un
+collaudo tenga il documento aperto accanto al browser.**
 
-**È anche il momento in cui le sezioni 3, 4 e 5 si vedono per la prima volta con gli
-occhi.** Tutte e tre sono state verificate **solo con i test**, e la 5 cambia la scheda
-della segnalazione in quattro punti — la casella all'apertura, i nomi, il bottone
-«Correggi», la conversazione che si chiude — che il punto **7** attraversa per intero.
-
-**Chi riprende deve riavviare l'API e ricreare il database**: il binario in esecuzione è
-precedente alle rotte delle sezioni 3, 4 e 5, e le migration `0033`–`0036` vanno applicate.
-Il costo del rinvio è scritto nell'[esito della sezione
-2](11-piani-conclusi.md#esito-sezione-2) e resta vero: il giro **alimenta i piani** e non
-solo li verifica — `R26` è entrata così.
+**La [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter) è conclusa**: un inquilino
+che torna rientra dalla stessa porta, il badge dice il fatto e non più la coppia su ogni
+riga, i collegamenti dicono il nome di dove portano, il riaddebito dice a chi e quanto
+resta, e la data di un pagamento si mostra senza perdere l'ora vera.
+[Piano](11-piani-conclusi.md#piano-sezione-5-ter) ·
+[esito](11-piani-conclusi.md#esito-sezione-5-ter). Due cose da portarsi dietro: il piano
+aveva una **premessa sbagliata** — l'intestatario non era in `LeaseResponse` — e si è
+emendata la premessa invece di rinunciare alla decisione; e `Y3` è costato più del
+previsto perché la lezione della sezione 5 — *i nomi su ogni risposta, transizioni
+comprese* — vale identica su addebiti e bollette, e ha cambiato il tipo di ritorno di nove
+casi d'uso di scrittura.
 
 **La [sezione 5](11-piani-conclusi.md#esito-sezione-5) è conclusa**: la visibilità di una
 segnalazione è una scelta di chi la apre, il testo si corregge finché nessuno l'ha presa in
@@ -435,614 +468,320 @@ Resta la decisione che continua a bloccare più valore di ogni riga di codice, e
 quella qui sotto: **il fornitore di OCR**.
 
 
-<a id="piano-sezione-5-ter"></a>
+<a id="piano-sezione-6"></a>
 
-## Piano — Sezione 5-ter: quello che il collaudo ha trovato
+## Piano — Sezione 6: le persone
 
-Pianificata il **9 settembre 2026**, subito dopo la prima mezza giornata di
-[collaudo](12-da-fare.md#lordine-di-esecuzione) percorsa **da chi non aveva scritto il
-codice**. Chiude `R30`, `R31`, `R32`, `R33` e `R34`. `R35` resta fuori e la ragione è
-scritta in fondo.
+Pianificata il **10 settembre 2026**, dopo il rinvio del deploy. Chiude `R7`, `R16` e
+`R38`. Le prime due erano in elenco; la terza è **uscita verificando le premesse** di
+questo piano contro il codice, ed è il motivo per cui la sezione ha una migration.
 
-**È la sezione che giustifica cinque rinvii.** Il costo del rinvio era scritto
-nell'[esito della sezione 2](11-piani-conclusi.md#esito-sezione-2) — *«il collaudo non
-serve solo a verificare, alimenta i piani»* — e mezza giornata di giro vero ha prodotto
-**sei voci**, di cui una (`R31`) è un buco nel ciclo di vita normale del prodotto che
-nessuna delle cinque sezioni precedenti aveva visto, e che nessun test avrebbe trovato
-perché tutti i test costruiscono un inquilino nuovo ogni volta.
+**È la prima sezione pianificata senza il collaudo davanti.** Le tre precedenti sono nate
+da un giro vero; questa nasce da una lettura, e va saputo: il rendimento del giro era sei
+voci in mezza giornata contro le quattro di cinque sezioni di lettura. Ciò che segue è un
+ragionamento, non una misura.
 
-### Le cinque voci non sono cinque problemi
+### Che cosa esiste davvero, verificato e non dedotto
 
-Sono **tre**, e vedere quali si accorpano è la parte del piano che conviene non perdere:
-
-| Voci | Che cosa hanno in comune |
+| Premessa | Verifica |
 |---|---|
-| `R30` | una regola di presentazione scritta per l'eccezione e applicata alla norma |
-| `R32`, `R33` | **il problema dei nomi, terza occorrenza**: `R14` sui contratti, `R21`/`R22` sulle segnalazioni, e adesso su segnalazioni, addebiti, bollette e sul riaddebito. La risposta è già decisa due volte |
-| `R31`, `R34` | due difetti isolati, che condividono solo l'essere stati trovati usando |
+| Nessuna rotta legge o scrive l'utente corrente | vero: `crates/api/src/routes/` non ha `/users/me` né equivalenti |
+| `users_update_self` esiste già | vero, `0014`: `USING (id = current_user_id() AND deleted_at IS NULL)`, `WITH CHECK (id = current_user_id())` |
+| `UserRepository::update` è chiamato solo dal pool privilegiato | vero: `Login` e `ConfirmPasswordReset`, entrambi `begin_privileged()` |
+| Un membro **non** può toccare la propria membership | vero: `org_members_update` è `is_org_staff(org_id)` su USING **e** WITH CHECK |
+| L'uscita è rappresentabile senza migration | **falso a metà**: `status` e `deleted_at` ci sono, ma la policy non la ammette e `role` resterebbe scrivibile |
+| `app.users` è coperta dalle invarianti dei privilegi di colonna | **falso**: né `colonna-di-confine-scrivibile` né `colonna-strutturale-scrivibile` la nominano |
 
-### Che cosa il collaudo ha trovato, e la causa di ciascuno
+### Il difetto che pianificare ha trovato — `R38`
 
-Le cause sono **verificate nel codice**, non dedotte dal sintomo: è la differenza fra un
-piano che si può eseguire e un elenco di lamentele.
+`users_update_self` ha una `WITH CHECK` che nomina **la sola identità della riga**. È
+letteralmente la constatazione della [`0029`](08-decisioni.md#adr-026) su una quinta
+tabella: ciò che il `WITH CHECK` non nomina resta libero, e sul ruolo applicativo non c'è
+nessuna `GRANT UPDATE` di colonna su `app.users`.
 
-#### `R30` — la parentesi che compare sempre
+La più cara è **`platform_role`**, e la catena va scritta perché non si vede da una riga
+sola:
 
-`status.tsx` mostra i due stati **ogni volta che differiscono**. La regola era per
-l'anomalia — una stanza in ristrutturazione e occupata — ma per
-[ADR-019](08-decisioni.md#adr-019) e per la [sezione 4](11-piani-conclusi.md#esito-sezione-4)
-la divergenza è **garantita** nel caso normale: nessuno riscrive `active` quando un
-contratto scade, `occupied` non lo scrive nessuno mai, `rented` nemmeno. La parentesi
-compare quindi su quasi ogni riga.
+```
+UPDATE app.users SET platform_role = 'platform_admin' WHERE id = app.current_user_id()
+   → Login legge users.platform_role e lo mette nei claim
+   → il middleware chiama with_platform_admin(...)
+   → l'unità di lavoro installa app.platform_admin = 'on'
+   → app.is_platform_admin() è vera
+   → is_org_member e is_org_staff sono vere su OGNI organizzazione
+```
 
-**Ma il commento di `LeaseStatusBadge` porta una ragione vera**, e buttarla via
-sarebbe il modo di reintrodurre il problema al contrario: chi filtra per «attivo» e si
-vede tornare un contratto marcato «Scaduto» deve poter capire perché. L'informazione
-serve; è il *posto* a essere sbagliato.
+Seguono `status`, con cui ci si toglie una sospensione, e `failed_login_count` con
+`locked_until`, che sono la difesa dal blocco dopo dieci tentativi descritta in
+[04](04-sicurezza.md#blocco-dopo-tentativi-falliti).
 
-#### `R31` — l'inquilino che torna, e non può rientrare
+**Non è sfruttabile dall'API**, e va detto con la stessa precisione: nessuna rotta scrive
+quelle colonne, e chi non possiede le credenziali del ruolo applicativo non può emettere
+quella query. È una difesa in profondità mancante, esattamente della classe che ADR-021 e
+ADR-026 hanno già chiuso quattro volte — *una regola applicativa non è un confine*.
 
-Il ciclo di vita normale: il contratto scade o si disdice, con la stessa persona se ne fa
-un altro. Oggi **non si può**, e il modo in cui non si può è il peggiore:
-
-1. `InviteTenant` non guarda niente: crea la parte contrattuale ed emette l'invito. Il
-   proprietario vede un codice buono e lo consegna;
-2. `AcceptInvitation` fa **sempre** `uow.members().insert(...)`, che sbatte contro
-   `org_members_org_user_uk`;
-3. `map_membership_conflict` lo traduce in `409 membership.already_exists`.
-
-L'inquilino riceve un errore su un invito che il proprietario ha appena emesso senza
-un avviso. E `lease_parties.user_id` **lo scrive solo quel percorso**: nessun'altra rotta
-collega una persona a una parte contrattuale — `PATCH /lease-parties/{id}` tocca nome,
-telefono, ruolo, quota e intestatario, non l'utente.
-
-**Nessun test lo copre**, e la ragione è istruttiva: ogni test costruisce un inquilino
-**nuovo**. Il difetto vive esattamente nello spazio che una suite verde non attraversa.
-
-#### `R32` e `R33` — i nomi, terza occorrenza
-
-Tre collegamenti mostrano un'etichetta generica: `TicketDetailPage.tsx:93`,
-`ChargeDetailPage.tsx:164`, `BillDetailPage.tsx:154`. E il `<Select>` del riaddebito
-elenca i contratti come *tipo · data*, che è **il difetto che `R14` ha corretto
-nell'elenco dei contratti** — mentre `LeaseResponse` porta ormai `property_label` e
-`room_name` e quel dialogo non li guarda.
-
-È il terzo giro sulla stessa radice, e la risposta è decisa da
-[ADR-049](08-decisioni.md#adr-049): allargare la risposta con un modello di lettura, mai
-una rotta che risolva le entità.
-
-#### `R34` — la data che non propone oggi
-
-`paid_at: ''` in `DeclarePaymentDialog` e `RecordPaymentDialog`, mentre `todayIso()`
-esiste ed è già usato per le scadenze. **La trappola sta nel rimedio**, non nel difetto:
-oggi il campo vuoto significa «adesso» e il server mette l'istante vero; precompilarlo
-lo trasformerebbe in **oggi a mezzanotte**.
+**Entra in questa sezione e non in una sua** per una ragione di tempi: `R7` aggiunge la
+**prima rotta che scrive `app.users` dal pool applicativo**. Finché non esiste, la porta è
+chiusa da un privilegio che nessuno usa; da quando esiste, è chiusa solo da un `UPDATE`
+scritto bene.
 
 ### Che cosa è stato deciso prima di pianificare
 
 | | Scelta | Alternativa scartata |
 |---|---|---|
-| Quando si mostra lo stato dichiarato | **solo quando è un giudizio che il fatto smentisce** | ogni volta che i due differiscono, che è oggi |
-| Dove va lo stato dichiarato quando non è un'anomalia | **un campo suo nella scheda** | toglierlo del tutto, perdendo la ragione del filtro |
-| Come rientra un inquilino (`R31`) | **`AcceptInvitation` tollera la membership che c'è già** | una rotta nuova che colleghi un utente a una parte |
-| I nomi mancanti (`R32`) | **tre campi in più su tre risposte**, con il modello di lettura di sempre | comporli nel client con richieste in più |
-| La bolletta dell'immobile intero (`R33`) | **dire quanto resta da riaddebitare**, una chiamata per volta | una richiesta che ne porti diverse insieme |
-| La data di oggi (`R34`) | **mostrata e non mandata** finché non la si cambia | mandarla, perdendo l'ora vera |
+| Come si raggiunge il proprio account | **`/api/v1/me`, che non prende mai un identificatore** | `PATCH /users/{id}`, che riaprirebbe ADR-036 |
+| Che cosa si può correggere | **nome, telefono, lingua** | anche l'email, che è la credenziale d'accesso |
+| Cambiare la password da dentro | **serve quella vecchia**, e revoca **tutte** le sessioni | tenere viva la corrente, che sono due regole invece di una |
+| Che cosa protegge `app.users` | **privilegi di colonna**, più le invarianti | una `WITH CHECK` più larga, che non può confrontare vecchio e nuovo |
+| Come si esce da un'organizzazione | **`status = 'left'` sulla propria riga**, negato con un contratto in essere | un soft delete della membership |
+| Chi garantisce il divieto | **una policy**, non un `if` | il solo service layer |
 
 ### Decisioni, con il perché
 
-#### 1. Il badge mostra il fatto; il dichiarato compare solo se è un giudizio smentito
+#### 1. `/api/v1/me`, e mai un identificatore
 
-La regola nuova, in una riga: **lo stato memorizzato compare accanto al derivato solo
-quando qualcuno ha deciso qualcosa che il fatto contraddice.**
+`GET` e `PATCH` su `/api/v1/me`. Il percorso non prende mai un `user_id`, ed è la forma
+che tiene chiusa la domanda di [ADR-036](08-decisioni.md#adr-036): **nessuna rotta proietta
+un utente per identificatore**. Una `PATCH /users/{id}` che accettasse solo il proprio
+sarebbe la stessa cosa con una guardia applicativa davanti — cioè la porta aperta e un
+cartello.
 
-| Caso | Oggi | Da qui |
-|---|---|---|
-| contratto `active` + derivato `expired`/`expiring` | «Scaduto (Attivo)» | **«Scaduto»** |
-| stanza `available` + derivato `occupied` | «Occupata (Disponibile)» | **«Occupata»** |
-| immobile `available` + derivato `rented` | «Affittato (Disponibile)» | **«Affittato»** |
-| stanza **`unavailable`** + derivato `occupied` | «Occupata (Non disponibile)» | **resta doppio**: qualcuno l'ha messa in ristrutturazione mentre ci abita una persona |
-| immobile **`maintenance`** o **`draft`** + derivato `rented` | doppio | **resta doppio** |
+`GET /me` restituisce ciò che serve a una schermata del proprio profilo: identificatore,
+email, nome, telefono, lingua, e se l'email risulta verificata. **Non** il ruolo di
+piattaforma, che non è affare di chi guarda.
 
-Il criterio non è un elenco di casi da imparare a memoria: `available` su una stanza e
-`active` su un contratto sono **il default che la derivazione esiste per superare**, non
-una decisione di qualcuno. `unavailable` e `maintenance` sì.
+#### 2. L'email non si cambia in questa sezione, e la ragione è scritta
 
-**L'informazione che il commento difendeva non si perde, cambia posto.** Lo stato
-dichiarato diventa un campo della scheda — accanto a quello effettivo — dove chi
-amministra lo trova quando lo cerca invece di leggerlo su ogni riga. E chi filtra per
-«attivo» e riceve un contratto marcato «Scaduto» trova la spiegazione **dove nasce la
-domanda**: nell'elenco, accanto al filtro attivo, non ripetuta su venticinque righe.
+È la scelta che sembra una mancanza e non lo è. `users.email` non è un dato anagrafico: è
+**la credenziale d'accesso**, ed è la chiave con cui tre cose si ritrovano.
 
-*Alternativa scartata: togliere del tutto lo stato dichiarato.* È il rimedio che verrebbe
-in mente leggendo solo la lamentela, e perderebbe la ragione scritta in
-`LeaseStatusBadge`: quel campo è l'unica cosa che spiega il risultato di un filtro.
+- `app.has_pending_invitation` fa `JOIN app.users u ON u.email = i.email`: cambiare
+  l'email **rompe in silenzio** ogni invito pendente per quell'indirizzo;
+- `app.current_user_email()` è ciò su cui poggiano quattro policy della `0018`;
+- `lease_parties.email` è come l'accettazione trova la propria riga.
 
-#### 2. Un inquilino che torna passa dalla stessa porta
+Cambiarla bene richiede un giro di verifica sul nuovo indirizzo — cioè la verifica
+dell'email, che è **deliberatamente fuori perimetro** — e una decisione su che cosa
+succede agli inviti pendenti. Farla male significa un account che non riceve più niente e
+un invito che non si può più accettare, con un sintomo muto in entrambi i casi.
 
-`AcceptInvitation` smette di fallire quando la membership esiste già: se chi accetta è
-**già membro attivo di quella organizzazione**, non la si inserisce e si va avanti a
-collegare la parte contrattuale.
+*Alternativa scartata: permetterla e basta.* È mezza sezione di lavoro e una classe di
+guasti che si manifesta giorni dopo, su una funzione che nessuno ha chiesto.
 
-**Una via sola e non due**, ed è la ragione della scelta: l'invito è già il gesto che il
-proprietario compie — lo ha appena compiuto, e ha ricevuto un codice buono. Aggiungere
-una rotta «collega una persona già dentro» significherebbe due meccanismi per lo stesso
-fatto, e il proprietario dovrebbe sapere in anticipo quale dei due gli tocca — cioè
-ricordarsi se quella persona è già stata sua inquilina.
+#### 3. Cambiare la password da dentro **pretende quella vecchia**
 
-**Il ruolo non si tocca.** Chi è già `owner` o `manager` e viene invitato come `tenant`
-resta quello che è: l'invito serve a collegare la parte contrattuale, non a retrocedere
-qualcuno. È anche il caso vero di [01](01-prodotto.md) — chi affitta una casa e ne abita
-un'altra.
+`POST /api/v1/me/password`, con `current_password` e `new_password`. La vecchia serve
+perché il contesto è diverso da quello del recupero: là la prova di identità è il controllo
+della casella di posta, qui è una sessione — e una sessione può essere una scheda lasciata
+aperta. Senza la vecchia, chiunque si sieda davanti a un browser non bloccato si prende
+l'account per sempre.
 
-**Chi è uscito dall'organizzazione resta fuori da questa decisione.** `org_members` ha
-`status` e `deleted_at`, ma nessuno li valorizza finché [`R16`](12-da-fare.md#uscire-da-unorganizzazione)
-non esiste: oggi non c'è modo di uscire, quindi non c'è nessuno da far rientrare. La
-guardia va scritta lo stesso — membership **attiva**, non una qualunque — perché il
-giorno in cui `R16` arriva questo punto diventerebbe la porta di servizio.
+**Revoca tutte le sessioni, compresa la propria**, esattamente come
+[ADR-052](08-decisioni.md#adr-052) fa per il recupero. La scelta è l'uniformità, ed è stata
+presa contro l'alternativa che sembra più gentile — tenere viva la sessione da cui si sta
+cambiando, riconoscendola dal cookie di refresh che la richiesta porta già.
 
-*Alternativa scartata: `PATCH /lease-parties/{id}` che accetta `user_id`.* Sposta la
-scelta della persona su chi amministra, che dovrebbe cercarla in un elenco — e l'elenco
-delle persone di un'organizzazione **non esiste ed è aperto apposta**
-([ADR-036](08-decisioni.md#adr-036), [ADR-043](08-decisioni.md#adr-043)). Costruirlo per
-questo sarebbe riaprire quella domanda per un problema di comodità.
+Il ragionamento, perché è la decisione meno ovvia della sezione: *«cambiare la password
+chiude tutto»* è **una frase sola**, e questa frase va scritta in almeno quattro posti — la
+schermata del recupero, quella del proprio account, `docs/04-sicurezza.md` e il corpo
+dell'API. Due regole diverse per due percorsi che una persona non distingue — *«ho cambiato
+la password»* è la stessa cosa dai due lati — sono due frasi da tenere allineate, e la
+seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile: chi cambia
+rientra subito con la password che ha appena scelto.
 
-#### 3. I nomi: terza occorrenza, stessa risposta
+**Ne segue che questa sezione non ha bisogno di un ADR nuovo.** Con la revoca selettiva
+sarebbe servito — una decisione che diverge da una documentata è una voce in
+`docs/08-decisioni.md`, scritta prima del codice — e con l'uniformità ADR-052 basta a
+spiegare entrambi i percorsi.
 
-`property_label` e `room_name` su `TicketResponse`; le stesse due su `ChargeResponse` e
-`UtilityBillResponse`, risolte attraverso il contratto. Modello di lettura, **una query
-per pagina**, campi opzionali, e l'etichetta neutra quando mancano.
+Vale anche qui la nota di ADR-052 che si dimentica: si revocano i **refresh token**, non
+gli access token, che sono JWT e vivono i loro quindici minuti. Chi cambia la password non
+è fuori nell'istante in cui la cambia; è fuori quando quel token scade.
 
-**Non è una decisione nuova e non serve un ADR**: [ADR-049](08-decisioni.md#adr-049) l'ha
-presa per le segnalazioni tre giorni fa, e questa ne è l'applicazione. Vale invece la pena
-scrivere che è la **terza** volta — `R14`, poi `R21`/`R22`, ora `R32` — perché la
-regolarità dice qualcosa: **ogni risposta che porta un identificatore verso una schermata
-è un difetto che aspetta di essere trovato**, e conviene guardare le rimanenti prima che
-le trovi qualcun altro.
+#### 4. `app.users` si difende con i privilegi di colonna
 
-#### 4. Il riaddebito dice a chi, e quanto resta
+Una migration che revoca `UPDATE` su `app.users` al ruolo applicativo e la riconcede sulle
+sole colonne che il prodotto scrive **da una richiesta autenticata**:
 
-Due metà, e la seconda è più piccola di quanto sembri.
+| Concesse | Negate |
+|---|---|
+| `full_name`, `phone`, `locale`, `password_hash` | `platform_role`, `status`, `email`, `email_verified_at`, `last_login_at`, `failed_login_count`, `locked_until`, `deleted_at` |
 
-**Chi**: il `<Select>` mostra *immobile · stanza* e il nome dell'intestatario, non
-*tipo · data*. I dati ci sono già tutti in `LeaseResponse` dalla sezione 3. E l'elenco
-**si restringe ai contratti che possono ricevere un addebito**: una bozza o un contratto
-disdetto non sono candidati, e offrirli è la stessa classe di difetto di
-[`R26`](12-da-fare.md#lelenco) — un'opzione che non può portare a niente di buono.
+Le negate non sono irraggiungibili: le scrive il pool **privilegiato**, che ha `BYPASSRLS`
+e i privilegi pieni — `Login` aggiorna `last_login_at` e il contatore dei tentativi, il
+recupero password scrive `password_hash`. È la stessa divisione delle quattro migration
+che l'hanno preceduta: ciò che una richiesta autenticata può scrivere è un elenco corto e
+dichiarato, tutto il resto passa da un flusso che il contesto di sicurezza non ha.
 
-**Quanto resta**: la bolletta conosce il proprio totale, e la somma di ciò che è già stato
-riaddebitato è leggibile. Il dialogo lo mostra e propone il residuo, così riaddebitare una
-bolletta d'immobile a tre contratti è tre volte lo stesso gesto guidato invece di tre
-sottrazioni a mente.
+Le colonne entrano nelle invarianti di `ops/sql/checks`: `platform_role` e `status` in
+`colonna-di-confine-scrivibile`, perché definiscono che cosa si vede; le altre in
+`colonna-strutturale-scrivibile`. **Le invarianti si aggiornano nello stesso passo della
+migration**, che è la forma che la sezione 5 ha stabilito emendando un controllo di CI.
 
-*Alternativa scartata: una richiesta che porti più contratti insieme.* È la strada giusta
-il giorno in cui serve davvero, e oggi porterebbe **l'esito parziale** che
-[`R15`](12-da-fare.md#cancellare-in-generale) ha già isolato come decisione a sé: N
-scritture, una fallisce, e non è chiaro né che cosa dire né che cosa disfare. Non si apre
-qui un fronte che ha già una voce sua.
+#### 5. Uscire è uno **stato**, non un soft delete
 
-**Non si tocca la regola contabile**: nessuno verifica che le quote riaddebitate sommino
-al totale, e riaddebitare più del totale resta possibile. È scritto nel commento di
-`RechargeDialog` e non è un difetto da correggere di passaggio: lo schema non ha il
-vincolo e un controllo applicativo sarebbe soggetto a race condition fra due riaddebiti
-concorrenti.
+`status = 'left'` su `app.org_members`, non `deleted_at`. Le due cose non sono
+intercambiabili: `OrgMemberRepository::find` filtra `deleted_at IS NULL`, quindi una
+membership cancellata **non si vede più** — e `org_members_org_user_uk` è unico e non
+parziale, quindi chi è uscito così non potrebbe più rientrare né con un `INSERT` né con un
+`UPDATE` su una riga che non si trova. È esattamente il difetto che la `0029` ha già
+pagato sulle spese co-living.
 
-#### 5. La data si mostra e non si manda
+Con lo stato la riga resta, e qui il piano deve dire una cosa che non si vede dal nome
+della voce: **così com'è, chi esce non rientra lo stesso.**
+[ADR-051](08-decisioni.md#adr-051) fa cercare a `AcceptInvitation` una membership
+**attiva**; su una riga `left` non la trova e prova a inserirne una, che sbatte contro
+`org_members_org_user_uk` — unico e non parziale — e diventa `409
+membership.already_exists`. È esattamente il `409` che quella sezione aveva chiuso, che
+ricompare da un'altra porta.
 
-`paid_at` parte da oggi **nel campo**, e la richiesta continua a non portarlo finché la
-data resta quella di oggi.
+ADR-051 lo aveva previsto per iscritto — *«il giorno in cui `R16` arriva questo punto
+diventerebbe la porta di servizio»* — e quel giorno è questo. **`AcceptInvitation` va
+esteso in questa sezione**: una membership non attiva si **riattiva** invece di inserirne
+una nuova. Senza quel ramo, `R16` produce persone che escono e non possono più tornare, e
+il sintomo arriverebbe mesi dopo su un invito che sembra buono.
 
-Sembra un cavillo ed è la sostanza: oggi il campo vuoto significa «adesso» e il server
-mette l'istante vero. Precompilare e mandare trasformerebbe un pagamento delle 18 in uno
-delle **00:00**, cioè si perderebbe l'ora per guadagnare una comodità — e in un elenco
-ordinato per data due dichiarazioni dello stesso giorno diventerebbero indistinguibili.
+#### 6. Il divieto è una policy, non un `if`
 
-Vale per la dichiarazione dell'inquilino e per l'incasso registrato dal proprietario. Per
-il secondo la data conta di più — un bonifico si vede sull'estratto conto giorni dopo — e
-lì cambiarla è il gesto normale, non l'eccezione.
+«Non si esce con un contratto in essere» va **verificato e garantito**, ed è la lezione
+della `0029`: là rendere l'uscita un confine vero ha richiesto una policy, perché una
+regola applicativa si legge come una garanzia proprio quando è scritta in tre posti.
+
+Serve quindi una funzione — `app.has_lease_in_force(p_org_id, p_user_id)`, `SECURITY
+DEFINER` con `search_path` come tutte le altre — che passi da `lease_parties.user_id` e da
+`app.lease_in_force`, cioè dalla **stessa** definizione di «in essere» del resto del
+progetto e non da una seconda.
+
+E la `WITH CHECK` della policy nuova deve nominare **`role`**. Oggi `org_members_update` è
+staff soltanto, quindi il ruolo è al sicuro per costruzione; dal momento in cui un membro
+può toccare la propria riga, `role` è la colonna con cui si promuoverebbe a `owner`. Una
+policy non può confrontare la riga vecchia con la nuova, quindi la difesa è un
+**privilegio di colonna**, come al punto 4.
+
+#### 7. Chi esce dall'unica organizzazione in cui abita
+
+Resta con la propria, personale e vuota: è il caso di
+[ADR-045](08-decisioni.md#adr-045) al contrario. Il client deve **dirlo prima**, non
+lasciarlo scoprire dopo con una dashboard vuota e nessuna spiegazione — è la stessa forma
+dell'avviso sulla revoca delle sessioni della 5-quater.
 
 ### Decomposizione
 
-L'ordine è quello del danno: prima il buco nel ciclo di vita, poi le tre cose che si
-leggono male.
+##### `A1` — I privilegi di colonna su `app.users` (`R38`)
 
-##### `Y1` — L'inquilino che torna (`R31`)
+Migration: `REVOKE UPDATE ON app.users` dal ruolo applicativo, `GRANT UPDATE (full_name,
+phone, locale, password_hash)`. Le colonne entrano nelle due invarianti di
+`ops/sql/checks/schema_invariants.sql` **nello stesso passo**.
 
-`AcceptInvitation` verifica la membership prima di inserirla: se ne esiste una **attiva**
-in quella organizzazione, salta l'inserimento e prosegue. Il ruolo non si tocca.
+`UserRepository` guadagna un `update_profile` che nomina le sole colonne concesse, sulla
+forma di `ChargeRepository::update_status`. `update` resta e resta privilegiato: un test
+che lo chiamasse dal pool applicativo fallirebbe con `permission denied`, ed è la difesa
+che si vuole.
 
-Due test, e provano i due lati: una persona già inquilina di un contratto scaduto accetta
-l'invito al contratto nuovo e **vede tutti e due**; e chi non è membro continua a
-diventarlo, che è il caso che non deve rompersi.
+Un test dei privilegi che prova le negate una per una, come quello dei ticket: la sola
+`platform_role` non basta, perché è l'elenco a essere il contratto.
 
-**La riproduzione esiste già** ed è il criterio di accettazione, misurato prima di
-pianificare:
+##### `A2` — `/api/v1/me`, lettura e correzione (`R7`)
 
-```
-CASO 1 — inquilino nuovo invitato su un contratto in bozza
-  invito 201 · accettazione 200 · l'inquilino vede 1 contratto ('draft')
-CASO 2 — lo stesso inquilino invitato su un secondo contratto
-  invito 201  ← il proprietario riceve un codice che sembra buono
-  accettazione 409 membership.already_exists
-  l'inquilino vede ancora 1 contratto, non 2
-```
+`GET` e `PATCH /api/v1/me`: nome, telefono, lingua. `PATCH` parziale con la semantica di
+sempre — campo omesso significa invariato, `null` esplicito cancella. Nessun `user_id` nel
+percorso.
 
-Il caso 2 deve finire `200` e con **due** contratti; il caso 1 deve restare identico.
+Un test che prova che l'email **non** è modificabile e che il tentativo lo dice.
 
-**Prima di scrivere**: rileggere il commento in testa a `AcceptInvitation` sull'ordine
-delle tre scritture — `app.has_pending_invitation` abilita le prime due e diventa falso
-appena l'invito è marcato accettato. Saltare la prima non cambia l'ordine delle altre, e
-va verificato che non cambi nemmeno il permesso.
+##### `A3` — La password si cambia da dentro (`R7`)
 
-##### `Y2` — Il badge smette di gridare (`R30`)
+`POST /api/v1/me/password` con la vecchia e la nuova. Sul pool **applicativo**: chi cambia
+la password è autenticato, quindi la regola 27 non ammette il privilegiato.
 
-`status.tsx`: i tre badge mostrano il derivato da solo, e il dichiarato accanto **solo**
-nei casi di anomalia della tabella della decisione 1. Nelle tre schede — contratto,
-stanza, immobile — lo stato dichiarato diventa un campo della `DescriptionList`.
+Due test: la vecchia password sbagliata dà `401` e non cambia niente; dopo il cambio
+**nessuna** sessione rinnova più, compresa quella da cui si è cambiata. Il secondo è quello
+che si scrive sbagliato, ed è lo stesso inciampo della 5-quater: asserire che la vecchia
+sessione smetta di *leggere* fallisce, perché l'access token è un JWT e vive i suoi quindici
+minuti. Ciò che muore è il **rinnovo**.
 
-Un test per famiglia sul caso che regredisce: **la stanza in ristrutturazione e occupata
-continua a mostrare entrambi**. È l'assert che qualcuno toglierà semplificando.
+Il client deve dire la conseguenza **prima** del bottone, con la stessa frase che usa il
+recupero: chi cambia la password si ritrova disconnesso anche sul telefono, e scoprirlo dopo
+sembra un guasto.
 
-##### `Y3` — I nomi nelle tre risposte (`R32`)
+##### `A4` — Uscire da un'organizzazione (`R16`)
 
-`property_label` e `room_name` su `TicketResponse`, `ChargeResponse` e
-`UtilityBillResponse`; nel client i tre collegamenti generici diventano il nome, con
-l'etichetta neutra quando il campo manca.
+Migration: `app.has_lease_in_force`, la policy che ammette `user_id =
+app.current_user_id()` con la `WITH CHECK` che vincola `org_id`, `user_id` e `role`, e i
+privilegi di colonna corrispondenti.
 
-Il modello di lettura dei contratti esiste già (`LeaseRepository::labels`): per addebiti e
-bollette si risolve **attraverso il contratto**, e per le segnalazioni serve la coppia
-sull'immobile, che è una query nuova della stessa forma.
+`POST /api/v1/organizations/{id}/leave`, e `AcceptInvitation` che riattiva una membership
+non attiva invece di inserirne una.
 
-##### `Y4` — Il riaddebito (`R33`)
+Tre test: si esce; **non** si esce con un contratto in essere; e chi è uscito **rientra**
+accettando un invito nuovo — che è la porta di servizio di ADR-051, ora percorribile.
 
-Il `<Select>` dice *immobile · stanza · intestatario* e offre i soli contratti che possono
-ricevere un addebito; il dialogo mostra il **residuo da riaddebitare** e lo propone come
-importo.
+##### `A5` — Il client
 
-##### `Y5` — Le date (`R34`)
-
-`paid_at` precompilato a oggi in entrambi i dialoghi, e mandato **solo se diverso da
-oggi**. Un test sul caso che si romperebbe in silenzio: aprire e inviare senza toccare la
-data non deve mettere `paid_at` nel corpo.
+Una schermata del proprio account con i tre campi e il cambio password, raggiungibile dal
+menù dell'organizzazione. L'uscita sta lì, con l'avviso che dice che cosa resta dopo.
 
 ### Trappole
 
-**Il caso che regredisce di `Y2` è l'anomalia, non la norma.** Chi legge la nuova regola
-e la semplifica in «mostra sempre il derivato» toglie l'unica cosa che quel doppio badge
-esisteva per dire. Il test va scritto su quello.
+**`UserRepository::update` nomina tutte le colonne.** Dopo `A1`, chiamarlo dal pool
+applicativo fallisce con `permission denied for table users`. Oggi non lo chiama nessuno da
+lì — solo `Login` e il recupero password, entrambi privilegiati — quindi la migration non
+rompe niente **e non lo dimostra**: è `A2` che deve usare il metodo nuovo.
 
-**`Y2` non è solo estetica: cambia ciò che si legge dopo un filtro.** Il commento di
-`LeaseStatusBadge` va **spostato**, non cancellato: la ragione che porta resta vera, e
-sopravvive nel campo della scheda e nell'avviso accanto al filtro.
+**`role` è la colonna che si dimentica in `A4`.** Aprire `org_members_update` a un membro
+senza negargli `role` è dargli la promozione a `owner`. Una policy non può confrontare
+vecchio e nuovo: la difesa è il privilegio.
 
-**`Y1` tocca un flusso che gira sotto una policy fatta apposta.** La `0018` estende la RLS
-all'accettazione, e `app.has_pending_invitation` è ciò che abilita le scritture. Un ramo
-in più prima dell'inserimento non deve spostare l'ordine delle altre due.
+**Uscire non è cancellare.** Con `deleted_at` la riga sparisce da `find`, e
+`org_members_org_user_uk` è unico e non parziale: chi esce così non rientra più. È il
+difetto che la `0029` ha già pagato.
 
-**`Y1` guarda la membership *attiva*.** Una qualunque aprirebbe la porta a chi è uscito, il
-giorno in cui `R16` renderà possibile uscire — e sarebbe un difetto trovato mesi dopo, in
-un'altra sezione.
+**ADR-051 va esteso, non riletto e basta.** La sua guardia sulla membership *attiva* è
+stata scritta prevedendo questo giorno; ciò che non è stato scritto è il ramo di
+riattivazione, perché non serviva. Adesso serve, e senza di esso `R16` produce persone che
+non possono rientrare.
 
-**`Y3` è la terza volta**, e le trappole sono già state pagate: `LEFT JOIN` e
-`deleted_at IS NULL`, quindi un immobile archiviato lascia il campo assente e il client
-dice che cosa è successo; **una query per pagina** e non una per riga.
+**L'email non si cambia, e va detto nel client.** Un campo disabilitato senza una
+spiegazione si legge come un difetto.
 
-**`Y5` sembra una riga e ne vale due.** Precompilare *e* mandare perde l'ora vera. Il campo
-mostra oggi, la richiesta tace.
-
-**Non si tocca la regola del riaddebito.** Che le quote possano superare il totale è
-scritto e voluto: qui si aggiunge un numero che aiuta, non un vincolo.
+**«Revoca tutte le sessioni» non butta fuori nessuno all'istante.** Si revocano i refresh
+token; l'access token già emesso è un JWT e non è revocabile, quindi vive i suoi quindici
+minuti. È la nota di ADR-052, ed è la stessa su cui un test della 5-quater ha asserito la
+cosa sbagliata: il criterio giusto è che il **rinnovo** non funzioni più.
 
 ### Come si saprà che è finita
 
-- un inquilino con un contratto scaduto accetta l'invito a un contratto nuovo e **li vede
-  entrambi**, senza che nessuno tocchi il database;
-- un contratto scaduto dice **«Scaduto»** e basta; una stanza occupata dice **«Occupata»**
-  e basta; una stanza in ristrutturazione e occupata continua a dire **tutte e due**;
-- la scheda di un contratto dice ancora qual è lo stato **dichiarato**, per chi lo cerca;
-- dalla scheda di una segnalazione, di un addebito e di una bolletta si legge **il nome**
-  di ciò a cui portano, e un immobile archiviato lo dice invece di lasciare uno spazio;
-- il riaddebito dice a quale stanza e a chi, e quanto **resta** da riaddebitare;
-- una dichiarazione di pagamento inviata senza toccare la data conserva **l'ora**;
-- `just ci` verde, con i test nuovi sui casi che regrediscono in silenzio.
-
-### Che cosa **non** entra
-
-- **`R35` non entra perché non esiste più.** Posta la domanda, la risposta è arrivata da
-  una riproduzione e non da un'opinione: un inquilino invitato su un contratto **in bozza**
-  accetta e **lo vede**. Non c'è nessuna regola che nasconda le bozze; il contratto che non
-  compariva non compariva perché la persona non era collegata, che è `R31` visto
-  dall'altro lato. Ne resta una domanda di sola presentazione — se «Bozza» sia la parola
-  giusta per chi abiterà lì — che va con [`R8`](12-da-fare.md#interfaccia-e-prodotto).
-  **Vale la pena tenerne il ricordo**: la voce era stata scritta come una scelta di
-  prodotto con tre letture, ed era il sintomo di un difetto già in elenco;
-- **una richiesta che riaddebiti a più contratti insieme**: è l'esito parziale di `R15`,
-  che ha una voce sua;
-- **il vincolo sulla somma dei riaddebiti**, che è scritto come deliberato;
-- **le altre risposte che portano identificatori verso una schermata.** La regolarità
-  vista al punto 3 dice che ce ne sono altre; guardarle tutte è una voce nuova, non un
-  allargamento di questa;
-- **`R26`, `R27`, `R28`, `R29`**, che restano dove sono.
-
-
-<a id="piano-utenti-veri"></a>
-
-## Piano — Prima degli utenti veri: le quattro cose che mancano a una persona esterna
-
-Pianificata il **10 settembre 2026**. Non chiude nessuna voce di
-[12](12-da-fare.md), e la ragione è che **non sono difetti**: è lavoro mai cominciato,
-che il criterio d'ordine di questo documento teneva in fondo *fino al momento in cui
-qualcuno che non sia chi sviluppa apre il prodotto*. Quel momento è arrivato — il
-collaudo l'ha aperto — e l'obiettivo dichiarato è più preciso di «utenti veri»:
-
-> **un proprietario vero, che non ha scritto il codice, lo usa per un mese con i suoi
-> dati.**
-
-Da lì discende tutto ciò che entra e tutto ciò che resta fuori. Non serve ciò che serve a
-mille sconosciuti; serve ciò senza cui **una** persona esterna si blocca e non torna.
-
-### La fase era già nominata, e per metà già pianificata
-
-[Prima degli utenti veri](#prima-degli-utenti-veri) porta già i passi 9 e 10 del piano
-archiviato — la porta `Notifier` e i due invii — con le loro decisioni e le loro trappole.
-**Questo piano non le riscrive**: le assorbe, e aggiunge le tre cose che quella prosa non
-prevedeva perché nate da una domanda diversa. Vanno rilette prima di `Z1`.
-
-### Quattro pezzi, e uno dipende da un altro
-
-L'ordine non è una preferenza:
-
-```
-Z1  la posta          ──┐
-                        ├──► Z2  il recupero della password
-                        │        (senza un canale, non c'è modo di recapitare niente)
-Z3  il deploy         ──┴──► Z4  il backup
-Z5  la privacy — piccola, e non rimandabile
-```
-
-**`Z2` è il blocco duro.** Le rotte di autenticazione sono quattro — `register`, `login`,
-`refresh`, `logout` — e non c'è **nessun** modo di recuperare una password. Il primo «non
-mi ricordo la password» del tuo proprietario finisce in una `UPDATE` scritta a mano da te,
-di notte, sul database di produzione. E per recapitare un codice serve `Z1`.
-
-### Che cosa è stato deciso prima di pianificare
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| Il canale | **SMTP**, il fornitore come dato di configurazione | l'API di un fornitore, che diventa un ramo di codice |
-| La posta è obbligatoria? | **sì, l'avvio la pretende** | facoltativa, con un utente chiuso fuori e nessun modo di farlo rientrare |
-| La forma del codice di recupero | **un codice da incollare**, come l'invito | un link cliccabile, con la credenziale nell'URL |
-| Che cosa fa il recupero alle sessioni | **le revoca tutte** | lasciarle vive, e chi ha rubato l'account resta dentro |
-| Che cosa risponde chi chiede il recupero | **la stessa cosa sempre** | dire se l'email esiste, cioè un oracolo sugli account |
-| Il limite agli invii | **per email, nel modello** | per IP, che vuole uno stato condiviso e un servizio in più |
-| La forma del deploy | **compose dietro Caddy su una VPS** | Kubernetes, che è la scala che non hai |
-| Quando un backup è un backup | **quando è stato ripristinato una volta** | quando il cron non dà errori |
-
-### Decisioni, con il perché
-
-#### 1. La posta diventa obbligatoria all'avvio, e il recupero è la ragione
-
-Oggi la configurazione della posta non esiste e non serve: il token d'invito torna nella
-risposta HTTP e il client lo mostra con un bottone per copiarlo. Da `Z2` in poi **la posta
-è l'unico canale** verso una persona chiusa fuori dal proprio account.
-
-Quindi le impostazioni della posta entrano in `AppConfig` come **obbligatorie**, allo
-stesso titolo di quelle dello storage. È la lezione già pagata tre volte e registrata
-nella fetta C: un'impostazione mancante deve far fallire **l'avvio**, con un messaggio che
-dice che cosa manca — non il primo uso, dove somiglia a un problema di rete.
-
-*Alternativa scartata: un `Notifier` che non fa niente quando la posta non è configurata.*
-Sembra prudente e produce il difetto peggiore di tutti: il recupero password che risponde
-`202` e non manda niente, su un utente che non può più entrare.
-
-#### 2. Il codice di recupero si incolla, non si clicca — ADR-051
-
-[ADR-045](08-decisioni.md#adr-045) ha già deciso questa domanda per l'invito, e
-l'argomento vale identico qui: **il token è una credenziale**, e un link
-`/nuova-password/<token>` la scrive in tre archivi che nessuno ripulisce — la cronologia
-del browser, il `Referer` verso qualunque risorsa esterna, e i log di ogni proxy davanti
-al client.
-
-Si fa quindi **come l'invito**: l'email porta un codice, la schermata ha un campo in cui
-incollarlo. Coerenza con una decisione già presa, e nessun meccanismo nuovo — il codice
-riusa `OpaqueTokenFactory` e `TokenHash`, che esistono per l'invito.
-
-**Il costo va detto, perché è reale**: incollare un codice è più scomodo di un clic, e
-succede nel momento in cui una persona è già frustrata. L'alternativa — il link, con la
-pagina che ripulisce l'URL dalla cronologia e `Referrer-Policy: no-referrer` — chiuderebbe
-due dei tre archivi e non il terzo, e introdurrebbe **due forme diverse** per due
-credenziali che si somigliano. Si sceglie la coerenza; se il collaudo dirà che l'attrito è
-troppo, sarà una voce nuova con una misura dietro invece di un'ipotesi.
-
-#### 3. Cambiare la password revoca tutte le sessioni
-
-È la parte che si dimentica, ed è quella che rende il recupero una difesa invece di una
-comodità: chi ha ottenuto l'accesso a un account ha in mano un refresh token che vive
-**trenta giorni**, e cambiare la password senza revocarlo non lo butta fuori.
-
-`SessionRepository::revoke_all_for_user` **esiste già** — la usa `RefreshSession` quando
-rileva il riuso di un token ruotato — quindi è una chiamata, non un meccanismo.
-
-#### 4. Chiedere il recupero non dice se l'email esiste
-
-Stessa risposta per un indirizzo noto e per uno sconosciuto. È la regola di
-[ADR-017](08-decisioni.md#adr-017), che il modulo degli inviti applica già: distinguere
-sarebbe un oracolo per capire chi ha un account.
-
-Ne segue una cosa da scrivere nel client e non da lasciare intuire: la schermata dice «se
-quell'indirizzo ha un account, riceverà un codice», che è la verità e non una scusa.
-
-#### 5. Il limite agli invii è per email, e sta nel modello
-
-Un recupero senza limiti è un modo per far arrivare cinquanta email a un indirizzo
-altrui. Il rimedio **non è il rate limiting per IP** — che è nell'elenco dei trasversali
-mancanti, vuole uno stato condiviso e non serve con una sola istanza: è un limite per
-**email**, cioè una riga che dice quando è stato emesso l'ultimo codice e un rifiuto
-silenzioso se è troppo recente.
-
-Costa una colonna e nessun servizio in più. Il rate limiting per IP resta dov'è.
-
-#### 6. Il deploy è `compose` dietro Caddy, e la parte difficile è già fatta
-
-`ops/web/Caddyfile` realizza già il contratto **una sola origine** — `/` ai file statici,
-`/api/v1` all'API — che è la metà dell'argomento per cui non c'è CORS da montare né una
-difesa CSRF da scrivere ([ADR-038](08-decisioni.md#adr-038)). In produzione cambia una
-riga: `:8080` diventa il dominio, e Caddy prende il certificato da sé.
-
-*Alternativa scartata: Kubernetes.* I manifest sono nell'elenco di ciò che manca, e
-restano lì: sono la scala che non hai, e ogni ora spesa lì è un'ora non spesa a scoprire
-se il prodotto serve a qualcuno.
-
-**`secure_cookies` torna a `true`**, che è già il default del file di configurazione: su
-HTTPS il cookie del refresh è `Secure`, e il `false` resta l'eccezione dello sviluppo su
-`http://localhost`.
-
-#### 7. Un backup è un backup solo dopo essere stato ripristinato una volta
-
-Un `pg_dump` che gira e non dà errori non prova niente: prova che il comando esiste. La
-prova è **ripristinarlo in un database vuoto e far partire il prodotto sopra**, e va fatta
-una volta prima che dentro ci siano dati di qualcun altro.
-
-Due cose e non una: il database **e il bucket**. I documenti sono oggetti in MinIO, non
-righe: un dump del database li lascia fuori, e la riga che li cita resta senza byte — è la
-stessa constatazione che `just down-hard` ha già prodotto una volta.
-
-E la copia **esce dalla macchina**. Un backup sullo stesso disco del database non è un
-backup, è una seconda copia dello stesso guasto.
-
-#### 8. La privacy è piccola adesso e cara dopo
-
-Appena i dati dei suoi inquilini entrano nella tua VPS — nome, email, telefono — stai
-trattando dati personali di terzi. Per un test fra conoscenti non serve un impianto: serve
-dire per iscritto che cosa raccogli, perché, dove sta e che lo cancelli su richiesta.
-
-Sta nel piano e non fuori perché è l'unica voce che **cresce di costo con il tempo**:
-scriverla adesso è un pomeriggio, scriverla dopo aver raccolto dati per sei mesi è
-un'operazione su dati che esistono già.
-
-### Decomposizione
-
-##### `Z1` — La posta
-
-I passi 9 e 10 di [Prima degli utenti veri](#prima-degli-utenti-veri), da rileggere per
-intero: la porta esiste, l'adattatore no, e `Notifier` **non è iniettata da nessuna
-parte**.
-
-Qui si aggiungono le due cose che quella prosa non aveva:
-
-- **le impostazioni sono obbligatorie** in `AppConfig`, con il messaggio di avvio che dice
-  che cosa manca;
-- **un raccoglitore locale nel `docker-compose.yml`** per lo sviluppo, e la configurazione
-  di un mittente vero per la produzione, che è cosa diversa — vedi le trappole.
-
-##### `Z2` — Il recupero della password — **ADR-051 prima**
-
-Migration nuova: la tabella dei codici di recupero — hash e non il codice, scadenza breve,
-uso singolo, e la colonna che regge il limite per email.
-
-Due rotte, `POST /api/v1/auth/password-reset` e
-`POST /api/v1/auth/password-reset/confirm`; due schermate nel client; il codice consegnato
-per email.
-
-**Il pool privilegiato è legittimo qui, ed è l'unico posto nuovo in cui lo diventa.** La
-regola 27 lo riserva ai flussi in cui un contesto di sicurezza **non può** esistere:
-registrazione, login, rotazione del refresh. Chi ha dimenticato la password non è
-autenticato per definizione. Va scritto nel commento del caso d'uso, o alla prossima
-lettura sembrerà una violazione.
-
-Tre test, e sono i tre che contano: la conferma **revoca le sessioni**; un indirizzo
-sconosciuto riceve la stessa risposta di uno noto; un codice già usato non vale due volte.
-
-##### `Z3` — Il deploy
-
-VPS, dominio, il `Caddyfile` che punta al dominio, i segreti fuori dal repository, il
-migratore prima dell'API, e la politica di riavvio.
-
-Il criterio non è «i container sono su»: è **aprire il prodotto dal telefono, in 4G, e
-fare l'accesso**. Finché non è successo, non è deployato.
-
-##### `Z4` — Il backup, e il ripristino provato
-
-`pg_dump` a orario e copia del bucket, cifrati, **fuori dalla macchina**, con una
-ritenzione dichiarata. Poi il ripristino, una volta, su un database vuoto.
-
-##### `Z5` — La privacy
-
-Una pagina raggiungibile dal prodotto: che cosa si raccoglie, perché, dove sta, per quanto
-e come si chiede la cancellazione. E il giro corrispondente: quando il tuo proprietario
-chiederà di cancellare tutto, deve esistere una risposta che non sia una `DELETE` a mano.
-
-### Trappole
-
-**La posta da una VPS nuova finisce nello spam, ed è la trappola pratica più cara di
-questa fase.** Un IP appena assegnato non ha reputazione, e senza SPF, DKIM e DMARC sul
-dominio l'email di recupero non arriva — e il sintomo è **muto**: nessun errore, il codice
-non compare. Non è un difetto del codice ed è il motivo per cui l'adattatore parla SMTP e
-non con l'API di qualcuno: il mittente vero è un dato di configurazione. Va provato **con
-un indirizzo vero**, non solo con il raccoglitore locale.
-
-**Un raccoglitore locale non è un fornitore.** Accetta tutto: non verifica SPF, DKIM né i
-rimbalzi. Prova che il messaggio parte e che cosa contiene, non che sarebbe recapitato.
-
-**Aggiungere un'impostazione senza la riga in [07](07-operazioni.md) fa fallire
-`cargo test`.** `crates/api/tests/docs_config_reference.rs` deriva l'elenco dai campi di
-`AppConfig` e lo confronta con quelle tabelle. Non è un fastidio: è la ragione per cui
-`PROPFLOW__TELEMETRY__FILTER` non è più documentato con il default di due versioni fa.
-
-**L'invito non può passare dall'outbox**, e vale identico per il codice di recupero. Il
-token in chiaro esiste **solo** nella risposta e nell'email: in database c'è lo hash, e gli
-eventi di dominio non trasportano valori né credenziali. Un worker che leggesse l'evento
-non avrebbe niente da spedire, e metterci il token dentro significherebbe scrivere una
-credenziale in una tabella fatta per essere pubblicata su un broker.
-
-**L'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
-[04](04-sicurezza.md) vieta email, token e corpi nei log, e un client SMTP che registri la
-richiesta li registra tutti e tre insieme. La porta ha già un `Debug` redatto e
-l'adattatore non deve annullarlo.
-
-**Il recupero senza revoca delle sessioni non è un recupero.** Un refresh token vive
-trenta giorni: cambiare la password e lasciarlo vivo lascia dentro chi c'era.
-
-**`just down-hard` sul server porta via tutto**, MinIO compreso. Sulla macchina di
-produzione quel comando non deve esistere nella memoria muscolare.
-
-**MinIO e PostgreSQL sullo stesso disco cadono insieme.** Il backup deve coprire entrambi,
-e stare altrove.
-
-**Non si aggiunge Redis.** Il limite agli invii è per email e sta nel modello; il rate
-limiting per IP resta fra i trasversali mancanti. Un servizio in più è un servizio da
-avviare, mettere in sicurezza, monitorare e ripristinare.
-
-### Come si saprà che è finita
-
-- un'email di invito arriva davvero nel raccoglitore locale, con il token nel corpo e in
-  **nessuna** riga di log;
-- un'email arriva a un indirizzo **vero**, e non nella cartella dello spam;
-- una password si recupera da capo a fondo, e le sessioni aperte prima **non funzionano
-  più**;
-- chiedere il recupero per un indirizzo che non esiste dà la stessa risposta di uno che
-  esiste, e il client lo dice invece di lasciarlo intuire;
-- il prodotto risponde su un dominio in HTTPS, aperto **dal telefono in 4G**;
-- un dump viene ripristinato in un database vuoto e il prodotto ci parte sopra;
-- esiste una pagina che dice che cosa si raccoglie e come si chiede la cancellazione;
+- si aprono i propri dati, si corregge il telefono, si ricarica e il telefono è quello;
+- si cambia la password dando quella vecchia, e **nessuna** sessione rinnova più — compresa
+  quella da cui si è cambiata, che è la decisione 3;
+- la password vecchia sbagliata non cambia niente e lo dice;
+- si esce da un'organizzazione in cui non si ha un contratto in essere; con un contratto in
+  essere **non** si esce, e il rifiuto arriva dal database e non da un `if`;
+- chi è uscito **rientra** accettando un invito nuovo;
+- una `UPDATE` a mano su `users.platform_role` dal ruolo applicativo fallisce con
+  `permission denied`, e un test lo prova su tutte le colonne negate;
 - `just ci` verde.
 
 ### Che cosa **non** entra
 
-- **il rate limiting per IP**, la verifica dell'email bloccante e l'MFA. La prima non serve
-  con una sola istanza; la seconda cambia il percorso di registrazione, che ogni collaudo
-  attraversa, e pagarne il costo mentre si prova da soli è il caso più netto del criterio
-  d'ordine; la terza è una colonna e nient'altro;
-- **Kubernetes, metriche, alerting, il cron delle partizioni di audit.** Dipendono da dove
-  il prodotto verrà esercito, che dopo questa fase sarà deciso — una VPS — e allora
-  saranno pianificabili con una misura invece che con un'ipotesi;
-- **`R9`, il perimetro dei ruoli.** Serve prima degli **sconosciuti**, non prima di un
-  proprietario che conosci: oggi chiunque si registri è owner di una propria
-  organizzazione, e con una persona sola è tollerabile e va saputo;
-- **la sezione 5-ter**, che è lavoro suo e viene prima di questa fase: `R31` in particolare
-  romperebbe il test appena il tuo proprietario rinnovasse un contratto;
-- **il modello di ricavo.** Questa fase esiste per poter fare la domanda, non per
-  rispondere.
+- **il cambio dell'email**, per la decisione 2: richiede la verifica dell'indirizzo, che è
+  fuori perimetro, e una decisione sugli inviti pendenti. Il client mostra il campo e non lo
+  rende modificabile, **con una riga che dice perché**: un campo disabilitato senza
+  spiegazione si legge come un difetto. Entra in [12](12-da-fare.md) insieme alla verifica
+  dell'email, che è la sua precondizione;
+- **togliere qualcuno dalla propria organizzazione**, che è il gemello di `R16` e non `R16`.
+  La policy lo ammetterebbe già — `org_members_update` è `is_org_staff` — e manca solo la
+  rotta, ma è una decisione a sé: che ne è dei suoi contratti, dei suoi addebiti e di ciò
+  che ha scritto, e lo stesso divieto va garantito su una persona che **non è chi chiama**.
+  Entra in [12](12-da-fare.md), riconosciuta e non istruita;
+- **la verifica dell'email alla registrazione**, che resta dov'è: cambia il percorso che
+  ogni collaudo attraversa;
+- **la cancellazione del proprio account.** È `R37` e la stessa domanda di `R15`: che cosa
+  significhi il verbo su righe che `audit_log` e gli eventi continuano a citare;
+- **`R9`**, il perimetro dei ruoli: serve prima degli sconosciuti, non prima di un
+  proprietario che conosci;
+- **l'elenco delle persone di un'organizzazione**, che resta chiuso per
+  [ADR-036](08-decisioni.md#adr-036) e [ADR-043](08-decisioni.md#adr-043).
 
 
 <a id="raccolta-da-ordinare"></a>

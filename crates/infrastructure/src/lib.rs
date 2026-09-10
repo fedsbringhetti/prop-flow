@@ -12,6 +12,7 @@
 pub mod ai;
 pub mod clock;
 pub mod db;
+pub mod notify;
 pub mod security;
 pub mod storage;
 pub mod telemetry;
@@ -19,4 +20,5 @@ pub mod telemetry;
 pub use ai::DeterministicOcrProvider;
 pub use clock::SystemClock;
 pub use db::{DatabasePools, PgUnitOfWorkFactory};
+pub use notify::{MailEncryption, SmtpNotifier, SmtpSettings};
 pub use storage::{S3ObjectStorage, S3Settings};

@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 
+import { todayIso } from '@/lib/format'
+
 import { SessionProvider } from '@/app/session'
 import type { Charge } from '@/api/types'
 import { DeclarePaymentDialog } from './DeclarePaymentDialog'
@@ -163,6 +165,48 @@ describe('dichiarare di aver pagato', () => {
     const body = attempts[0]?.body as { amount: unknown }
     expect(body.amount).toBe('184.20')
     expect(typeof body.amount).toBe('string')
+  })
+
+  /**
+   * **Il caso che si romperebbe in silenzio**, ed è `R34` letta dal verso giusto.
+   *
+   * Precompilare la data *e mandarla* sembra la stessa cosa e non lo è:
+   * `<input type="date">` produce un giorno senza ora, quindi un pagamento delle 18
+   * diventerebbe delle **00:00** — e in un elenco ordinato per data due
+   * dichiarazioni dello stesso giorno diventerebbero indistinguibili. Il rimedio è
+   * nel difetto: il campo mostra oggi, la richiesta tace.
+   *
+   * Nessuno se ne accorgerebbe guardando la schermata, perché la schermata è
+   * *identica* nei due casi. Solo questo test lo vede.
+   */
+  it('mostra oggi nel campo e non manda `paid_at` finché non si cambia', async () => {
+    const user = userEvent.setup()
+    const attempts = renderDialog([201])
+
+    await openDialog(user)
+    const date = await screen.findByLabelText(/data del movimento/i)
+    // A schermo c'è, così chi dichiara vede quale giorno sta dichiarando.
+    expect(date).toHaveValue(todayIso())
+
+    await submit(user)
+    await waitFor(() => expect(attempts).toHaveLength(1))
+    // Nel corpo no: il server mette l'istante vero, ore e minuti compresi.
+    expect(attempts[0]?.body).not.toHaveProperty('paid_at')
+  })
+
+  it('manda `paid_at` quando la data viene cambiata davvero', async () => {
+    const user = userEvent.setup()
+    const attempts = renderDialog([201])
+
+    await openDialog(user)
+    const date = await screen.findByLabelText(/data del movimento/i)
+    await user.clear(date)
+    await user.type(date, '2026-08-31')
+
+    await submit(user)
+    await waitFor(() => expect(attempts).toHaveLength(1))
+    const body = attempts[0]?.body as { paid_at?: string }
+    expect(body.paid_at).toBe(new Date('2026-08-31').toISOString())
   })
 
   it('non perde ciò che è stato digitato quando la chiamata fallisce', async () => {

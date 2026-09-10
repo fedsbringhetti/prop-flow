@@ -331,6 +331,36 @@ export function acceptInvitation(
   return client.post('/auth/accept-invitation', { token }, { withoutOrganization: true })
 }
 
+/**
+ * Chiede un codice di recupero.
+ *
+ * **Risponde sempre `202`**, per un indirizzo noto come per uno sconosciuto:
+ * distinguerli sarebbe un oracolo per sapere chi ha un account. Il client non ha
+ * quindi niente da ramificare sull'esito, e la schermata lo dice a parole.
+ */
+export function requestPasswordReset(client: ApiClient, email: string): Promise<void> {
+  return client.post('/auth/password-reset', { email }, { withoutOrganization: true })
+}
+
+/**
+ * Consuma il codice e imposta la password nuova.
+ *
+ * `401` per un codice sconosciuto, scaduto o già usato — i tre casi non si
+ * distinguono — e `422` per una password troppo debole, che invece è un errore del
+ * chiamante e va detto.
+ */
+export function confirmPasswordReset(
+  client: ApiClient,
+  code: string,
+  newPassword: string,
+): Promise<void> {
+  return client.post(
+    '/auth/password-reset/confirm',
+    { code, new_password: newPassword },
+    { withoutOrganization: true },
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Segnalazioni
 

@@ -10,8 +10,8 @@ use propflow_domain::billing::{
     SupplierVat, UtilityBill, UtilityBillParts,
 };
 use propflow_domain::ports::{
-    ChargeBalancePage, ChargeQuery, ChargeRepository, RepositoryError, RepositoryResult,
-    UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
+    ChargeBalancePage, ChargeQuery, ChargeRepository, RechargedAmount, RepositoryError,
+    RepositoryResult, UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
 };
 use propflow_domain::shared::{
     AiJobId, ChargeId, Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId, UtilityBillId,
@@ -384,6 +384,47 @@ impl UtilityBillRepository for PgUnitOfWork {
             return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
+    }
+
+    async fn recharged(&mut self, ids: &[UtilityBillId]) -> RepositoryResult<Vec<RechargedAmount>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **Sotto la RLS del chiamante**, come ogni altra lettura: `charges_select`
+        // chiede `can_access_lease`, quindi uno staff vede tutte le quote della
+        // propria organizzazione e un inquilino solo le proprie. È la ragione per
+        // cui il campo che ne nasce viaggia **solo verso lo staff**: un numero
+        // parziale mostrato come totale sarebbe peggio di nessun numero. Il bordo
+        // HTTP applica quella regola, il database questo confine.
+        //
+        // `status <> 'void'` e non un elenco di stati ammessi: gli stati degli
+        // addebiti cambiano, e un elenco positivo andrebbe aggiornato a ogni
+        // aggiunta dimenticandolo. L'unico che **non** conta è l'annullato — «non
+        // doveva essere chiesto», quindi la quota torna disponibile.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT c.utility_bill_id AS utility_bill_id,
+                    sum(c.amount)     AS recharged
+               FROM app.charges c
+              WHERE c.utility_bill_id = ANY($1)
+                AND c.deleted_at IS NULL
+                AND c.status <> 'void'
+              GROUP BY c.utility_bill_id",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let utility_bill_id: Uuid = try_get(&row, "utility_bill_id")?;
+                Ok(RechargedAmount {
+                    utility_bill_id: UtilityBillId::from_uuid(utility_bill_id),
+                    amount: try_get(&row, "recharged")?,
+                })
+            })
+            .collect()
     }
 }
 

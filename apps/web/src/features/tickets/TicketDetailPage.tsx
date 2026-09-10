@@ -85,13 +85,22 @@ export function TicketDetailPage() {
                   <DescriptionItem label={t.ticket.openedBy}>
                     <Person kind={data.reported_by_kind} name={data.reported_by_name} />
                   </DescriptionItem>
+                  {/* **Il nome, non la parola «Immobili».** Un collegamento che
+                      porta il nome della categoria invece di quello della cosa è
+                      `R32`, ed è la terza volta che il difetto si presenta —
+                      `R14` sui contratti, `R21`/`R22` sulle persone. Quando
+                      l'immobile è archiviato il nome non torna, e si dice che cosa
+                      è successo invece di mostrare uno spazio o un UUID. */}
                   <DescriptionItem label={t.ticket.property}>
                     <Link
                       to={`/immobili/${data.property_id}`}
                       className="text-accent underline-offset-4 hover:underline"
                     >
-                      {t.property.title}
+                      {data.property_label ?? t.common.archivedProperty}
                     </Link>
+                    {data.room_name ? (
+                      <span className="block text-xs text-ink-muted">{data.room_name}</span>
+                    ) : null}
                   </DescriptionItem>
                   {/* **Il nome, e poi la data.** Prima c'era solo la data, che
                       risponde «quando» a una domanda che chiede «chi»: è `R21`. Il

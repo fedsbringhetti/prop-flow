@@ -251,6 +251,19 @@ mescolati.
   a nessuno.
 - **PR in stack:** la base è il branch padre, non `dev`. Non usare *squash* sul
   padre di uno stack: rompe i figli.
+- **Su una PR in stack la CI non gira**, e non è un guasto: `.github/workflows/ci.yml`
+  si attiva su `pull_request: branches: [main, dev]`, che filtra il branch di
+  **destinazione**, e la base di una PR in stack è il padre. Il cancello vero resta la
+  PR del padre verso `dev`, dove la CI gira e dove la protezione del branch esige il
+  check `CI`.
+  Ne segue un obbligo per chi apre una PR in stack: **la verifica è quella eseguita a
+  mano**, e va scritta nel corpo con i numeri — `just ci`, quanti test, quanti falliti,
+  quanti dichiarati `SALTATO`. Senza, quella PR non ha nessuna prova, né automatica né
+  scritta.
+  Allargare il filtro ai branch di lavoro è possibile e si è scelto di non farlo: il
+  nome del job `CI` è un contratto con la protezione dei branch, e verificare due volte
+  lo stesso albero — una nella PR figlia, una in quella del padre — costa minuti di
+  runner per una prova che il padre rifà comunque.
 
 ### Altro
 
@@ -291,13 +304,17 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 ./ops/ci/check-schema.sh "$DATABASE_URL"
 
 # Ambiente di sviluppo
-docker compose up -d postgres minio minio-setup   # minio: storage dei documenti
+docker compose up -d postgres minio minio-setup mailpit   # minio: documenti; mailpit: posta
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
 cp .env.example .env                    # poi adattare
 set -a; source .env; set +a             # solo se lanci a mano: `just` lo carica da sé
 cargo run -p propflow-migrator
 cargo run -p propflow-api               # Swagger UI su http://localhost:8080/docs
 cargo run -p propflow-worker            # dispatcher dell'outbox
+
+# La posta che parte si legge su http://localhost:8025 (mailpit). Accetta tutto e
+# non recapita niente: prova che il messaggio parte e che cosa contiene, **non**
+# che sarebbe recapitato.
 ```
 
 Il client web, che vive in `apps/web/`:

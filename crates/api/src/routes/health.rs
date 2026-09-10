@@ -41,16 +41,29 @@ async fn liveness() -> Json<HealthResponse> {
     )
 )]
 async fn readiness(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
-    match state.pools.ping().await {
-        Ok(()) => (StatusCode::OK, Json(HealthResponse { status: "ready" })),
-        Err(error) => {
-            tracing::warn!(error = %error, "controllo di prontezza fallito");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(HealthResponse {
-                    status: "database non raggiungibile",
-                }),
-            )
-        }
+    if let Err(error) = state.pools.ping().await {
+        tracing::warn!(error = %error, "controllo di prontezza fallito");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                status: "database non raggiungibile",
+            }),
+        );
     }
+    // **La posta sta qui accanto al database**, e non è completezza. L'invio è
+    // best-effort dopo il commit: un relay caduto non produce nessun errore visibile
+    // a nessuno, e il recupero della password risponde `202` senza mandare niente —
+    // su chi non ha nessun altro modo di rientrare nel proprio account. Dirlo al
+    // chiamante costruirebbe un oracolo sugli account (ADR-017), quindi lo si dice
+    // **qui**, prima che qualcuno lo incontri.
+    if let Err(error) = state.notifier.probe().await {
+        tracing::warn!(error = %error, "controllo di prontezza fallito");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                status: "posta non raggiungibile",
+            }),
+        );
+    }
+    (StatusCode::OK, Json(HealthResponse { status: "ready" }))
 }

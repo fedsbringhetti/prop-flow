@@ -81,6 +81,33 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Il raccoglitore di posta dello sviluppo: accetta tutto, non recapita niente, e
+  # mostra i messaggi su http://localhost:8025.
+  #
+  # **Non è un fornitore.** Non verifica SPF, DKIM né i rimbalzi: prova che il
+  # messaggio parte e che cosa contiene, non che sarebbe recapitato — è lo stesso
+  # limite che MinIO ha rispetto a S3. La posta verso un indirizzo vero va provata
+  # con un mittente vero, e su un dominio nuovo finisce nello spam senza dare
+  # errore.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: propflow-mailpit
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      # 1025 SMTP, 8025 l'interfaccia in cui si leggono i messaggi.
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
   api:
     build: .
     image: propflow:dev
@@ -96,6 +123,15 @@ services:
       PROPFLOW__STORAGE__BUCKET: propflow-documents
       PROPFLOW__STORAGE__ACCESS_KEY_ID: propflow
       PROPFLOW__STORAGE__SECRET_ACCESS_KEY: propflow-dev-secret
+      # La posta è **obbligatoria** all'avvio: da quando esiste il recupero della
+      # password è l'unica via verso chi è chiuso fuori dal proprio account, e
+      # un'API che parte senza saper spedire risponderebbe `202` senza mandare
+      # niente. In chiaro perché il raccoglitore non cifra: `none` è ammesso solo
+      # qui, un relay vero raggiunto così manderebbe credenziali sulla rete.
+      PROPFLOW__MAIL__HOST: mailpit
+      PROPFLOW__MAIL__PORT: "1025"
+      PROPFLOW__MAIL__ENCRYPTION: none
+      PROPFLOW__MAIL__FROM_ADDRESS: propflow@localhost
       PROPFLOW__TELEMETRY__JSON_LOGS: "true"
       # Lo stack di compose parla HTTP su `localhost`, e un browser non manda un
       # cookie `Secure` su HTTP: senza questa riga il refresh fallirebbe sempre e
@@ -113,6 +149,8 @@ services:
         condition: service_completed_successfully
       minio-setup:
         condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
     read_only: true
     security_opt:
       - no-new-privileges:true

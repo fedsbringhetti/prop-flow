@@ -38,6 +38,16 @@ export const it = {
     search: 'Cerca',
     all: 'Tutti',
     saving: 'Salvataggio…',
+    /**
+     * L'etichetta neutra di un nome che l'API non ha potuto risolvere.
+     *
+     * Sta in `common` e non sotto un modulo perché la stessa frase serve a
+     * contratti, segnalazioni, addebiti e bollette: le query dei nomi filtrano
+     * `deleted_at IS NULL` come impone la regola 10, quindi un immobile archiviato
+     * lascia il campo assente ovunque. **Mai l'identificatore al suo posto**
+     * (ADR-043): un UUID a schermo non è un nome, è un guasto che si vede.
+     */
+    archivedProperty: 'Immobile archiviato',
   },
 
   state: {
@@ -69,6 +79,85 @@ export const it = {
     logout: 'Esci',
     sessionExpired: 'La sessione è scaduta. Entra di nuovo.',
     registeredNowSignIn: 'Account creato. Entra con le tue credenziali.',
+
+    /** Il recupero della password. Le stringhe dicono **la verità** su ciò che
+     *  succede: la risposta è la stessa per un indirizzo noto e per uno
+     *  sconosciuto, e dirlo è più onesto che lasciarlo intuire (ADR-052). */
+    forgotten: 'Password dimenticata?',
+    resetTitle: 'Recupera la password',
+    resetSubtitle: 'Ti mandiamo un codice da incollare qui.',
+    resetSubmit: 'Mandami il codice',
+    /** Non «ti abbiamo mandato un'email»: sarebbe una promessa che il prodotto non
+     *  può mantenere per un indirizzo che non ha un account, e dirla renderebbe la
+     *  sua assenza un modo per sapere chi è registrato. */
+    resetSent:
+      'Se quell’indirizzo ha un account, riceverà un codice. Vale 30 minuti e si usa una volta sola.',
+    resetCode: 'Codice ricevuto per email',
+    /** Come per l'invito: un codice si incolla, non si clicca. Un token dentro un
+     *  URL finisce nella cronologia, nel «Referer» e nei log di ogni proxy. */
+    resetCodeHint: 'Incollalo come l’hai ricevuto.',
+    newPassword: 'Password nuova',
+    resetConfirmTitle: 'Scegli la password nuova',
+    resetConfirmSubtitle: 'Il codice vale una volta sola.',
+    resetConfirmSubmit: 'Cambia la password',
+    /** La revoca è l'unica parte con una conseguenza che si sente: va detta prima,
+     *  non scoperta dopo trovandosi disconnessi ovunque. */
+    resetRevokesSessions:
+      'Cambiare la password chiude le sessioni aperte su tutti i dispositivi.',
+    resetDone: 'Password cambiata. Entra con quella nuova.',
+    backToLogin: 'Torna all’accesso',
+  },
+
+  /**
+   * L'informativa sulla privacy.
+   *
+   * **Il testo sta qui e non nel componente**, come ogni altra stringa visibile
+   * (regola 18): è prosa lunga, e la tentazione di scriverla nel JSX «perché è un
+   * caso a parte» è precisamente il modo in cui l'indirezione si perde. Le sezioni
+   * sono un elenco, così aggiungerne una non tocca il componente.
+   *
+   * **Dice quello che il prodotto fa davvero**, e non quello che si vorrebbe: la
+   * cancellazione è una richiesta da scrivere e non un bottone, perché il ruolo
+   * applicativo non ha il privilegio `DELETE` e tutto passa da `deleted_at`
+   * (ADR-003). Promettere un bottone sarebbe una promessa che il prodotto non può
+   * mantenere — vedi `R37`.
+   */
+  privacy: {
+    title: 'Privacy e dati personali',
+    subtitle:
+      'Che cosa raccogliamo, perché, dove sta e come si chiede la cancellazione.',
+    updated: 'Ultimo aggiornamento',
+    contactLabel: 'Per qualunque richiesta',
+    sections: [
+      {
+        title: 'Chi tratta i dati',
+        body: 'Il titolare del trattamento è la persona o la società che gestisce questa installazione di PropFlow, ed è la stessa a cui hai chiesto di usarlo. I contatti sono in fondo a questa pagina.',
+      },
+      {
+        title: 'Che cosa raccogliamo',
+        body: 'Di chi usa il prodotto: nome, email, e la password in una forma da cui non si torna indietro. Di chi è parte di un contratto: nome, email e telefono, se chi amministra li inserisce. Poi ciò che serve al servizio: immobili, contratti, importi, segnalazioni, bollette e i documenti che vengono caricati. Non raccogliamo dati di navigazione a fini pubblicitari e non usiamo strumenti di profilazione.',
+      },
+      {
+        title: 'Perché',
+        body: 'Per far funzionare il servizio che hai chiesto: gestire i tuoi immobili e i rapporti con chi ci abita. La base giuridica è il contratto con te, e per i dati di terzi che inserisci — i tuoi inquilini — sei tu a doverli informare, perché sei tu ad averli raccolti.',
+      },
+      {
+        title: 'Dove stanno e per quanto',
+        body: 'Su un server nell’Unione Europea, in un database e in uno storage di documenti che stanno sulla stessa macchina. Le copie di sicurezza sono cifrate e conservate fuori da quella macchina. I dati restano finché usi il servizio, e le copie di sicurezza per il periodo dichiarato nel contratto.',
+      },
+      {
+        title: 'Chi altro li vede',
+        body: 'Nessuno oltre a chi amministra la tua organizzazione e alle persone a cui quei dati si riferiscono. Non li vendiamo e non li cediamo. Il fornitore del server e quello della posta li trattano per conto nostro, per il solo fatto di ospitarli e di recapitare le email del servizio.',
+      },
+      {
+        title: 'Che cosa puoi chiedere',
+        body: 'Di sapere quali dati abbiamo, di correggerli, di riceverne una copia, di limitarne l’uso e di farli cancellare. Scrivi all’indirizzo qui sotto: rispondiamo entro trenta giorni. La cancellazione oggi è una procedura che eseguiamo a mano, non un bottone nel prodotto, e la differenza è che richiede la richiesta scritta.',
+      },
+      {
+        title: 'Che cosa la cancellazione non porta via',
+        body: 'Restano le righe che servono a un obbligo di legge — la contabilità, per il tempo che la legge impone — e la traccia tecnica delle operazioni, che non contiene i tuoi dati ma il fatto che qualcosa sia successo. Restano anche i dati che riguardano un’altra persona: se il tuo nome è in un contratto, quel contratto è anche di qualcun altro.',
+      },
+    ],
   },
 
   org: {
@@ -186,8 +275,11 @@ export const it = {
     statusLabel: 'Stato dichiarato',
     statusHint:
       'Affittato e parzialmente affittato non si scelgono: li calcolano i contratti in essere.',
-    /** Quando il dichiarato e l'effettivo divergono si mostrano entrambi: un
-     *  immobile in manutenzione che risulta affittato è un'anomalia da vedere. */
+    /** Il badge mostra il fatto; il dichiarato compare accanto solo quando è un
+     *  giudizio che il fatto smentisce — un immobile in manutenzione e insieme
+     *  affittato. Nella scheda c'è comunque, per chi lo cerca. */
+    filteredByDeclaredStatus:
+      'Il filtro usa lo stato dichiarato; il badge mostra quello che dicono i contratti in essere.',
     occupancy: 'Occupazione',
     filterOccupied: 'Con contratti in essere',
     filterFree: 'Senza contratti in essere',
@@ -240,9 +332,6 @@ export const it = {
     property: 'Immobile',
     room: 'Stanza',
     wholeProperty: 'Immobile intero',
-    /** Quando l'immobile è archiviato il nome non si legge più: la riga resta e
-     *  lo dice, invece di mostrare uno spazio vuoto. */
-    unknownProperty: 'Immobile archiviato',
     /** L'avviso arriva **prima**, ma non vieta: due bozze sullo stesso periodo
      *  sono ipotesi alternative, e i vincoli del database le ammettono apposta. */
     overlapTitle: 'Su questo periodo c’è già un contratto',
@@ -320,6 +409,13 @@ export const it = {
     /** `expiring` ed `expired` sono derivati: si mostrano e non si filtrano. */
     derivedStatusNote:
       'In scadenza e scaduto sono stati derivati dalla data: si vedono, non si filtrano.',
+    /** La risposta alla domanda che il filtro fa nascere: «ho chiesto gli attivi e
+     *  me ne torna uno marcato Scaduto». Sta accanto al filtro perché è lì che la
+     *  domanda nasce, e non ripetuta su ogni riga — che era `R30`. */
+    filteredByDeclaredStatus:
+      'Il filtro usa lo stato dichiarato; il badge mostra quello derivato dalle date.',
+    /** Lo stato che qualcuno ha scelto, distinto da quello che le date dicono. */
+    statusLabel: 'Stato dichiarato',
     charges: 'Addebiti del contratto',
     issueCharge: 'Emetti un addebito',
     types: { whole_property: 'Immobile intero', room: 'Stanza' },
@@ -682,6 +778,17 @@ export const it = {
       'Crea un addebito verso l’inquilino. Si può ripetere su più contratti; nessuno verifica che le quote sommino al totale.',
     rechargeAmount: 'Importo da riaddebitare',
     rechargeDueDate: 'Scadenza dell’addebito',
+    /** Il conto che si faceva a mente, e a mente si sbagliava: riaddebitare una
+     *  bolletta d'immobile a tre contratti sono tre sottrazioni. */
+    rechargeRemaining: 'Da riaddebitare',
+    rechargeAlready: 'Già riaddebitato',
+    /** Superare il totale **è ammesso** e resta ammesso: qui si avvisa, non si
+     *  vieta. Il vincolo non esiste in database, e uno applicativo cadrebbe fra
+     *  due riaddebiti concorrenti. */
+    rechargeOverBudget: 'Questo importo supera quanto resta da riaddebitare.',
+    /** Solo i contratti in corso ricevono un addebito: una bozza non è ancora un
+     *  rapporto, un contratto annullato o disdetto non lo è più. */
+    rechargeNoLeases: 'Nessun contratto in corso su questo immobile.',
     recharged: 'Riaddebito effettuato.',
     created: 'Bolletta registrata.',
     updated: 'Bolletta aggiornata.',
@@ -856,7 +963,10 @@ export const it = {
     amount: 'Importo incassato',
     method: 'Strumento',
     paidAt: 'Data del movimento',
-    paidAtHint: 'Vuoto significa adesso.',
+    /** Il campo mostra oggi e la richiesta tace finché non lo si cambia: così un
+     *  pagamento delle 18 resta delle 18 invece di diventare delle 00:00. Il
+     *  suggerimento dice a chi guarda che cosa succede se non tocca niente. */
+    paidAtHint: 'Lasciata a oggi vale l’istante dell’invio. Cambiala se il movimento è di un altro giorno.',
     reference: 'Causale o riferimento',
     referenceHint: 'Quello che leggi sull’estratto conto: serve a ritrovarlo.',
     payer: 'A chi attribuirlo',

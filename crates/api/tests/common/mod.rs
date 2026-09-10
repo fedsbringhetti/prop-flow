@@ -13,7 +13,10 @@ use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use chrono::Duration;
 use propflow_api::state::{AppState, Dependencies};
-use propflow_application::ports::{ObjectStorage, StorageError, StoredObject};
+use propflow_application::ports::{
+    Notification, NotificationContent, Notifier, NotifyError, ObjectStorage, StorageError,
+    StoredObject,
+};
 use propflow_infrastructure::db::PoolSettings;
 use propflow_infrastructure::security::{
     Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
@@ -120,10 +123,46 @@ pub struct Upload<'a> {
     pub kind: Option<&'a str>,
 }
 
+/// Doppio in memoria di [`Notifier`].
+///
+/// **Il raccoglitore locale, dentro il processo.** Il criterio di fine di questo
+/// passo è «un'email di invito arriva davvero, con il token nel corpo»: qui la si
+/// intercetta e la si ispeziona, invece di guardarla con gli occhi in una casella.
+/// Quello che questo doppio **non** prova è lo stesso che un raccoglitore vero non
+/// prova — che il messaggio sarebbe recapitato.
+#[derive(Default)]
+pub struct RecordingNotifier {
+    sent: std::sync::Mutex<Vec<(String, NotificationContent)>>,
+}
+
+impl RecordingNotifier {
+    /// Le notifiche recapitate, come coppie (destinatario, contenuto).
+    pub fn sent(&self) -> Vec<(String, NotificationContent)> {
+        self.sent.lock().expect("mutex").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl Notifier for RecordingNotifier {
+    async fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
+        self.sent.lock().expect("mutex").push((
+            notification.to.as_str().to_owned(),
+            notification.content.clone(),
+        ));
+        Ok(())
+    }
+
+    async fn probe(&self) -> Result<(), NotifyError> {
+        Ok(())
+    }
+}
+
 pub struct TestApp {
     pub router: Router,
     /// Lo stesso storage iniettato nell'app: i test lo ispezionano.
     pub storage: Arc<InMemoryObjectStorage>,
+    /// La posta iniettata nell'app: i test leggono che cosa è partito.
+    pub mail: Arc<RecordingNotifier>,
     /// I due pool, per i test che devono far girare anche il **worker**.
     ///
     /// Il worker non è montato nel router — non è un bordo HTTP — quindi un test
@@ -151,6 +190,7 @@ impl TestApp {
             .expect("connessione al database di test");
 
         let storage = Arc::new(InMemoryObjectStorage::default());
+        let mail = Arc::new(RecordingNotifier::default());
         let dependencies = Dependencies {
             unit_of_work: Arc::new(PgUnitOfWorkFactory::new(pools.clone())),
             hasher: Arc::new(Argon2PasswordHasher::new().expect("Argon2")),
@@ -168,6 +208,7 @@ impl TestApp {
             invitation_tokens: Arc::new(OpaqueTokenGenerator),
             clock: Arc::new(SystemClock),
             object_storage: Arc::clone(&storage) as Arc<dyn ObjectStorage>,
+            notifier: Arc::clone(&mail) as Arc<dyn Notifier>,
             presign_ttl_seconds: PRESIGN_TTL_SECONDS,
             ocr_provider_name: propflow_infrastructure::DeterministicOcrProvider::NAME.to_owned(),
             pools: pools.clone(),
@@ -186,6 +227,7 @@ impl TestApp {
                 std::time::Duration::from_secs(10),
             ),
             storage,
+            mail,
         })
     }
 

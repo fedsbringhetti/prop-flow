@@ -33,6 +33,6 @@ pub use bill::{
 pub use charge::{IssueCharge, IssueChargeCommand, VoidCharge, WriteOffCharge};
 pub use read::{
     GetCharge, GetUtilityBill, ListCharges, ListChargesQuery, ListUtilityBills,
-    ListUtilityBillsQuery,
+    ListUtilityBillsQuery, Placed, Places, Recharged,
 };
 pub use recharge::{Recharge, RechargeUtilityBill, RechargeUtilityBillCommand};

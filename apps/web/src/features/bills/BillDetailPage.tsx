@@ -11,6 +11,7 @@ import {
   validateBill,
   voidBill,
 } from '@/api/endpoints'
+import type { LeaseStatus } from '@/api/types'
 import { Async, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,6 +21,7 @@ import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/com
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
+import { compareDecimals, isZero, subtractAmounts } from '@/lib/decimal'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
 import { BillStatusBadge } from '../shared/status'
@@ -83,7 +85,13 @@ export function BillDetailPage() {
                   />
                 ) : null}
                 {data.status === 'validated' || data.status === 'allocated' ? (
-                  <RechargeDialog billId={id} propertyId={data.property_id} total={data.total_amount} />
+                  <RechargeDialog
+                    billId={id}
+                    propertyId={data.property_id}
+                    total={data.total_amount}
+                    currency={data.currency}
+                    recharged={data.recharged_amount}
+                  />
                 ) : null}
                 {/* **Dichiarare, non registrare un pagamento.** Il denaro in
                     uscita non è modellato: `app.payments` è per ciò che entra, e
@@ -145,14 +153,24 @@ export function BillDetailPage() {
                   <DescriptionItem label={t.bill.supplierVat}>
                     {data.supplier_vat ?? t.common.none}
                   </DescriptionItem>
+                  {/* Il contratto imputato si nomina come sugli addebiti. Il
+                      trattino resta il caso della bolletta d'immobile intero, che
+                      non è imputata a nessuno ed è il caso normale; il nome manca
+                      anche quando l'immobile del contratto è archiviato, e allora
+                      si dice che cosa è successo. */}
                   <DescriptionItem label={t.bill.lease}>
                     {data.lease_id ? (
-                      <Link
-                        to={`/contratti/${data.lease_id}`}
-                        className="text-accent underline-offset-4 hover:underline"
-                      >
-                        {t.lease.title}
-                      </Link>
+                      <>
+                        <Link
+                          to={`/contratti/${data.lease_id}`}
+                          className="text-accent underline-offset-4 hover:underline"
+                        >
+                          {data.property_label ?? t.common.archivedProperty}
+                        </Link>
+                        {data.room_name ? (
+                          <span className="block text-xs text-ink-muted">{data.room_name}</span>
+                        ) : null}
+                      </>
                     ) : (
                       t.common.none
                     )}
@@ -237,33 +255,71 @@ function ScansCard({
 }
 
 /**
- * Il riaddebito, con l'avvertenza scritta e non nascosta.
+ * I soli contratti che possono ricevere un addebito.
  *
- * Nessuno verifica che le quote riaddebitate sommino al totale della bolletta: lo
- * schema non ha il vincolo, e un controllo applicativo sarebbe soggetto a race
- * condition fra due riaddebiti concorrenti. Riaddebitare più del totale **è
- * possibile**, e chi lo fa deve saperlo prima e non dopo.
+ * Lo stato **memorizzato** e non quello derivato, ed è la parte che si sbaglia
+ * volendo essere precisi: un contratto scaduto ieri ha `effective_status`
+ * `expired` e `status` ancora `active`, e riaddebitargli l'ultima bolletta del
+ * periodo in cui quella persona ci abitava è il caso normale, non un'anomalia.
+ * Filtrare sul derivato lo escluderebbe proprio quando serve.
+ *
+ * Fuori restano `draft` e `pending_signature` — non è ancora un rapporto — e
+ * `terminated` e `cancelled`, che non lo sono più. È la stessa classe di difetto di
+ * `R26`: offrire un'opzione che non può portare a niente di buono.
+ *
+ * **Restringe ciò che si offre, non ciò che si può fare**: l'API accetta un
+ * addebito su qualunque contratto visibile, ed è la distinzione di ADR-042.
+ */
+const RECHARGEABLE: readonly LeaseStatus[] = ['active']
+
+/**
+ * Il riaddebito: **a chi**, e **quanto resta**.
+ *
+ * Prima diceva né l'uno né l'altro. La tendina elencava i contratti come *tipo ·
+ * data* — che è il difetto che `R14` aveva già corretto nell'elenco dei contratti,
+ * ricomparso qui — e l'importo partiva dal totale della bolletta, così che
+ * riaddebitare una bolletta d'immobile a tre contratti erano tre sottrazioni a
+ * mente.
+ *
+ * # Il residuo aiuta e non vincola
+ *
+ * Nessuno verifica che le quote riaddebitate sommino al totale: lo schema non ha il
+ * vincolo, e un controllo applicativo cadrebbe fra due riaddebiti concorrenti.
+ * Riaddebitare più del totale **resta possibile**, ed è deliberato — qui si aggiunge
+ * un numero che aiuta, non un cancello. Per questo l'avvertenza sopra l'importo è un
+ * avviso e non un errore che blocca l'invio.
  */
 function RechargeDialog({
   billId,
   propertyId,
   total,
+  currency,
+  recharged,
 }: {
   billId: string
   propertyId: string
   total: string
+  currency: string
+  /** Assente per chi non è staff — che però non vede questo dialogo. */
+  recharged: string | null | undefined
 }) {
   const client = useApi()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
-  const [values, setValues] = useState({ lease_id: '', amount: total, due_date: todayIso() })
+  // Il residuo, non il totale: è ciò che si sta per chiedere a **questo**
+  // contratto quando i precedenti hanno già preso la loro parte.
+  const remaining = subtractAmounts(total, recharged ?? '0.00')
+  const [values, setValues] = useState({ lease_id: '', amount: remaining, due_date: todayIso() })
 
   const leases = useQuery({
     queryKey: keys.leases({ property: propertyId, perRiaddebito: true }),
     queryFn: () => listLeases(client, { property_id: propertyId }),
     enabled: open,
   })
+  const candidates = (leases.data?.items ?? []).filter((lease) =>
+    RECHARGEABLE.includes(lease.status),
+  )
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -303,7 +359,13 @@ function RechargeDialog({
         }}
       >
         <InlineError error={error} />
-        <Field label={t.charge.lease} required>
+        <Field
+          label={t.charge.lease}
+          required
+          {...(leases.isSuccess && candidates.length === 0
+            ? { hint: t.bill.rechargeNoLeases }
+            : {})}
+        >
           {(props) => (
             <Select
               {...props}
@@ -311,16 +373,45 @@ function RechargeDialog({
               onChange={(event) => setValues((v) => ({ ...v, lease_id: event.target.value }))}
             >
               <option value="">—</option>
-              {(leases.data?.items ?? []).map((lease) => (
+              {candidates.map((lease) => (
                 <option key={lease.id} value={lease.id}>
-                  {t.lease.types[lease.lease_type]} · {formatDate(lease.start_date)}
+                  {/* **Dove e chi.** L'immobile è sempre lo stesso in questa
+                      tendina — sono i contratti di *questa* bolletta — ma la
+                      stanza e l'intestatario sono ciò che distingue una riga
+                      dall'altra in un co-living, che è il caso per cui il
+                      riaddebito ripetuto esiste. */}
+                  {[
+                    lease.property_label ?? t.common.archivedProperty,
+                    lease.room_name,
+                    lease.primary_tenant,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </option>
               ))}
             </Select>
           )}
         </Field>
+        {/* Il conto che prima si faceva a mente. Si mostra solo a riaddebito già
+            cominciato: su una bolletta intatta «già riaddebitato: 0,00» è rumore. */}
+        {recharged && !isZero(recharged) ? (
+          <dl className="grid grid-cols-2 gap-1 rounded-lg bg-surface-muted px-3 py-2 text-xs">
+            <dt className="text-ink-muted">{t.bill.rechargeAlready}</dt>
+            <dd className="text-right tabular-nums">{formatAmount(recharged, { currency })}</dd>
+            <dt className="text-ink-muted">{t.bill.rechargeRemaining}</dt>
+            <dd className="text-right font-medium tabular-nums">
+              {formatAmount(remaining, { currency })}
+            </dd>
+          </dl>
+        ) : null}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label={t.bill.rechargeAmount} required>
+          <Field
+            label={t.bill.rechargeAmount}
+            required
+            {...(compareDecimals(values.amount, remaining) > 0
+              ? { hint: t.bill.rechargeOverBudget }
+              : {})}
+          >
             {(props) => (
               <Input
                 {...props}

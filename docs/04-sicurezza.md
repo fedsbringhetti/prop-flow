@@ -109,6 +109,30 @@ presentare un token che abbiamo firmato noi, quindi si dice solo a chi già lo s
 Il **refresh** invece resta indistinto: lì separare "scaduto" da "riusato" direbbe a
 chi ha rubato un token se è ancora vivo.
 
+### Il recupero della password non riapre nessuna di queste porte
+
+Le stesse tre proprietà, applicate a una rotta nuova. La risposta è `202` **sempre**,
+senza corpo: un indirizzo noto e uno sconosciuto ricevono la stessa cosa. Il **tempo**
+è lo stesso, perché per un indirizzo senza account si calcola comunque lo hash di un
+valore fittizio — è il punto 2 qui sopra, spostato dalla verifica Argon2 alla
+generazione del codice. E il limite agli invii rifiuta **in silenzio**: dire «troppo
+presto» confermerebbe che l'account esiste.
+
+Ne segue una cosa che va saputa: **un fallimento dell'invio non può essere riportato a
+chi chiede**. Si tenta solo per un indirizzo che ha un account, quindi qualunque
+differenza — un codice, un messaggio, una durata — riaprirebbe l'oracolo. Un relay di
+posta caduto è perciò **muto**, e a renderlo visibile è il controllo di prontezza, che
+interroga SMTP insieme al database.
+
+Il codice vale trenta minuti e una volta sola; sconosciuto, scaduto e già usato danno lo
+stesso `401`. In database c'è lo **hash**, come per il token d'invito e per il refresh:
+il valore in chiaro esiste solo nell'email.
+
+**Confermare revoca tutte le sessioni**, e la frase va letta con precisione: revoca i
+**refresh token**. L'access token è un JWT firmato e non è revocabile
+([ADR-013](08-decisioni.md#adr-013)), quindi chi ne ha uno in mano resta dentro fino
+alla scadenza — quindici minuti. La catena si chiude, e da lì in poi non si rinnova più.
+
 ### Blocco dopo tentativi falliti
 
 Dieci tentativi consecutivi bloccano l'account per **15 minuti**. Temporaneo e non
@@ -146,7 +170,10 @@ contesto di sicurezza non può esistere:
 
 - registrazione — utente, organizzazione e membership non esistono ancora;
 - login — la policy su `users` mostra una riga solo a chi è già identificato;
-- rotazione del refresh token — il chiamante presenta un token, non un'identità.
+- rotazione del refresh token — il chiamante presenta un token, non un'identità;
+- **recupero della password** — chi l'ha dimenticata non è autenticato per
+  definizione, quindi non c'è un `current_user_id` da installare e la Row Level
+  Security non ha nulla su cui appoggiarsi ([ADR-052](08-decisioni.md#adr-052)).
 
 Ogni altro uso è un errore di progetto. Il logout, per contrasto, passa dal
 contesto normale: la policy su `user_sessions` impedisce di revocare la sessione di
@@ -267,6 +294,14 @@ Regola: **niente dati personali nei log, nelle tracce, negli eventi.**
   tecnico resta nei log correlato da quello. Un messaggio di errore del database in
   una risposta HTTP è ricognizione gratuita.
 - Gli eventi di dominio trasportano identificatori e nomi di campo, non valori.
+- **L'adattatore SMTP è il posto più facile in cui far uscire dati personali**, perché
+  una notifica *deve* trasportarli: senza l'indirizzo non si recapita niente. Un client
+  che registrasse la richiesta scriverebbe destinatario, oggetto e corpo insieme. Non
+  si registra nulla dell'invio riuscito, e del fallito solo la **classe** dell'errore.
+  `Notification` e `NotificationContent` hanno `Debug` redatto, e l'adattatore non lo
+  annulla. Il fallimento di un invito registra l'identificatore dell'invito, mai il
+  destinatario né il token; quello di un codice di recupero non registra nemmeno
+  l'identificatore, perché lì l'unica cosa da cui si risalirebbe è l'indirizzo.
 
 ## Difese al bordo HTTP
 

@@ -9,6 +9,7 @@ use propflow_domain::{DomainResult, Entity, RequestContext};
 use rust_decimal::Decimal;
 
 use super::bill::append_all;
+use super::read::{Placed, placed_charge};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -50,7 +51,7 @@ impl IssueCharge {
         &self,
         context: &RequestContext,
         command: IssueChargeCommand,
-    ) -> AppResult<Charge> {
+    ) -> AppResult<Placed<Charge>> {
         let org_id = authorization::ensure_staff(context)?;
         let now = self.clock.now();
 
@@ -85,9 +86,12 @@ impl IssueCharge {
             ))],
         )
         .await?;
+        // I nomi si risolvono **prima** del commit, perché dopo l'unità di lavoro
+        // non c'è più — e su ogni risposta, non solo sulle letture: vedi `Placed`.
+        let placed = placed_charge(uow.as_mut(), charge).await?;
         uow.commit().await?;
 
-        Ok(charge)
+        Ok(placed)
     }
 }
 
@@ -171,7 +175,7 @@ async fn transition<T>(
     context: &RequestContext,
     id: ChargeId,
     apply: T,
-) -> AppResult<Charge>
+) -> AppResult<Placed<Charge>>
 where
     T: FnOnce(&mut Charge, DateTime<Utc>) -> DomainResult<()>,
 {
@@ -207,9 +211,10 @@ where
         )],
     )
     .await?;
+    let placed = placed_charge(uow.as_mut(), charge).await?;
     uow.commit().await?;
 
-    Ok(charge)
+    Ok(placed)
 }
 
 /// Annulla un addebito: la richiesta è caduta.
@@ -231,7 +236,11 @@ impl VoidCharge {
         }
     }
 
-    pub async fn execute(&self, context: &RequestContext, id: ChargeId) -> AppResult<Charge> {
+    pub async fn execute(
+        &self,
+        context: &RequestContext,
+        id: ChargeId,
+    ) -> AppResult<Placed<Charge>> {
         transition(
             &self.unit_of_work,
             &self.clock,
@@ -262,7 +271,11 @@ impl WriteOffCharge {
         }
     }
 
-    pub async fn execute(&self, context: &RequestContext, id: ChargeId) -> AppResult<Charge> {
+    pub async fn execute(
+        &self,
+        context: &RequestContext,
+        id: ChargeId,
+    ) -> AppResult<Placed<Charge>> {
         transition(
             &self.unit_of_work,
             &self.clock,
