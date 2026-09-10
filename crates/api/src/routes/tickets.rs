@@ -5,9 +5,9 @@ use axum::{Json, Router};
 use propflow_application::authorization::discloses_estimated_cost;
 use propflow_application::use_cases::ticket::{
     AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, CorrectTicketReportCommand,
-    ListTicketMessagesCommand, ListTicketsQuery, OpenTicketCommand, People,
+    ListTicketMessagesCommand, ListTicketsQuery, OpenTicketCommand, People, Places,
     PostTicketMessageCommand, ReopenTicketCommand, StartTicketWorkCommand, SuspendTicketCommand,
-    TicketDetail, TriageTicketCommand, UpdateTicketCostsCommand,
+    TicketDetail, TicketView, TriageTicketCommand, UpdateTicketCostsCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::property::Patch;
@@ -443,6 +443,20 @@ pub struct TicketResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assigned_to_name: Option<String>,
     pub assigned_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Come si chiama l'immobile a cui la segnalazione si riferisce.
+    ///
+    /// **Assente non è un errore**: la riga dell'immobile può essere archiviata, e
+    /// allora il nome non si legge più mentre la segnalazione resta. Chi legge mette
+    /// un'etichetta neutra — «Immobile archiviato» — e **mai l'identificatore**
+    /// ([ADR-043](../../../../../docs/08-decisioni.md), [ADR-049](../../../../../docs/08-decisioni.md)).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_label: Option<String>,
+    /// Come si chiama la stanza, quando la segnalazione ne riguarda una.
+    ///
+    /// Assente è il caso **normale**: una segnalazione sull'immobile intero non ha
+    /// una stanza, ed è diverso dall'assenza di `property_label`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
     /// Stringhe decimali, come tutti gli importi dell'API.
     ///
     /// **`estimated_cost` è `null` per chi non è staff**, anche quando un valore
@@ -466,7 +480,13 @@ impl TicketResponse {
     /// `people` è il modello di lettura dei nomi, risolto dallo stesso caso d'uso
     /// che ha letto la segnalazione: **ogni** risposta ne porta uno, transizioni
     /// comprese, così i due campi del nome non ci sono a volte sì e a volte no.
-    fn from_domain(ticket: &Ticket, discloses_estimated_cost: bool, people: &People) -> Self {
+    fn from_domain(
+        ticket: &Ticket,
+        discloses_estimated_cost: bool,
+        people: &People,
+        places: &Places,
+    ) -> Self {
+        let labels = places.of(ticket.id());
         Self {
             id: ticket.id().as_uuid(),
             organization_id: ticket.org_id().as_uuid(),
@@ -488,6 +508,8 @@ impl TicketResponse {
             assigned_to: ticket.assigned_to().map(|id| id.as_uuid()),
             assigned_to_name: people.name_of(ticket.assigned_to()).map(str::to_owned),
             assigned_at: ticket.assigned_at(),
+            property_label: labels.and_then(|labels| labels.property_label.clone()),
+            room_name: labels.and_then(|labels| labels.room_name.clone()),
             estimated_cost: discloses_estimated_cost
                 .then(|| {
                     ticket
@@ -504,6 +526,20 @@ impl TicketResponse {
             created_at: ticket.created_at(),
             updated_at: ticket.updated_at(),
         }
+    }
+
+    /// La proiezione di ciò che un caso d'uso restituisce, senza scomporlo.
+    ///
+    /// I due modelli di lettura viaggiano **insieme** alla segnalazione apposta
+    /// (vedi `TicketView`): passarli separati a ogni chiamata era il modo di
+    /// dimenticarne uno in una delle dodici.
+    fn from_view(view: &TicketView, discloses_estimated_cost: bool) -> Self {
+        Self::from_domain(
+            &view.ticket,
+            discloses_estimated_cost,
+            &view.people,
+            &view.places,
+        )
     }
 }
 
@@ -660,10 +696,9 @@ async fn open(
 
     Ok((
         StatusCode::CREATED,
-        Json(TicketResponse::from_domain(
-            &view.ticket,
+        Json(TicketResponse::from_view(
+            &view,
             discloses_estimated_cost(&context),
-            &view.people,
         )),
     ))
 }
@@ -700,7 +735,9 @@ async fn list(
         items: page
             .items
             .iter()
-            .map(|ticket| TicketResponse::from_domain(ticket, discloses, &page.people))
+            .map(|ticket| {
+                TicketResponse::from_domain(ticket, discloses, &page.people, &page.places)
+            })
             .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
@@ -725,6 +762,7 @@ async fn detail(
         ticket,
         history,
         people,
+        places,
     } = state
         .get_ticket
         .execute(&context, TicketId::from_uuid(id))
@@ -732,7 +770,12 @@ async fn detail(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(TicketDetailResponse {
-        ticket: TicketResponse::from_domain(&ticket, discloses_estimated_cost(&context), &people),
+        ticket: TicketResponse::from_domain(
+            &ticket,
+            discloses_estimated_cost(&context),
+            &people,
+            &places,
+        ),
         history: history
             .iter()
             .map(TicketStatusChangeResponse::from_domain)
@@ -775,10 +818,9 @@ async fn update_costs(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -819,10 +861,9 @@ async fn correct_report(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -945,10 +986,9 @@ async fn triage(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -982,10 +1022,9 @@ async fn assign(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -1016,10 +1055,9 @@ async fn start(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -1053,10 +1091,9 @@ async fn suspend(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -1090,10 +1127,9 @@ async fn close(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -1133,10 +1169,9 @@ async fn reopen(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }
 
@@ -1167,9 +1202,8 @@ async fn cancel(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &view.ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
-        &view.people,
     )))
 }

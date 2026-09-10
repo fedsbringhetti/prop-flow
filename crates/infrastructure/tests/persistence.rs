@@ -1936,6 +1936,9 @@ async fn register_bill(
         )
         .await
         .expect("bolletta registrata")
+        // I casi d'uso restituiscono ora la bolletta **con i nomi dei luoghi che
+        // cita**: qui interessa il solo aggregato.
+        .value
 }
 
 /// Porta un inquilino dentro l'organizzazione come parte del contratto indicato,
@@ -2782,6 +2785,7 @@ async fn issue_charge(
         )
         .await
         .expect("addebito emesso")
+        .value
 }
 
 fn key(label: &str) -> IdempotencyKey {

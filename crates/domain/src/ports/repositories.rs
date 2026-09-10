@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rust_decimal::Decimal;
 
 use crate::ai::{AiJob, AiTask};
 use crate::billing::{
@@ -353,6 +354,15 @@ pub struct LeaseLabels {
     pub lease_id: LeaseId,
     pub property_label: Option<String>,
     pub room_name: Option<String>,
+    /// Il nome dell'**intestatario**, cioè della parte marcata `is_primary`.
+    ///
+    /// Assente su un contratto che non ne ha una — una bozza a cui non si è ancora
+    /// aggiunto nessuno — e su uno le cui parti non sono leggibili da chi chiede.
+    /// È lo stesso `full_name` denormalizzato su `lease_parties`, che sopravvive a
+    /// chi se ne va ([ADR-043](../../../../docs/08-decisioni.md)); qui viaggia
+    /// perché *dove* non basta a dire *a chi*: due contratti sulla stessa stanza in
+    /// due anni diversi si distinguono solo così.
+    pub primary_tenant: Option<String>,
 }
 
 /// Parti di un contratto.
@@ -529,6 +539,26 @@ pub trait TicketRepository: Send {
         &mut self,
         ticket_id: TicketId,
     ) -> RepositoryResult<Vec<TicketStatusChange>>;
+
+    /// I nomi di ciò a cui le segnalazioni si riferiscono, per un'intera pagina.
+    ///
+    /// Stessa forma di [`LeaseRepository::labels`], e per le stesse ragioni: una
+    /// query e non una per riga, e fuori dall'aggregato perché il nome di un
+    /// immobile appartiene all'immobile.
+    async fn labels(&mut self, ids: &[TicketId]) -> RepositoryResult<Vec<TicketLabels>>;
+}
+
+/// Dove sta ciò che una segnalazione riguarda.
+///
+/// L'**immobile** manca quando la sua riga è archiviata — la segnalazione resta, il
+/// nome no — e la **stanza** manca quando la segnalazione riguarda l'immobile
+/// intero, che è il caso normale. Chi legge mette un'etichetta neutra: mai
+/// l'identificatore (ADR-043).
+#[derive(Debug, Clone)]
+pub struct TicketLabels {
+    pub ticket_id: TicketId,
+    pub property_label: Option<String>,
+    pub room_name: Option<String>,
 }
 
 /// Filtro di elenco dei messaggi di una segnalazione, con paginazione keyset.
@@ -641,6 +671,31 @@ pub trait UtilityBillRepository: Send {
     /// L'immutabilità della bolletta è quindi un'invariante di **dominio**
     /// (`UtilityBill::apply` rifiuta da `allocated` in poi) e non un privilegio.
     async fn update(&mut self, bill: &UtilityBill) -> RepositoryResult<()>;
+
+    /// Quanto di ciascuna bolletta è **già stato riaddebitato**.
+    ///
+    /// Non è un campo dell'aggregato e non ci deve entrare: è la somma di righe di
+    /// un altro aggregato — gli addebiti che citano la bolletta — e memorizzarla
+    /// darebbe due fonti di verità che divergono al primo annullamento. Modello di
+    /// lettura, come [`LeaseLabels`], e **una query per pagina**.
+    ///
+    /// Serve a dire quanto **resta**: riaddebitare una bolletta d'immobile a tre
+    /// contratti sono tre sottrazioni a mente, e a mente si sbagliano. Non è un
+    /// vincolo — riaddebitare più del totale resta possibile e voluto
+    /// ([ADR-015](../../../../docs/08-decisioni.md) sul perché un'invariante del
+    /// genere starebbe nel database o da nessuna parte) — è un numero che aiuta.
+    ///
+    /// Gli addebiti **annullati non contano**: `void` dice «non doveva essere
+    /// chiesto», quindi quella quota torna disponibile. Gli **stornati sì**: erano
+    /// dovuti, e rinunciare a incassarli non disfa il riaddebito.
+    async fn recharged(&mut self, ids: &[UtilityBillId]) -> RepositoryResult<Vec<RechargedAmount>>;
+}
+
+/// Quanto di una bolletta è già stato riaddebitato.
+#[derive(Debug, Clone)]
+pub struct RechargedAmount {
+    pub utility_bill_id: UtilityBillId,
+    pub amount: Decimal,
 }
 
 /// I job AI **visti da una richiesta**: si accodano e si leggono, non si toccano.

@@ -6,7 +6,7 @@ use propflow_domain::shared::TicketId;
 use propflow_domain::ticket::TicketCosts;
 use propflow_domain::{Entity, RequestContext};
 
-use super::read::{TicketView, resolve_one};
+use super::read::{TicketView, view_of};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -63,8 +63,7 @@ impl UpdateTicketCosts {
             // audit. Un PATCH vuoto non è un errore, ma non è nemmeno una
             // modifica. I nomi si risolvono lo stesso: la risposta è quella di
             // sempre, e un `PATCH` a vuoto non deve restituirne una più povera.
-            let people = resolve_one(&mut *uow, &ticket).await?;
-            return Ok(TicketView { ticket, people });
+            return view_of(&mut *uow, ticket).await;
         }
 
         uow.tickets().update(&ticket).await?;
@@ -80,9 +79,9 @@ impl UpdateTicketCosts {
             ))
             .await?;
 
-        let people = resolve_one(&mut *uow, &ticket).await?;
+        let view = view_of(&mut *uow, ticket).await?;
         uow.commit().await?;
 
-        Ok(TicketView { ticket, people })
+        Ok(view)
     }
 }

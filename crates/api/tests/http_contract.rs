@@ -3514,6 +3514,429 @@ async fn register_bill(
     created["id"].as_str().expect("id").to_owned()
 }
 
+/// **I nomi di ciò a cui una risposta porta**, che è `R32` — terza occorrenza dello
+/// stesso difetto dopo `R14` sui contratti e `R21`/`R22` sulle persone.
+///
+/// Tre schede portavano un collegamento etichettato con il nome della *categoria*
+/// — «Immobili», «Contratti» — invece che con quello della cosa. Il test guarda le
+/// tre risposte insieme, perché è insieme che il difetto si vede: chi ne sistemasse
+/// una sola lascerebbe una schermata in cui un nome compare e l'altro no.
+///
+/// Copre anche i due modi in cui un nome **manca**, che sono diversi fra loro: la
+/// stanza assente è il caso normale di un contratto sull'immobile intero, il nome
+/// dell'immobile assente è un immobile archiviato — e sono due assenze che il
+/// client racconta in modo diverso.
+#[tokio::test]
+async fn tickets_charges_and_bills_carry_the_names_of_what_they_point_at() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "i-nomi").await;
+    let property = create_property(&app, &owner, "Villa Aurora").await;
+
+    let (_, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera azzurra", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let room = room["id"].as_str().expect("id").to_owned();
+    let lease = draft_lease(&app, &owner, &property, Some(&room), -10, Some(355)).await;
+
+    // --- la segnalazione: l'immobile e, quando c'è, la stanza ---
+    let (status, ticket) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({
+                "title": "La caldaia perde",
+                "description": "Perde dal raccordo.",
+                "room_id": room,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {ticket}");
+    // **Anche sulla creazione**, non solo in lettura: una risposta che portasse i
+    // nomi a volte sì e a volte no non permetterebbe di distinguere «non
+    // risolto» da «archiviato».
+    assert_eq!(ticket["property_label"], "Villa Aurora", "corpo: {ticket}");
+    assert_eq!(ticket["room_name"], "Camera azzurra", "corpo: {ticket}");
+    let ticket_id = ticket["id"].as_str().expect("id").to_owned();
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["property_label"], "Villa Aurora", "corpo: {detail}");
+
+    let (status, page) = app.send("GET", "/api/v1/tickets", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(ticket_id.clone()))
+        .expect("la segnalazione appena aperta");
+    assert_eq!(listed["property_label"], "Villa Aurora", "corpo: {page}");
+
+    // Una transizione risponde con gli stessi campi: è la ragione per cui i nomi
+    // si risolvono in `view_of` e non nel solo caso d'uso di lettura.
+    let (status, triaged) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket_id}/triage"),
+            &owner,
+            serde_json::json!({ "category": "plumbing", "priority": "high" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {triaged}");
+    assert_eq!(
+        triaged["property_label"], "Villa Aurora",
+        "corpo: {triaged}"
+    );
+    assert_eq!(triaged["room_name"], "Camera azzurra", "corpo: {triaged}");
+
+    // --- l'addebito: il contratto si nomina con la casa e la stanza ---
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "400.00",
+                "due_date": day(5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    assert_eq!(charge["property_label"], "Villa Aurora", "corpo: {charge}");
+    assert_eq!(charge["room_name"], "Camera azzurra", "corpo: {charge}");
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["property_label"], "Villa Aurora", "corpo: {detail}");
+    assert_eq!(detail["room_name"], "Camera azzurra", "corpo: {detail}");
+
+    // --- la bolletta: il **contratto imputato**, e il riaddebito ---
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/N/1").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["property_label"], "Villa Aurora", "corpo: {read}");
+    assert_eq!(read["room_name"], "Camera azzurra", "corpo: {read}");
+
+    // Una bolletta **senza contratto imputato** non ha niente da nominare, e il
+    // campo resta assente invece di prendere il nome dell'immobile della bolletta:
+    // ciò che il collegamento nomina è il contratto, e lì non ce n'è uno.
+    let orphan = register_bill(&app, &owner, &property, None, "2026/N/2").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{orphan}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert!(read.get("property_label").is_none(), "corpo: {read}");
+
+    let (status, validated) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {validated}");
+    assert_eq!(
+        validated["property_label"], "Villa Aurora",
+        "una transizione risponde senza i nomi: {validated}"
+    );
+
+    let (status, recharged) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": lease, "amount": "90.00", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {recharged}");
+    assert_eq!(
+        recharged["charge"]["property_label"], "Villa Aurora",
+        "corpo: {recharged}"
+    );
+    assert_eq!(
+        recharged["utility_bill"]["room_name"], "Camera azzurra",
+        "corpo: {recharged}"
+    );
+}
+
+/// **Quanto resta da riaddebitare**, che è la metà di `R33` che riguarda i numeri.
+///
+/// Riaddebitare una bolletta d'immobile a tre contratti erano tre sottrazioni a
+/// mente. Il test fissa le tre regole che quel numero deve rispettare, e la terza è
+/// quella che si perde: **un addebito annullato non conta**, perché `void` dice «non
+/// doveva essere chiesto» e quella quota torna disponibile.
+///
+/// Fissa anche ciò che **non** cambia: superare il totale resta possibile. È scritto
+/// come deliberato — lo schema non ha il vincolo e uno applicativo cadrebbe fra due
+/// riaddebiti concorrenti — e un test che lo vietasse trasformerebbe un aiuto in un
+/// cancello.
+#[tokio::test]
+async fn a_bill_says_how_much_of_it_has_already_been_recharged() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "quanto-resta").await;
+    let property = create_property(&app, &owner, "Casa da dividere").await;
+
+    let (_, first_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera uno", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let first_room = first_room["id"].as_str().expect("id").to_owned();
+    let (_, second_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera due", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let second_room = second_room["id"].as_str().expect("id").to_owned();
+
+    let first = draft_lease(&app, &owner, &property, Some(&first_room), -10, Some(355)).await;
+    let second = draft_lease(&app, &owner, &property, Some(&second_room), -10, Some(355)).await;
+    let email = common::unique_email("intestatario");
+    add_tenant(&app, &owner, &first, "Giulia Neri", Some(&email)).await;
+
+    // **L'intestatario viaggia con i nomi del posto**: è ciò che distingue due
+    // contratti sulla stessa stanza in due anni diversi, e senza di lui una tendina
+    // di contratti resta un elenco di date.
+    let (status, page) = app.send("GET", "/api/v1/leases", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(first.clone()))
+        .expect("il primo contratto");
+    assert_eq!(listed["primary_tenant"], "Giulia Neri", "corpo: {page}");
+    assert_eq!(listed["room_name"], "Camera uno", "corpo: {page}");
+    // Un contratto senza parti non ha un intestatario, e il campo manca.
+    let bare = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(second.clone()))
+        .expect("il secondo contratto");
+    assert!(bare.get("primary_tenant").is_none(), "corpo: {page}");
+
+    // La bolletta è dell'immobile intero: non è imputata a nessun contratto, ed è
+    // il caso in cui il residuo serve davvero.
+    let bill = register_bill(&app, &owner, &property, None, "2026/Q/1").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["total_amount"], "184.20", "corpo: {read}");
+    assert_eq!(read["recharged_amount"], "0.00", "mai riaddebitata: {read}");
+
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, first_recharge) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": first, "amount": "92.10", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first_recharge}");
+    assert_eq!(
+        first_recharge["utility_bill"]["recharged_amount"], "92.10",
+        "corpo: {first_recharge}"
+    );
+    let first_charge = first_recharge["charge"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    let (status, second_recharge) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": second, "amount": "92.10", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second_recharge}");
+    assert_eq!(
+        second_recharge["utility_bill"]["recharged_amount"], "184.20",
+        "la somma non torna: {second_recharge}"
+    );
+
+    // Annullare il primo addebito **libera la sua quota**: era una richiesta che non
+    // doveva essere fatta, e il residuo torna a coprirla.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/charges/{first_charge}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(
+        read["recharged_amount"], "92.10",
+        "un addebito annullato non deve contare: {read}"
+    );
+
+    // Superare il totale resta ammesso: è scritto come deliberato, e qui il numero
+    // lo dice invece di impedirlo.
+    let (status, over) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": first, "amount": "1000.00", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {over}");
+    assert_eq!(
+        over["utility_bill"]["recharged_amount"], "1092.10",
+        "corpo: {over}"
+    );
+
+    // **Per chi abita, il campo non c'è.** La somma si legge sotto RLS e a lui
+    // tornerebbe parziale: un numero sbagliato che sembra un totale.
+    let tenant_bill = register_bill(&app, &owner, &property, Some(&first), "2026/Q/2").await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{first}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    let (_, accept_token) = invite_tenant(&app, &owner, &first, &email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (status, read) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/utility-bills/{tenant_bill}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert!(
+        read["recharged_amount"].is_null(),
+        "l'inquilino non deve ricevere una somma parziale: {read}"
+    );
+}
+
+/// **Un immobile archiviato lascia il campo assente, e la riga resta.**
+///
+/// È la trappola che la sezione 3 aveva già pagato con un `LEFT JOIN`: la query dei
+/// nomi filtra `deleted_at IS NULL` come impone la regola 10, quindi con un `INNER`
+/// sparirebbero dall'elenco *tutte* le righe di ogni immobile archiviato. Il campo
+/// manca, e chi legge dice «Immobile archiviato» invece di mostrare uno spazio.
+#[tokio::test]
+async fn an_archived_property_leaves_the_name_out_without_hiding_the_charge() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "immobile-archiviato").await;
+    let property = create_property(&app, &owner, "Casa che sparirà").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "500.00",
+                "due_date": day(5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    assert_eq!(charge["property_label"], "Casa che sparirà");
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    // La riga c'è ancora — è la cosa che l'`INNER JOIN` avrebbe rotto — e il nome
+    // non c'è più.
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["id"], charge_id, "corpo: {detail}");
+    assert!(
+        detail.get("property_label").is_none(),
+        "il nome di un immobile archiviato non deve tornare: {detail}"
+    );
+}
+
 /// Il mese del proprietario, dal bordo HTTP: registra, corregge, valida,
 /// riaddebita; l'inquilino vede addebito e bolletta con il saldo a zero.
 #[tokio::test]

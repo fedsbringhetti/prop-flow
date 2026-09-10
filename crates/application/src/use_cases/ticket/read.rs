@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use propflow_domain::ports::{PersonName, TicketQuery, UnitOfWorkFactory};
+use propflow_domain::ports::{PersonName, TicketLabels, TicketQuery, UnitOfWorkFactory};
 use propflow_domain::shared::{PropertyId, TicketId, UserId};
 use propflow_domain::ticket::{Ticket, TicketStatus, TicketStatusChange};
 use propflow_domain::{Entity, RequestContext};
@@ -35,6 +35,25 @@ impl People {
     }
 }
 
+/// I nomi di **dove** stanno le segnalazioni di una pagina.
+///
+/// Terza occorrenza dello stesso modello di lettura — `LeaseLabels` sui contratti
+/// (sezione 3), `People` sulle persone ([ADR-049](../../../../../docs/08-decisioni.md)),
+/// e adesso i luoghi — e la regolarità dice qualcosa: **ogni risposta che porta un
+/// identificatore verso una schermata è un difetto che aspetta di essere trovato**.
+///
+/// Si costruisce una volta per pagina, con un `LEFT JOIN`: un immobile archiviato
+/// lascia il campo assente invece di far sparire la riga.
+#[derive(Debug, Clone, Default)]
+pub struct Places(Vec<TicketLabels>);
+
+impl Places {
+    #[must_use]
+    pub fn of(&self, ticket_id: TicketId) -> Option<&TicketLabels> {
+        self.0.iter().find(|labels| labels.ticket_id == ticket_id)
+    }
+}
+
 /// Una segnalazione e i nomi delle persone che vi compaiono.
 ///
 /// **Ogni caso d'uso che restituisce una segnalazione restituisce questo**, le
@@ -47,6 +66,13 @@ impl People {
 pub struct TicketView {
     pub ticket: Ticket,
     pub people: People,
+    /// Dove sta la segnalazione, per nome.
+    ///
+    /// Viaggia insieme ai nomi delle persone e per la stessa ragione: se le
+    /// transizioni non li risolvessero, la stessa risposta porterebbe i campi a
+    /// volte sì e a volte no, e un client mostrerebbe «Immobile archiviato» subito
+    /// dopo un'azione riuscita.
+    pub places: Places,
 }
 
 /// Pagina di segnalazioni, con i nomi delle persone che vi compaiono.
@@ -55,6 +81,7 @@ pub struct TicketListPage {
     pub items: Vec<Ticket>,
     pub next_cursor: Option<TicketId>,
     pub people: People,
+    pub places: Places,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -117,12 +144,37 @@ impl ListTickets {
         )
         .await?;
 
+        let places = resolve_places(&mut *uow, &page.items).await?;
+
         Ok(TicketListPage {
             items: page.items,
             next_cursor: page.next_cursor,
             people,
+            places,
         })
     }
+}
+
+/// La risposta di **ogni** caso d'uso che restituisce una segnalazione.
+///
+/// Esiste per essere l'unico punto in cui `TicketView` si costruisce: i due modelli
+/// di lettura — le persone e i luoghi — vanno risolti *tutti e due* e **prima del
+/// commit**, perché dopo l'unità di lavoro non c'è più. Con sette transizioni, un
+/// `open`, due `patch` e due letture, la forma «risolvi e poi costruisci» ripetuta
+/// dodici volte è la forma in cui la tredicesima ne dimentica uno — e il sintomo
+/// sarebbe un'etichetta neutra subito dopo un'azione riuscita, cioè indistinguibile
+/// da «non leggibile».
+pub(super) async fn view_of(
+    uow: &mut dyn propflow_domain::ports::UnitOfWork,
+    ticket: Ticket,
+) -> AppResult<TicketView> {
+    let people = resolve_one(uow, &ticket).await?;
+    let places = resolve_places(uow, std::slice::from_ref(&ticket)).await?;
+    Ok(TicketView {
+        ticket,
+        people,
+        places,
+    })
 }
 
 /// Risolve in una query sola i nomi di tutti gli identificatori citati.
@@ -138,6 +190,15 @@ pub(super) async fn resolve_one(
         [ticket.reported_by(), ticket.assigned_to()].into_iter(),
     )
     .await
+}
+
+/// I luoghi di una pagina di segnalazioni, in una query sola.
+pub(super) async fn resolve_places(
+    uow: &mut dyn propflow_domain::ports::UnitOfWork,
+    tickets: &[Ticket],
+) -> AppResult<Places> {
+    let ids: Vec<TicketId> = tickets.iter().map(Ticket::id).collect();
+    Ok(Places(uow.tickets().labels(&ids).await?))
 }
 
 pub(super) async fn resolve_people(
@@ -171,6 +232,8 @@ pub struct TicketDetail {
     /// che serve — che cosa è cambiato e quando. Aggiungere lì i nomi è un'altra
     /// domanda, e la si fa quando qualcuno la pone.
     pub people: People,
+    /// Dove sta la segnalazione, per nome. Stessa regola dell'assenza.
+    pub places: Places,
 }
 
 /// Legge una segnalazione con lo storico delle sue transizioni.
@@ -195,11 +258,13 @@ impl GetTicket {
             .ok_or(AppError::not_found(Entity::Ticket))?;
         let history = uow.tickets().list_status_history(ticket.id()).await?;
         let people = resolve_one(&mut *uow, &ticket).await?;
+        let places = resolve_places(&mut *uow, std::slice::from_ref(&ticket)).await?;
 
         Ok(TicketDetail {
             ticket,
             history,
             people,
+            places,
         })
     }
 }

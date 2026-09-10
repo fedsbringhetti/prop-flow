@@ -8,7 +8,7 @@ use propflow_domain::shared::TicketId;
 use propflow_domain::ticket::TicketCorrection;
 use propflow_domain::{Entity, RequestContext};
 
-use super::read::{TicketView, resolve_one};
+use super::read::{TicketView, view_of};
 use super::transition::reporter_while_open;
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -91,8 +91,7 @@ impl CorrectTicketReport {
             // Nessun campo toccato: niente UPDATE, niente evento, niente riga di
             // audit. Un PATCH vuoto non è un errore, ma non è nemmeno una
             // modifica — è la stessa scelta di `UpdateTicketCosts`.
-            let people = resolve_one(&mut *uow, &ticket).await?;
-            return Ok(TicketView { ticket, people });
+            return view_of(&mut *uow, ticket).await;
         }
 
         uow.tickets().update(&ticket).await?;
@@ -108,10 +107,10 @@ impl CorrectTicketReport {
             ))
             .await?;
 
-        let people = resolve_one(&mut *uow, &ticket).await?;
+        let view = view_of(&mut *uow, ticket).await?;
         uow.commit().await?;
 
-        Ok(TicketView { ticket, people })
+        Ok(view)
     }
 }
 

@@ -518,6 +518,31 @@ Il tipo di contratto **non si dichiara**: si deduce dalla presenza di `room_id`.
 Dichiararlo a parte sarebbe soltanto un modo di contraddirlo, e il `CHECK`
 `leases_target_ck` lo rifiuterebbe.
 
+#### `property_label`, `room_name`, `primary_tenant`: come si chiama un contratto
+
+I tre campi che rendono un contratto riconoscibile in un elenco. Un contratto non ha un
+nome proprio in database, e senza di loro l'elenco mostra tipo e date: venticinque righe
+identiche.
+
+| Campo | Assente quando |
+|---|---|
+| `property_label` | l'immobile è **archiviato** — la riga non si legge più, il contratto resta |
+| `room_name` | il contratto è sull'**immobile intero**, che è il caso normale |
+| `primary_tenant` | non c'è ancora una parte marcata `is_primary` — una bozza vuota |
+
+Vengono da un **modello di lettura** e non dall'aggregato: il nome di un immobile
+appartiene all'immobile, e un contratto che se lo portasse dietro avrebbe due fonti di
+verità che divergono alla prima correzione. Una query per pagina, con `LEFT JOIN` e
+`deleted_at IS NULL` sulle righe collegate.
+
+`primary_tenant` completa gli altri due dove non bastano: due contratti sulla stessa
+stanza in due anni diversi hanno lo stesso immobile e la stessa stanza, e a distinguerli
+è chi ci abita. È il `full_name` denormalizzato su `lease_parties`, che sopravvive a chi
+se ne va ([ADR-043](08-decisioni.md#adr-043)).
+
+**Assenti sulle risposte a una singola operazione** — attivazione, disdetta,
+annullamento — dove chi chiama ha già il contratto sotto gli occhi.
+
 #### `status` ed `effective_status`
 
 La risposta porta due stati:
@@ -727,6 +752,22 @@ I nomi viaggiano **dentro** la risposta e non da una rotta che risolva le person
 accanto al nome e non al suo posto: `author_kind` dice da che parte del rapporto sta chi
 scrive, il nome dice chi è — e in un co-living due coinquilini sono entrambi `tenant`.
 Vedi [ADR-049](08-decisioni.md#adr-049).
+
+#### E dove: `property_label` e `room_name`
+
+`TicketResponse` porta anche i nomi **del posto**: `property_label` e `room_name`. Stessa
+forma e stessa regola dell'assenza — campo mancante, etichetta neutra, mai
+l'identificatore — con una differenza fra i due:
+
+| Campo | Assente quando |
+|---|---|
+| `property_label` | l'immobile è **archiviato**. La segnalazione resta, il nome no |
+| `room_name` | la segnalazione riguarda l'**immobile intero**, che è il caso normale |
+
+La query è un `LEFT JOIN` con `deleted_at IS NULL` sulle righe collegate, **una per
+pagina**. Con un `INNER JOIN` sparirebbero dall'elenco tutte le segnalazioni di ogni
+immobile archiviato, che è il modo di far scomparire righe che esistono per andare a
+prendere un nome — la trappola che la sezione 3 aveva già pagato sui contratti.
 
 #### Il ciclo di vita
 
@@ -940,6 +981,44 @@ bolletta invece resta dov'è**: lì non c'è nessuna affermazione da smentire, c
 proposta di una macchina, e correggerla *è* la revisione. Vedi
 [Lettura automatica](#lettura-automatica-delle-bollette).
 
+#### `recharged_amount`: quanto è già stato riaddebitato
+
+`UtilityBillResponse` porta la somma delle quote già riaddebitate. Il **residuo** è
+`total_amount` meno quel valore, e serve a una cosa sola: riaddebitare una bolletta
+d'immobile a tre contratti sono tre sottrazioni a mente, e a mente si sbagliano.
+
+**Non è un vincolo, ed è deliberato.** Nessuno verifica che le quote sommino al totale:
+lo schema non ha il vincolo e un controllo applicativo cadrebbe fra due riaddebiti
+concorrenti — il criterio di [ADR-015](08-decisioni.md#adr-015), per cui un'invariante
+del genere sta nel database o non sta da nessuna parte. **Riaddebitare più del totale
+resta possibile**, e il residuo va sotto zero.
+
+Gli addebiti **annullati non contano**: `void` dice «non doveva essere chiesto», quindi
+quella quota torna disponibile. Gli **stornati sì**: erano dovuti, e rinunciare a
+incassarli non disfa il riaddebito.
+
+**`null` per chi non è staff**, come `estimated_cost` sulle segnalazioni ma con una
+ragione più stringente. La somma si legge sotto Row Level Security e `charges_select`
+mostra all'inquilino le sole quote sue: il numero che riceverebbe sarebbe **parziale e
+indistinguibile da un totale**. Un numero sbagliato è peggio di un numero assente.
+
+#### `property_label` e `room_name`: il **contratto imputato**, non l'immobile della bolletta
+
+`UtilityBillResponse` porta i due nomi, e nominano il **contratto** a cui la bolletta è
+imputata: è ciò a cui il collegamento porta, e il nome di un contratto è la casa più la
+stanza. L'immobile *della bolletta* resta `property_id` e non ha un nome nella risposta.
+
+L'assenza ha quindi **due cause diverse**, entrambe legittime: la bolletta non è imputata
+a nessun contratto — il caso della bolletta d'immobile intero, che non la vede nessun
+inquilino — oppure l'immobile di quel contratto è archiviato. In entrambi i casi il campo
+manca e chi legge mette un'etichetta neutra, mai l'identificatore
+([ADR-043](08-decisioni.md#adr-043), [ADR-049](08-decisioni.md#adr-049)).
+
+I due campi ci sono su **ogni** risposta che porti una bolletta, transizioni comprese, e
+non sulle sole letture: una risposta che li portasse a volte sì e a volte no non
+permetterebbe di distinguere «archiviato» da «non risolto», e un client mostrerebbe
+l'etichetta neutra subito dopo un'azione riuscita.
+
 #### Lettura automatica delle bollette
 
 Allegare una scansione a una bolletta **in bozza** accoda un job di OCR. Il
@@ -1040,6 +1119,18 @@ riferimento polimorfico dei documenti, come per ogni altro aggregato.
 | POST | `/api/v1/charges/{charge_id}/payments` | staff | `201`. Vedi [Pagamenti](#pagamenti) |
 | POST | `/api/v1/charges/{charge_id}/payment-declarations` | membro | `201`. Vedi [Pagamenti](#pagamenti) |
 | GET | `/api/v1/charges/{charge_id}/payments` | membro | `200`, pagina keyset |
+
+#### `property_label` e `room_name`
+
+`ChargeResponse` porta i nomi del contratto a cui l'addebito è emesso: **la casa e la
+stanza**, che è come `R14` aveva già risolto lo stesso difetto nell'elenco dei contratti.
+Un collegamento etichettato «Contratti» non dice a chi il denaro è chiesto, e in un
+co-living con una riga per stanza non distingue niente.
+
+`room_name` è assente sui contratti sull'immobile intero, che è il caso normale;
+`property_label` è assente quando l'immobile è archiviato. Vale anche qui la regola
+dell'etichetta neutra e la presenza su **ogni** risposta, transizioni comprese: vedi
+[le bollette](#property_label-e-room_name-il-contratto-imputato-non-limmobile-della-bolletta).
 
 #### Le due uscite non sono simmetriche
 
