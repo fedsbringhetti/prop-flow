@@ -1922,6 +1922,170 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
     );
 }
 
+/// **L'inquilino che torna**, che è `R31`: il ciclo di vita normale del prodotto.
+///
+/// Un contratto finisce, con la stessa persona se ne fa un altro. Prima di questo
+/// test la seconda accettazione rispondeva `409 membership.already_exists` — su un
+/// codice che il proprietario aveva appena ricevuto senza un avviso — e siccome
+/// `lease_parties.user_id` lo scrive **solo** l'accettazione, l'inquilino restava
+/// fuori dal contratto nuovo senza nessun modo di rientrare.
+///
+/// **Nessun test poteva trovarlo**, e la ragione va tenuta: ogni altro test
+/// costruisce un inquilino **nuovo**. Il difetto viveva nella *seconda* volta che
+/// qualcosa succede alla stessa persona, che è lo spazio che una suite verde non
+/// attraversa. Questo test è quella seconda volta.
+#[tokio::test]
+async fn a_returning_tenant_can_accept_a_second_invitation() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "inquilino-che-torna").await;
+    let property = create_property(&app, &owner, "Casa con due stagioni").await;
+
+    let (_, first_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera del primo anno", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let first_room = first_room["id"].as_str().expect("id").to_owned();
+    let (_, second_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera del secondo anno", "monthly_rent": "450.00" }),
+        )
+        .await;
+    let second_room = second_room["id"].as_str().expect("id").to_owned();
+
+    // CASO 1 — l'inquilino nuovo. È il lato che non deve rompersi.
+    let first_lease = draft_lease(&app, &owner, &property, Some(&first_room), 0, Some(365)).await;
+    let tenant_email = common::unique_email("torna");
+    let (_, first_token) = invite_tenant(&app, &owner, &first_lease, &tenant_email).await;
+    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": first_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["organization_id"], owner_org);
+    assert_eq!(accepted["role"], "tenant");
+    assert_eq!(visible_leases(&app, &tenant, &owner_org).await.len(), 1);
+
+    // CASO 2 — la stessa persona, un contratto nuovo. Qui rispondeva `409`.
+    let second_lease =
+        draft_lease(&app, &owner, &property, Some(&second_room), 400, Some(730)).await;
+    let (_, second_token) = invite_tenant(&app, &owner, &second_lease, &tenant_email).await;
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": second_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["lease_id"], second_lease, "corpo: {accepted}");
+
+    // **Tutti e due**, non l'ultimo: il primo contratto non si perde per strada.
+    let mut visible = visible_leases(&app, &tenant, &owner_org).await;
+    visible.sort();
+    let mut expected = vec![first_lease, second_lease.clone()];
+    expected.sort();
+    assert_eq!(
+        visible, expected,
+        "l'inquilino non vede entrambi i contratti"
+    );
+
+    // La parte contrattuale del secondo è collegata: è ciò che rende visibile il
+    // contratto, e la ragione per cui il `409` era irreparabile.
+    let (_, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{second_lease}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert!(
+        detail["parties"][0]["user_id"].is_string(),
+        "la parte del secondo contratto non è stata collegata: {detail}"
+    );
+
+    // Una sola appartenenza, non due: la membership non è stata reinserita.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let in_owner_org = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .count();
+    assert_eq!(in_owner_org, 1, "appartenenza duplicata: {orgs}");
+}
+
+/// **Il ruolo non si tocca.** Chi è già staff e viene invitato come inquilino
+/// resta staff.
+///
+/// È il caso vero di chi affitta una casa e ne abita un'altra, ed è anche l'assert
+/// che qualcuno toglierebbe «uniformando» il ramo: far coincidere il ruolo con
+/// quello dell'invito retrocederebbe il proprietario a `tenant`
+/// nella **propria** organizzazione.
+#[tokio::test]
+async fn accepting_a_tenant_invitation_does_not_demote_an_existing_member() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-inquilino");
+    let (owner, owner_org, _) = common::register_and_login_with_email(&app, &email).await;
+    let property = create_property(&app, &owner, "Casa dove abita chi la possiede").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &owner,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let membership = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .expect("la propria organizzazione");
+    assert_eq!(
+        membership["role"], "owner",
+        "l'invito ha retrocesso il proprietario: {orgs}"
+    );
+}
+
+/// Gli identificatori dei contratti che un utente vede in un'organizzazione.
+async fn visible_leases(app: &TestApp, token: &str, org: &str) -> Vec<String> {
+    let (status, page) = app
+        .send_in_org("GET", "/api/v1/leases", Some(token), Some(org), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Documenti
 // ---------------------------------------------------------------------------
