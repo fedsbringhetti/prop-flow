@@ -379,12 +379,141 @@ cambiamento, e poi "in locale funziona".
   sostituisce i commit che i figli contengono e li costringe a un rebase manuale.
 - Merge commit o rebase, così la ripartizione in commit logici sopravvive.
 
+## Il primo deploy — runbook
+
+**Niente di ciò che segue è stato eseguito.** Gli artefatti esistono e sono validi
+(`docker compose config` passa, gli script passano `bash -n`); la macchina, il dominio e
+le credenziali no. Un runbook non provato è un elenco di intenzioni: la parte in fondo
+dice come si smette di esserlo.
+
+### 0. Che cosa serve prima di cominciare
+
+- una **VPS** con Docker e il plugin `compose`, e le porte **80 e 443** aperte — la 80
+  serve alla convalida del certificato anche se poi tutto va in HTTPS;
+- un **dominio** il cui record `A` punta a quella macchina. Va fatto *prima*: Caddy
+  chiede il certificato alla prima richiesta, e con il DNS non ancora propagato la
+  richiesta fallisce e Let's Encrypt ha un limite che si tocca in fretta;
+- un **relay SMTP** con utenza e password, e sul dominio **SPF, DKIM e DMARC**. Senza,
+  la posta parte e finisce nello spam, e il sintomo è muto: nessun errore, il codice non
+  arriva;
+- `gpg` sulla macchina, per cifrare le copie di sicurezza.
+
+### 1. Il codice e i segreti
+
+```bash
+git clone <repo> /srv/propflow && cd /srv/propflow
+./ops/dev/generate-jwt-keys.sh /srv/propflow/.secrets   # richiede OpenSSL 3
+chmod 700 /srv/propflow/.secrets
+```
+
+Poi `/srv/propflow/.env.prod`, che **non** sta nel repository. Le variabili che il
+compose di produzione pretende sono dichiarate con `:?` in
+`ops/deploy/docker-compose.prod.yml`: se ne manca una, `up` si ferma dicendo quale.
+
+```
+POSTGRES_SUPERUSER_PASSWORD=…
+MINIO_ROOT_USER=…            MINIO_ROOT_PASSWORD=…
+PROPFLOW__DATABASE__MIGRATOR_URL=postgres://propflow_migrator:…@postgres:5432/propflow
+PROPFLOW__DATABASE__APPLICATION_URL=postgres://propflow_app:…@postgres:5432/propflow
+PROPFLOW__DATABASE__PRIVILEGED_URL=postgres://propflow_worker:…@postgres:5432/propflow
+PROPFLOW__MAIL__HOST=…       PROPFLOW__MAIL__USERNAME=…       PROPFLOW__MAIL__PASSWORD=…
+PROPFLOW__MAIL__FROM_ADDRESS=propflow@iltuodominio
+PROPFLOW_DOMAIN=iltuodominio
+PROPFLOW_SECRETS_DIR=/srv/propflow/.secrets
+```
+
+`chmod 600 .env.prod`. **`PROPFLOW__SERVER__SECURE_COOKIES` non si dichiara**: il
+default è `true` ed è quello che serve su HTTPS. Ogni posto in cui compare è un posto da
+cui qualcuno può metterlo a `false` per far funzionare una prova.
+
+### 2. Le immagini e i ruoli del database
+
+```bash
+docker build -t propflow:latest .
+docker build -t propflow-web:latest --target web .
+
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod up -d postgres
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod exec -T postgres   psql -U postgres -d postgres -v db_name=propflow     -v migrator_password=… -v app_password=… -v worker_password=…     -f - < ops/sql/roles.sql
+```
+
+I ruoli si creano **una volta per cluster** e stanno fuori dalle migration: il migratore
+si connette con un ruolo che deve già esistere.
+
+### 3. Su
+
+```bash
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod up -d
+docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod logs -f migrate
+```
+
+`migrate` è un job che deve uscire `0`. L'API parte solo dopo.
+
+### 4. Quando è deployato
+
+**Non quando i container sono su**: quando succede questo, in quest'ordine.
+
+1. `curl https://<dominio>/api/v1/ready` risponde `200`. Se dice
+   `posta non raggiungibile`, il relay è sbagliato o irraggiungibile — e va sistemato
+   adesso, perché dopo il sintomo diventa muto;
+2. si apre il prodotto **dal telefono, in 4G** — non dalla stessa rete della macchina —
+   e si fa l'accesso. È il passo che trova i certificati a metà, i record DNS
+   propagati solo in locale e i firewall aperti alla rete sbagliata;
+3. si chiede un **recupero della password** con un indirizzo vero e il codice arriva
+   **fuori dalla cartella dello spam**. Il raccoglitore locale non lo prova: accetta
+   tutto e non verifica SPF, DKIM né i rimbalzi;
+4. `https://<dominio>/docs` risponde `404`. In produzione Swagger UI non si espone.
+
+Finché il punto 2 non è successo, non è deployato.
+
+### 5. Il backup, e il ripristino provato
+
+```bash
+# Una volta a mano, per vedere che cosa produce.
+PROPFLOW_BACKUP_PASSPHRASE=… PROPFLOW_BACKUP_REMOTE=… ops/deploy/backup.sh
+
+# Poi da cron, di notte.
+0 3 * * * PROPFLOW_BACKUP_PASSPHRASE=… PROPFLOW_BACKUP_REMOTE=…   /srv/propflow/ops/deploy/backup.sh >> /var/log/propflow-backup.log 2>&1
+```
+
+Due cose e non una: il **database e il bucket**. I documenti sono oggetti in MinIO, non
+righe — un dump del database li lascia fuori, e la riga che li cita resta senza byte. E
+la copia **esce dalla macchina**: un backup sullo stesso disco del database è una seconda
+copia dello stesso guasto.
+
+**Poi il ripristino, una volta, prima che dentro ci siano i dati di qualcun altro**, su
+una macchina di prova e su un database vuoto:
+
+```bash
+PROPFLOW_BACKUP_PASSPHRASE=… ops/deploy/restore.sh /var/backups/propflow/propflow-….tar.gz.gpg
+```
+
+E la parte che conta, che il codice di uscita dello script non dice: si avvia lo stack, si
+entra con un account che **esisteva prima del dump**, si apre un contratto e si **scarica
+un documento**. Il terzo punto è la metà che un dump del solo database non porta, ed è
+quella che si scopre mancante mesi dopo. **Finché non è successo non c'è un backup, c'è
+un file.**
+
+### 6. La privacy
+
+`https://<dominio>/privacy` esiste e si legge **senza sessione**, perché la si deve poter
+leggere prima di consegnare i propri dati. Il contatto del titolare arriva da
+`VITE_PRIVACY_CONTACT` a build time: se la pagina mostra il nome della variabile invece di
+un indirizzo, è quella che manca.
+
+La cancellazione dichiarata è una **richiesta scritta con risposta entro trenta giorni**,
+non un bottone, e la pagina lo dice. Non è una promessa al ribasso: il ruolo applicativo
+non ha il privilegio `DELETE`, tutto passa da `deleted_at`, e `audit_log` e gli eventi
+continuano a citare le righe. La capacità vera è
+[`R37`](12-da-fare.md#cancellare-in-generale).
+
 ## Cosa manca
 
-- Manifest Kubernetes: non ci sono ancora.
-- Backup e restore del database.
+- Manifest Kubernetes: non ci sono ancora, e restano fuori finché la scala è una VPS.
+- **Il runbook qui sopra non è mai stato eseguito**: gli artefatti sono validi, la
+  macchina non esiste.
 - Metriche (esistono log e tracce, non metriche).
 - Alerting — compreso quello sul `/ready` che dice `posta non raggiungibile`, che oggi
   lo vede solo chi guarda.
 - La potatura dei codici di recupero scaduti: restano in tabella, inerti. Il ruolo
-  applicativo non ha `DELETE`.
+  applicativo non ha `DELETE`, quindi è un'operazione del runbook con il ruolo del
+  migratore, non un trigger.

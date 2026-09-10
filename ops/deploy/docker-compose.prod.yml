@@ -1,0 +1,166 @@
+# Lo stack di **produzione**: `compose` dietro Caddy su una VPS.
+#
+# Non è Kubernetes, ed è una decisione e non un ripiego: i manifest sono nell'elenco
+# di ciò che manca e restano lì, perché sono la scala che questo prodotto non ha —
+# e ogni ora spesa lì è un'ora non spesa a scoprire se il prodotto serve a qualcuno.
+#
+# COME SI USA
+#   docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod up -d
+#
+# Le differenze dal compose di sviluppo, tutte deliberate:
+#
+#   - **niente porte esposte oltre la 80 e la 443.** Il database, MinIO, la posta e
+#     l'API stessa parlano solo dentro la rete del compose. In sviluppo la 8080
+#     dell'API è aperta per Swagger UI; qui Swagger UI non si espone affatto;
+#   - **niente credenziali scritte qui.** Arrivano da `.env.prod`, che non sta nel
+#     repository. Un file di compose versionato con dentro una password è una
+#     password compromessa;
+#   - **`secure_cookies` resta al default `true`**: si parla HTTPS, e il cookie del
+#     refresh deve dichiarare `Secure`;
+#   - **la posta punta a un relay vero**, non al raccoglitore: quello accetta tutto e
+#     non recapita niente;
+#   - **`restart: unless-stopped` ovunque**, perché una macchina che si riavvia deve
+#     tornare su da sola.
+#
+# QUELLO CHE QUESTO FILE NON FA
+# Non fa il backup — è `ops/deploy/backup.sh`, da un cron — e non fa il monitoraggio.
+# Il runbook in `docs/07-operazioni.md` dice l'ordine in cui si fanno le cose.
+
+name: propflow
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?serve POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: propflow
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d propflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?serve MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?serve MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # Le migration girano **prima** dell'API e con il ruolo del migratore, che è
+  # l'unico con privilegi DDL. Un job che termina, non un servizio.
+  migrate:
+    image: propflow:${PROPFLOW_VERSION:-latest}
+    command: ["propflow-migrator"]
+    environment:
+      PROPFLOW__DATABASE__MIGRATOR_URL: ${PROPFLOW__DATABASE__MIGRATOR_URL:?serve l'URL del migratore}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    image: propflow:${PROPFLOW_VERSION:-latest}
+    command: ["propflow-api"]
+    environment:
+      PROPFLOW__DATABASE__APPLICATION_URL: ${PROPFLOW__DATABASE__APPLICATION_URL:?serve l'URL applicativo}
+      PROPFLOW__DATABASE__PRIVILEGED_URL: ${PROPFLOW__DATABASE__PRIVILEGED_URL:?serve l'URL privilegiato}
+      PROPFLOW__AUTH__PRIVATE_KEY_PATH: /run/secrets/jwt_ed25519.pem
+      PROPFLOW__AUTH__PUBLIC_KEY_PATH: /run/secrets/jwt_ed25519.pub.pem
+      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__BUCKET: propflow-documents
+      PROPFLOW__STORAGE__ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      # Un relay vero. Il mittente deve stare sul **tuo** dominio, e quel dominio
+      # deve avere SPF, DKIM e DMARC: senza, la posta parte e finisce nello spam,
+      # con un sintomo muto — nessun errore, il codice non arriva.
+      PROPFLOW__MAIL__HOST: ${PROPFLOW__MAIL__HOST:?serve l'host SMTP}
+      PROPFLOW__MAIL__PORT: ${PROPFLOW__MAIL__PORT:-587}
+      PROPFLOW__MAIL__USERNAME: ${PROPFLOW__MAIL__USERNAME:?serve l'utenza SMTP}
+      PROPFLOW__MAIL__PASSWORD: ${PROPFLOW__MAIL__PASSWORD:?serve la password SMTP}
+      PROPFLOW__MAIL__FROM_ADDRESS: ${PROPFLOW__MAIL__FROM_ADDRESS:?serve il mittente}
+      PROPFLOW__MAIL__ENCRYPTION: starttls
+      PROPFLOW__TELEMETRY__JSON_LOGS: "true"
+      # `PROPFLOW__SERVER__SECURE_COOKIES` **non si dichiara**: il default è `true`,
+      # ed è quello che serve su HTTPS. Dichiararlo qui sarebbe un posto in più da
+      # cui qualcuno potrebbe metterlo a `false` per far funzionare una prova.
+    volumes:
+      - ${PROPFLOW_SECRETS_DIR:-./.secrets}:/run/secrets:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    image: propflow:${PROPFLOW_VERSION:-latest}
+    command: ["propflow-worker"]
+    environment:
+      PROPFLOW__DATABASE__PRIVILEGED_URL: ${PROPFLOW__DATABASE__PRIVILEGED_URL}
+      # **Lo stesso bucket dell'API.** Due configurazioni che divergono danno il
+      # sintomo peggiore: job che falliscono `document_unavailable` su documenti
+      # che l'API mostra benissimo.
+      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__BUCKET: propflow-documents
+      PROPFLOW__STORAGE__ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      PROPFLOW__TELEMETRY__JSON_LOGS: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: propflow-web:${PROPFLOW_VERSION:-latest}
+    environment:
+      PROPFLOW_API_UPSTREAM: api:8080
+      PROPFLOW_DOMAIN: ${PROPFLOW_DOMAIN:?serve il dominio}
+    volumes:
+      - ../../ops/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      # La 80 serve alla convalida del certificato, anche se poi tutto va in HTTPS.
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+  minio_data:
+  # I certificati di Caddy: senza un volume si riprendono a ogni riavvio, e Let's
+  # Encrypt ha un limite di richieste che si tocca in fretta.
+  caddy_data:
+  caddy_config:
