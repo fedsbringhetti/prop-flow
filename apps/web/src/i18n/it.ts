@@ -884,7 +884,10 @@ export const it = {
     amount: 'Importo incassato',
     method: 'Strumento',
     paidAt: 'Data del movimento',
-    paidAtHint: 'Vuoto significa adesso.',
+    /** Il campo mostra oggi e la richiesta tace finché non lo si cambia: così un
+     *  pagamento delle 18 resta delle 18 invece di diventare delle 00:00. Il
+     *  suggerimento dice a chi guarda che cosa succede se non tocca niente. */
+    paidAtHint: 'Lasciata a oggi vale l’istante dell’invio. Cambiala se il movimento è di un altro giorno.',
     reference: 'Causale o riferimento',
     referenceHint: 'Quello che leggi sull’estratto conto: serve a ritrovarlo.',
     payer: 'A chi attribuirlo',
