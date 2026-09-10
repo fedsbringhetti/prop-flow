@@ -136,7 +136,7 @@ export function LeaseDetailPage() {
                       to={`/immobili/${data.property_id}`}
                       className="text-accent underline-offset-4 hover:underline"
                     >
-                      {data.property_label ?? t.lease.unknownProperty}
+                      {data.property_label ?? t.common.archivedProperty}
                     </Link>
                   </DescriptionItem>
                   {data.room_name ? (

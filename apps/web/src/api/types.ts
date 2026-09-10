@@ -234,6 +234,14 @@ export interface Lease {
   property_label?: string
   /** Assente sui contratti sull'immobile intero. */
   room_name?: string
+  /**
+   * Il nome dell'**intestatario**, cioè della parte marcata `is_primary`.
+   *
+   * Serve dove *dove* non basta: due contratti sulla stessa stanza in due anni
+   * diversi hanno lo stesso immobile e la stessa stanza, e a distinguerli è chi ci
+   * abita. **Assente** su una bozza a cui non è ancora stato aggiunto nessuno.
+   */
+  primary_tenant?: string
   signed_at: IsoDateTime | null
   terminated_at: IsoDateTime | null
   termination_reason?: string
@@ -333,6 +341,15 @@ export interface Ticket {
    * non riapre, non annulla, non corregge.
    */
   visible_to_residents: boolean
+  /**
+   * Come si chiama l'immobile a cui la segnalazione si riferisce.
+   *
+   * **Assente** quando la riga dell'immobile è archiviata: la segnalazione resta,
+   * il nome no. Si mette l'etichetta neutra dal catalogo, mai l'identificatore.
+   */
+  property_label?: string
+  /** La stanza, quando la segnalazione ne riguarda una. */
+  room_name?: string
   reported_by: Uuid | null
   reported_by_kind: TicketActor
   /**
@@ -466,6 +483,25 @@ export interface UtilityBill {
   validated_at: IsoDateTime | null
   /** Quando è stata dichiarata pagata al fornitore. */
   paid_at?: IsoDateTime | null
+  /**
+   * Come si chiama l'immobile del **contratto imputato**, non quello della
+   * bolletta: serve a nominare il collegamento, e il nome di un contratto è la
+   * casa più la stanza.
+   *
+   * **Assente** per due ragioni diverse — nessun contratto imputato, o immobile
+   * archiviato — e in entrambi i casi si mette l'etichetta neutra.
+   */
+  property_label?: string
+  /** La stanza del contratto imputato, quando ne nomina una. */
+  room_name?: string
+  /**
+   * Quanto è **già stato riaddebitato**. Il residuo è `total_amount` meno questo,
+   * e si calcola con `@/lib/decimal`, mai con un `-`.
+   *
+   * **`null` per chi non è staff**: la somma si legge sotto RLS e a un inquilino
+   * tornerebbe parziale, cioè un numero sbagliato che sembra un totale.
+   */
+  recharged_amount?: Amount | null
   notes?: string
   created_at: IsoDateTime
   updated_at: IsoDateTime
@@ -575,6 +611,14 @@ export interface Charge {
   due_date: IsoDate
   issued_at: IsoDateTime | null
   utility_bill_id?: Uuid
+  /**
+   * Come si chiama l'immobile del contratto a cui l'addebito è emesso.
+   *
+   * **Assente** quando l'immobile è archiviato: il contratto resta, il nome no.
+   */
+  property_label?: string
+  /** La stanza, quando il contratto ne nomina una. */
+  room_name?: string
   notes?: string
   created_at: IsoDateTime
   updated_at: IsoDateTime

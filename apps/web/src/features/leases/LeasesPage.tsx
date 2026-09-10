@@ -150,7 +150,7 @@ export function LeasesPage() {
                         to={`/contratti/${lease.id}`}
                         className="font-medium text-accent underline-offset-4 hover:underline"
                       >
-                        {lease.property_label ?? t.lease.unknownProperty}
+                        {lease.property_label ?? t.common.archivedProperty}
                       </Link>
                       {lease.room_name ? (
                         <span className="block text-xs text-ink-muted">{lease.room_name}</span>

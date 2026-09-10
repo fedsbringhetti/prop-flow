@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareDecimals, isNegative, isPositive, isZero, sumAmounts } from './decimal'
+import {
+  compareDecimals,
+  isNegative,
+  isPositive,
+  isZero,
+  subtractAmounts,
+  sumAmounts,
+} from './decimal'
 import { formatAmount, formatDate, formatFraction } from './format'
 
 describe('gli importi non passano mai da un float', () => {
@@ -23,6 +30,23 @@ describe('gli importi non passano mai da un float', () => {
 
   it('regge importi che un double non rappresenta più', () => {
     expect(sumAmounts(['999999999999.99', '0.01'])).toBe('1000000000000.00')
+  })
+
+  /**
+   * Il residuo da riaddebitare si calcola così, e non con un `-`.
+   *
+   * `184.20 - 90` in aritmetica nativa dà `94.19999999999999`, e quel valore
+   * finirebbe nel campo di un form e da lì nella richiesta.
+   */
+  it('sottrae senza l’errore che l’aritmetica nativa introduce', () => {
+    expect(184.2 - 90).not.toBe(94.2)
+    expect(subtractAmounts('184.20', '90.00')).toBe('94.20')
+    expect(subtractAmounts('184.20', '90')).toBe('94.20')
+  })
+
+  /** Riaddebitare più del totale è possibile e voluto: il residuo va sotto zero. */
+  it('lascia il residuo negativo invece di fermarlo a zero', () => {
+    expect(subtractAmounts('100.00', '150.00')).toBe('-50.00')
   })
 
   it('confronta senza convertire', () => {

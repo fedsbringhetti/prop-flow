@@ -156,13 +156,20 @@ export function ChargeDetailPage() {
                     <DescriptionItem label={t.charge.dueDate}>
                       {formatDate(data.due_date)}
                     </DescriptionItem>
+                    {/* Il contratto si nomina con **la casa e la stanza**, che è
+                        il modo in cui `R14` lo aveva già risolto nell'elenco dei
+                        contratti: «Contratti» non distingueva una riga dall'altra
+                        e non diceva a chi l'addebito fosse emesso. */}
                     <DescriptionItem label={t.charge.lease}>
                       <Link
                         to={`/contratti/${data.lease_id}`}
                         className="text-accent underline-offset-4 hover:underline"
                       >
-                        {t.lease.title}
+                        {data.property_label ?? t.common.archivedProperty}
                       </Link>
+                      {data.room_name ? (
+                        <span className="block text-xs text-ink-muted">{data.room_name}</span>
+                      ) : null}
                     </DescriptionItem>
                     <DescriptionItem label={t.charge.issuedAt}>
                       {data.issued_at ? formatDate(data.issued_at) : t.common.none}

@@ -38,6 +38,16 @@ export const it = {
     search: 'Cerca',
     all: 'Tutti',
     saving: 'Salvataggio…',
+    /**
+     * L'etichetta neutra di un nome che l'API non ha potuto risolvere.
+     *
+     * Sta in `common` e non sotto un modulo perché la stessa frase serve a
+     * contratti, segnalazioni, addebiti e bollette: le query dei nomi filtrano
+     * `deleted_at IS NULL` come impone la regola 10, quindi un immobile archiviato
+     * lascia il campo assente ovunque. **Mai l'identificatore al suo posto**
+     * (ADR-043): un UUID a schermo non è un nome, è un guasto che si vede.
+     */
+    archivedProperty: 'Immobile archiviato',
   },
 
   state: {
@@ -243,9 +253,6 @@ export const it = {
     property: 'Immobile',
     room: 'Stanza',
     wholeProperty: 'Immobile intero',
-    /** Quando l'immobile è archiviato il nome non si legge più: la riga resta e
-     *  lo dice, invece di mostrare uno spazio vuoto. */
-    unknownProperty: 'Immobile archiviato',
     /** L'avviso arriva **prima**, ma non vieta: due bozze sullo stesso periodo
      *  sono ipotesi alternative, e i vincoli del database le ammettono apposta. */
     overlapTitle: 'Su questo periodo c’è già un contratto',
@@ -692,6 +699,17 @@ export const it = {
       'Crea un addebito verso l’inquilino. Si può ripetere su più contratti; nessuno verifica che le quote sommino al totale.',
     rechargeAmount: 'Importo da riaddebitare',
     rechargeDueDate: 'Scadenza dell’addebito',
+    /** Il conto che si faceva a mente, e a mente si sbagliava: riaddebitare una
+     *  bolletta d'immobile a tre contratti sono tre sottrazioni. */
+    rechargeRemaining: 'Da riaddebitare',
+    rechargeAlready: 'Già riaddebitato',
+    /** Superare il totale **è ammesso** e resta ammesso: qui si avvisa, non si
+     *  vieta. Il vincolo non esiste in database, e uno applicativo cadrebbe fra
+     *  due riaddebiti concorrenti. */
+    rechargeOverBudget: 'Questo importo supera quanto resta da riaddebitare.',
+    /** Solo i contratti in corso ricevono un addebito: una bozza non è ancora un
+     *  rapporto, un contratto annullato o disdetto non lo è più. */
+    rechargeNoLeases: 'Nessun contratto in corso su questo immobile.',
     recharged: 'Riaddebito effettuato.',
     created: 'Bolletta registrata.',
     updated: 'Bolletta aggiornata.',
