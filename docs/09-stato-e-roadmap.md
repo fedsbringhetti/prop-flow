@@ -531,7 +531,7 @@ scritto bene.
 |---|---|---|
 | Come si raggiunge il proprio account | **`/api/v1/me`, che non prende mai un identificatore** | `PATCH /users/{id}`, che riaprirebbe ADR-036 |
 | Che cosa si può correggere | **nome, telefono, lingua** | anche l'email, che è la credenziale d'accesso |
-| Cambiare la password da dentro | **serve quella vecchia**, e revoca le altre sessioni | senza la vecchia, come il recupero |
+| Cambiare la password da dentro | **serve quella vecchia**, e revoca **tutte** le sessioni | tenere viva la corrente, che sono due regole invece di una |
 | Che cosa protegge `app.users` | **privilegi di colonna**, più le invarianti | una `WITH CHECK` più larga, che non può confrontare vecchio e nuovo |
 | Come si esce da un'organizzazione | **`status = 'left'` sulla propria riga**, negato con un contratto in essere | un soft delete della membership |
 | Chi garantisce il divieto | **una policy**, non un `if` | il solo service layer |
@@ -576,15 +576,27 @@ della casella di posta, qui è una sessione — e una sessione può essere una s
 aperta. Senza la vecchia, chiunque si sieda davanti a un browser non bloccato si prende
 l'account per sempre.
 
-**Revoca le altre sessioni e non la propria.** È la differenza con
-[ADR-052](08-decisioni.md#adr-052), che le revoca tutte: là chi recupera non sa quali
-sessioni fossero sue e non deve tenerne nessuna; qui chi cambia la password sta guardando
-lo schermo, e buttarlo fuori dal browser in cui ha appena digitato due password è attrito
-senza contropartita. La sessione corrente si riconosce dal cookie di refresh, che la
-richiesta porta già.
+**Revoca tutte le sessioni, compresa la propria**, esattamente come
+[ADR-052](08-decisioni.md#adr-052) fa per il recupero. La scelta è l'uniformità, ed è stata
+presa contro l'alternativa che sembra più gentile — tenere viva la sessione da cui si sta
+cambiando, riconoscendola dal cookie di refresh che la richiesta porta già.
 
-Vale la nota di ADR-052 anche qui, ed è quella che si dimentica: si revocano i **refresh
-token**, non gli access token, che sono JWT e vivono i loro quindici minuti.
+Il ragionamento, perché è la decisione meno ovvia della sezione: *«cambiare la password
+chiude tutto»* è **una frase sola**, e questa frase va scritta in almeno quattro posti — la
+schermata del recupero, quella del proprio account, `docs/04-sicurezza.md` e il corpo
+dell'API. Due regole diverse per due percorsi che una persona non distingue — *«ho cambiato
+la password»* è la stessa cosa dai due lati — sono due frasi da tenere allineate, e la
+seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile: chi cambia
+rientra subito con la password che ha appena scelto.
+
+**Ne segue che questa sezione non ha bisogno di un ADR nuovo.** Con la revoca selettiva
+sarebbe servito — una decisione che diverge da una documentata è una voce in
+`docs/08-decisioni.md`, scritta prima del codice — e con l'uniformità ADR-052 basta a
+spiegare entrambi i percorsi.
+
+Vale anche qui la nota di ADR-052 che si dimentica: si revocano i **refresh token**, non
+gli access token, che sono JWT e vivono i loro quindici minuti. Chi cambia la password non
+è fuori nell'istante in cui la cambia; è fuori quando quel token scade.
 
 #### 4. `app.users` si difende con i privilegi di colonna
 
@@ -682,8 +694,15 @@ Un test che prova che l'email **non** è modificabile e che il tentativo lo dice
 `POST /api/v1/me/password` con la vecchia e la nuova. Sul pool **applicativo**: chi cambia
 la password è autenticato, quindi la regola 27 non ammette il privilegiato.
 
-Due test: la vecchia password sbagliata dà `401` e non cambia niente; dopo il cambio le
-**altre** sessioni non rinnovano più e la corrente sì.
+Due test: la vecchia password sbagliata dà `401` e non cambia niente; dopo il cambio
+**nessuna** sessione rinnova più, compresa quella da cui si è cambiata. Il secondo è quello
+che si scrive sbagliato, ed è lo stesso inciampo della 5-quater: asserire che la vecchia
+sessione smetta di *leggere* fallisce, perché l'access token è un JWT e vive i suoi quindici
+minuti. Ciò che muore è il **rinnovo**.
+
+Il client deve dire la conseguenza **prima** del bottone, con la stessa frase che usa il
+recupero: chi cambia la password si ritrova disconnesso anche sul telefono, e scoprirlo dopo
+sembra un guasto.
 
 ##### `A4` — Uscire da un'organizzazione (`R16`)
 
@@ -725,15 +744,16 @@ non possono rientrare.
 **L'email non si cambia, e va detto nel client.** Un campo disabilitato senza una
 spiegazione si legge come un difetto.
 
-**La sessione corrente si riconosce dal cookie, non dall'access token.** Revocare «tutte
-tranne la mia» richiede l'hash del refresh presentato: senza, o si revocano tutte o
-nessuna.
+**«Revoca tutte le sessioni» non butta fuori nessuno all'istante.** Si revocano i refresh
+token; l'access token già emesso è un JWT e non è revocabile, quindi vive i suoi quindici
+minuti. È la nota di ADR-052, ed è la stessa su cui un test della 5-quater ha asserito la
+cosa sbagliata: il criterio giusto è che il **rinnovo** non funzioni più.
 
 ### Come si saprà che è finita
 
 - si aprono i propri dati, si corregge il telefono, si ricarica e il telefono è quello;
-- si cambia la password dando quella vecchia, e le altre sessioni smettono di rinnovare
-  mentre quella da cui si è cambiata continua;
+- si cambia la password dando quella vecchia, e **nessuna** sessione rinnova più — compresa
+  quella da cui si è cambiata, che è la decisione 3;
 - la password vecchia sbagliata non cambia niente e lo dice;
 - si esce da un'organizzazione in cui non si ha un contratto in essere; con un contratto in
   essere **non** si esce, e il rifiuto arriva dal database e non da un `if`;
@@ -745,7 +765,15 @@ nessuna.
 ### Che cosa **non** entra
 
 - **il cambio dell'email**, per la decisione 2: richiede la verifica dell'indirizzo, che è
-  fuori perimetro, e una decisione sugli inviti pendenti;
+  fuori perimetro, e una decisione sugli inviti pendenti. Il client mostra il campo e non lo
+  rende modificabile, **con una riga che dice perché**: un campo disabilitato senza
+  spiegazione si legge come un difetto. Entra in [12](12-da-fare.md) insieme alla verifica
+  dell'email, che è la sua precondizione;
+- **togliere qualcuno dalla propria organizzazione**, che è il gemello di `R16` e non `R16`.
+  La policy lo ammetterebbe già — `org_members_update` è `is_org_staff` — e manca solo la
+  rotta, ma è una decisione a sé: che ne è dei suoi contratti, dei suoi addebiti e di ciò
+  che ha scritto, e lo stesso divieto va garantito su una persona che **non è chi chiama**.
+  Entra in [12](12-da-fare.md), riconosciuta e non istruita;
 - **la verifica dell'email alla registrazione**, che resta dov'è: cambia il percorso che
   ogni collaudo attraversa;
 - **la cancellazione del proprio account.** È `R37` e la stessa domanda di `R15`: che cosa

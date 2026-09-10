@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Dodici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Quattordici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -12,7 +12,8 @@ la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
 e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter). Sono entrate
 `R26`, `R27`, `R28` e `R29`, poi `R30`–`R35` dal collaudo, e infine `R36` **eseguendo** la
 5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
-le premesse** prima di pianificare la sezione 6.
+le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
+pianificazione come ciò che quella sezione decide di **non** fare.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -234,6 +235,8 @@ sezione è il primo client che legge un nome da `app.users`
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
+| R39 | aperta | **Un proprietario non può togliere nessuno dalla propria organizzazione** | Il gemello di `R16`, tenuto **fuori dalla sezione 6** perché è una decisione a sé e non un secondo verso della stessa. Metà del lavoro esiste già: `org_members_update` è `is_org_staff(org_id)` su USING e WITH CHECK, quindi la policy lo ammette e manca la rotta — e il divieto «non con un contratto in essere» userebbe `app.has_lease_in_force`, che la sezione 6 costruisce. Quello che va deciso è il resto: che ne è dei suoi contratti, dei suoi addebiti e dei messaggi che ha scritto; se sia un'espulsione o una chiusura concordata; e il fatto che qui il divieto va garantito su una persona che **non è chi chiama**, cioè il caso che la `0029` ha già trovato difficile sulle spese co-living. Oggi un proprietario che ha invitato la persona sbagliata non ha nessun modo di disfarlo se non revocare l'invito prima che venga accettato |
+| R40 | aperta | **La propria email non si cambia**, e non si verifica | Tenuta fuori dalla sezione 6 con la ragione scritta nel suo piano: `users.email` non è un dato anagrafico, è **la credenziale d'accesso**, ed è la chiave con cui tre cose si ritrovano — `app.has_pending_invitation` fa `JOIN app.users u ON u.email = i.email`, `app.current_user_email()` regge quattro policy della `0018`, e `lease_parties.email` è come l'accettazione trova la propria riga. Cambiarla senza un giro di verifica sul **nuovo** indirizzo produce un account che non riceve più niente o un invito che nessuno può più accettare, in entrambi i casi con un sintomo muto. La precondizione è quindi la **verifica dell'email**, che è deliberatamente fuori perimetro perché cambia il percorso di registrazione che ogni collaudo attraversa: le due voci si fanno insieme o non si fanno. Da decidere anche che cosa succede agli inviti pendenti per l'indirizzo vecchio |
 | R16 | aperta | **Un inquilino deve poter uscire da un'organizzazione**, e l'operazione va negata se ha un contratto attivo | **Non esiste nessuna rotta**: su `/api/v1/organizations` c'è soltanto la `GET` che elenca le proprie. `app.org_members` ha però `status` e `deleted_at`, quindi l'uscita è già rappresentabile senza migration — è lo use case, la rotta e la regola a mancare. Il blocco richiesto è la parte interessante: «ha un contratto attivo» va verificato **e** garantito, e vale la lezione della `0029` sulle spese co-living, dove rendere l'uscita un confine vero ha richiesto una policy e non un `if`. Da decidere anche che cosa vede dopo: chi esce dall'unica organizzazione in cui abita resta con la propria, personale e vuota — cioè il caso di [ADR-045](08-decisioni.md#adr-045) al contrario |
 
 ### Dal collaudo della fetta C

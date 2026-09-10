@@ -251,6 +251,19 @@ mescolati.
   a nessuno.
 - **PR in stack:** la base è il branch padre, non `dev`. Non usare *squash* sul
   padre di uno stack: rompe i figli.
+- **Su una PR in stack la CI non gira**, e non è un guasto: `.github/workflows/ci.yml`
+  si attiva su `pull_request: branches: [main, dev]`, che filtra il branch di
+  **destinazione**, e la base di una PR in stack è il padre. Il cancello vero resta la
+  PR del padre verso `dev`, dove la CI gira e dove la protezione del branch esige il
+  check `CI`.
+  Ne segue un obbligo per chi apre una PR in stack: **la verifica è quella eseguita a
+  mano**, e va scritta nel corpo con i numeri — `just ci`, quanti test, quanti falliti,
+  quanti dichiarati `SALTATO`. Senza, quella PR non ha nessuna prova, né automatica né
+  scritta.
+  Allargare il filtro ai branch di lavoro è possibile e si è scelto di non farlo: il
+  nome del job `CI` è un contratto con la protezione dei branch, e verificare due volte
+  lo stesso albero — una nella PR figlia, una in quella del padre — costa minuti di
+  runner per una prova che il padre rifà comunque.
 
 ### Altro
 
