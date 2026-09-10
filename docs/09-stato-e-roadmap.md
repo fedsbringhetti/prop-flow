@@ -306,8 +306,15 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**Finire il [collaudo](12-da-fare.md#lordine-di-esecuzione), poi eseguire la
-[5-ter](#piano-sezione-5-ter)**, che il collaudo ha appena prodotto: mezza giornata di
+**Finire il [collaudo](12-da-fare.md#lordine-di-esecuzione), poi la
+[5-ter](#piano-sezione-5-ter), poi la [5-quater](#piano-utenti-veri).** Le tre hanno un
+obiettivo dichiarato che le lega: *un proprietario vero, che non ha scritto il codice, usa
+il prodotto per un mese con i suoi dati*. Il giro dice se il prodotto regge; la 5-ter
+corregge ciò che il giro ha trovato; la 5-quater aggiunge le quattro cose senza cui una
+persona esterna non può cominciare — la posta, il **recupero della password**, il deploy,
+il backup.
+
+La 5-ter è quella che il collaudo ha appena prodotto: mezza giornata di
 giro vero, fatto da chi non aveva scritto il codice, ha dato **sei voci** — `R30`–`R35` —
 e una di esse, `R31`, è un buco nel **ciclo di vita normale**. Un inquilino il cui
 contratto scade e che ne firma un altro **non può rientrare**: l'invito è l'unica via che
@@ -751,6 +758,286 @@ scritto e voluto: qui si aggiunge un numero che aiuta, non un vincolo.
   vista al punto 3 dice che ce ne sono altre; guardarle tutte è una voce nuova, non un
   allargamento di questa;
 - **`R26`, `R27`, `R28`, `R29`**, che restano dove sono.
+
+
+<a id="piano-utenti-veri"></a>
+
+## Piano — Prima degli utenti veri: le quattro cose che mancano a una persona esterna
+
+Pianificata il **10 settembre 2026**. Non chiude nessuna voce di
+[12](12-da-fare.md), e la ragione è che **non sono difetti**: è lavoro mai cominciato,
+che il criterio d'ordine di questo documento teneva in fondo *fino al momento in cui
+qualcuno che non sia chi sviluppa apre il prodotto*. Quel momento è arrivato — il
+collaudo l'ha aperto — e l'obiettivo dichiarato è più preciso di «utenti veri»:
+
+> **un proprietario vero, che non ha scritto il codice, lo usa per un mese con i suoi
+> dati.**
+
+Da lì discende tutto ciò che entra e tutto ciò che resta fuori. Non serve ciò che serve a
+mille sconosciuti; serve ciò senza cui **una** persona esterna si blocca e non torna.
+
+### La fase era già nominata, e per metà già pianificata
+
+[Prima degli utenti veri](#prima-degli-utenti-veri) porta già i passi 9 e 10 del piano
+archiviato — la porta `Notifier` e i due invii — con le loro decisioni e le loro trappole.
+**Questo piano non le riscrive**: le assorbe, e aggiunge le tre cose che quella prosa non
+prevedeva perché nate da una domanda diversa. Vanno rilette prima di `Z1`.
+
+### Quattro pezzi, e uno dipende da un altro
+
+L'ordine non è una preferenza:
+
+```
+Z1  la posta          ──┐
+                        ├──► Z2  il recupero della password
+                        │        (senza un canale, non c'è modo di recapitare niente)
+Z3  il deploy         ──┴──► Z4  il backup
+Z5  la privacy — piccola, e non rimandabile
+```
+
+**`Z2` è il blocco duro.** Le rotte di autenticazione sono quattro — `register`, `login`,
+`refresh`, `logout` — e non c'è **nessun** modo di recuperare una password. Il primo «non
+mi ricordo la password» del tuo proprietario finisce in una `UPDATE` scritta a mano da te,
+di notte, sul database di produzione. E per recapitare un codice serve `Z1`.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Il canale | **SMTP**, il fornitore come dato di configurazione | l'API di un fornitore, che diventa un ramo di codice |
+| La posta è obbligatoria? | **sì, l'avvio la pretende** | facoltativa, con un utente chiuso fuori e nessun modo di farlo rientrare |
+| La forma del codice di recupero | **un codice da incollare**, come l'invito | un link cliccabile, con la credenziale nell'URL |
+| Che cosa fa il recupero alle sessioni | **le revoca tutte** | lasciarle vive, e chi ha rubato l'account resta dentro |
+| Che cosa risponde chi chiede il recupero | **la stessa cosa sempre** | dire se l'email esiste, cioè un oracolo sugli account |
+| Il limite agli invii | **per email, nel modello** | per IP, che vuole uno stato condiviso e un servizio in più |
+| La forma del deploy | **compose dietro Caddy su una VPS** | Kubernetes, che è la scala che non hai |
+| Quando un backup è un backup | **quando è stato ripristinato una volta** | quando il cron non dà errori |
+
+### Decisioni, con il perché
+
+#### 1. La posta diventa obbligatoria all'avvio, e il recupero è la ragione
+
+Oggi la configurazione della posta non esiste e non serve: il token d'invito torna nella
+risposta HTTP e il client lo mostra con un bottone per copiarlo. Da `Z2` in poi **la posta
+è l'unico canale** verso una persona chiusa fuori dal proprio account.
+
+Quindi le impostazioni della posta entrano in `AppConfig` come **obbligatorie**, allo
+stesso titolo di quelle dello storage. È la lezione già pagata tre volte e registrata
+nella fetta C: un'impostazione mancante deve far fallire **l'avvio**, con un messaggio che
+dice che cosa manca — non il primo uso, dove somiglia a un problema di rete.
+
+*Alternativa scartata: un `Notifier` che non fa niente quando la posta non è configurata.*
+Sembra prudente e produce il difetto peggiore di tutti: il recupero password che risponde
+`202` e non manda niente, su un utente che non può più entrare.
+
+#### 2. Il codice di recupero si incolla, non si clicca — ADR-051
+
+[ADR-045](08-decisioni.md#adr-045) ha già deciso questa domanda per l'invito, e
+l'argomento vale identico qui: **il token è una credenziale**, e un link
+`/nuova-password/<token>` la scrive in tre archivi che nessuno ripulisce — la cronologia
+del browser, il `Referer` verso qualunque risorsa esterna, e i log di ogni proxy davanti
+al client.
+
+Si fa quindi **come l'invito**: l'email porta un codice, la schermata ha un campo in cui
+incollarlo. Coerenza con una decisione già presa, e nessun meccanismo nuovo — il codice
+riusa `OpaqueTokenFactory` e `TokenHash`, che esistono per l'invito.
+
+**Il costo va detto, perché è reale**: incollare un codice è più scomodo di un clic, e
+succede nel momento in cui una persona è già frustrata. L'alternativa — il link, con la
+pagina che ripulisce l'URL dalla cronologia e `Referrer-Policy: no-referrer` — chiuderebbe
+due dei tre archivi e non il terzo, e introdurrebbe **due forme diverse** per due
+credenziali che si somigliano. Si sceglie la coerenza; se il collaudo dirà che l'attrito è
+troppo, sarà una voce nuova con una misura dietro invece di un'ipotesi.
+
+#### 3. Cambiare la password revoca tutte le sessioni
+
+È la parte che si dimentica, ed è quella che rende il recupero una difesa invece di una
+comodità: chi ha ottenuto l'accesso a un account ha in mano un refresh token che vive
+**trenta giorni**, e cambiare la password senza revocarlo non lo butta fuori.
+
+`SessionRepository::revoke_all_for_user` **esiste già** — la usa `RefreshSession` quando
+rileva il riuso di un token ruotato — quindi è una chiamata, non un meccanismo.
+
+#### 4. Chiedere il recupero non dice se l'email esiste
+
+Stessa risposta per un indirizzo noto e per uno sconosciuto. È la regola di
+[ADR-017](08-decisioni.md#adr-017), che il modulo degli inviti applica già: distinguere
+sarebbe un oracolo per capire chi ha un account.
+
+Ne segue una cosa da scrivere nel client e non da lasciare intuire: la schermata dice «se
+quell'indirizzo ha un account, riceverà un codice», che è la verità e non una scusa.
+
+#### 5. Il limite agli invii è per email, e sta nel modello
+
+Un recupero senza limiti è un modo per far arrivare cinquanta email a un indirizzo
+altrui. Il rimedio **non è il rate limiting per IP** — che è nell'elenco dei trasversali
+mancanti, vuole uno stato condiviso e non serve con una sola istanza: è un limite per
+**email**, cioè una riga che dice quando è stato emesso l'ultimo codice e un rifiuto
+silenzioso se è troppo recente.
+
+Costa una colonna e nessun servizio in più. Il rate limiting per IP resta dov'è.
+
+#### 6. Il deploy è `compose` dietro Caddy, e la parte difficile è già fatta
+
+`ops/web/Caddyfile` realizza già il contratto **una sola origine** — `/` ai file statici,
+`/api/v1` all'API — che è la metà dell'argomento per cui non c'è CORS da montare né una
+difesa CSRF da scrivere ([ADR-038](08-decisioni.md#adr-038)). In produzione cambia una
+riga: `:8080` diventa il dominio, e Caddy prende il certificato da sé.
+
+*Alternativa scartata: Kubernetes.* I manifest sono nell'elenco di ciò che manca, e
+restano lì: sono la scala che non hai, e ogni ora spesa lì è un'ora non spesa a scoprire
+se il prodotto serve a qualcuno.
+
+**`secure_cookies` torna a `true`**, che è già il default del file di configurazione: su
+HTTPS il cookie del refresh è `Secure`, e il `false` resta l'eccezione dello sviluppo su
+`http://localhost`.
+
+#### 7. Un backup è un backup solo dopo essere stato ripristinato una volta
+
+Un `pg_dump` che gira e non dà errori non prova niente: prova che il comando esiste. La
+prova è **ripristinarlo in un database vuoto e far partire il prodotto sopra**, e va fatta
+una volta prima che dentro ci siano dati di qualcun altro.
+
+Due cose e non una: il database **e il bucket**. I documenti sono oggetti in MinIO, non
+righe: un dump del database li lascia fuori, e la riga che li cita resta senza byte — è la
+stessa constatazione che `just down-hard` ha già prodotto una volta.
+
+E la copia **esce dalla macchina**. Un backup sullo stesso disco del database non è un
+backup, è una seconda copia dello stesso guasto.
+
+#### 8. La privacy è piccola adesso e cara dopo
+
+Appena i dati dei suoi inquilini entrano nella tua VPS — nome, email, telefono — stai
+trattando dati personali di terzi. Per un test fra conoscenti non serve un impianto: serve
+dire per iscritto che cosa raccogli, perché, dove sta e che lo cancelli su richiesta.
+
+Sta nel piano e non fuori perché è l'unica voce che **cresce di costo con il tempo**:
+scriverla adesso è un pomeriggio, scriverla dopo aver raccolto dati per sei mesi è
+un'operazione su dati che esistono già.
+
+### Decomposizione
+
+##### `Z1` — La posta
+
+I passi 9 e 10 di [Prima degli utenti veri](#prima-degli-utenti-veri), da rileggere per
+intero: la porta esiste, l'adattatore no, e `Notifier` **non è iniettata da nessuna
+parte**.
+
+Qui si aggiungono le due cose che quella prosa non aveva:
+
+- **le impostazioni sono obbligatorie** in `AppConfig`, con il messaggio di avvio che dice
+  che cosa manca;
+- **un raccoglitore locale nel `docker-compose.yml`** per lo sviluppo, e la configurazione
+  di un mittente vero per la produzione, che è cosa diversa — vedi le trappole.
+
+##### `Z2` — Il recupero della password — **ADR-051 prima**
+
+Migration nuova: la tabella dei codici di recupero — hash e non il codice, scadenza breve,
+uso singolo, e la colonna che regge il limite per email.
+
+Due rotte, `POST /api/v1/auth/password-reset` e
+`POST /api/v1/auth/password-reset/confirm`; due schermate nel client; il codice consegnato
+per email.
+
+**Il pool privilegiato è legittimo qui, ed è l'unico posto nuovo in cui lo diventa.** La
+regola 27 lo riserva ai flussi in cui un contesto di sicurezza **non può** esistere:
+registrazione, login, rotazione del refresh. Chi ha dimenticato la password non è
+autenticato per definizione. Va scritto nel commento del caso d'uso, o alla prossima
+lettura sembrerà una violazione.
+
+Tre test, e sono i tre che contano: la conferma **revoca le sessioni**; un indirizzo
+sconosciuto riceve la stessa risposta di uno noto; un codice già usato non vale due volte.
+
+##### `Z3` — Il deploy
+
+VPS, dominio, il `Caddyfile` che punta al dominio, i segreti fuori dal repository, il
+migratore prima dell'API, e la politica di riavvio.
+
+Il criterio non è «i container sono su»: è **aprire il prodotto dal telefono, in 4G, e
+fare l'accesso**. Finché non è successo, non è deployato.
+
+##### `Z4` — Il backup, e il ripristino provato
+
+`pg_dump` a orario e copia del bucket, cifrati, **fuori dalla macchina**, con una
+ritenzione dichiarata. Poi il ripristino, una volta, su un database vuoto.
+
+##### `Z5` — La privacy
+
+Una pagina raggiungibile dal prodotto: che cosa si raccoglie, perché, dove sta, per quanto
+e come si chiede la cancellazione. E il giro corrispondente: quando il tuo proprietario
+chiederà di cancellare tutto, deve esistere una risposta che non sia una `DELETE` a mano.
+
+### Trappole
+
+**La posta da una VPS nuova finisce nello spam, ed è la trappola pratica più cara di
+questa fase.** Un IP appena assegnato non ha reputazione, e senza SPF, DKIM e DMARC sul
+dominio l'email di recupero non arriva — e il sintomo è **muto**: nessun errore, il codice
+non compare. Non è un difetto del codice ed è il motivo per cui l'adattatore parla SMTP e
+non con l'API di qualcuno: il mittente vero è un dato di configurazione. Va provato **con
+un indirizzo vero**, non solo con il raccoglitore locale.
+
+**Un raccoglitore locale non è un fornitore.** Accetta tutto: non verifica SPF, DKIM né i
+rimbalzi. Prova che il messaggio parte e che cosa contiene, non che sarebbe recapitato.
+
+**Aggiungere un'impostazione senza la riga in [07](07-operazioni.md) fa fallire
+`cargo test`.** `crates/api/tests/docs_config_reference.rs` deriva l'elenco dai campi di
+`AppConfig` e lo confronta con quelle tabelle. Non è un fastidio: è la ragione per cui
+`PROPFLOW__TELEMETRY__FILTER` non è più documentato con il default di due versioni fa.
+
+**L'invito non può passare dall'outbox**, e vale identico per il codice di recupero. Il
+token in chiaro esiste **solo** nella risposta e nell'email: in database c'è lo hash, e gli
+eventi di dominio non trasportano valori né credenziali. Un worker che leggesse l'evento
+non avrebbe niente da spedire, e metterci il token dentro significherebbe scrivere una
+credenziale in una tabella fatta per essere pubblicata su un broker.
+
+**L'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
+[04](04-sicurezza.md) vieta email, token e corpi nei log, e un client SMTP che registri la
+richiesta li registra tutti e tre insieme. La porta ha già un `Debug` redatto e
+l'adattatore non deve annullarlo.
+
+**Il recupero senza revoca delle sessioni non è un recupero.** Un refresh token vive
+trenta giorni: cambiare la password e lasciarlo vivo lascia dentro chi c'era.
+
+**`just down-hard` sul server porta via tutto**, MinIO compreso. Sulla macchina di
+produzione quel comando non deve esistere nella memoria muscolare.
+
+**MinIO e PostgreSQL sullo stesso disco cadono insieme.** Il backup deve coprire entrambi,
+e stare altrove.
+
+**Non si aggiunge Redis.** Il limite agli invii è per email e sta nel modello; il rate
+limiting per IP resta fra i trasversali mancanti. Un servizio in più è un servizio da
+avviare, mettere in sicurezza, monitorare e ripristinare.
+
+### Come si saprà che è finita
+
+- un'email di invito arriva davvero nel raccoglitore locale, con il token nel corpo e in
+  **nessuna** riga di log;
+- un'email arriva a un indirizzo **vero**, e non nella cartella dello spam;
+- una password si recupera da capo a fondo, e le sessioni aperte prima **non funzionano
+  più**;
+- chiedere il recupero per un indirizzo che non esiste dà la stessa risposta di uno che
+  esiste, e il client lo dice invece di lasciarlo intuire;
+- il prodotto risponde su un dominio in HTTPS, aperto **dal telefono in 4G**;
+- un dump viene ripristinato in un database vuoto e il prodotto ci parte sopra;
+- esiste una pagina che dice che cosa si raccoglie e come si chiede la cancellazione;
+- `just ci` verde.
+
+### Che cosa **non** entra
+
+- **il rate limiting per IP**, la verifica dell'email bloccante e l'MFA. La prima non serve
+  con una sola istanza; la seconda cambia il percorso di registrazione, che ogni collaudo
+  attraversa, e pagarne il costo mentre si prova da soli è il caso più netto del criterio
+  d'ordine; la terza è una colonna e nient'altro;
+- **Kubernetes, metriche, alerting, il cron delle partizioni di audit.** Dipendono da dove
+  il prodotto verrà esercito, che dopo questa fase sarà deciso — una VPS — e allora
+  saranno pianificabili con una misura invece che con un'ipotesi;
+- **`R9`, il perimetro dei ruoli.** Serve prima degli **sconosciuti**, non prima di un
+  proprietario che conosci: oggi chiunque si registri è owner di una propria
+  organizzazione, e con una persona sola è tollerabile e va saputo;
+- **la sezione 5-ter**, che è lavoro suo e viene prima di questa fase: `R31` in particolare
+  romperebbe il test appena il tuo proprietario rinnovasse un contratto;
+- **il modello di ricavo.** Questa fase esiste per poter fare la domanda, non per
+  rispondere.
 
 
 <a id="raccolta-da-ordinare"></a>
