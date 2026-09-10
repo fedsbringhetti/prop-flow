@@ -4,13 +4,14 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
 
+import { confirmPasswordReset, requestPasswordReset } from '@/api/endpoints'
 import { ApiError, fieldErrorFor } from '@/api/problem'
 import { InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 import { t } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { useSession } from '@/app/session'
+import { useApi, useSession } from '@/app/session'
 
 /**
  * **Questi due form non usano `zod`, e sono gli unici.**
@@ -66,6 +67,13 @@ function AuthFrame({
         <p className="mt-1 mb-6 text-sm text-ink-muted">{subtitle}</p>
         {children}
         <p className="mt-6 text-sm text-ink-muted">{footer}</p>
+        {/* L'informativa va letta **prima** di consegnare i propri dati, quindi
+            sta su ogni schermata in cui si consegnano. */}
+        <p className="mt-4 text-xs text-ink-muted">
+          <Link to="/privacy" className="underline-offset-4 hover:underline">
+            {t.privacy.title}
+          </Link>
+        </p>
       </div>
     </main>
   )
@@ -133,9 +141,22 @@ export function LoginPage() {
       title={t.auth.loginTitle}
       subtitle={t.auth.loginSubtitle}
       footer={
-        <Link to="/registrazione" className="text-accent underline-offset-4 hover:underline">
-          {t.auth.toRegister}
-        </Link>
+        <>
+          <Link to="/registrazione" className="text-accent underline-offset-4 hover:underline">
+            {t.auth.toRegister}
+          </Link>
+          {/* **La via d'uscita sta dove ci si accorge di non ricordarla**, cioè
+              sotto il form che ha appena rifiutato la password. Metterla altrove
+              vorrebbe dire cercarla nel momento peggiore. */}
+          <span className="mt-1 block">
+            <Link
+              to="/recupero-password"
+              className="text-accent underline-offset-4 hover:underline"
+            >
+              {t.auth.forgotten}
+            </Link>
+          </span>
+        </>
       }
     >
       <form onSubmit={submit} noValidate className="flex flex-col gap-4">
@@ -273,6 +294,188 @@ export function RegisterPage() {
           {form.formState.isSubmitting ? t.common.saving : t.auth.submitRegister}
         </Button>
       </form>
+    </AuthFrame>
+  )
+}
+
+/**
+ * Il recupero della password, in **due tempi e una schermata sola**.
+ *
+ * Due tempi perché il codice arriva per posta: si chiede, si aspetta, si incolla.
+ * Una schermata sola perché fra i due passaggi non c'è niente da ricordare tranne
+ * l'indirizzo, e mandare una persona già frustrata su una seconda pagina — con un
+ * link da ritrovare o un URL da riaprire — è attrito che non compra niente.
+ *
+ * # Il codice si incolla, non si clicca
+ *
+ * È [ADR-052](../../../../docs/08-decisioni.md), che riprende la stessa decisione già
+ * presa per l'invito: il token è una **credenziale**, e un link
+ * `/nuova-password/<token>` la scriverebbe in tre archivi che nessuno ripulisce — la
+ * cronologia del browser, il `Referer` verso qualunque risorsa esterna, e i log di
+ * ogni proxy davanti al client. Il costo è reale — incollare è più scomodo di un
+ * clic — e si paga per non avere due forme diverse per due credenziali che si
+ * somigliano.
+ *
+ * # La schermata dice la verità sulla risposta
+ *
+ * L'API risponde `202` a chiunque, perché distinguere un indirizzo noto da uno
+ * sconosciuto direbbe chi ha un account. Il messaggio quindi **non** promette
+ * «ti abbiamo mandato un'email»: dice «se quell'indirizzo ha un account». È la
+ * verità, e una promessa che il prodotto non può mantenere sarebbe peggio.
+ *
+ * # E dice la conseguenza **prima**
+ *
+ * Cambiare la password revoca le sessioni aperte ovunque, ed è la parte che si
+ * scopre dopo trovandosi disconnessi sul telefono. Sta scritta accanto al bottone.
+ */
+export function PasswordResetPage() {
+  const [stage, setStage] = useState<'request' | 'confirm'>('request')
+  const [email, setEmail] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [done, setDone] = useState(false)
+  const client = useApi()
+
+  const request = useForm<{ email: string }>({ defaultValues: { email: '' } })
+  const confirm = useForm<{ code: string; newPassword: string }>({
+    defaultValues: { code: '', newPassword: '' },
+  })
+
+  const askForCode = request.handleSubmit(async (values) => {
+    setError(null)
+    try {
+      await requestPasswordReset(client, values.email)
+      setEmail(values.email)
+      setStage('confirm')
+    } catch (failure) {
+      setError(failure)
+    }
+  })
+
+  const useCode = confirm.handleSubmit(async (values) => {
+    setError(null)
+    try {
+      await confirmPasswordReset(client, values.code.trim(), values.newPassword)
+      setDone(true)
+    } catch (failure) {
+      // Il form **non si svuota**: chi ha sbagliato la password nuova non deve
+      // farsi rimandare il codice, che vale una volta sola.
+      setError(failure)
+    }
+  })
+
+  if (done) {
+    return (
+      <AuthFrame
+        title={t.auth.resetConfirmTitle}
+        subtitle={t.auth.resetDone}
+        footer={
+          <Link to="/accesso" className="text-accent underline-offset-4 hover:underline">
+            {t.auth.backToLogin}
+          </Link>
+        }
+      >
+        <Button asChild variant="primary" size="lg">
+          <Link to="/accesso">{t.auth.submitLogin}</Link>
+        </Button>
+      </AuthFrame>
+    )
+  }
+
+  return (
+    <AuthFrame
+      title={t.auth.resetTitle}
+      subtitle={stage === 'request' ? t.auth.resetSubtitle : t.auth.resetConfirmSubtitle}
+      footer={
+        <Link to="/accesso" className="text-accent underline-offset-4 hover:underline">
+          {t.auth.backToLogin}
+        </Link>
+      }
+    >
+      {stage === 'request' ? (
+        <form onSubmit={askForCode} noValidate className="flex flex-col gap-4">
+          <InlineError error={error} />
+          <Field label={t.auth.email} error={request.formState.errors.email?.message} required>
+            {(props) => (
+              <Input
+                {...props}
+                {...request.register('email', {
+                  required: t.validation.required,
+                  pattern: { value: EMAIL_PATTERN, message: t.validation.email },
+                })}
+                type="email"
+                autoComplete="email"
+                autoFocus
+              />
+            )}
+          </Field>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            disabled={request.formState.isSubmitting}
+          >
+            {request.formState.isSubmitting ? t.common.saving : t.auth.resetSubmit}
+          </Button>
+        </form>
+      ) : (
+        <form onSubmit={useCode} noValidate className="flex flex-col gap-4">
+          <InlineError error={error} />
+          {/* La verità, non una promessa: l'API risponde `202` anche a un indirizzo
+              che non ha un account, e dire «ti abbiamo mandato un'email» sarebbe
+              falso proprio nel caso in cui non è partito niente. */}
+          <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">
+            {t.auth.resetSent}
+          </p>
+          <Field
+            label={t.auth.resetCode}
+            hint={t.auth.resetCodeHint}
+            error={confirm.formState.errors.code?.message}
+            required
+          >
+            {(props) => (
+              <Input
+                {...props}
+                {...confirm.register('code', { required: t.validation.required })}
+                autoComplete="one-time-code"
+                autoFocus
+              />
+            )}
+          </Field>
+          <Field
+            label={t.auth.newPassword}
+            hint={t.auth.passwordHint}
+            error={confirm.formState.errors.newPassword?.message}
+            required
+          >
+            {(props) => (
+              <PasswordInput
+                {...props}
+                {...confirm.register('newPassword', {
+                  required: t.validation.required,
+                  minLength: { value: PASSWORD_MIN_LENGTH, message: t.validation.passwordTooShort },
+                })}
+                autoComplete="new-password"
+              />
+            )}
+          </Field>
+          {/* La conseguenza **prima**, non dopo: chi cambia la password si ritrova
+              disconnesso anche sul telefono, e scoprirlo dopo sembra un guasto. */}
+          <p className="rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+            {t.auth.resetRevokesSessions}
+          </p>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            disabled={confirm.formState.isSubmitting}
+          >
+            {confirm.formState.isSubmitting ? t.common.saving : t.auth.resetConfirmSubmit}
+          </Button>
+          {/* L'indirizzo resta a schermo: chi ha sbagliato a digitarlo se ne
+              accorge qui, invece di aspettare un'email che non arriverà. */}
+          <p className="text-center text-xs text-ink-muted">{email}</p>
+        </form>
+      )}
     </AuthFrame>
   )
 }

@@ -24,6 +24,10 @@ import { AppShell, TENANT_HOME } from './shell'
 const AuthPage = () => import('@/features/auth/AuthPage')
 const LoginPage = lazy(async () => ({ default: (await AuthPage()).LoginPage }))
 const RegisterPage = lazy(async () => ({ default: (await AuthPage()).RegisterPage }))
+const PasswordResetPage = lazy(async () => ({ default: (await AuthPage()).PasswordResetPage }))
+const PrivacyPage = lazy(async () => ({
+  default: (await import('@/features/legal/PrivacyPage')).PrivacyPage,
+}))
 
 const InvitationPage = () => import('@/features/invitations/AcceptInvitationPage')
 const AcceptInvitationPage = lazy(async () => ({
@@ -129,6 +133,14 @@ export function App() {
         <Routes>
         <Route path="/accesso" element={<LoginPage />} />
         <Route path="/registrazione" element={<RegisterPage />} />
+        {/* Il recupero vive fuori dalla sessione per definizione: chi lo apre non
+            riesce a entrare. Una rotta sola per i due tempi — si chiede il codice,
+            si incolla — perché fra i due non c'è niente da ricordare tranne
+            l'indirizzo, e mandare altrove chi è già frustrato non compra niente. */}
+        <Route path="/recupero-password" element={<PasswordResetPage />} />
+        {/* L'informativa si legge **prima** di dare i propri dati, quindi sta
+            fra le rotte di chi non è entrato e non solo dentro il guscio. */}
+        <Route path="/privacy" element={<PrivacyPage />} />
         {/* Accettare un invito richiede una sessione — la rotta dell'API è
             autenticata — quindi chi arriva qui con un codice in mano e senza
             account non va al login in silenzio: gli si dice che cosa fare

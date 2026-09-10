@@ -79,6 +79,85 @@ export const it = {
     logout: 'Esci',
     sessionExpired: 'La sessione è scaduta. Entra di nuovo.',
     registeredNowSignIn: 'Account creato. Entra con le tue credenziali.',
+
+    /** Il recupero della password. Le stringhe dicono **la verità** su ciò che
+     *  succede: la risposta è la stessa per un indirizzo noto e per uno
+     *  sconosciuto, e dirlo è più onesto che lasciarlo intuire (ADR-052). */
+    forgotten: 'Password dimenticata?',
+    resetTitle: 'Recupera la password',
+    resetSubtitle: 'Ti mandiamo un codice da incollare qui.',
+    resetSubmit: 'Mandami il codice',
+    /** Non «ti abbiamo mandato un'email»: sarebbe una promessa che il prodotto non
+     *  può mantenere per un indirizzo che non ha un account, e dirla renderebbe la
+     *  sua assenza un modo per sapere chi è registrato. */
+    resetSent:
+      'Se quell’indirizzo ha un account, riceverà un codice. Vale 30 minuti e si usa una volta sola.',
+    resetCode: 'Codice ricevuto per email',
+    /** Come per l'invito: un codice si incolla, non si clicca. Un token dentro un
+     *  URL finisce nella cronologia, nel «Referer» e nei log di ogni proxy. */
+    resetCodeHint: 'Incollalo come l’hai ricevuto.',
+    newPassword: 'Password nuova',
+    resetConfirmTitle: 'Scegli la password nuova',
+    resetConfirmSubtitle: 'Il codice vale una volta sola.',
+    resetConfirmSubmit: 'Cambia la password',
+    /** La revoca è l'unica parte con una conseguenza che si sente: va detta prima,
+     *  non scoperta dopo trovandosi disconnessi ovunque. */
+    resetRevokesSessions:
+      'Cambiare la password chiude le sessioni aperte su tutti i dispositivi.',
+    resetDone: 'Password cambiata. Entra con quella nuova.',
+    backToLogin: 'Torna all’accesso',
+  },
+
+  /**
+   * L'informativa sulla privacy.
+   *
+   * **Il testo sta qui e non nel componente**, come ogni altra stringa visibile
+   * (regola 18): è prosa lunga, e la tentazione di scriverla nel JSX «perché è un
+   * caso a parte» è precisamente il modo in cui l'indirezione si perde. Le sezioni
+   * sono un elenco, così aggiungerne una non tocca il componente.
+   *
+   * **Dice quello che il prodotto fa davvero**, e non quello che si vorrebbe: la
+   * cancellazione è una richiesta da scrivere e non un bottone, perché il ruolo
+   * applicativo non ha il privilegio `DELETE` e tutto passa da `deleted_at`
+   * (ADR-003). Promettere un bottone sarebbe una promessa che il prodotto non può
+   * mantenere — vedi `R37`.
+   */
+  privacy: {
+    title: 'Privacy e dati personali',
+    subtitle:
+      'Che cosa raccogliamo, perché, dove sta e come si chiede la cancellazione.',
+    updated: 'Ultimo aggiornamento',
+    contactLabel: 'Per qualunque richiesta',
+    sections: [
+      {
+        title: 'Chi tratta i dati',
+        body: 'Il titolare del trattamento è la persona o la società che gestisce questa installazione di PropFlow, ed è la stessa a cui hai chiesto di usarlo. I contatti sono in fondo a questa pagina.',
+      },
+      {
+        title: 'Che cosa raccogliamo',
+        body: 'Di chi usa il prodotto: nome, email, e la password in una forma da cui non si torna indietro. Di chi è parte di un contratto: nome, email e telefono, se chi amministra li inserisce. Poi ciò che serve al servizio: immobili, contratti, importi, segnalazioni, bollette e i documenti che vengono caricati. Non raccogliamo dati di navigazione a fini pubblicitari e non usiamo strumenti di profilazione.',
+      },
+      {
+        title: 'Perché',
+        body: 'Per far funzionare il servizio che hai chiesto: gestire i tuoi immobili e i rapporti con chi ci abita. La base giuridica è il contratto con te, e per i dati di terzi che inserisci — i tuoi inquilini — sei tu a doverli informare, perché sei tu ad averli raccolti.',
+      },
+      {
+        title: 'Dove stanno e per quanto',
+        body: 'Su un server nell’Unione Europea, in un database e in uno storage di documenti che stanno sulla stessa macchina. Le copie di sicurezza sono cifrate e conservate fuori da quella macchina. I dati restano finché usi il servizio, e le copie di sicurezza per il periodo dichiarato nel contratto.',
+      },
+      {
+        title: 'Chi altro li vede',
+        body: 'Nessuno oltre a chi amministra la tua organizzazione e alle persone a cui quei dati si riferiscono. Non li vendiamo e non li cediamo. Il fornitore del server e quello della posta li trattano per conto nostro, per il solo fatto di ospitarli e di recapitare le email del servizio.',
+      },
+      {
+        title: 'Che cosa puoi chiedere',
+        body: 'Di sapere quali dati abbiamo, di correggerli, di riceverne una copia, di limitarne l’uso e di farli cancellare. Scrivi all’indirizzo qui sotto: rispondiamo entro trenta giorni. La cancellazione oggi è una procedura che eseguiamo a mano, non un bottone nel prodotto, e la differenza è che richiede la richiesta scritta.',
+      },
+      {
+        title: 'Che cosa la cancellazione non porta via',
+        body: 'Restano le righe che servono a un obbligo di legge — la contabilità, per il tempo che la legge impone — e la traccia tecnica delle operazioni, che non contiene i tuoi dati ma il fatto che qualcosa sia successo. Restano anche i dati che riguardano un’altra persona: se il tuo nome è in un contratto, quel contratto è anche di qualcun altro.',
+      },
+    ],
   },
 
   org: {

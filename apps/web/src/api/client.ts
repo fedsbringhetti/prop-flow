@@ -111,9 +111,17 @@ export class ApiClient {
 
   private async decode<T>(response: Response): Promise<T> {
     if (!response.ok) throw await apiErrorFrom(response)
-    // `204` è la risposta delle archiviazioni: nessun corpo da leggere, e
-    // chiamare `json()` su di esso solleverebbe.
-    if (response.status === 204) return undefined as T
+    // **Una risposta senza corpo non è solo il `204`.** Le archiviazioni
+    // rispondono `204`, e la richiesta di recupero della password risponde `202`
+    // con niente dentro — deve rispondere lo stesso a chiunque, quindi non ha nulla
+    // da dire. Guardare il solo `204` faceva sollevare `json()` su un corpo vuoto,
+    // e l'errore che ne usciva parlava di JSON malformato invece che di una
+    // risposta riuscita.
+    //
+    // Il criterio è il tipo di contenuto e non l'elenco dei codici: un elenco
+    // andrebbe aggiornato al prossimo `202`, e la volta dopo ce se ne dimentica.
+    const contentType = response.headers.get('content-type') ?? ''
+    if (response.status === 204 || !contentType.includes('json')) return undefined as T
     return (await response.json()) as T
   }
 
