@@ -80,15 +80,23 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Immagine Docker, stack compose | completi |
 | Pipeline CI | completa |
 
-438 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+443 test: 206 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
 del bordo HTTP, 81 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 91 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+MinIO, 96 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
 
-I sette nuovi sono della sezione 5, e provano soprattutto **confini**: la segnalazione
-condivisa che arriva al coinquilino *con il thread e lo storico*, quella non condivisa che
-non gli arriva affatto, il coinquilino che la vede e non la scrive, la correzione che si
-chiude ad `assigned`, il thread chiuso che si legge e non si scrive, e il motivo della
-riapertura che si va a rileggere nella conversazione.
+I sette della sezione 5 provano soprattutto **confini**: la segnalazione condivisa che
+arriva al coinquilino *con il thread e lo storico*, quella non condivisa che non gli
+arriva affatto, il coinquilino che la vede e non la scrive, la correzione che si chiude ad
+`assigned`, il thread chiuso che si legge e non si scrive, e il motivo della riapertura
+che si va a rileggere nella conversazione.
+
+**I cinque della sezione 5-ter provano una cosa diversa: la seconda volta.** Due
+percorrono la riproduzione di `R31` — un inquilino invitato due volte, che prima riceveva
+`409` sul secondo invito — e uno di essi verifica che accettare come inquilino non
+retroceda chi è già proprietario. Gli altri tre guardano i nomi su ogni risposta,
+transizioni comprese, l'immobile archiviato che lascia il campo assente **senza far
+sparire la riga**, e il residuo da riaddebitare con la regola che si perde: un addebito
+annullato non conta.
 
 ### Client web — le due metà
 
@@ -119,7 +127,11 @@ dell'API dietro un reverse proxy.
 | **Una bozza sbagliata si annulla e una parte si corregge**: quota, nome, telefono, ruolo, intestatario — l'email solo finché nessuno l'ha usata — e si toglie chi è stato inserito per sbaglio | completo per la sezione 3 |
 | **Il form non produce più quote sbagliate**: propone il residuo, offre l'intestatario solo se libero, e l'invito dice quale quota riceverà chi accetta | completo per la sezione 3 |
 | **L'elenco dei contratti dice quale casa e quale stanza**, e la creazione avverte se il periodo è già occupato | completo per la sezione 3 |
-| **Stato dichiarato ed effettivo, mostrati insieme quando divergono**: una stanza fuori uso e insieme occupata è un'anomalia da vedere. Le tendine offrono solo ciò che si decide, e il filtro dell'occupazione sostituisce quello sullo stato derivato | completo per la sezione 4 |
+| **Stato dichiarato ed effettivo, mostrati insieme quando il dichiarato è un giudizio che il fatto smentisce**: una stanza fuori uso e insieme occupata è l'anomalia da vedere; una stanza disponibile e occupata dice solo «Occupata». Le tendine offrono solo ciò che si decide, e il filtro dell'occupazione sostituisce quello sullo stato derivato | completo per la sezione 4, **regola corretta dalla 5-ter** |
+| **Lo stato dichiarato vive nella scheda e accanto al filtro**, non fra parentesi su ogni riga: è dove nasce la domanda «ho chiesto gli attivi e me ne torna uno scaduto» | completo per la sezione 5-ter |
+| **I collegamenti dicono il nome di dove portano**: segnalazione, addebito e bolletta nominano immobile, stanza e contratto invece di «Immobili» e «Contratti»; un immobile archiviato lo dice | completo per la sezione 5-ter |
+| **Il riaddebito dice a chi e quanto resta**: la tendina elenca *immobile · stanza · intestatario* e i soli contratti in corso, e il dialogo propone il **residuo** invece del totale | completo per la sezione 5-ter |
+| **La data di un pagamento si mostra e non si manda**: il campo parte da oggi, la richiesta tace finché non la si cambia, e l'ora vera non si perde | completo per la sezione 5-ter |
 | **Il bundle è diviso per rotta**, con i confini di `Suspense` dentro il guscio e con il loro stato | completo per la fetta C |
 | I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
 | Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
@@ -132,7 +144,7 @@ dell'API dietro un reverse proxy.
 | Pagamenti: registrazione di un incasso con l'attribuzione come scelta esplicita, **coda delle dichiarazioni** con conferma e rifiuto, chiave di idempotenza generata una volta per intento | completo per la fetta A |
 | Reverse proxy in sviluppo e in `docker-compose.yml`, immagine del client | completi |
 
-86 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+102 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
 volo **e quello fra schede, entrambi riprodotti anche al contrario** — 11 sui
 decimali e sulla formattazione, 5
 sulla chiave di idempotenza, 4 sull'accettazione di un invito — l'header che **non**
@@ -146,7 +158,12 @@ ricordata che l'elenco vero corregge — 13 sui contratti, che sono le due aritm
 replicate dal server: la quota che resta da assegnare e la sovrapposizione dei periodi come
 la contano i vincoli di esclusione — e 13 sulle spese co-living: la risoluzione dei
 nomi **compreso chi non è più residente**, la somma dei netti verificata sugli interi, e
-la scheda del gruppo con un membro uscito che ha ancora un conto aperto.
+la scheda del gruppo con un membro uscito che ha ancora un conto aperto. Gli ultimi
+**sedici** sono della sezione 5-ter: 8 sui badge — e quelli che contano sono i tre
+sull'**anomalia che resta doppia**, che è l'assert che qualcuno toglie semplificando — 2
+sull'aritmetica della sottrazione, che è il posto in cui `parseFloat` rientrerebbe dalla
+finestra, e 3 sulla data che si mostra e non si manda, il cui difetto è **invisibile a
+schermo**: le due schermate sono identiche, e solo il corpo della richiesta le distingue.
 
 I test sulla chiave di idempotenza sono stati **verificati contro il difetto**, e non
 una volta sola: sostituendo `intent.current()` con un `randomUUID()` dentro
@@ -306,48 +323,56 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [5-ter](#piano-sezione-5-ter), poi la [5-quater](#piano-utenti-veri).** Il
-[collaudo](11-piani-conclusi.md#esito-sezione-5-bis) è **concluso** — percorso per intero
-il 9 e il 10 settembre 2026, da chi non aveva scritto il codice — e con esso l'[esito
-della fetta C](11-piani-conclusi.md#esito-fetta-c) smette di essere aperto. **Nessuno
-degli undici punti si è fermato**: le sei voci uscite dal giro sono difetti dentro
-percorsi che funzionano, il che dice che ciò che manca è rifinitura e non fondamenta.
+**La [5-quater](#piano-utenti-veri).** La [5-ter](11-piani-conclusi.md#esito-sezione-5-ter)
+è **conclusa** il 10 settembre 2026: le cinque voci che il collaudo aveva trovato sono
+chiuse, e con `R31` è chiuso il buco nel **ciclo di vita normale** — un inquilino il cui
+contratto scade e che ne firma un altro adesso rientra dalla stessa porta
+([ADR-051](08-decisioni.md#adr-051)).
 
-Le due sezioni che restano hanno un obiettivo dichiarato che le lega: *un proprietario vero, che non ha scritto il codice, usa
-il prodotto per un mese con i suoi dati*. Il giro dice se il prodotto regge; la 5-ter
-corregge ciò che il giro ha trovato; la 5-quater aggiunge le quattro cose senza cui una
-persona esterna non può cominciare — la posta, il **recupero della password**, il deploy,
-il backup.
+Resta quindi una sezione sola prima dell'obiettivo dichiarato: *un proprietario vero, che
+non ha scritto il codice, usa il prodotto per un mese con i suoi dati*. La 5-quater
+aggiunge le quattro cose senza cui una persona esterna non può nemmeno cominciare — la
+posta, il **recupero della password**, il deploy, il backup — e nessuna delle quattro
+chiude una voce di [12](12-da-fare.md): non sono difetti, è lavoro mai cominciato.
 
-La 5-ter è quella che il collaudo ha prodotto: mezza giornata di
-giro vero, fatto da chi non aveva scritto il codice, ha dato **sei voci** — `R30`–`R35` —
-e una di esse, `R31`, è un buco nel **ciclo di vita normale**. Un inquilino il cui
-contratto scade e che ne firma un altro **non può rientrare**: l'invito è l'unica via che
-scrive `lease_parties.user_id`, e rifiuta chi è già membro. Cinque sezioni di lettura del
-codice non l'avevano visto, e nessun test poteva vederlo — ogni test costruisce un
-inquilino nuovo.
+**Che cosa la 5-ter lascia sul tavolo**, e conviene saperlo prima di aprire la 5-quater:
+`R36` — il badge degli addebiti, che ha la stessa forma di `R30` e non lo stesso difetto —
+e la regolarità che il suo piano ha nominato senza esaurirla, *ogni risposta che porta un
+identificatore verso una schermata è un difetto che aspetta di essere trovato*. Se ne sono
+sistemate tre; guardarle tutte è una voce nuova.
 
-**È il rendimento che il rinvio del collaudo aveva sospeso**, e che l'[esito della sezione
-2](11-piani-conclusi.md#esito-sezione-2) aveva scritto come costo: *il giro alimenta i
-piani, non solo li verifica*.
+**Il rendimento del collaudo resta la cosa da ricordare.** Mezza giornata di giro vero,
+fatto da chi non aveva scritto il codice, ha dato **sei voci**; cinque sezioni di lettura
+del codice ne avevano date quattro. È il costo che l'[esito della sezione
+2](11-piani-conclusi.md#esito-sezione-2) aveva scritto in anticipo — *il giro alimenta i
+piani, non solo li verifica* — e adesso c'è la misura.
 
-**Il [collaudo in undici punti](12-da-fare.md#lordine-di-esecuzione), che è la 5-bis.**
-Il piano è già scritto — passi `T3`–`T7` dell'[esito della sezione
-2](11-piani-conclusi.md#piano-sezione-2), con le sette trappole e la finta bolletta — e da
-adesso **nove punti su undici sono su codice fermo**: l'1 e il 5 dipendono da `R9`, che è
-la sezione 8, e aspettare anche quella vorrebbe dire non provare niente per altre tre
-sezioni.
+**Il [collaudo in undici punti](11-piani-conclusi.md#esito-sezione-5-bis), che è la
+5-bis, è concluso** — percorso per intero il 9 e il 10 settembre 2026 da chi non aveva
+scritto il codice — e con esso l'[esito della fetta
+C](11-piani-conclusi.md#esito-fetta-c) smette di essere aperto dopo due giorni e cinque
+sezioni di attesa. **Nessuno degli undici punti si è fermato**: le sei voci uscite dal
+giro sono difetti dentro percorsi che funzionano, il che dice che ciò che manca è
+rifinitura e non fondamenta.
 
-**È anche il momento in cui le sezioni 3, 4 e 5 si vedono per la prima volta con gli
-occhi.** Tutte e tre sono state verificate **solo con i test**, e la 5 cambia la scheda
-della segnalazione in quattro punti — la casella all'apertura, i nomi, il bottone
-«Correggi», la conversazione che si chiude — che il punto **7** attraversa per intero.
+Quel giro ha anche fatto vedere per la prima volta **con gli occhi** le sezioni 3, 4 e 5,
+che erano state verificate solo con i test. La 5-ter le ha ora rifinite, e resta vera la
+cosa che l'esito della 5-bis segnala come propria mancanza: le undici righe sono state
+riempite alla fine del giro invece che mentre lo si percorreva, e per quattro punti resta
+l'affermazione che sono stati attraversati, senza l'osservazione. **Chi rifarà un
+collaudo tenga il documento aperto accanto al browser.**
 
-**Chi riprende deve riavviare l'API e ricreare il database**: il binario in esecuzione è
-precedente alle rotte delle sezioni 3, 4 e 5, e le migration `0033`–`0036` vanno applicate.
-Il costo del rinvio è scritto nell'[esito della sezione
-2](11-piani-conclusi.md#esito-sezione-2) e resta vero: il giro **alimenta i piani** e non
-solo li verifica — `R26` è entrata così.
+**La [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter) è conclusa**: un inquilino
+che torna rientra dalla stessa porta, il badge dice il fatto e non più la coppia su ogni
+riga, i collegamenti dicono il nome di dove portano, il riaddebito dice a chi e quanto
+resta, e la data di un pagamento si mostra senza perdere l'ora vera.
+[Piano](11-piani-conclusi.md#piano-sezione-5-ter) ·
+[esito](11-piani-conclusi.md#esito-sezione-5-ter). Due cose da portarsi dietro: il piano
+aveva una **premessa sbagliata** — l'intestatario non era in `LeaseResponse` — e si è
+emendata la premessa invece di rinunciare alla decisione; e `Y3` è costato più del
+previsto perché la lezione della sezione 5 — *i nomi su ogni risposta, transizioni
+comprese* — vale identica su addebiti e bollette, e ha cambiato il tipo di ritorno di nove
+casi d'uso di scrittura.
 
 **La [sezione 5](11-piani-conclusi.md#esito-sezione-5) è conclusa**: la visibilità di una
 segnalazione è una scelta di chi la apre, il testo si corregge finché nessuno l'ha presa in
@@ -435,336 +460,6 @@ Resta la decisione che continua a bloccare più valore di ogni riga di codice, e
 quella qui sotto: **il fornitore di OCR**.
 
 
-<a id="piano-sezione-5-ter"></a>
-
-## Piano — Sezione 5-ter: quello che il collaudo ha trovato
-
-Pianificata il **9 settembre 2026**, subito dopo la prima mezza giornata di
-[collaudo](12-da-fare.md#lordine-di-esecuzione) percorsa **da chi non aveva scritto il
-codice**. Chiude `R30`, `R31`, `R32`, `R33` e `R34`. `R35` resta fuori e la ragione è
-scritta in fondo.
-
-**È la sezione che giustifica cinque rinvii.** Il costo del rinvio era scritto
-nell'[esito della sezione 2](11-piani-conclusi.md#esito-sezione-2) — *«il collaudo non
-serve solo a verificare, alimenta i piani»* — e mezza giornata di giro vero ha prodotto
-**sei voci**, di cui una (`R31`) è un buco nel ciclo di vita normale del prodotto che
-nessuna delle cinque sezioni precedenti aveva visto, e che nessun test avrebbe trovato
-perché tutti i test costruiscono un inquilino nuovo ogni volta.
-
-### Le cinque voci non sono cinque problemi
-
-Sono **tre**, e vedere quali si accorpano è la parte del piano che conviene non perdere:
-
-| Voci | Che cosa hanno in comune |
-|---|---|
-| `R30` | una regola di presentazione scritta per l'eccezione e applicata alla norma |
-| `R32`, `R33` | **il problema dei nomi, terza occorrenza**: `R14` sui contratti, `R21`/`R22` sulle segnalazioni, e adesso su segnalazioni, addebiti, bollette e sul riaddebito. La risposta è già decisa due volte |
-| `R31`, `R34` | due difetti isolati, che condividono solo l'essere stati trovati usando |
-
-### Che cosa il collaudo ha trovato, e la causa di ciascuno
-
-Le cause sono **verificate nel codice**, non dedotte dal sintomo: è la differenza fra un
-piano che si può eseguire e un elenco di lamentele.
-
-#### `R30` — la parentesi che compare sempre
-
-`status.tsx` mostra i due stati **ogni volta che differiscono**. La regola era per
-l'anomalia — una stanza in ristrutturazione e occupata — ma per
-[ADR-019](08-decisioni.md#adr-019) e per la [sezione 4](11-piani-conclusi.md#esito-sezione-4)
-la divergenza è **garantita** nel caso normale: nessuno riscrive `active` quando un
-contratto scade, `occupied` non lo scrive nessuno mai, `rented` nemmeno. La parentesi
-compare quindi su quasi ogni riga.
-
-**Ma il commento di `LeaseStatusBadge` porta una ragione vera**, e buttarla via
-sarebbe il modo di reintrodurre il problema al contrario: chi filtra per «attivo» e si
-vede tornare un contratto marcato «Scaduto» deve poter capire perché. L'informazione
-serve; è il *posto* a essere sbagliato.
-
-#### `R31` — l'inquilino che torna, e non può rientrare
-
-Il ciclo di vita normale: il contratto scade o si disdice, con la stessa persona se ne fa
-un altro. Oggi **non si può**, e il modo in cui non si può è il peggiore:
-
-1. `InviteTenant` non guarda niente: crea la parte contrattuale ed emette l'invito. Il
-   proprietario vede un codice buono e lo consegna;
-2. `AcceptInvitation` fa **sempre** `uow.members().insert(...)`, che sbatte contro
-   `org_members_org_user_uk`;
-3. `map_membership_conflict` lo traduce in `409 membership.already_exists`.
-
-L'inquilino riceve un errore su un invito che il proprietario ha appena emesso senza
-un avviso. E `lease_parties.user_id` **lo scrive solo quel percorso**: nessun'altra rotta
-collega una persona a una parte contrattuale — `PATCH /lease-parties/{id}` tocca nome,
-telefono, ruolo, quota e intestatario, non l'utente.
-
-**Nessun test lo copre**, e la ragione è istruttiva: ogni test costruisce un inquilino
-**nuovo**. Il difetto vive esattamente nello spazio che una suite verde non attraversa.
-
-#### `R32` e `R33` — i nomi, terza occorrenza
-
-Tre collegamenti mostrano un'etichetta generica: `TicketDetailPage.tsx:93`,
-`ChargeDetailPage.tsx:164`, `BillDetailPage.tsx:154`. E il `<Select>` del riaddebito
-elenca i contratti come *tipo · data*, che è **il difetto che `R14` ha corretto
-nell'elenco dei contratti** — mentre `LeaseResponse` porta ormai `property_label` e
-`room_name` e quel dialogo non li guarda.
-
-È il terzo giro sulla stessa radice, e la risposta è decisa da
-[ADR-049](08-decisioni.md#adr-049): allargare la risposta con un modello di lettura, mai
-una rotta che risolva le entità.
-
-#### `R34` — la data che non propone oggi
-
-`paid_at: ''` in `DeclarePaymentDialog` e `RecordPaymentDialog`, mentre `todayIso()`
-esiste ed è già usato per le scadenze. **La trappola sta nel rimedio**, non nel difetto:
-oggi il campo vuoto significa «adesso» e il server mette l'istante vero; precompilarlo
-lo trasformerebbe in **oggi a mezzanotte**.
-
-### Che cosa è stato deciso prima di pianificare
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| Quando si mostra lo stato dichiarato | **solo quando è un giudizio che il fatto smentisce** | ogni volta che i due differiscono, che è oggi |
-| Dove va lo stato dichiarato quando non è un'anomalia | **un campo suo nella scheda** | toglierlo del tutto, perdendo la ragione del filtro |
-| Come rientra un inquilino (`R31`) | **`AcceptInvitation` tollera la membership che c'è già** | una rotta nuova che colleghi un utente a una parte |
-| I nomi mancanti (`R32`) | **tre campi in più su tre risposte**, con il modello di lettura di sempre | comporli nel client con richieste in più |
-| La bolletta dell'immobile intero (`R33`) | **dire quanto resta da riaddebitare**, una chiamata per volta | una richiesta che ne porti diverse insieme |
-| La data di oggi (`R34`) | **mostrata e non mandata** finché non la si cambia | mandarla, perdendo l'ora vera |
-
-### Decisioni, con il perché
-
-#### 1. Il badge mostra il fatto; il dichiarato compare solo se è un giudizio smentito
-
-La regola nuova, in una riga: **lo stato memorizzato compare accanto al derivato solo
-quando qualcuno ha deciso qualcosa che il fatto contraddice.**
-
-| Caso | Oggi | Da qui |
-|---|---|---|
-| contratto `active` + derivato `expired`/`expiring` | «Scaduto (Attivo)» | **«Scaduto»** |
-| stanza `available` + derivato `occupied` | «Occupata (Disponibile)» | **«Occupata»** |
-| immobile `available` + derivato `rented` | «Affittato (Disponibile)» | **«Affittato»** |
-| stanza **`unavailable`** + derivato `occupied` | «Occupata (Non disponibile)» | **resta doppio**: qualcuno l'ha messa in ristrutturazione mentre ci abita una persona |
-| immobile **`maintenance`** o **`draft`** + derivato `rented` | doppio | **resta doppio** |
-
-Il criterio non è un elenco di casi da imparare a memoria: `available` su una stanza e
-`active` su un contratto sono **il default che la derivazione esiste per superare**, non
-una decisione di qualcuno. `unavailable` e `maintenance` sì.
-
-**L'informazione che il commento difendeva non si perde, cambia posto.** Lo stato
-dichiarato diventa un campo della scheda — accanto a quello effettivo — dove chi
-amministra lo trova quando lo cerca invece di leggerlo su ogni riga. E chi filtra per
-«attivo» e riceve un contratto marcato «Scaduto» trova la spiegazione **dove nasce la
-domanda**: nell'elenco, accanto al filtro attivo, non ripetuta su venticinque righe.
-
-*Alternativa scartata: togliere del tutto lo stato dichiarato.* È il rimedio che verrebbe
-in mente leggendo solo la lamentela, e perderebbe la ragione scritta in
-`LeaseStatusBadge`: quel campo è l'unica cosa che spiega il risultato di un filtro.
-
-#### 2. Un inquilino che torna passa dalla stessa porta
-
-`AcceptInvitation` smette di fallire quando la membership esiste già: se chi accetta è
-**già membro attivo di quella organizzazione**, non la si inserisce e si va avanti a
-collegare la parte contrattuale.
-
-**Una via sola e non due**, ed è la ragione della scelta: l'invito è già il gesto che il
-proprietario compie — lo ha appena compiuto, e ha ricevuto un codice buono. Aggiungere
-una rotta «collega una persona già dentro» significherebbe due meccanismi per lo stesso
-fatto, e il proprietario dovrebbe sapere in anticipo quale dei due gli tocca — cioè
-ricordarsi se quella persona è già stata sua inquilina.
-
-**Il ruolo non si tocca.** Chi è già `owner` o `manager` e viene invitato come `tenant`
-resta quello che è: l'invito serve a collegare la parte contrattuale, non a retrocedere
-qualcuno. È anche il caso vero di [01](01-prodotto.md) — chi affitta una casa e ne abita
-un'altra.
-
-**Chi è uscito dall'organizzazione resta fuori da questa decisione.** `org_members` ha
-`status` e `deleted_at`, ma nessuno li valorizza finché [`R16`](12-da-fare.md#uscire-da-unorganizzazione)
-non esiste: oggi non c'è modo di uscire, quindi non c'è nessuno da far rientrare. La
-guardia va scritta lo stesso — membership **attiva**, non una qualunque — perché il
-giorno in cui `R16` arriva questo punto diventerebbe la porta di servizio.
-
-*Alternativa scartata: `PATCH /lease-parties/{id}` che accetta `user_id`.* Sposta la
-scelta della persona su chi amministra, che dovrebbe cercarla in un elenco — e l'elenco
-delle persone di un'organizzazione **non esiste ed è aperto apposta**
-([ADR-036](08-decisioni.md#adr-036), [ADR-043](08-decisioni.md#adr-043)). Costruirlo per
-questo sarebbe riaprire quella domanda per un problema di comodità.
-
-#### 3. I nomi: terza occorrenza, stessa risposta
-
-`property_label` e `room_name` su `TicketResponse`; le stesse due su `ChargeResponse` e
-`UtilityBillResponse`, risolte attraverso il contratto. Modello di lettura, **una query
-per pagina**, campi opzionali, e l'etichetta neutra quando mancano.
-
-**Non è una decisione nuova e non serve un ADR**: [ADR-049](08-decisioni.md#adr-049) l'ha
-presa per le segnalazioni tre giorni fa, e questa ne è l'applicazione. Vale invece la pena
-scrivere che è la **terza** volta — `R14`, poi `R21`/`R22`, ora `R32` — perché la
-regolarità dice qualcosa: **ogni risposta che porta un identificatore verso una schermata
-è un difetto che aspetta di essere trovato**, e conviene guardare le rimanenti prima che
-le trovi qualcun altro.
-
-#### 4. Il riaddebito dice a chi, e quanto resta
-
-Due metà, e la seconda è più piccola di quanto sembri.
-
-**Chi**: il `<Select>` mostra *immobile · stanza* e il nome dell'intestatario, non
-*tipo · data*. I dati ci sono già tutti in `LeaseResponse` dalla sezione 3. E l'elenco
-**si restringe ai contratti che possono ricevere un addebito**: una bozza o un contratto
-disdetto non sono candidati, e offrirli è la stessa classe di difetto di
-[`R26`](12-da-fare.md#lelenco) — un'opzione che non può portare a niente di buono.
-
-**Quanto resta**: la bolletta conosce il proprio totale, e la somma di ciò che è già stato
-riaddebitato è leggibile. Il dialogo lo mostra e propone il residuo, così riaddebitare una
-bolletta d'immobile a tre contratti è tre volte lo stesso gesto guidato invece di tre
-sottrazioni a mente.
-
-*Alternativa scartata: una richiesta che porti più contratti insieme.* È la strada giusta
-il giorno in cui serve davvero, e oggi porterebbe **l'esito parziale** che
-[`R15`](12-da-fare.md#cancellare-in-generale) ha già isolato come decisione a sé: N
-scritture, una fallisce, e non è chiaro né che cosa dire né che cosa disfare. Non si apre
-qui un fronte che ha già una voce sua.
-
-**Non si tocca la regola contabile**: nessuno verifica che le quote riaddebitate sommino
-al totale, e riaddebitare più del totale resta possibile. È scritto nel commento di
-`RechargeDialog` e non è un difetto da correggere di passaggio: lo schema non ha il
-vincolo e un controllo applicativo sarebbe soggetto a race condition fra due riaddebiti
-concorrenti.
-
-#### 5. La data si mostra e non si manda
-
-`paid_at` parte da oggi **nel campo**, e la richiesta continua a non portarlo finché la
-data resta quella di oggi.
-
-Sembra un cavillo ed è la sostanza: oggi il campo vuoto significa «adesso» e il server
-mette l'istante vero. Precompilare e mandare trasformerebbe un pagamento delle 18 in uno
-delle **00:00**, cioè si perderebbe l'ora per guadagnare una comodità — e in un elenco
-ordinato per data due dichiarazioni dello stesso giorno diventerebbero indistinguibili.
-
-Vale per la dichiarazione dell'inquilino e per l'incasso registrato dal proprietario. Per
-il secondo la data conta di più — un bonifico si vede sull'estratto conto giorni dopo — e
-lì cambiarla è il gesto normale, non l'eccezione.
-
-### Decomposizione
-
-L'ordine è quello del danno: prima il buco nel ciclo di vita, poi le tre cose che si
-leggono male.
-
-##### `Y1` — L'inquilino che torna (`R31`)
-
-`AcceptInvitation` verifica la membership prima di inserirla: se ne esiste una **attiva**
-in quella organizzazione, salta l'inserimento e prosegue. Il ruolo non si tocca.
-
-Due test, e provano i due lati: una persona già inquilina di un contratto scaduto accetta
-l'invito al contratto nuovo e **vede tutti e due**; e chi non è membro continua a
-diventarlo, che è il caso che non deve rompersi.
-
-**La riproduzione esiste già** ed è il criterio di accettazione, misurato prima di
-pianificare:
-
-```
-CASO 1 — inquilino nuovo invitato su un contratto in bozza
-  invito 201 · accettazione 200 · l'inquilino vede 1 contratto ('draft')
-CASO 2 — lo stesso inquilino invitato su un secondo contratto
-  invito 201  ← il proprietario riceve un codice che sembra buono
-  accettazione 409 membership.already_exists
-  l'inquilino vede ancora 1 contratto, non 2
-```
-
-Il caso 2 deve finire `200` e con **due** contratti; il caso 1 deve restare identico.
-
-**Prima di scrivere**: rileggere il commento in testa a `AcceptInvitation` sull'ordine
-delle tre scritture — `app.has_pending_invitation` abilita le prime due e diventa falso
-appena l'invito è marcato accettato. Saltare la prima non cambia l'ordine delle altre, e
-va verificato che non cambi nemmeno il permesso.
-
-##### `Y2` — Il badge smette di gridare (`R30`)
-
-`status.tsx`: i tre badge mostrano il derivato da solo, e il dichiarato accanto **solo**
-nei casi di anomalia della tabella della decisione 1. Nelle tre schede — contratto,
-stanza, immobile — lo stato dichiarato diventa un campo della `DescriptionList`.
-
-Un test per famiglia sul caso che regredisce: **la stanza in ristrutturazione e occupata
-continua a mostrare entrambi**. È l'assert che qualcuno toglierà semplificando.
-
-##### `Y3` — I nomi nelle tre risposte (`R32`)
-
-`property_label` e `room_name` su `TicketResponse`, `ChargeResponse` e
-`UtilityBillResponse`; nel client i tre collegamenti generici diventano il nome, con
-l'etichetta neutra quando il campo manca.
-
-Il modello di lettura dei contratti esiste già (`LeaseRepository::labels`): per addebiti e
-bollette si risolve **attraverso il contratto**, e per le segnalazioni serve la coppia
-sull'immobile, che è una query nuova della stessa forma.
-
-##### `Y4` — Il riaddebito (`R33`)
-
-Il `<Select>` dice *immobile · stanza · intestatario* e offre i soli contratti che possono
-ricevere un addebito; il dialogo mostra il **residuo da riaddebitare** e lo propone come
-importo.
-
-##### `Y5` — Le date (`R34`)
-
-`paid_at` precompilato a oggi in entrambi i dialoghi, e mandato **solo se diverso da
-oggi**. Un test sul caso che si romperebbe in silenzio: aprire e inviare senza toccare la
-data non deve mettere `paid_at` nel corpo.
-
-### Trappole
-
-**Il caso che regredisce di `Y2` è l'anomalia, non la norma.** Chi legge la nuova regola
-e la semplifica in «mostra sempre il derivato» toglie l'unica cosa che quel doppio badge
-esisteva per dire. Il test va scritto su quello.
-
-**`Y2` non è solo estetica: cambia ciò che si legge dopo un filtro.** Il commento di
-`LeaseStatusBadge` va **spostato**, non cancellato: la ragione che porta resta vera, e
-sopravvive nel campo della scheda e nell'avviso accanto al filtro.
-
-**`Y1` tocca un flusso che gira sotto una policy fatta apposta.** La `0018` estende la RLS
-all'accettazione, e `app.has_pending_invitation` è ciò che abilita le scritture. Un ramo
-in più prima dell'inserimento non deve spostare l'ordine delle altre due.
-
-**`Y1` guarda la membership *attiva*.** Una qualunque aprirebbe la porta a chi è uscito, il
-giorno in cui `R16` renderà possibile uscire — e sarebbe un difetto trovato mesi dopo, in
-un'altra sezione.
-
-**`Y3` è la terza volta**, e le trappole sono già state pagate: `LEFT JOIN` e
-`deleted_at IS NULL`, quindi un immobile archiviato lascia il campo assente e il client
-dice che cosa è successo; **una query per pagina** e non una per riga.
-
-**`Y5` sembra una riga e ne vale due.** Precompilare *e* mandare perde l'ora vera. Il campo
-mostra oggi, la richiesta tace.
-
-**Non si tocca la regola del riaddebito.** Che le quote possano superare il totale è
-scritto e voluto: qui si aggiunge un numero che aiuta, non un vincolo.
-
-### Come si saprà che è finita
-
-- un inquilino con un contratto scaduto accetta l'invito a un contratto nuovo e **li vede
-  entrambi**, senza che nessuno tocchi il database;
-- un contratto scaduto dice **«Scaduto»** e basta; una stanza occupata dice **«Occupata»**
-  e basta; una stanza in ristrutturazione e occupata continua a dire **tutte e due**;
-- la scheda di un contratto dice ancora qual è lo stato **dichiarato**, per chi lo cerca;
-- dalla scheda di una segnalazione, di un addebito e di una bolletta si legge **il nome**
-  di ciò a cui portano, e un immobile archiviato lo dice invece di lasciare uno spazio;
-- il riaddebito dice a quale stanza e a chi, e quanto **resta** da riaddebitare;
-- una dichiarazione di pagamento inviata senza toccare la data conserva **l'ora**;
-- `just ci` verde, con i test nuovi sui casi che regrediscono in silenzio.
-
-### Che cosa **non** entra
-
-- **`R35` non entra perché non esiste più.** Posta la domanda, la risposta è arrivata da
-  una riproduzione e non da un'opinione: un inquilino invitato su un contratto **in bozza**
-  accetta e **lo vede**. Non c'è nessuna regola che nasconda le bozze; il contratto che non
-  compariva non compariva perché la persona non era collegata, che è `R31` visto
-  dall'altro lato. Ne resta una domanda di sola presentazione — se «Bozza» sia la parola
-  giusta per chi abiterà lì — che va con [`R8`](12-da-fare.md#interfaccia-e-prodotto).
-  **Vale la pena tenerne il ricordo**: la voce era stata scritta come una scelta di
-  prodotto con tre letture, ed era il sintomo di un difetto già in elenco;
-- **una richiesta che riaddebiti a più contratti insieme**: è l'esito parziale di `R15`,
-  che ha una voce sua;
-- **il vincolo sulla somma dei riaddebiti**, che è scritto come deliberato;
-- **le altre risposte che portano identificatori verso una schermata.** La regolarità
-  vista al punto 3 dice che ce ne sono altre; guardarle tutte è una voce nuova, non un
-  allargamento di questa;
-- **`R26`, `R27`, `R28`, `R29`**, che restano dove sono.
-
-
 <a id="piano-utenti-veri"></a>
 
 ## Piano — Prima degli utenti veri: le quattro cose che mancano a una persona esterna
@@ -835,7 +530,7 @@ dice che cosa manca — non il primo uso, dove somiglia a un problema di rete.
 Sembra prudente e produce il difetto peggiore di tutti: il recupero password che risponde
 `202` e non manda niente, su un utente che non può più entrare.
 
-#### 2. Il codice di recupero si incolla, non si clicca — ADR-051
+#### 2. Il codice di recupero si incolla, non si clicca — ADR-052
 
 [ADR-045](08-decisioni.md#adr-045) ha già deciso questa domanda per l'invito, e
 l'argomento vale identico qui: **il token è una credenziale**, e un link
@@ -935,7 +630,7 @@ Qui si aggiungono le due cose che quella prosa non aveva:
 - **un raccoglitore locale nel `docker-compose.yml`** per lo sviluppo, e la configurazione
   di un mittente vero per la produzione, che è cosa diversa — vedi le trappole.
 
-##### `Z2` — Il recupero della password — **ADR-051 prima**
+##### `Z2` — Il recupero della password — **ADR-052 prima**
 
 Migration nuova: la tabella dei codici di recupero — hash e non il codice, scadenza breve,
 uso singolo, e la colonna che regge il limite per email.
