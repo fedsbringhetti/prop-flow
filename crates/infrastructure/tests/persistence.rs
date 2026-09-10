@@ -844,6 +844,7 @@ async fn accepting_an_invitation_never_touches_the_privileged_pool() {
         Arc::clone(&env.factory),
         Arc::new(OpaqueTokenGenerator),
         Arc::clone(&env.clock) as _,
+        Arc::new(SilentNotifier),
     )
     .execute(
         &owner,
@@ -990,6 +991,28 @@ async fn the_application_role_cannot_repoint_a_lease_party_to_another_lease() {
 /// Qui si verifica il **repository**, non S3: legare questi test a un MinIO
 /// acceso significherebbe non poterli eseguire quando lo storage manca, e la
 /// query non ha nulla da guadagnarne.
+/// Doppio di `Notifier` che non fa niente.
+///
+/// Questi test verificano la **persistenza** — che cosa entra in database e che
+/// cosa la Row Level Security concede — e l'invio è best-effort dopo il commit:
+/// legarli a un canale di posta significherebbe far fallire un test dello schema
+/// perché un doppio ha detto di no.
+struct SilentNotifier;
+
+#[async_trait::async_trait]
+impl propflow_application::ports::Notifier for SilentNotifier {
+    async fn send(
+        &self,
+        _notification: &propflow_application::ports::Notification,
+    ) -> Result<(), propflow_application::ports::NotifyError> {
+        Ok(())
+    }
+
+    async fn probe(&self) -> Result<(), propflow_application::ports::NotifyError> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct MemoryStorage {
     objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
@@ -1973,6 +1996,7 @@ async fn tenant_on_lease(
         Arc::clone(&env.factory),
         Arc::new(OpaqueTokenGenerator),
         Arc::clone(&env.clock) as _,
+        Arc::new(SilentNotifier),
     )
     .execute(
         owner,
@@ -4969,6 +4993,7 @@ async fn the_invited_appear_without_an_identifier_and_the_guarantor_not_at_all()
         Arc::clone(&env.factory),
         Arc::new(OpaqueTokenGenerator),
         Arc::clone(&env.clock) as _,
+        Arc::new(SilentNotifier),
     )
     .execute(
         &owner,

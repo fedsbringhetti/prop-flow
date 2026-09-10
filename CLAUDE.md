@@ -291,13 +291,17 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 ./ops/ci/check-schema.sh "$DATABASE_URL"
 
 # Ambiente di sviluppo
-docker compose up -d postgres minio minio-setup   # minio: storage dei documenti
+docker compose up -d postgres minio minio-setup mailpit   # minio: documenti; mailpit: posta
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
 cp .env.example .env                    # poi adattare
 set -a; source .env; set +a             # solo se lanci a mano: `just` lo carica da sé
 cargo run -p propflow-migrator
 cargo run -p propflow-api               # Swagger UI su http://localhost:8080/docs
 cargo run -p propflow-worker            # dispatcher dell'outbox
+
+# La posta che parte si legge su http://localhost:8025 (mailpit). Accetta tutto e
+# non recapita niente: prova che il messaggio parte e che cosa contiene, **non**
+# che sarebbe recapitato.
 ```
 
 Il client web, che vive in `apps/web/`:

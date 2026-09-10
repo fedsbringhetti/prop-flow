@@ -10,7 +10,7 @@ use rust_decimal::Decimal;
 
 use crate::authorization;
 use crate::error::{AppError, AppResult, Conflict};
-use crate::ports::OpaqueTokenFactory;
+use crate::ports::{Notification, NotificationContent, Notifier, OpaqueTokenFactory};
 
 #[derive(Debug, Clone)]
 pub struct InviteTenantCommand {
@@ -31,15 +31,28 @@ pub struct IssuedInvitation {
 
 /// Invita un inquilino su un contratto.
 ///
-/// L'invio dell'email non avviene qui: la porta [`Notifier`](crate::ports::Notifier)
-/// è dichiarata e non implementata, quindi il token torna nella risposta e il
-/// proprietario lo consegna come preferisce. È deliberato: consegnare il token in
-/// due modi diversi a seconda che il fornitore di posta risponda o no avrebbe reso
-/// il comportamento dipendente da un servizio esterno.
+/// # L'email parte **dopo il commit, e best-effort**
+///
+/// Non dentro la transazione, e non prima: se il relay non risponde, l'invito resta
+/// valido e il token resta nella risposta HTTP, dove il proprietario lo trova e lo
+/// consegna come faceva prima che la posta esistesse. Legare la validità di un
+/// invito alla disponibilità di un servizio esterno sarebbe il baratto sbagliato.
+///
+/// **E non passa dall'outbox**, che è la trappola più cara di questo passo. Il token
+/// in chiaro esiste solo qui e nella risposta: in database ne resta lo hash, e gli
+/// eventi di dominio trasportano identificatori e nomi di campo, mai valori. Un
+/// worker che leggesse `TenantInvited` non avrebbe niente da spedire, e metterci il
+/// token dentro significherebbe scrivere una credenziale in una tabella fatta per
+/// essere pubblicata su un broker.
+///
+/// Il fallimento va nei log **senza il destinatario e senza il token**: si registra
+/// l'identificatore dell'invito e la classe dell'errore, che è quanto basta per
+/// sapere che è successo senza scrivere dati personali in una traccia.
 pub struct InviteTenant {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
     tokens: Arc<dyn OpaqueTokenFactory>,
     clock: Arc<dyn Clock>,
+    notifier: Arc<dyn Notifier>,
 }
 
 impl InviteTenant {
@@ -48,11 +61,13 @@ impl InviteTenant {
         unit_of_work: Arc<dyn UnitOfWorkFactory>,
         tokens: Arc<dyn OpaqueTokenFactory>,
         clock: Arc<dyn Clock>,
+        notifier: Arc<dyn Notifier>,
     ) -> Self {
         Self {
             unit_of_work,
             tokens,
             clock,
+            notifier,
         }
     }
 
@@ -68,6 +83,20 @@ impl InviteTenant {
         let material = self.tokens.generate().map_err(AppError::internal)?;
 
         let mut uow = self.unit_of_work.begin(context).await?;
+        // Il nome dell'organizzazione serve **all'email**, non all'invito: chi
+        // riceve un codice deve capire da chi arriva, e «PropFlow ti ha invitato»
+        // non lo dice. Letto sotto RLS come tutto il resto — `organizations_select`
+        // è `is_org_member(id)`, e chi invita è staff.
+        let organization = uow
+            .organizations()
+            .find_by_id(org_id)
+            .await?
+            // Non un `404`: chi invita è staff di questa organizzazione, e
+            // `organizations_select` è `is_org_member(id)`. Se qui non si trova
+            // nulla è un difetto nostro, non una riga che il chiamante non vede.
+            .ok_or_else(|| {
+                AppError::internal("organizzazione non leggibile da chi la amministra")
+            })?;
         let lease = uow
             .leases()
             .find_by_id(command.lease_id)
@@ -129,10 +158,40 @@ impl InviteTenant {
             .await?;
         uow.commit().await?;
 
+        self.deliver(&invitation, organization.name(), &material.plaintext)
+            .await;
+
         Ok(IssuedInvitation {
             invitation,
             token: material.plaintext,
         })
+    }
+
+    /// Recapita il codice, e **non fallisce**.
+    ///
+    /// Il tipo di ritorno è `()` di proposito: non c'è niente che il chiamante
+    /// possa fare con un errore qui, perché a questo punto l'invito è già scritto e
+    /// il token è già nella risposta. Restituire un `Result` inviterebbe qualcuno a
+    /// propagarlo, e propagarlo significherebbe annullare un invito valido perché
+    /// un server di posta era occupato.
+    async fn deliver(&self, invitation: &Invitation, organization_name: &str, token: &str) {
+        let notification = Notification {
+            to: invitation.email().clone(),
+            content: NotificationContent::TenantInvitation {
+                organization_name: organization_name.to_owned(),
+                accept_token: token.to_owned(),
+            },
+        };
+        if let Err(error) = self.notifier.send(&notification).await {
+            // **Né il destinatario né il token**: `docs/04-sicurezza.md` vieta email
+            // e credenziali nelle tracce, e questa è la riga in cui è più facile
+            // scriverli. L'identificatore dell'invito basta a ritrovare la riga.
+            tracing::warn!(
+                invitation_id = %invitation.id(),
+                error = %error,
+                "invito non recapitato per posta: il codice resta nella risposta"
+            );
+        }
     }
 }
 

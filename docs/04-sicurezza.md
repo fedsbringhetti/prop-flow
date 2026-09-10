@@ -267,6 +267,14 @@ Regola: **niente dati personali nei log, nelle tracce, negli eventi.**
   tecnico resta nei log correlato da quello. Un messaggio di errore del database in
   una risposta HTTP è ricognizione gratuita.
 - Gli eventi di dominio trasportano identificatori e nomi di campo, non valori.
+- **L'adattatore SMTP è il posto più facile in cui far uscire dati personali**, perché
+  una notifica *deve* trasportarli: senza l'indirizzo non si recapita niente. Un client
+  che registrasse la richiesta scriverebbe destinatario, oggetto e corpo insieme. Non
+  si registra nulla dell'invio riuscito, e del fallito solo la **classe** dell'errore.
+  `Notification` e `NotificationContent` hanno `Debug` redatto, e l'adattatore non lo
+  annulla. Il fallimento di un invito registra l'identificatore dell'invito, mai il
+  destinatario né il token; quello di un codice di recupero non registra nemmeno
+  l'identificatore, perché lì l'unica cosa da cui si risalirebbe è l'indirizzo.
 
 ## Difese al bordo HTTP
 

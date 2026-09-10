@@ -59,6 +59,14 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 | `PROPFLOW__STORAGE__PATH_STYLE` | `true` | bucket nel percorso; `false` solo con un DNS `<bucket>.<host>` |
 | `PROPFLOW__STORAGE__PRESIGN_TTL_SECONDS` | `300` | vita dell'URL di download pre-firmato |
 | `PROPFLOW__STORAGE__REQUEST_TIMEOUT_SECONDS` | `30` | per richiesta verso lo storage |
+| `PROPFLOW__MAIL__HOST` | — | **obbligatoria**, host del relay SMTP |
+| `PROPFLOW__MAIL__PORT` | `587` | `1025` per il raccoglitore locale, `465` con TLS implicito |
+| `PROPFLOW__MAIL__USERNAME` | — | assente sul raccoglitore locale; con la password, o nessuna delle due |
+| `PROPFLOW__MAIL__PASSWORD` | — | dal gestore dei segreti |
+| `PROPFLOW__MAIL__FROM_ADDRESS` | — | **obbligatoria**, il mittente. Su un dominio senza SPF, DKIM e DMARC finisce nello spam senza dare errore |
+| `PROPFLOW__MAIL__FROM_NAME` | `PropFlow` | il nome accanto all'indirizzo |
+| `PROPFLOW__MAIL__ENCRYPTION` | `starttls` | `tls` per la 465, `none` **solo** per il raccoglitore locale |
+| `PROPFLOW__MAIL__TIMEOUT_SECONDS` | `10` | per invio verso il relay |
 | `PROPFLOW__TELEMETRY__SERVICE_NAME` | `propflow-api` | nome del servizio nelle tracce e negli span |
 | `PROPFLOW__TELEMETRY__OTLP_ENDPOINT` | — | assente: solo stdout |
 | `PROPFLOW__TELEMETRY__FILTER` | `info,propflow_api=debug,propflow_application=debug` | direttiva `EnvFilter` |
@@ -70,6 +78,21 @@ ricorda il prefisso `PROPFLOW__`, rimanda a `.env.example` per l'elenco completo
 ricorda che quel file il processo non lo carica da solo — lo fa `just`, o la shell con
 `set -a; source .env; set +a` per chi lancia il binario a mano. Il messaggio di figment,
 che dice quale campo e sotto quale chiave, resta nella catena delle cause.
+
+**Le due obbligatorie della posta sono `HOST` e `FROM_ADDRESS`**, e non hanno un default
+perché non ne esiste uno sensato. La ragione è più stringente di quella dello storage: da
+quando esiste il recupero della password la posta è l'**unico canale** verso una persona
+chiusa fuori dal proprio account, e un'API che parte senza saper spedire risponderebbe
+`202` a una richiesta di recupero senza mandare niente — su chi non ha nessun altro modo
+di rientrare.
+
+**La configurazione ferma un relay mal configurato, non un relay caduto.** Quello lo dice
+`/ready`, che interroga SMTP insieme al database: l'invio è best-effort dopo il commit,
+quindi un relay fermo non produce nessun errore visibile a nessuno. Dirlo al chiamante non
+si può — si tenta l'invio solo per un indirizzo che ha un account, quindi qualunque cosa
+distingua i due rami sarebbe un oracolo sugli account — e il controllo di prontezza è il
+rimedio: rende la posta caduta nota **prima** che qualcuno la incontri. Prova che il
+server risponde, **non** che il messaggio verrebbe recapitato.
 
 Non c'è un default per le credenziali dello storage, ed è deliberato: uno storage
 configurato a caso sposterebbe il fallimento al primo caricamento di un documento, dove
@@ -247,10 +270,23 @@ una partizione che cresce.
 | Endpoint | Uso | Comportamento |
 |---|---|---|
 | `/health` | liveness | Risponde sempre, non tocca il database. Se lo facesse, un'indisponibilità di PostgreSQL riavvierebbe in loop tutti i pod |
-| `/ready` | readiness | Verifica il database. `503` se non raggiungibile: il pod non riceve traffico ma non viene riavviato |
+| `/ready` | readiness | Verifica il database **e la posta**. `503` se una delle due non risponde: il pod non riceve traffico ma non viene riavviato |
 
 All'avvio l'API verifica il database e **esce** se non risponde: meglio non entrare
 mai in servizio che accettare traffico e restituire `500`.
+
+**La posta sta in `/ready` e non nell'avvio**, e la differenza è deliberata. La
+*configurazione* della posta è obbligatoria e ferma l'avvio, perché un'API che non sa
+spedire non deve entrare in servizio. Il *relay*, invece, può cadere in qualunque
+momento dopo, e un'API che uscisse a ogni disservizio SMTP smetterebbe di servire tutto
+il resto — contratti, addebiti, segnalazioni — per una funzione che serve a chi non
+riesce a entrare.
+
+Ma un relay caduto **non produce nessun errore visibile**: l'invio è best-effort dopo il
+commit, e la richiesta di recupero risponde `202` a chiunque per non fare da oracolo
+sugli account. Se non lo dicesse `/ready`, lo scoprirebbe una persona chiusa fuori dal
+proprio account. Il controllo prova che il relay risponde, **non** che il messaggio
+verrebbe recapitato: quello lo dicono SPF, DKIM e DMARC.
 
 Lo shutdown ascolta `SIGTERM` oltre a `SIGINT` — `SIGTERM` è quello che manda
 Kubernetes, e ignorarlo significa farsi terminare a forza dopo il grace period
@@ -348,4 +384,5 @@ cambiamento, e poi "in locale funziona".
 - Manifest Kubernetes: non ci sono ancora.
 - Backup e restore del database.
 - Metriche (esistono log e tracce, non metriche).
-- Alerting.
+- Alerting — compreso quello sul `/ready` che dice `posta non raggiungibile`, che oggi
+  lo vede solo chi guarda.

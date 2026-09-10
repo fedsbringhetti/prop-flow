@@ -1161,8 +1161,9 @@ scrivere. Prorogare una scadenza si fa **annullando e riemettendo**
 **Non esiste nemmeno uno stato di bozza.** `draft` è nell'enum del database e nessuno
 lo scrive: la policy `charges_select` non guarda lo stato, quindi una bozza comparirebbe
 nell'elenco di chi deve pagarla esattamente come un addebito emesso; ed emettere non
-manda niente a nessuno, perché la porta `Notifier` è dichiarata e senza adattatore. Fra
-i due stati non resterebbe alcuna differenza osservabile.
+manda niente a nessuno, perché `NotificationContent` non ha una variante per gli
+addebiti — la posta recapita inviti e codici di recupero, non solleciti. Fra i due stati
+non resterebbe alcuna differenza osservabile.
 
 **`void` e `write_off` non sono sinonimi.** `void` dice «non doveva essere chiesto»,
 `write_off` dice «era dovuto e ci rinunciamo». Entrambi escono dall'insoluto, ma solo il
@@ -1678,10 +1679,20 @@ Emettere l'invito crea anche la **parte contrattuale** con `user_id` nullo, se n
 esiste già una riga con quella email: è ciò che l'invitato collegherà a sé, e senza
 di essa accettare non lo renderebbe parte di nulla.
 
-Il token in chiaro esiste **solo** nella risposta a `POST .../invitations`, come il
-refresh token: in database ne resta lo hash. L'invio dell'email non è implementato —
-la porta `Notifier` è dichiarata e senza adattatore — quindi è il proprietario a
-consegnare il token.
+Il token in chiaro esiste **solo** nella risposta a `POST .../invitations` e
+nell'email, come il refresh token: in database ne resta lo hash.
+
+**L'email parte dopo il commit e best-effort**, e il token resta nella risposta anche
+per questo: se il relay non risponde, l'invito è valido lo stesso e il proprietario
+consegna il codice come faceva prima: legare la validità di un invito alla
+disponibilità di un servizio esterno sarebbe il baratto sbagliato. Il fallimento va nei
+log **senza il destinatario e senza il token**.
+
+**L'invito non passa dall'outbox**, e non è un dettaglio implementativo: gli eventi di
+dominio trasportano identificatori e nomi di campo, mai valori, quindi un worker che
+leggesse `TenantInvited` non avrebbe niente da spedire. Metterci il token dentro
+significherebbe scrivere una credenziale in una tabella fatta per essere pubblicata su
+un broker.
 
 `accept-invitation` richiede l'autenticazione ma **non** l'appartenenza: è
 l'operazione che la crea. Chi accetta non deve passare `X-Org-Id`, perché di quella

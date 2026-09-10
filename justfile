@@ -90,9 +90,9 @@ env:
 # container sani. Parte dopo, e `depends_on: service_healthy` gli garantisce
 # comunque il MinIO pronto.
 
-# Avvia PostgreSQL e MinIO aspettando che siano sani, poi crea il bucket.
+# Avvia PostgreSQL, MinIO e il raccoglitore di posta, poi crea il bucket.
 up:
-    docker compose up -d --wait postgres minio
+    docker compose up -d --wait postgres minio mailpit
     docker compose up -d minio-setup
 
 # I volumi restano: i dati di un giro a mano non si buttano via per aver fermato

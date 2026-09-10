@@ -1922,6 +1922,53 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
     );
 }
 
+/// **L'invito parte per posta**, che è il criterio di fine di `Z1`.
+///
+/// Prima di questo passo il token tornava solo nella risposta HTTP e il
+/// proprietario lo consegnava a mano: era deliberato finché `Notifier` era una porta
+/// senza adattatore, e smette di bastare quando la posta diventa l'unico canale
+/// verso chi è chiuso fuori dal proprio account.
+///
+/// Il test guarda **il contenuto** e non il fatto che qualcosa sia partito: nel corpo
+/// c'è lo stesso codice che la risposta consegna, e c'è il nome dell'organizzazione,
+/// senza cui chi riceve un codice non sa da chi arriva.
+///
+/// **Il token resta anche nella risposta**, ed è la metà che si toglierebbe
+/// «pulendo»: l'invio è best-effort dopo il commit, quindi con il relay fermo quella
+/// è l'unica copia che esiste.
+#[tokio::test]
+async fn inviting_a_tenant_sends_the_code_by_mail() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "invito-per-posta").await;
+    let property = create_property(&app, &owner, "Immobile con posta").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let email = common::unique_email("destinatario");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+
+    let sent = app.mail.sent();
+    assert_eq!(sent.len(), 1, "l'invito non è stato recapitato per posta");
+    let (recipient, content) = &sent[0];
+    assert_eq!(recipient, &email);
+    match content {
+        propflow_application::ports::NotificationContent::TenantInvitation {
+            organization_name,
+            accept_token: sent_token,
+        } => {
+            // Lo **stesso** codice della risposta: se fossero due, uno dei due non
+            // funzionerebbe e nessuno saprebbe quale.
+            assert_eq!(sent_token, &accept_token);
+            assert_eq!(
+                organization_name, "Proprietario Test",
+                "l'email non dice da chi arriva l'invito"
+            );
+        }
+    }
+
+    // La risposta continua a portarlo: con il relay fermo è l'unica copia.
+    assert!(!accept_token.is_empty());
+}
+
 /// **L'inquilino che torna**, che è `R31`: il ciclo di vita normale del prodotto.
 ///
 /// Un contratto finisce, con la stessa persona se ne fa un altro. Prima di questo

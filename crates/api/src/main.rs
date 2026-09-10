@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Duration;
-use propflow_api::config::AppConfig;
+use propflow_api::config::{AppConfig, MailEncryptionConfig};
 use propflow_api::state::{AppState, Dependencies};
 use propflow_infrastructure::db::PoolSettings;
+use propflow_infrastructure::notify::{MailEncryption, SmtpNotifier, SmtpSettings};
 use propflow_infrastructure::security::{
     Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
     OpaqueTokenGenerator,
@@ -107,6 +108,27 @@ async fn main() -> Result<()> {
                 ),
             })
             .context("configurazione dello storage oggetti non valida")?,
+        ),
+        // Come lo storage: costruito **all'avvio**, così un mittente non valido o
+        // credenziali a metà fermano il processo invece del primo invio. Non apre la
+        // connessione — quella la prova `/ready`, che è il posto in cui un relay
+        // *caduto* diventa visibile prima che qualcuno lo incontri.
+        notifier: Arc::new(
+            SmtpNotifier::new(SmtpSettings {
+                host: config.mail.host.clone(),
+                port: config.mail.port,
+                username: config.mail.username.clone(),
+                password: config.mail.password.clone(),
+                from_address: config.mail.from_address.clone(),
+                from_name: config.mail.from_name.clone(),
+                encryption: match config.mail.encryption {
+                    MailEncryptionConfig::StartTls => MailEncryption::StartTls,
+                    MailEncryptionConfig::Tls => MailEncryption::Tls,
+                    MailEncryptionConfig::None => MailEncryption::None,
+                },
+                timeout: std::time::Duration::from_secs(config.mail.timeout_seconds),
+            })
+            .context("configurazione della posta non valida")?,
         ),
         presign_ttl_seconds: config.storage.presign_ttl_seconds,
         // Il **nome**, non l'adattatore: l'API accoda job destinati a questo

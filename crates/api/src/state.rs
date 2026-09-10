@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use propflow_application::ports::{
-    ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
+    Notifier, ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
 use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
@@ -190,8 +190,13 @@ pub struct AppState {
     /// Serve al middleware per risolvere il ruolo quando il client cambia
     /// organizzazione con l'header `X-Org-Id`.
     pub unit_of_work: Arc<dyn UnitOfWorkFactory>,
-    /// Usato solo dall'endpoint di prontezza.
+    /// Usati dall'endpoint di prontezza.
+    ///
+    /// Il canale di posta ci sta accanto al database e non per completezza: l'invio
+    /// è best-effort dopo il commit, quindi un relay caduto è **muto** — e la posta
+    /// è l'unica via verso chi non riesce più a entrare. Vedi `Notifier::probe`.
     pub pools: DatabasePools,
+    pub notifier: Arc<dyn Notifier>,
     /// Se il cookie del refresh token debba dichiarare `Secure`.
     ///
     /// Vive nello stato e non nella firma di `router()` perché a leggerlo sono gli
@@ -210,6 +215,11 @@ pub struct Dependencies {
     pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,
     pub clock: Arc<dyn propflow_domain::ports::Clock>,
     pub object_storage: Arc<dyn ObjectStorage>,
+    /// Il canale verso l'esterno. **Obbligatorio**, non facoltativo: da quando
+    /// esiste il recupero della password è l'unica via verso chi è chiuso fuori dal
+    /// proprio account, e un `Notifier` assente produrrebbe una richiesta che
+    /// risponde `202` senza mandare niente.
+    pub notifier: Arc<dyn Notifier>,
     /// Vita dell'URL di download pre-firmato. Vive qui e non dentro l'adattatore
     /// perché è una decisione applicativa — quanto a lungo vale un permesso — e non
     /// un dettaglio del fornitore.
@@ -241,6 +251,7 @@ impl AppState {
             invitation_tokens,
             clock,
             object_storage,
+            notifier,
             presign_ttl_seconds,
             ocr_provider_name,
             pools,
@@ -504,6 +515,7 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),
                 Arc::clone(&clock),
+                Arc::clone(&notifier),
             )),
             revoke_invitation: Arc::new(RevokeInvitation::new(
                 Arc::clone(&unit_of_work),
@@ -517,6 +529,7 @@ impl AppState {
             tokens,
             clock,
             unit_of_work,
+            notifier,
             pools,
             secure_cookies,
         }

@@ -43,8 +43,12 @@ pub struct InvitationResponse {
     pub role: &'static str,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     /// Token di accettazione **in chiaro**, presente solo in questa risposta: in
-    /// database ne resta lo hash, come per i refresh token. Finché la porta
-    /// `Notifier` non è implementata, è il proprietario a consegnarlo.
+    /// database ne resta lo hash, come per i refresh token.
+    ///
+    /// **Resta qui anche ora che l'email parte.** L'invio è best-effort dopo il
+    /// commit: se il relay non risponde, l'invito è valido lo stesso e questa è
+    /// l'unica copia del codice che esiste. Toglierlo legherebbe la validità di un
+    /// invito alla disponibilità di un servizio esterno.
     pub accept_token: String,
 }
 
