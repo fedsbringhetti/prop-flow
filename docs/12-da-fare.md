@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Undici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Dodici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -11,7 +11,8 @@ la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
 `R24` con la [sezione 5](11-piani-conclusi.md#esito-sezione-5); `R30`, `R31`, `R32`, `R33`
 e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter). Sono entrate
 `R26`, `R27`, `R28` e `R29`, poi `R30`–`R35` dal collaudo, e infine `R36` **eseguendo** la
-5-ter e `R37` **rivedendo** il piano della 5-quater contro il codice.
+5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
+le premesse** prima di pianificare la sezione 6.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -99,22 +100,41 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | ~~**5-bis**~~ | ~~Il collaudo in undici punti~~ — **concluso** il 10 settembre 2026, per intero | — | a mano, due account | [Esito](11-piani-conclusi.md#esito-sezione-5-bis), e con esso l'[esito della fetta C](11-piani-conclusi.md#esito-fetta-c) **smette di essere aperto** dopo due giorni e cinque sezioni. **Nessuno degli undici punti si è fermato**: le sei voci che ne sono uscite — `R30`–`R35` — sono difetti dentro percorsi che funzionano. Il rendimento che il rinvio aveva sospeso è misurato: mezza giornata di giro ha prodotto sei voci, cinque sezioni di lettura del codice ne avevano prodotte quattro. E una, `R31`, **nessun test poteva trovarla**: ogni test costruisce un inquilino nuovo, e quel difetto vive nella seconda volta che qualcosa succede alla stessa persona |
 | ~~**5-ter**~~ | ~~Quello che il collaudo ha trovato~~ — **conclusa** il 10 settembre 2026 | `R30` `R31` `R32` `R33` `R34` | dominio + client | [Piano](11-piani-conclusi.md#piano-sezione-5-ter) · [esito](11-piani-conclusi.md#esito-sezione-5-ter). Un ADR e **nessuna migration**: il ramo che fa rientrare un inquilino passa dal primo ramo di `org_members_select`, che non chiede di essere già membri. Il piano aveva una premessa sbagliata — l'intestatario **non** era in `LeaseResponse` — e una decisione giusta: si è emendata la premessa con un terzo campo nella stessa query. Apre `R36`, il badge degli addebiti, che ha la stessa forma di `R30` e non lo stesso difetto |
 | ~~**5-quater**~~ | ~~Prima degli utenti veri~~ — **conclusa** il 10 settembre 2026, **due sezioni su quattro eseguite** | — | posta + dominio + migration | [Piano](11-piani-conclusi.md#piano-utenti-veri) · [esito](11-piani-conclusi.md#esito-utenti-veri). `Z1` e `Z2` sono codice e girano; `Z3`, `Z4` e `Z5` hanno prodotto **artefatti e un runbook** e non sono stati eseguiti — servono una VPS, un dominio e delle credenziali. **Non è deployato**, e il criterio è il punto 4 del [runbook](07-operazioni.md#il-primo-deploy--runbook): aprire il prodotto dal telefono, in 4G. Apre `R37`, la cancellazione come capacità del prodotto |
-| **6** | Le persone | `R7` `R16` | backend | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. La 5 ha già affrontato come si risolve un nome, ed è il modello da riusare: un modello di lettura che proietta `full_name` sotto `users_select`, non una rotta che risolva le persone ([ADR-049](08-decisioni.md#adr-049)) |
+| **6** | Le persone — **pianificata**, vedi [09](09-stato-e-roadmap.md#piano-sezione-6) | `R7` `R16` `R38` | migration + backend + client | Due rotte nuove sugli utenti: il proprio account e l'uscita da un'organizzazione. La 5 ha già affrontato come si risolve un nome, ed è il modello da riusare: un modello di lettura che proietta `full_name` sotto `users_select`, non una rotta che risolva le persone ([ADR-049](08-decisioni.md#adr-049)) |
 | **7** | Cancellare, in generale | `R15` | client trasversale | Dopo la 3, perché finché un contratto non si elimina «elimina» non è un'operazione sola. Ha una decisione sua: che cosa significa il verbo su entità che si archiviano, si annullano o non si toccano, e che cosa vuol dire un esito parziale su N chiamate |
 | **8** | Il perimetro dei ruoli | `R9` | modello + ADR | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di sicurezza. **ADR prima del codice** |
 | **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
+| **10** | **Il primo deploy** — [runbook](07-operazioni.md#il-primo-deploy--runbook) | — | a mano, su una macchina | **Rinviato per mancanza di mezzi e non di priorità**: servono una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC e delle credenziali. Gli artefatti sono scritti e validati per quello che si può validare senza — `docker compose config`, `bash -n` — e non sono mai stati eseguiti. Il criterio di fine è il punto 4 del runbook: **aprire il prodotto dal telefono, in 4G**. Prima del deploy va provato il **ripristino**, una volta, mentre dentro non ci sono ancora i dati di nessuno |
 
-**Concluse la 1, la 2, la 3, la 4, la 5, il collaudo (5-bis), la 5-ter e la 5-quater.** Il passo successivo non è codice: è il [runbook del primo deploy](07-operazioni.md#il-primo-deploy--runbook), che nessuno ha ancora eseguito.
+**Concluse la 1, la 2, la 3, la 4, la 5, il collaudo (5-bis), la 5-ter e la 5-quater.** Si
+continua dalla **6**: il [runbook del primo deploy](07-operazioni.md#il-primo-deploy--runbook)
+è **rinviato in fondo**, e la ragione sta qui sotto.
 
-**Le tre sezioni dopo la 5 hanno un obiettivo dichiarato che le lega**, e vale la pena
-scriverlo perché non si legge dai loro nomi: *un proprietario vero, che non ha scritto il
-codice, usa il prodotto per un mese con i suoi dati*. La 5-bis dice se il prodotto regge
-un giro; la 5-ter corregge ciò che il giro ha trovato; la 5-quater aggiunge le quattro
-cose senza cui una persona esterna non può nemmeno cominciare. Le sezioni 6-9 vengono
-dopo quel mese, e quale di esse per prima lo dirà quel mese.
+**Le tre sezioni dopo la 5 avevano un obiettivo dichiarato che le legava**: *un
+proprietario vero, che non ha scritto il codice, usa il prodotto per un mese con i suoi
+dati*. La 5-bis ha detto che il prodotto regge un giro; la 5-ter ha corretto ciò che il
+giro ha trovato; la 5-quater ha aggiunto le quattro cose senza cui una persona esterna non
+può cominciare — **due scritte, due preparate e non eseguite**.
 
-Non è in fondo alla fila per dimenticanza, e adesso è il suo turno: nove punti su undici
-sono su codice fermo, e le sezioni 3, 4 e 5 sono state verificate **solo con i test**.
+**Il deploy si rinvia, e non per una scelta di priorità.** Servono una VPS, un dominio, un
+relay SMTP con SPF, DKIM e DMARC e delle credenziali, e non ci sono. Gli artefatti e il
+[runbook](07-operazioni.md#il-primo-deploy--runbook) sono scritti e restano lì finché
+quelle quattro cose esistono; nel frattempo si continua a costruire.
+
+**Ne segue che il criterio d'ordine cambia, e va detto.** La frase che stava qui —
+*«quale delle sezioni 6-9 per prima lo dirà quel mese»* — poggiava su un'evidenza che
+adesso non arriva. L'ordine 6 → 7 → 8 → 9 resta quello scritto sotto, ma è **scelto senza
+quella prova**: chi lo esegue non ha una misura dietro, ha un ragionamento. Il rendimento
+del collaudo — sei voci in mezza giornata contro le quattro di cinque sezioni di lettura —
+dice che il modo più economico di riprendere quella prova, **senza aspettare la VPS**, è
+un secondo giro in locale: `mailpit` mostra la posta su `localhost:8025`, e l'unica cosa
+che resta fuori è «arriva fuori dallo spam».
+
+**Che cosa «pronto» significa, e per chi.** La lettura scelta è *un proprietario che
+conosci*, non *chiunque si registri*: `R9` resta quindi in fondo, e con esso il fatto che
+oggi chiunque si registri è owner di una propria organizzazione. È tollerabile perché
+scritto, e smette di esserlo il giorno in cui la registrazione è aperta a degli
+sconosciuti.
 
 L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
 riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
@@ -203,6 +223,12 @@ sezione è il primo client che legge un nome da `app.users`
 |---|---|---|---|
 | R15 | aperta | **Selezionare righe in tabella e cancellarle in blocco**, e poter cancellare anche una sola riga | La parte di interfaccia è ripetibile — le tabelle passano già da `@/components/ui/table` — ma **«elimina» non è un'operazione sola**, ed è la cosa da sapere prima di disegnare un bottone unico: un immobile e una stanza si **archiviano** (`DELETE`, cancellazione soft), un addebito e una bolletta si **annullano** (`void`, che è un fatto contabile e non una cancellazione), un contratto si **annulla** finché è una bozza, e da attivo si disdice soltanto (sezione 3). Un'azione di gruppo che chiami tutto «elimina» direbbe una cosa falsa su almeno due di questi. Va deciso anche che cosa fa una selezione multipla quando **una parte** fallisce: nessuna rotta accetta più identificatori, quindi sono N chiamate e un esito parziale è possibile |
 | R37 | aperta | **Cancellare i dati di una persona su sua richiesta non è un'operazione del prodotto** | Riconosciuta **rivedendo il piano della 5-quater** contro il codice, non usando. `Z5` produce la pagina della privacy e un **runbook** eseguito con il ruolo del migratore: la capacità vera resta fuori, e la ragione è nello schema. Il ruolo applicativo non ha il privilegio `DELETE` ([ADR-003](08-decisioni.md#adr-003), regola 7), tutto passa da `deleted_at`, e `audit_log` e gli eventi di dominio continuano a citare le righe — quindi una cancellazione vera non si soddisfa con un soft delete. È la stessa domanda di `R15`, qui sopra, posta su un altro perimetro: che cosa significhi il verbo su righe che altre tabelle nominano, e che cosa resti quando la persona non c'è più. Probabile una migration e un ADR; **non** è un dettaglio di una pagina. Si pianifica quando qualcuno la chiede davvero, e fino ad allora la pagina dichiara un tempo di risposta invece di promettere un bottone |
+
+### I privilegi di colonna su `app.users`
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R38 | aperta | **`users_update_self` lascia scrivibile ogni colonna della propria riga**, `platform_role` compresa | Trovata **leggendo il codice** mentre si pianificava la sezione 6, ed è la stessa forma della `0029` su una quinta tabella: `WITH CHECK (id = app.current_user_id())` nomina la sola identità della riga, quindi **ogni altra colonna resta libera**. Sul ruolo applicativo non c'è nessuna `GRANT UPDATE` di colonna su `app.users`, e le due invarianti di `ops/sql/checks` — `colonna-di-confine-scrivibile` e `colonna-strutturale-scrivibile` — non nominano quella tabella. La più cara è `platform_role`: `app.is_platform_admin()` legge un'impostazione di sessione, che il contesto installa a partire dai claim del token, che `Login` prende da `users.platform_role`. Una `UPDATE` scritta a mano sul pool applicativo la porterebbe a `platform_admin`, e al login successivo `is_org_member` e `is_org_staff` sarebbero vere su **ogni** organizzazione. Seguono `status`, con cui ci si toglierebbe una sospensione, e `failed_login_count`/`locked_until`, che sono la difesa dal blocco dopo dieci tentativi descritta in [04](04-sicurezza.md). **Non è sfruttabile dall'API**: nessuna rotta scrive quelle colonne, e chi non ha le credenziali del ruolo applicativo non può emettere quella query. È esattamente il criterio che ADR-021 e ADR-026 hanno già applicato quattro volte — *una regola applicativa non è un confine* — e diventa più urgente con la sezione 6, che aggiunge la prima rotta che scrive quella tabella dal pool applicativo. Il rimedio ha una trappola: `UserRepository::update` nomina tutte le colonne, quindi una `GRANT` ristretta la farebbe fallire con `permission denied` — oggi non se ne accorgerebbe nessuno perché quel metodo è chiamato solo da `Login` e dal recupero password, che girano sul pool **privilegiato** |
 
 ### Uscire da un'organizzazione
 
