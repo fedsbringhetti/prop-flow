@@ -474,6 +474,10 @@ marcarlo per primo si toglierebbe il permesso di completare il resto.
 `AcceptInvitation` scrive nell'ordine membership → parte contrattuale → invito, e il
 commento nel codice lo dice.
 
+**Emendata da [ADR-051](#adr-051):** la prima delle tre scritture si salta quando la
+membership esiste già ed è attiva. L'ordine resta questo, perché a rendere falso
+`has_pending_invitation` è l'ultima scrittura e non la prima.
+
 **Difetto osservato durante l'implementazione.** Le tre scritture riuscivano e
 l'accettazione falliva sull'**ultimo** statement: l'evento di dominio. Chi accetta
 arriva con il contesto della propria organizzazione personale — di quella
@@ -3167,3 +3171,98 @@ serve.
 **Una colonna `reopen_reason` su `app.tickets`.** Simmetrica a `resolution_notes` e con lo
 stesso difetto: ne tiene uno solo, e la chiusura successiva dovrebbe cancellarlo — cioè
 perderebbe esattamente ciò per cui esiste.
+
+---
+
+<a id="adr-051"></a>
+
+## ADR-051 — Un inquilino che torna passa dalla stessa porta
+
+**10 settembre 2026.** Nasce da [`R31`](12-da-fare.md#lelenco), trovata **usando** e non
+leggendo il codice: mezza giornata di collaudo percorsa da chi non l'aveva scritto.
+Emenda [ADR-020](#adr-020) su un punto solo — quando la membership si inserisce — e non
+tocca niente del resto.
+
+### Il fatto
+
+Il ciclo di vita normale del prodotto: un contratto scade o si disdice, e con la stessa
+persona se ne fa un altro. **Oggi non si può**, e il modo in cui non si può è il peggiore:
+
+1. `InviteTenant` non guarda niente: crea la parte contrattuale ed emette l'invito. Il
+   proprietario vede un codice buono e lo consegna;
+2. `AcceptInvitation` fa **sempre** `uow.members().insert(...)`, che sbatte contro
+   `org_members_org_user_uk`;
+3. `map_membership_conflict` lo traduce in `409 membership.already_exists`.
+
+L'inquilino riceve un errore su un invito appena emesso, e non c'è nessuna via
+alternativa: `lease_parties.user_id` **lo scrive solo quel percorso**. `PATCH
+/lease-parties/{id}` tocca nome, telefono, ruolo, quota e intestatario, non l'utente.
+
+**Nessun test lo copriva, e la ragione vale più del difetto**: ogni test di integrazione
+costruisce un inquilino **nuovo**. Il difetto vive nella *seconda* volta che qualcosa
+succede alla stessa persona, che è esattamente lo spazio che una suite verde non
+attraversa. Vale la pena portarsi dietro la domanda: *quali altri percorsi il prodotto
+attraversa solo la seconda volta?*
+
+### La decisione
+
+`AcceptInvitation` verifica la membership prima di inserirla: se chi accetta è **già
+membro attivo** di quella organizzazione, salta l'inserimento e prosegue a collegare la
+parte contrattuale e a marcare l'invito.
+
+**Il ruolo non si tocca.** Chi è già `owner` o `manager` e viene invitato come `tenant`
+resta quello che è: l'invito serve a collegare la parte contrattuale, non a retrocedere
+qualcuno. È anche il caso vero di [01](01-prodotto.md) — chi affitta una casa e ne abita
+un'altra.
+
+### Perché una via sola e non due
+
+L'invito è già il gesto che il proprietario compie: lo ha appena compiuto, e ha ricevuto
+un codice buono. Una rotta «collega una persona già dentro» darebbe **due meccanismi per
+lo stesso fatto**, e il proprietario dovrebbe sapere in anticipo quale gli tocca — cioè
+ricordarsi se quella persona è già stata sua inquilina.
+
+### La guardia è sulla membership **attiva**, e oggi non serve a niente
+
+`org_members` ha `status` e `deleted_at`, ma nessuno li valorizza finché
+[`R16`](12-da-fare.md#uscire-da-unorganizzazione) non esiste: oggi da un'organizzazione
+non si esce, quindi non c'è nessuno da far rientrare e la distinzione fra «una
+membership» e «una membership attiva» non cambia il comportamento di una sola riga.
+
+Va scritta lo stesso, ed è il punto per cui questa voce esiste. Il giorno in cui `R16`
+arriva, una guardia che accettasse una membership *qualunque* farebbe rientrare chi è
+stato fatto uscire — e sarebbe **questa** la porta di servizio, trovata mesi dopo in
+un'altra sezione, quando nessuno starà più guardando qui.
+
+Il conflitto sull'indice **resta mappato**: `org_members_org_user_uk` non è parziale su
+`deleted_at` e `OrgMemberRepository::find` filtra il soft delete, quindi una membership
+non attiva non si vede e l'`INSERT` sbatte comunque. Il giorno in cui `R16` la produrrà,
+quel `409` sarà la domanda giusta da porsi e non un errore da nascondere.
+
+### Che cosa non cambia di ADR-020
+
+**L'ordine delle scritture.** `app.has_pending_invitation` abilita la membership e il
+collegamento della parte, e diventa falso appena l'invito è marcato accettato: a renderlo
+falso è l'**ultima** scrittura, quindi saltare la **prima** non sposta le altre due. La
+`SELECT` aggiunta passa dal primo ramo di `org_members_select` — `user_id =
+app.current_user_id()` — che non chiede di essere già membri, quindi non serve nessuna
+policy nuova e **nessuna migration**.
+
+**La verifica del token e le due difese indipendenti** restano identiche: l'applicazione
+prova il possesso del token, la RLS prova che un invito pendente esiste.
+
+### Verifica
+
+Due test di integrazione, e provano i due lati. Il primo percorre la riproduzione che ha
+prodotto questa voce — invito, accettazione, secondo invito, seconda accettazione — e
+pretende `200` con **due** contratti visibili e **una sola** appartenenza; il secondo fa
+accettare un invito come inquilino a chi è già `owner` e pretende che il ruolo resti
+`owner`. Il secondo è l'assert che qualcuno toglierebbe «uniformando» il ramo.
+
+### Alternativa scartata
+
+**`PATCH /lease-parties/{id}` che accetta `user_id`.** Sposta la scelta della persona su
+chi amministra, che dovrebbe cercarla in un elenco — e l'elenco delle persone di
+un'organizzazione **non esiste ed è aperto apposta** ([ADR-036](#adr-036),
+[ADR-043](#adr-043)). Costruirlo per questo sarebbe riaprire quella domanda per un
+problema di comodità.
