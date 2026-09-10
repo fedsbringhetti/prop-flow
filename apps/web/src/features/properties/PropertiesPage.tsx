@@ -121,6 +121,13 @@ export function PropertiesPage() {
             <option value="occupati">{t.property.filterOccupied}</option>
             <option value="liberi">{t.property.filterFree}</option>
           </Select>
+
+          {/* Come sui contratti: il badge dice ciò che i contratti in essere
+              producono, il filtro chiede lo stato dichiarato, e la spiegazione sta
+              dove nasce la domanda invece che fra parentesi su ogni riga. */}
+          {status ? (
+            <p className="w-full text-xs text-ink-muted">{t.property.filteredByDeclaredStatus}</p>
+          ) : null}
         </div>
 
         <Async

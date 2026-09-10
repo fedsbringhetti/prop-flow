@@ -96,6 +96,14 @@ export function LeasesPage() {
             />
             {t.lease.inForce}
           </label>
+          {/* **Dove nasce la domanda.** Il badge mostra lo stato derivato, quindi
+              chi chiede «attivo» può vedersi tornare una riga marcata «Scaduto»:
+              la spiegazione sta accanto al filtro che l'ha prodotta, e compare
+              solo quando un filtro è attivo. Prima viveva fra parentesi su ogni
+              riga, che è `R30`. */}
+          {status ? (
+            <p className="text-xs text-ink-muted">{t.lease.filteredByDeclaredStatus}</p>
+          ) : null}
         </div>
 
         <Async

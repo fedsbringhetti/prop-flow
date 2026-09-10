@@ -123,6 +123,14 @@ export function LeaseDetailPage() {
               </CardHeader>
               <CardBody>
                 <DescriptionList>
+                  {/* **Lo stato dichiarato, che il badge non mostra più.** Il badge
+                      dice il fatto — «Scaduto» — e chi filtra per «attivo» e se lo
+                      vede tornare trova qui la ragione. L'informazione che il
+                      commento di `LeaseStatusBadge` difendeva non si è persa: ha
+                      cambiato posto, da venticinque righe a una scheda. */}
+                  <DescriptionItem label={t.lease.statusLabel}>
+                    {t.lease.statuses[data.status]}
+                  </DescriptionItem>
                   <DescriptionItem label={t.lease.property}>
                     <Link
                       to={`/immobili/${data.property_id}`}

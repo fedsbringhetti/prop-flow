@@ -186,8 +186,11 @@ export const it = {
     statusLabel: 'Stato dichiarato',
     statusHint:
       'Affittato e parzialmente affittato non si scelgono: li calcolano i contratti in essere.',
-    /** Quando il dichiarato e l'effettivo divergono si mostrano entrambi: un
-     *  immobile in manutenzione che risulta affittato è un'anomalia da vedere. */
+    /** Il badge mostra il fatto; il dichiarato compare accanto solo quando è un
+     *  giudizio che il fatto smentisce — un immobile in manutenzione e insieme
+     *  affittato. Nella scheda c'è comunque, per chi lo cerca. */
+    filteredByDeclaredStatus:
+      'Il filtro usa lo stato dichiarato; il badge mostra quello che dicono i contratti in essere.',
     occupancy: 'Occupazione',
     filterOccupied: 'Con contratti in essere',
     filterFree: 'Senza contratti in essere',
@@ -320,6 +323,13 @@ export const it = {
     /** `expiring` ed `expired` sono derivati: si mostrano e non si filtrano. */
     derivedStatusNote:
       'In scadenza e scaduto sono stati derivati dalla data: si vedono, non si filtrano.',
+    /** La risposta alla domanda che il filtro fa nascere: «ho chiesto gli attivi e
+     *  me ne torna uno marcato Scaduto». Sta accanto al filtro perché è lì che la
+     *  domanda nasce, e non ripetuta su ogni riga — che era `R30`. */
+    filteredByDeclaredStatus:
+      'Il filtro usa lo stato dichiarato; il badge mostra quello derivato dalle date.',
+    /** Lo stato che qualcuno ha scelto, distinto da quello che le date dicono. */
+    statusLabel: 'Stato dichiarato',
     charges: 'Addebiti del contratto',
     issueCharge: 'Emetti un addebito',
     types: { whole_property: 'Immobile intero', room: 'Stanza' },
