@@ -6734,11 +6734,12 @@ chiude con «tutto bene» dopo un giro come questo è una fetta che il giro non 
 **Eseguita l'8 settembre 2026**, per intero e fino al punto di taglio dichiarato:
 `C1`–`C6`, e **le notifiche sono restate fuori** come la decisione 6 prevedeva.
 
-**Il collaudo in undici punti non è ancora stato percorso**, ed è la ragione per cui
-questo esito è **aperto**: il criterio della fetta non è la suite, è che una persona che
-non ha scritto il codice attraversi il prodotto con due account e un browser. Ciò che
-quel giro troverà si scrive qui sotto, **anche se non si corregge**. Un esito che si
-chiudesse con «tutto bene» prima del giro sarebbe un esito che il giro non l'ha fatto.
+**Il collaudo in undici punti è stato percorso il 9 e il 10 settembre 2026**, e con esso
+questo esito **si chiude**. È restato aperto per due giorni e cinque sezioni, ed è
+l'attesa più lunga che questo archivio registri: il criterio della fetta non era la suite,
+era che una persona che non ha scritto il codice attraversasse il prodotto con due account
+e un browser. È successo, e ciò che ha trovato sta nella tabella qui sotto e in
+[12](12-da-fare.md) come `R30`–`R35`.
 
 ### Che cosa è entrato
 
@@ -6846,31 +6847,44 @@ oggetto che non la chiede.
   due schede scrivono insieme, e in quel caso si torna al difetto — non a una regressione.
   Vedi [ADR-044](08-decisioni.md#adr-044).
 
-### Il collaudo — da percorrere
+### Il collaudo — percorso
 
-*Questa sezione si riempie percorrendolo, ed è ciò che chiude la fetta.*
+**Percorso il 9 e il 10 settembre 2026**, per intero, **da chi non aveva scritto il
+codice**. Rinviato una volta — il 9 settembre, dopo i primi due punti, con la ragione
+nell'[esito della sezione 2](#esito-sezione-2) — e poi ripreso e finito. I punti 4 e 10
+erano **stati corretti** prima di percorrerli, ed è scritto sotto la tabella.
 
-**Rinviato alla sezione 5-bis**, il 9 settembre 2026, dopo averne percorsi i primi due
-punti: sei degli undici attraversano schermate che le sezioni 3, 4, 5, 8 e 9 riscrivono, e
-camminarli prima vorrebbe dire camminarli due volte. La ragione per esteso, e il costo che
-il rinvio ha, stanno nell'[esito della sezione 2](#esito-sezione-2). I punti 4 e 10 sono
-**stati corretti** prima del rinvio, ed è scritto sotto la tabella.
+**Nessuno degli undici punti si è fermato.** Il prodotto regge un giro completo con due
+account e un browser, e questa è la prima volta che qualcuno può dirlo. Le sei cose
+trovate sono difetti *dentro* percorsi che funzionano, non percorsi interrotti — che è una
+distinzione che conta, perché dice che ciò che manca è rifinitura e non fondamenta.
 
 | # | Punto | Esito |
 |---|---|---|
-| 1 | il proprietario si registra e atterra sul riepilogo vuoto | — |
-| 2 | immobile, due stanze, **una corretta** (`C4`) | — |
-| 3 | due contratti per stanza, parti, attivazione | — |
-| 4 | due inviti; il primo **revocato, e il codice revocato presentato davvero** — che è l'unico modo di provare la revoca — poi rifatto (`C1`) | — |
-| 5 | i due inquilini si registrano e **accettano** (`C1`), nell'organizzazione giusta | — |
-| 6 | bolletta, scansione, revisione OCR, validazione, riaddebito | — |
-| 7 | segnalazione con **foto allegata** (`C3`), e il ciclo completo | — |
-| 8 | dichiarazione di pagamento, conferma, residuo che scende | — |
-| 9 | gruppo di spesa, una spesa a testa, rimborso, saldi a zero | — |
-| 10 | **due schede dello stesso account**, stesso profilo, token scaduto, ricaricate insieme: nessuna delle due viene buttata fuori (`C2`) | — |
-| 11 | il percorso dell'inquilino **a 375 px** | — |
+| 1 | il proprietario si registra e atterra sul riepilogo vuoto | percorso, nessun difetto riportato |
+| 2 | immobile, due stanze, **una corretta** (`C4`) | percorso. È il punto in cui si vede `R30`: una stanza occupata dice «Occupata (Disponibile)». La divergenza vera — «Non disponibile · occupata» su una stanza in ristrutturazione e abitata — è stata **verificata e funziona**, ed è la ragione per cui `R30` corregge la regola invece di toglierla |
+| 3 | due contratti per stanza, parti, attivazione | percorso. Qui si vede l'altra faccia di `R30`: un contratto scaduto dice «Scaduto (Attivo)» |
+| 4 | due inviti; il primo **revocato, e il codice revocato presentato davvero** — che è l'unico modo di provare la revoca — poi rifatto (`C1`) | percorso, e la revoca rifiuta: `C1` regge nella forma corretta da `T1` |
+| 5 | i due inquilini si registrano e **accettano** (`C1`), nell'organizzazione giusta | percorso. **È il punto che ha prodotto `R31`**, che il giro ha incontrato al secondo contratto e non al primo: un inquilino già membro non può essere collegato a un contratto nuovo |
+| 6 | bolletta, scansione, revisione OCR, validazione, riaddebito | percorso. Ha prodotto `R33` — il riaddebito non dice a quale contratto assegna, ed elenca i contratti come *tipo · data* — e metà di `R32` |
+| 7 | segnalazione con **foto allegata** (`C3`), e il ciclo completo | percorso. Ha prodotto metà di `R32` — il collegamento all'immobile dice «Immobile» — e ha mostrato che il ciclo delle transizioni **non si capisce dall'interfaccia**, che è `R8` e non un difetto nuovo |
+| 8 | dichiarazione di pagamento, conferma, residuo che scende | percorso, e i numeri tornano. Ha prodotto `R34`, le date che non propongono oggi |
+| 9 | gruppo di spesa, una spesa a testa, rimborso, saldi a zero | percorso, nessun difetto riportato |
+| 10 | **due schede dello stesso account**, stesso profilo, token scaduto, ricaricate insieme: nessuna delle due viene buttata fuori (`C2`) | percorso, nessuno buttato fuori. **`C2` regge**, ed era il punto che prima della fetta C era *certo* che fallisse |
+| 11 | il percorso dell'inquilino **a 375 px** | percorso, nessun difetto riportato |
 
-Ciò che il giro trova va scritto qui **anche se non si corregge**.
+**Il dettaglio di queste righe è più magro di quanto `T7` chiedesse, e va detto invece di
+lasciarlo sembrare completo.** Il metodo voleva «che cosa si è visto e non un segno di
+spunta»; il resoconto è arrivato consolidato — *tutto andava tranne quello che ho scritto*
+— quindi per i punti 1, 9, 10 e 11 qui resta l'affermazione che sono stati percorsi e che
+non hanno prodotto difetti, senza l'osservazione che il metodo voleva. È una perdita
+reale: fra sei mesi nessuno saprà se al punto 9 i saldi tornavano a zero **da entrambe le
+parti** o solo da una. Il rimedio, la prossima volta, non è ricordarsi meglio: è scrivere
+la riga **mentre** si percorre il punto, non alla fine del giro.
+
+Ciò che il giro ha trovato è entrato in [12](12-da-fare.md) con identificatori nuovi —
+`R30`–`R35`, ripartendo da dove `R29` si era fermata — e **non è stato corretto durante il
+giro**, come la regola prevede.
 
 **Due punti sono stati corretti prima di percorrerli**, e ciò che dicevano resta scritto
 qui sotto perché è quello che si credeva. Nessuno dei due era una previsione smentita:
@@ -7276,8 +7290,9 @@ che cosa.
 
 Pianificata l'**8 settembre 2026**, subito dopo la [sezione 1](11-piani-conclusi.md#esito-sezione-1).
 È la seconda delle nove dell'[ordine di esecuzione](12-da-fare.md#lordine-di-esecuzione), e
-chiude `R2`, `R3` e **il collaudo in undici punti** — cioè la fetta C, che oggi ha un
-[esito aperto](11-piani-conclusi.md#esito-fetta-c).
+chiude `R2`, `R3` e **il collaudo in undici punti** — cioè la fetta C, che alla
+pianificazione aveva un [esito aperto](11-piani-conclusi.md#esito-fetta-c) e che il
+collaudo ha poi chiuso il 10 settembre 2026, dalla [sezione 5-bis](#esito-sezione-5-bis).
 
 **Qui il codice è due stringhe.** Tutto il resto è prosa e cammino, ed è il motivo per cui
 questa sezione esiste: il criterio della fetta C non è la suite — che è verde da un giorno
@@ -9035,3 +9050,88 @@ attraversa per intero.
 **È il momento della [5-bis](12-da-fare.md#lordine-di-esecuzione)**: nove punti su undici
 sono ora su codice fermo, ed è la prima volta che le sezioni 3, 4 e 5 si vedono con gli
 occhi invece che da una suite verde.
+
+
+---
+
+<a id="esito-sezione-5-bis"></a>
+
+## Esito — Sezione 5-bis: il collaudo in undici punti
+
+Percorso il **9 e il 10 settembre 2026**, per intero, **da chi non aveva scritto il
+codice**. Non chiude nessuna voce di [12](12-da-fare.md) — non era il suo compito — e ne
+apre **sei**: `R30`, `R31`, `R32`, `R33`, `R34` e `R35`, che nello stesso giorno si è
+dissolta dentro `R31`.
+
+Le undici righe stanno nell'[esito della fetta C](#esito-fetta-c), che con questo giro
+**smette di essere aperto** dopo due giorni e cinque sezioni di attesa.
+
+### Il rendimento, e perché il rinvio era costato
+
+L'[esito della sezione 2](#esito-sezione-2) aveva scritto il costo del rinvio in anticipo,
+e vale la pena rileggerlo adesso che c'è la misura:
+
+> Il collaudo non serve solo a verificare, **alimenta i piani**. […] Le sezioni 4 e 5 si
+> pianificheranno leggendo il codice soltanto.
+
+**Mezza giornata di giro ha prodotto sei voci; cinque sezioni di lettura del codice ne
+avevano prodotte quattro.** E una delle sei — `R31` — è un buco nel **ciclo di vita
+normale** del prodotto, non un dettaglio: un inquilino il cui contratto scade e che ne
+firma un altro non può essere ricollegato, perché l'accettazione dell'invito è l'unica
+cosa che scrive `lease_parties.user_id` e rifiuta chi è già membro.
+
+**Nessun test poteva trovarlo, e la ragione è la cosa più utile di questo esito**: ogni
+test di integrazione costruisce un inquilino **nuovo**. Il difetto vive esattamente nello
+spazio che una suite verde non attraversa — la seconda volta che qualcosa succede alla
+stessa persona. Vale la pena portarselo dietro come domanda: *quali altri percorsi il
+prodotto attraversa solo la seconda volta?*
+
+### Che cosa ha retto
+
+Va scritto, perché un esito che elenca solo i difetti fa credere che il resto non sia
+stato guardato:
+
+- **nessuno degli undici punti si è fermato.** Le sei cose trovate sono difetti dentro
+  percorsi che funzionano, non percorsi interrotti;
+- **`C2` regge** — due schede dello stesso account, token scaduto, ricaricate insieme, e
+  nessuna buttata fuori — ed era il punto che prima della fetta C era *certo* che
+  fallisse;
+- **`C1` regge nella forma corretta da `T1`**: il codice revocato, presentato davvero,
+  viene rifiutato. La correzione del punto 4 è servita a qualcosa;
+- **la divergenza vera degli stati funziona**: una stanza in ristrutturazione e abitata
+  dice «Non disponibile · occupata», che è l'anomalia che la sezione 4 voleva far vedere.
+  È la ragione per cui `R30` **corregge la regola invece di toglierla**.
+
+### Una voce entrata e dissolta nello stesso giorno
+
+`R35` — che cosa vede l'inquilino di un contratto non ancora attivo — era stata scritta
+come una scelta di prodotto con tre letture possibili, e tenuta **fuori** dal piano della
+5-ter in attesa di una risposta. La risposta è arrivata da una riproduzione: un inquilino
+invitato su un contratto in bozza accetta e **lo vede**. Non esiste nessuna regola sulle
+bozze; il contratto che non compariva non compariva perché la persona non era collegata.
+
+**Era `R31` visto dall'altro lato.** Vale la pena tenerne il ricordo perché è il modo in
+cui un difetto si traveste: da lontano sembrava una domanda di prodotto, e chiedere
+«quale delle tre?» invece di riprodurre avrebbe fatto progettare una regola per un
+comportamento che non esiste.
+
+### Che cosa non ha funzionato di questo esito
+
+**Il dettaglio delle undici righe.** `T7` chiedeva di riempirle «con che cosa si è visto e
+non con un segno di spunta»; il resoconto è arrivato consolidato — *tutto andava tranne
+quello che ho scritto* — e per i punti 1, 9, 10 e 11 resta l'affermazione che sono stati
+percorsi, senza l'osservazione.
+
+È una perdita reale e non una formalità: fra sei mesi nessuno saprà se al punto 9 i saldi
+tornavano a zero **da entrambe le parti** o solo da una, che è precisamente la cosa che la
+fetta B-bis aveva costruito. **Il rimedio non è ricordarsi meglio**: è scrivere la riga
+mentre si percorre il punto, non alla fine del giro. Chi rifarà un collaudo tenga il
+documento aperto accanto al browser.
+
+### Che cosa viene dopo
+
+La [sezione 5-ter](09-stato-e-roadmap.md#piano-sezione-5-ter) corregge le cinque voci che
+restano, e la [5-quater](09-stato-e-roadmap.md#piano-utenti-veri) aggiunge le quattro cose
+senza cui una persona esterna non può cominciare. L'obiettivo che le lega è dichiarato:
+**un proprietario vero, che non ha scritto il codice, usa il prodotto per un mese con i
+suoi dati.**

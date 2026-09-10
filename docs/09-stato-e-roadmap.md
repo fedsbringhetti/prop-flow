@@ -306,15 +306,20 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**Finire il [collaudo](12-da-fare.md#lordine-di-esecuzione), poi la
-[5-ter](#piano-sezione-5-ter), poi la [5-quater](#piano-utenti-veri).** Le tre hanno un
-obiettivo dichiarato che le lega: *un proprietario vero, che non ha scritto il codice, usa
+**La [5-ter](#piano-sezione-5-ter), poi la [5-quater](#piano-utenti-veri).** Il
+[collaudo](11-piani-conclusi.md#esito-sezione-5-bis) è **concluso** — percorso per intero
+il 9 e il 10 settembre 2026, da chi non aveva scritto il codice — e con esso l'[esito
+della fetta C](11-piani-conclusi.md#esito-fetta-c) smette di essere aperto. **Nessuno
+degli undici punti si è fermato**: le sei voci uscite dal giro sono difetti dentro
+percorsi che funzionano, il che dice che ciò che manca è rifinitura e non fondamenta.
+
+Le due sezioni che restano hanno un obiettivo dichiarato che le lega: *un proprietario vero, che non ha scritto il codice, usa
 il prodotto per un mese con i suoi dati*. Il giro dice se il prodotto regge; la 5-ter
 corregge ciò che il giro ha trovato; la 5-quater aggiunge le quattro cose senza cui una
 persona esterna non può cominciare — la posta, il **recupero della password**, il deploy,
 il backup.
 
-La 5-ter è quella che il collaudo ha appena prodotto: mezza giornata di
+La 5-ter è quella che il collaudo ha prodotto: mezza giornata di
 giro vero, fatto da chi non aveva scritto il codice, ha dato **sei voci** — `R30`–`R35` —
 e una di esse, `R31`, è un buco nel **ciclo di vita normale**. Un inquilino il cui
 contratto scade e che ne firma un altro **non può rientrare**: l'invito è l'unica via che
@@ -400,7 +405,7 @@ passa affatto dal proprietario. I resoconti sono in fondo all'archivio:
 · [esito](11-piani-conclusi.md#esito-inquilino-fetta-b) ·
 [fetta B-bis](11-piani-conclusi.md#piano-spese-co-living-fetta-b-bis) ·
 [fetta C](11-piani-conclusi.md#piano-fetta-c)
-· [esito](11-piani-conclusi.md#esito-fetta-c), **ancora aperto sul collaudo**.
+· [esito](11-piani-conclusi.md#esito-fetta-c), **chiuso dal collaudo il 10 settembre 2026**.
 
 **Le notifiche vanno in fondo, e non sono più una fetta A-bis.** Erano i passi 9 e
 10 del piano archiviato, e la scelta era «prima o dopo la B». È stata sciolta: *dopo*,
