@@ -4,7 +4,9 @@ use propflow_application::ports::{
     Notifier, ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
 use propflow_application::use_cases::ai::GetBillOcrStatus;
-use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::auth::{
+    ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase, RegisterOwner, RequestPasswordReset,
+};
 use propflow_application::use_cases::billing::{
     GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, MarkUtilityBillPaid,
     RechargeUtilityBill, RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge,
@@ -54,6 +56,10 @@ pub struct AppState {
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
+    /// Le due rotte del recupero della password: girano sul pool privilegiato,
+    /// perché chi ha dimenticato la password non è autenticato (ADR-052).
+    pub request_password_reset: Arc<RequestPasswordReset>,
+    pub confirm_password_reset: Arc<ConfirmPasswordReset>,
 
     /// L'unica rotta che risponde **senza un'organizzazione attiva**: dire quali
     /// si hanno non appartiene a nessuna di esse.
@@ -266,7 +272,7 @@ impl AppState {
             )),
             login: Arc::new(Login::new(
                 Arc::clone(&unit_of_work),
-                hasher,
+                Arc::clone(&hasher),
                 Arc::clone(&tokens),
                 Arc::clone(&refresh_tokens),
                 Arc::clone(&clock),
@@ -511,6 +517,18 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             list_settlements: Arc::new(ListSettlements::new(Arc::clone(&unit_of_work))),
+            request_password_reset: Arc::new(RequestPasswordReset::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&notifier),
+                Arc::clone(&clock),
+            )),
+            confirm_password_reset: Arc::new(ConfirmPasswordReset::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&hasher),
+                Arc::clone(&clock),
+            )),
             invite_tenant: Arc::new(InviteTenant::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),

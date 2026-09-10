@@ -4,9 +4,9 @@ use super::repositories::{
     AiJobQueue, AiJobRepository, ChargeRepository, DashboardRepository, DocumentRepository,
     EventSink, ExpenseGroupRepository, ExpenseRepository, InvitationRepository,
     LeasePartyRepository, LeaseRepository, OrgMemberRepository, OrganizationRepository,
-    PaymentRepository, PropertyRepository, RepositoryResult, RoomRepository, SessionRepository,
-    SettlementRepository, TicketMessageRepository, TicketRepository, UserRepository,
-    UtilityBillRepository,
+    PasswordResetCodeRepository, PaymentRepository, PropertyRepository, RepositoryResult,
+    RoomRepository, SessionRepository, SettlementRepository, TicketMessageRepository,
+    TicketRepository, UserRepository, UtilityBillRepository,
 };
 use crate::context::RequestContext;
 
@@ -26,6 +26,7 @@ pub trait UnitOfWork: Send {
     fn members(&mut self) -> &mut dyn OrgMemberRepository;
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn invitations(&mut self) -> &mut dyn InvitationRepository;
+    fn password_reset_codes(&mut self) -> &mut dyn PasswordResetCodeRepository;
     fn properties(&mut self) -> &mut dyn PropertyRepository;
     fn rooms(&mut self) -> &mut dyn RoomRepository;
     fn leases(&mut self) -> &mut dyn LeaseRepository;

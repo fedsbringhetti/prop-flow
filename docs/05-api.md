@@ -215,6 +215,37 @@ scrittura, evento o riga di audit.
 | POST | `/api/v1/auth/login` | no | `200` con la sessione, più il **cookie** del refresh token |
 | POST | `/api/v1/auth/refresh` | cookie | `200`, ruota il refresh token e riposa il cookie. **Nessun corpo** |
 | POST | `/api/v1/auth/logout` | sì, più il cookie | `204`, idempotente. Cancella il cookie |
+| POST | `/api/v1/auth/password-reset` | no | `202` **sempre**, senza corpo. Se quell'indirizzo ha un account, riceve un codice |
+| POST | `/api/v1/auth/password-reset/confirm` | no | `204`. **Revoca tutte le sessioni.** `401` se il codice non vale, `422` se la password è debole |
+
+#### Il recupero della password
+
+Quattro proprietà, e tre si dimenticano. Vedi [ADR-052](08-decisioni.md#adr-052).
+
+**La risposta è la stessa per un indirizzo noto e per uno sconosciuto**, e non ha un
+corpo: `202` a chiunque. Distinguerli sarebbe un oracolo per sapere chi ha un account
+([ADR-017](08-decisioni.md#adr-017)). **Anche il tempo è lo stesso**: per un indirizzo
+senza account si calcola comunque lo hash di un valore fittizio, altrimenti la latenza
+direbbe ciò che la risposta tace. Il client scrive «se quell'indirizzo ha un account,
+riceverà un codice», che è la verità e non una scusa.
+
+**Il codice si incolla, non si clicca.** L'email porta un codice e non un link: un token
+in un URL finisce nella cronologia, nel `Referer` e nei log di ogni proxy davanti al
+client. È la stessa decisione presa per l'invito ([ADR-045](08-decisioni.md#adr-045)).
+Vale **trenta minuti** e una volta sola; sconosciuto, scaduto e già usato danno lo stesso
+`401`.
+
+**Confermare revoca tutte le sessioni** — ma sono i **refresh token**, non gli access
+token, che sono JWT firmati e non revocabili ([ADR-013](08-decisioni.md#adr-013)): chi ne
+ha uno in mano resta dentro fino alla scadenza, quindici minuti. La catena si chiude
+comunque, e da lì in poi non si rinnova più.
+
+**Il limite agli invii è per email**: un secondo codice chiesto entro due minuti viene
+rifiutato **in silenzio**, con lo stesso `202`. Dirlo sarebbe di nuovo l'oracolo — «troppo
+presto» conferma che l'account esiste.
+
+**Il cambio password da autenticati non esiste ancora**: sta in `R7`. Questa coppia di
+rotte serve a chi **non può entrare**, non a chi è già dentro.
 
 Risposta di sessione, nella forma attesa da un client OAuth2 **meno il refresh
 token**:

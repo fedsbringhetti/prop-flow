@@ -31,6 +31,10 @@ pub enum NotificationContent {
         organization_name: String,
         accept_token: String,
     },
+    /// Recupero della password. `code` è il codice **in chiaro**: a differenza del
+    /// token d'invito non esiste da nessun'altra parte — la risposta HTTP non lo
+    /// porta, perché è la stessa per chiunque (ADR-052).
+    PasswordReset { code: String, valid_minutes: i64 },
 }
 
 // `Debug` scritto a mano: il derive stamperebbe l'indirizzo del destinatario e il
@@ -49,6 +53,7 @@ impl std::fmt::Debug for NotificationContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TenantInvitation { .. } => f.write_str("TenantInvitation(<redatto>)"),
+            Self::PasswordReset { .. } => f.write_str("PasswordReset(<redatto>)"),
         }
     }
 }

@@ -6,9 +6,10 @@ use propflow_domain::ports::{
     AiJobQueue, AiJobRepository, ChargeRepository, DashboardRepository, DocumentRepository,
     EventSink, ExpenseGroupRepository, ExpenseRepository, InvitationRepository,
     LeasePartyRepository, LeaseRepository, OrgMemberRepository, OrganizationRepository,
-    PaymentRepository, PropertyRepository, RepositoryResult, RoomRepository, SessionRepository,
-    SettlementRepository, TicketMessageRepository, TicketRepository, UnitOfWork, UnitOfWorkFactory,
-    UserRepository, UtilityBillRepository, WorkerUnitOfWork, WorkerUnitOfWorkFactory,
+    PasswordResetCodeRepository, PaymentRepository, PropertyRepository, RepositoryResult,
+    RoomRepository, SessionRepository, SettlementRepository, TicketMessageRepository,
+    TicketRepository, UnitOfWork, UnitOfWorkFactory, UserRepository, UtilityBillRepository,
+    WorkerUnitOfWork, WorkerUnitOfWorkFactory,
 };
 
 use super::db_enums;
@@ -42,6 +43,9 @@ impl UnitOfWork for PgUnitOfWork {
         self
     }
     fn invitations(&mut self) -> &mut dyn InvitationRepository {
+        self
+    }
+    fn password_reset_codes(&mut self) -> &mut dyn PasswordResetCodeRepository {
         self
     }
     fn properties(&mut self) -> &mut dyn PropertyRepository {

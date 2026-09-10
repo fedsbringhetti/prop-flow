@@ -1,10 +1,15 @@
 mod login;
 mod logout;
+mod password_reset;
 mod refresh;
 mod register_owner;
 
 pub use login::{Login, LoginCommand};
 pub use logout::{Logout, LogoutCommand};
+pub use password_reset::{
+    ConfirmPasswordReset, ConfirmPasswordResetCommand, RequestPasswordReset,
+    RequestPasswordResetCommand,
+};
 pub use refresh::{RefreshSessionCommand, RefreshSessionUseCase};
 pub use register_owner::{RegisterOwner, RegisterOwnerCommand, RegisterOwnerResult};
 

@@ -12,7 +12,8 @@ use crate::expense::{
     SettlementStatus,
 };
 use crate::identity::{
-    Invitation, OrgMember, Organization, OrganizationMembership, RefreshSession, TokenHash, User,
+    Invitation, OrgMember, Organization, OrganizationMembership, PasswordResetCode, RefreshSession,
+    TokenHash, User,
 };
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
@@ -143,6 +144,33 @@ pub trait OrgMemberRepository: Send {
         user_id: UserId,
     ) -> RepositoryResult<Vec<OrganizationMembership>>;
     async fn insert(&mut self, member: &OrgMember) -> RepositoryResult<()>;
+}
+
+/// Codici di recupero della password.
+///
+/// La ricerca è per **hash del codice** e non per utente: chi lo presenta prova di
+/// possederlo, e cercare per email vorrebbe dire fidarsi di chi chiede. È la stessa
+/// forma di [`InvitationRepository::find_by_token_hash`].
+///
+/// **Niente `delete`**: un codice usato o scaduto è inerte e resta, come ogni altra
+/// riga di questo schema ([ADR-003](../../../../docs/08-decisioni.md)). La potatura
+/// è un'operazione del runbook, con il ruolo del migratore.
+#[async_trait]
+pub trait PasswordResetCodeRepository: Send {
+    async fn find_by_code_hash(
+        &mut self,
+        code_hash: &TokenHash,
+    ) -> RepositoryResult<Option<PasswordResetCode>>;
+    /// L'ultimo codice emesso per quell'utente, per il limite agli invii.
+    ///
+    /// Il limite non ha una colonna sua: è il `created_at` della riga più recente, e
+    /// `password_reset_codes_user_ix` lo rende una lettura sola. Una colonna che
+    /// duplicasse quel valore avrebbe due fonti di verità per lo stesso fatto.
+    async fn last_issued(&mut self, user_id: UserId)
+    -> RepositoryResult<Option<PasswordResetCode>>;
+    async fn insert(&mut self, code: &PasswordResetCode) -> RepositoryResult<()>;
+    /// Consuma il codice. L'unica colonna scrivibile è `used_at`.
+    async fn mark_used(&mut self, code: &PasswordResetCode) -> RepositoryResult<()>;
 }
 
 #[async_trait]

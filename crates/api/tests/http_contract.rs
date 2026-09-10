@@ -1922,6 +1922,188 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
     );
 }
 
+/// **Il recupero della password, da capo a fondo**, che è `Z2`.
+///
+/// Prima di questo passo le rotte di autenticazione erano quattro e il primo «non mi
+/// ricordo la password» di un utente vero finiva in una `UPDATE` scritta a mano sul
+/// database di produzione.
+///
+/// Le tre cose che il test fissa sono le tre che si perdono, e nessuna delle tre si
+/// vede guardando la schermata:
+///
+/// 1. **la conferma revoca le sessioni**, comprese quelle aperte prima. Senza,
+///    cambiare la password non butta fuori chi era entrato con quella vecchia — e un
+///    refresh token vive trenta giorni;
+/// 2. **un indirizzo sconosciuto riceve la stessa risposta di uno noto**, e non manda
+///    niente: distinguerli sarebbe un oracolo per sapere chi ha un account;
+/// 3. **un codice già usato non vale due volte.**
+#[tokio::test]
+async fn a_forgotten_password_can_be_recovered_and_the_old_sessions_die() {
+    let app = require_app!();
+    let email = common::unique_email("smemorato");
+    let vecchia = "cavallo batteria graffetta";
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/register",
+            serde_json::json!({
+                "email": email,
+                "full_name": "Proprietario Test",
+                "password": vecchia,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // La sessione di prima, con il **cookie di refresh**: è ciò che la revoca
+    // uccide, e l'unica cosa che si possa verificare subito. L'access token è un
+    // JWT e resta valido i suoi quindici minuti — vedi l'asserzione più sotto.
+    let (status, _, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("cookie di refresh");
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+
+    let code = match app.mail.sent().last() {
+        Some((
+            recipient,
+            propflow_application::ports::NotificationContent::PasswordReset {
+                code,
+                valid_minutes,
+            },
+        )) => {
+            assert_eq!(recipient, &email);
+            // La durata è nel testo perché chi legge deve sapere quanto ha: un
+            // codice che scade senza dirlo è un codice che scade addosso.
+            assert!(*valid_minutes > 0);
+            code.clone()
+        }
+        other => panic!("il codice di recupero non è partito: {other:?}"),
+    };
+
+    // Una password debole viene rifiutata **prima** di consumare il codice: chi
+    // sbaglia la password non deve doversi rifare mandare il codice.
+    let (status, problem) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": "corta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let nuova = "cavallo batteria graffetta nuova";
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // 1. **La sessione di prima è morta**: il refresh non rinnova più. È la parte
+    //    che si dimentica, ed è quella che rende il recupero una difesa invece di
+    //    una comodità — un refresh token vive trenta giorni.
+    //
+    //    Quello che **non** muore è l'access token già emesso, che è un JWT e non è
+    //    revocabile: chi ce l'ha resta dentro fino alla scadenza, quindici minuti.
+    //    È il baratto di ADR-013 e va saputo, perché «revoca tutte le sessioni» si
+    //    legge come «lo butta fuori adesso» e non è vero.
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&cookie), None)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "il refresh della vecchia sessione funziona ancora: {body}"
+    );
+
+    // La password nuova funziona, la vecchia no.
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 3. Lo stesso codice non vale due volte, e la risposta non dice perché.
+    let (status, problem) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": "un altro cavallo lungo" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {problem}");
+
+    // 2. Un indirizzo che non esiste riceve **la stessa** risposta, e non fa partire
+    //    niente: è la regola di ADR-017 applicata al recupero.
+    let prima = app.mail.sent().len();
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": common::unique_email("mai-registrato") }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+    assert_eq!(
+        app.mail.sent().len(),
+        prima,
+        "un indirizzo sconosciuto ha fatto partire un'email"
+    );
+}
+
+/// **Il limite agli invii è per email**, e rifiuta in silenzio.
+///
+/// Un recupero senza freno è un modo per far arrivare cinquanta email a un indirizzo
+/// altrui. Il rifiuto è silenzioso — `202` come sempre — perché dirlo sarebbe di
+/// nuovo l'oracolo: «troppo presto» conferma che l'account esiste.
+#[tokio::test]
+async fn asking_for_a_second_code_too_soon_sends_nothing_and_says_nothing() {
+    let app = require_app!();
+    let email = common::unique_email("insistente");
+    common::register_and_login_with_email(&app, &email).await;
+
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let dopo_il_primo = app.mail.sent().len();
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    // Stessa risposta del primo, e nessuna seconda email.
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+    assert_eq!(
+        app.mail.sent().len(),
+        dopo_il_primo,
+        "il limite agli invii non ha fermato il secondo codice"
+    );
+}
+
 /// **L'invito parte per posta**, che è il criterio di fine di `Z1`.
 ///
 /// Prima di questo passo il token tornava solo nella risposta HTTP e il
@@ -1963,6 +2145,7 @@ async fn inviting_a_tenant_sends_the_code_by_mail() {
                 "l'email non dice da chi arriva l'invito"
             );
         }
+        other => panic!("notifica inattesa: {other:?}"),
     }
 
     // La risposta continua a portarlo: con il relay fermo è l'unica copia.

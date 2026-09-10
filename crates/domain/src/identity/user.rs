@@ -177,6 +177,22 @@ impl User {
         }
     }
 
+    /// Sostituisce la password, e **sblocca l'account**.
+    ///
+    /// Il contatore dei tentativi falliti e il blocco temporaneo si azzerano, ed è
+    /// deliberato: chi ha dimostrato di controllare la casella di posta ha superato
+    /// una prova più forte di quella che il blocco difende, e lasciarlo fuori per
+    /// altri quindici minuti sarebbe punire la persona sbagliata.
+    ///
+    /// **Non revoca le sessioni**: quelle non sono un attributo dell'utente e
+    /// vivono in `app.user_sessions`. Lo fa il caso d'uso, che è anche l'unico
+    /// posto da cui si vede che le due cose vanno insieme ([ADR-052](../../../../docs/08-decisioni.md)).
+    pub fn set_password(&mut self, password_hash: PasswordHash) {
+        self.password_hash = Some(password_hash);
+        self.failed_login_count = 0;
+        self.locked_until = None;
+    }
+
     pub fn mark_email_verified(&mut self, now: DateTime<Utc>) {
         if self.email_verified_at.is_none() {
             self.email_verified_at = Some(now);

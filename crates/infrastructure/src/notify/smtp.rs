@@ -182,6 +182,19 @@ fn render(content: &NotificationContent) -> (String, String) {
                  Il codice vale sette giorni e si usa una volta sola.\n"
             ),
         ),
+        NotificationContent::PasswordReset {
+            code,
+            valid_minutes,
+        } => (
+            "Recupero della password di PropFlow".to_owned(),
+            format!(
+                "Hai chiesto di reimpostare la password del tuo account PropFlow.\n\n\
+                 Incolla questo codice nella schermata di recupero:\n\n\
+                 {code}\n\n\
+                 Vale {valid_minutes} minuti e si usa una volta sola. Se non l'hai\n\
+                 chiesto tu, non devi fare niente: senza il codice non cambia nulla.\n"
+            ),
+        ),
     }
 }
 

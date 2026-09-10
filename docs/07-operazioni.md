@@ -386,3 +386,5 @@ cambiamento, e poi "in locale funziona".
 - Metriche (esistono log e tracce, non metriche).
 - Alerting — compreso quello sul `/ready` che dice `posta non raggiungibile`, che oggi
   lo vede solo chi guarda.
+- La potatura dei codici di recupero scaduti: restano in tabella, inerti. Il ruolo
+  applicativo non ha `DELETE`.
