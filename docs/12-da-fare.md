@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Dieci voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Undici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -9,11 +9,15 @@ Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
 [sezione 4](11-piani-conclusi.md#esito-sezione-4); `R19`, `R19-bis`, `R21`, `R22`, `R23` e
 `R24` con la [sezione 5](11-piani-conclusi.md#esito-sezione-5); `R30`, `R31`, `R32`, `R33`
-e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter). Quattro sono
-entrate — `R26`, `R27`, `R28`, `R29`, e poi `R30`–`R35` dal collaudo, e `R36`
-dall'esecuzione della 5-ter — e **quasi tutte le ha trovate l'uso del prodotto**, non la
-lettura del codice. `R29` è entrata **preparando** il collaudo,
-prima che cominciasse: seminare dei dati veri è già usare il prodotto. Le sei da `R30` a
+e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter). Sono entrate
+`R26`, `R27`, `R28` e `R29`, poi `R30`–`R35` dal collaudo, e infine `R36` **eseguendo** la
+5-ter e `R37` **rivedendo** il piano della 5-quater contro il codice.
+
+**Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
+due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
+lettura a freddo, ma dal *lavorare su una cosa e vederne un'altra di fianco*. `R29` è
+entrata **preparando** il collaudo, prima che cominciasse: seminare dei dati veri è già
+usare il prodotto. Le sei da `R30` a
 `R35` sono uscite dalla prima mezza giornata di giro vero, fatto da chi non aveva scritto
 il codice — che è il rendimento che il collaudo aveva promesso e che cinque sezioni di
 rinvio avevano tenuto fermo.
@@ -198,6 +202,7 @@ sezione è il primo client che legge un nome da `app.users`
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R15 | aperta | **Selezionare righe in tabella e cancellarle in blocco**, e poter cancellare anche una sola riga | La parte di interfaccia è ripetibile — le tabelle passano già da `@/components/ui/table` — ma **«elimina» non è un'operazione sola**, ed è la cosa da sapere prima di disegnare un bottone unico: un immobile e una stanza si **archiviano** (`DELETE`, cancellazione soft), un addebito e una bolletta si **annullano** (`void`, che è un fatto contabile e non una cancellazione), un contratto si **annulla** finché è una bozza, e da attivo si disdice soltanto (sezione 3). Un'azione di gruppo che chiami tutto «elimina» direbbe una cosa falsa su almeno due di questi. Va deciso anche che cosa fa una selezione multipla quando **una parte** fallisce: nessuna rotta accetta più identificatori, quindi sono N chiamate e un esito parziale è possibile |
+| R37 | aperta | **Cancellare i dati di una persona su sua richiesta non è un'operazione del prodotto** | Riconosciuta **rivedendo il piano della 5-quater** contro il codice, non usando. `Z5` produce la pagina della privacy e un **runbook** eseguito con il ruolo del migratore: la capacità vera resta fuori, e la ragione è nello schema. Il ruolo applicativo non ha il privilegio `DELETE` ([ADR-003](08-decisioni.md#adr-003), regola 7), tutto passa da `deleted_at`, e `audit_log` e gli eventi di dominio continuano a citare le righe — quindi una cancellazione vera non si soddisfa con un soft delete. È la stessa domanda di `R15`, qui sopra, posta su un altro perimetro: che cosa significhi il verbo su righe che altre tabelle nominano, e che cosa resti quando la persona non c'è più. Probabile una migration e un ADR; **non** è un dettaglio di una pagina. Si pianifica quando qualcuno la chiede davvero, e fino ad allora la pagina dichiara un tempo di risposta invece di promettere un bottone |
 
 ### Uscire da un'organizzazione
 

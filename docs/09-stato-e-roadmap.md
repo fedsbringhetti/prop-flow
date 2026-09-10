@@ -476,6 +476,22 @@ collaudo l'ha aperto — e l'obiettivo dichiarato è più preciso di «utenti ve
 Da lì discende tutto ciò che entra e tutto ciò che resta fuori. Non serve ciò che serve a
 mille sconosciuti; serve ciò senza cui **una** persona esterna si blocca e non torna.
 
+**Emendata il 10 settembre 2026**, subito dopo l'esecuzione della
+[5-ter](11-piani-conclusi.md#esito-sezione-5-ter) e rileggendo questo piano **contro il
+codice** invece che contro sé stesso. È il controllo che alla 5-ter è mancato e le è
+costato un passo: `Y4` poggiava su una premessa falsa — *«i dati ci sono già tutti in
+`LeaseResponse`»* — che nessuno aveva verificato prima di eseguire. Qui le premesse sono
+state verificate una per una e **tengono tutte**: `Notifier` è una porta senza adattatore e
+non è iniettata da nessuna parte, `revoke_all_for_user` esiste, le rotte di autenticazione
+sono quattro, `ops/web/Caddyfile` realizza già l'origine unica, `secure_cookies` è già
+`true` per default, e la guardia della configurazione deriva davvero l'elenco da
+`AppConfig`.
+
+Quello che il controllo ha trovato sono **quattro cose che il piano non diceva**, e sono
+già dentro: la posta che cade in silenzio (decisione 1), il tempo di risposta che
+distingue un indirizzo noto da uno sconosciuto (decisione 5), il perimetro di `Z5`, e il
+cambio password da autenticati, che **non** entra. Sono segnate dove valgono.
+
 ### La fase era già nominata, e per metà già pianificata
 
 [Prima degli utenti veri](#prima-degli-utenti-veri) porta già i passi 9 e 10 del piano
@@ -530,6 +546,29 @@ dice che cosa manca — non il primo uso, dove somiglia a un problema di rete.
 Sembra prudente e produce il difetto peggiore di tutti: il recupero password che risponde
 `202` e non manda niente, su un utente che non può più entrare.
 
+**E la configurazione obbligatoria da sola non basta**, che è la contraddizione che
+rileggere il piano ha trovato. I passi 9 e 10 che `Z1` assorbe prescrivono l'invio **dopo
+il commit e best-effort**: con SMTP configurato ma *giù*, il recupero risponde `202` e non
+manda niente lo stesso — stesso sintomo, causa diversa. Per l'invito non importa, perché il
+token è **anche** nella risposta HTTP e lo consegna il proprietario a mano; per il recupero
+non c'è un secondo canale, ed è tutta la ragione per cui `Z1` viene prima di `Z2`.
+
+Il rimedio **non è dirlo al chiamante**: si tenta l'invio solo se l'indirizzo ha un
+account, quindi una risposta che distingua un invio riuscito da uno fallito è l'oracolo
+sugli account che la decisione 4 esiste per chiudere. E non è nemmeno l'invio sincrono, che
+farebbe durare la richiesta quanto il server SMTP e finirebbe comunque in un `202` al primo
+timeout.
+
+**La raggiungibilità del server SMTP si verifica all'avvio e vive nel controllo di
+salute.** L'invio resta best-effort dopo il commit, come per l'invito; ciò che cambia è che
+un'indisponibilità è **nota prima** che qualcuno la incontri, invece di essere scoperta da
+una persona chiusa fuori. La configurazione è già obbligatoria per la decisione qui sopra,
+quindi il collegamento all'avvio non aggiunge un concetto: aggiunge una riga a `/health`.
+
+Il limite va detto: il controllo di salute prova che il server risponde, non che il
+messaggio verrebbe **recapitato** — quello lo dicono SPF, DKIM e DMARC, ed è la trappola
+pratica più cara di questa fase.
+
 #### 2. Il codice di recupero si incolla, non si clicca — ADR-052
 
 [ADR-045](08-decisioni.md#adr-045) ha già deciso questa domanda per l'invito, e
@@ -577,6 +616,19 @@ silenzioso se è troppo recente.
 
 Costa una colonna e nessun servizio in più. Il rate limiting per IP resta dov'è.
 
+**Ma il limite per email apre una differenza che la decisione 4 chiude solo a metà**, e
+va chiusa qui. Per un indirizzo **senza** account non si crea nessuna riga: la risposta è
+identica — è la decisione 4 — mentre il costo no. Un ramo fa una lettura; l'altro fa una
+lettura, calcola uno hash e inserisce. [ADR-017](08-decisioni.md#adr-017) governa il
+**contenuto** della risposta, non la sua durata, e un tempo che distingue è un oracolo come
+un codice di errore che distingue.
+
+**Il percorso è quindi a tempo costante**: anche per un indirizzo sconosciuto si calcola
+lo hash di un valore fittizio, così i due rami costano uguale. Poche righe, e chiudono la
+differenza dove nasce invece di lasciarla scritta come rischio accettato — che con una
+persona sola sarebbe stato tollerabile e sarebbe rimasto lì per sempre, come le finestre
+che la `0030` aveva lasciato aperte per iscritto.
+
 #### 6. Il deploy è `compose` dietro Caddy, e la parte difficile è già fatta
 
 `ops/web/Caddyfile` realizza già il contratto **una sola origine** — `/` ai file statici,
@@ -615,6 +667,25 @@ Sta nel piano e non fuori perché è l'unica voce che **cresce di costo con il t
 scriverla adesso è un pomeriggio, scriverla dopo aver raccolto dati per sei mesi è
 un'operazione su dati che esistono già.
 
+**La cancellazione è un runbook e non una rotta, e la ragione è nello schema.** La prima
+stesura di questo passo diceva *«deve esistere una risposta che non sia una `DELETE` a
+mano»*, e chiedeva una capacità che il progetto **vieta**: il ruolo applicativo non ha il
+privilegio `DELETE` ([ADR-003](08-decisioni.md#adr-003), regola 7), tutto passa da
+`deleted_at`, e `audit_log` e gli eventi di dominio continuano a citare le righe. Una
+cancellazione vera non si soddisfa con un soft delete, e farla diventare una capacità di
+prodotto qui vorrebbe dire decidere che cosa significa il verbo su righe che altre tabelle
+nominano — cioè una migration, un ADR e la stessa domanda che `R15` ha già isolata.
+
+`Z5` produce quindi **la pagina e un runbook**, eseguito con il ruolo del migratore e
+percorso una volta per intero, come il ripristino di `Z4` e per la stessa ragione: una
+procedura mai eseguita non è una procedura. La pagina dichiara un **tempo di risposta**
+invece di promettere un bottone, che è la verità e non una scusa. La capacità di prodotto
+diventa una voce di [12](12-da-fare.md) e si pianifica quando qualcuno la chiede davvero.
+
+*Alternativa scartata: solo la pagina, e la procedura da inventare alla prima richiesta.*
+È più piccola del runbook di mezza giornata e sposta il lavoro nel momento peggiore — con
+una persona che aspetta, e su dati che nel frattempo sono cresciuti.
+
 ### Decomposizione
 
 ##### `Z1` — La posta
@@ -623,12 +694,18 @@ I passi 9 e 10 di [Prima degli utenti veri](#prima-degli-utenti-veri), da rilegg
 intero: la porta esiste, l'adattatore no, e `Notifier` **non è iniettata da nessuna
 parte**.
 
-Qui si aggiungono le due cose che quella prosa non aveva:
+Qui si aggiungono le tre cose che quella prosa non aveva:
 
 - **le impostazioni sono obbligatorie** in `AppConfig`, con il messaggio di avvio che dice
-  che cosa manca;
+  che cosa manca. Un'impostazione nuova tocca **quattro** posti e non due: oltre a
+  `AppConfig` e alle tabelle di [07](07-operazioni.md) — che è la guardia che fa fallire
+  `cargo test` — servono `.env.example`, senza cui `just env` smette di dire che cosa
+  manca a chi ha un `.env` più vecchio, e il servizio `api` del `docker-compose.yml`;
 - **un raccoglitore locale nel `docker-compose.yml`** per lo sviluppo, e la configurazione
-  di un mittente vero per la produzione, che è cosa diversa — vedi le trappole.
+  di un mittente vero per la produzione, che è cosa diversa — vedi le trappole;
+- **la raggiungibilità del server SMTP nel controllo di salute**, per la decisione 1: è
+  ciò che rende visibile una posta caduta **prima** che la incontri una persona chiusa
+  fuori dal proprio account.
 
 ##### `Z2` — Il recupero della password — **ADR-052 prima**
 
@@ -645,13 +722,28 @@ registrazione, login, rotazione del refresh. Chi ha dimenticato la password non 
 autenticato per definizione. Va scritto nel commento del caso d'uso, o alla prossima
 lettura sembrerà una violazione.
 
-Tre test, e sono i tre che contano: la conferma **revoca le sessioni**; un indirizzo
-sconosciuto riceve la stessa risposta di uno noto; un codice già usato non vale due volte.
+**Il percorso è a tempo costante** (decisione 5): per un indirizzo sconosciuto si calcola
+comunque lo hash di un valore fittizio, così i due rami non si distinguono per durata.
+
+**Il cambio password da autenticati non entra**, ed è la cosa che il titolo di questo passo
+invita a dare per fatta. Dopo `Z2` chi *è* dentro continua a non poter cambiare la propria
+password: quella rotta sta in [`R7`](12-da-fare.md#interfaccia-e-prodotto), sezione 6.
+Coerente con il perimetro dichiarato — questa fase serve a chi **non può entrare**, non a
+chi è già dentro — e va scritto perché condivide con il recupero la revoca delle sessioni e
+la validazione, quindi sembra incluso.
+
+Quattro test, e sono i quattro che contano: la conferma **revoca le sessioni**; un
+indirizzo sconosciuto riceve la stessa risposta di uno noto; un codice già usato non vale
+due volte; e un secondo codice chiesto troppo presto viene rifiutato in silenzio.
 
 ##### `Z3` — Il deploy
 
 VPS, dominio, il `Caddyfile` che punta al dominio, i segreti fuori dal repository, il
 migratore prima dell'API, e la politica di riavvio.
+
+**`Strict-Transport-Security` va aggiunto a mano**: Caddy prende il certificato da sé e
+reindirizza a HTTPS, ma quell'intestazione non la mette. Su un sito che tratta dati
+personali di terzi è la differenza fra «reindirizza» e «non ci si arriva più in chiaro».
 
 Il criterio non è «i container sono su»: è **aprire il prodotto dal telefono, in 4G, e
 fare l'accesso**. Finché non è successo, non è deployato.
@@ -664,8 +756,18 @@ ritenzione dichiarata. Poi il ripristino, una volta, su un database vuoto.
 ##### `Z5` — La privacy
 
 Una pagina raggiungibile dal prodotto: che cosa si raccoglie, perché, dove sta, per quanto
-e come si chiede la cancellazione. E il giro corrispondente: quando il tuo proprietario
-chiederà di cancellare tutto, deve esistere una risposta che non sia una `DELETE` a mano.
+e come si chiede la cancellazione, **con un tempo di risposta dichiarato** invece di un
+bottone promesso.
+
+E il **runbook** della cancellazione, per la decisione 8: i passi da eseguire con il ruolo
+del migratore, percorsi una volta per intero prima che dentro ci siano dati di qualcun
+altro — come il ripristino di `Z4`, e per la stessa ragione. Una procedura mai eseguita non
+è una procedura.
+
+La cancellazione **come capacità del prodotto** non entra: richiede di decidere che cosa
+significhi il verbo su righe che `audit_log` e gli eventi continuano a citare, ed è la
+stessa domanda di [`R15`](12-da-fare.md#cancellare-in-generale). Entra invece in
+[12](12-da-fare.md) come voce sua.
 
 ### Trappole
 
@@ -677,7 +779,16 @@ non con l'API di qualcuno: il mittente vero è un dato di configurazione. Va pro
 un indirizzo vero**, non solo con il raccoglitore locale.
 
 **Un raccoglitore locale non è un fornitore.** Accetta tutto: non verifica SPF, DKIM né i
-rimbalzi. Prova che il messaggio parte e che cosa contiene, non che sarebbe recapitato.
+rimbalzi. Prova che il messaggio parte e che cosa contiene, non che sarebbe recapitato. E
+**il controllo di salute prova ancora meno**: dice che il server risponde, non che il
+messaggio arriverebbe.
+
+**Il recupero non può dire se l'invio è riuscito, e nemmeno metterci più tempo.** Le due
+metà si dimenticano insieme: si tenta l'invio solo per un indirizzo che ha un account,
+quindi *qualunque* cosa distingua i due rami — un codice di risposta, un messaggio, una
+durata — è l'oracolo che la decisione 4 esiste per chiudere. La risposta è uniforme per
+decisione 4, il costo lo è per decisione 5, e chi tocca uno dei due rami deve guardare
+l'altro.
 
 **Aggiungere un'impostazione senza la riga in [07](07-operazioni.md) fa fallire
 `cargo test`.** `crates/api/tests/docs_config_reference.rs` deriva l'elenco dai campi di
@@ -713,13 +824,16 @@ avviare, mettere in sicurezza, monitorare e ripristinare.
 - un'email di invito arriva davvero nel raccoglitore locale, con il token nel corpo e in
   **nessuna** riga di log;
 - un'email arriva a un indirizzo **vero**, e non nella cartella dello spam;
+- con il server SMTP **fermo**, il controllo di salute lo dice — invece di lasciarlo
+  scoprire a chi è chiuso fuori dal proprio account;
 - una password si recupera da capo a fondo, e le sessioni aperte prima **non funzionano
   più**;
 - chiedere il recupero per un indirizzo che non esiste dà la stessa risposta di uno che
   esiste, e il client lo dice invece di lasciarlo intuire;
 - il prodotto risponde su un dominio in HTTPS, aperto **dal telefono in 4G**;
 - un dump viene ripristinato in un database vuoto e il prodotto ci parte sopra;
-- esiste una pagina che dice che cosa si raccoglie e come si chiede la cancellazione;
+- esiste una pagina che dice che cosa si raccoglie, come si chiede la cancellazione e in
+  quanto tempo, e il **runbook** che la soddisfa è stato percorso una volta per intero;
 - `just ci` verde.
 
 ### Che cosa **non** entra
@@ -736,6 +850,13 @@ avviare, mettere in sicurezza, monitorare e ripristinare.
   organizzazione, e con una persona sola è tollerabile e va saputo;
 - **la sezione 5-ter**, che è lavoro suo e viene prima di questa fase: `R31` in particolare
   romperebbe il test appena il tuo proprietario rinnovasse un contratto;
+- **il cambio password da autenticati.** Sta in [`R7`](12-da-fare.md#interfaccia-e-prodotto),
+  sezione 6, e non qui: questa fase serve a chi **non può entrare**. Va detto perché
+  condivide con `Z2` la revoca delle sessioni e la validazione, quindi sembra incluso;
+- **la cancellazione come capacità del prodotto**, che `Z5` risolve con un runbook e che
+  diventa una voce di [12](12-da-fare.md): decidere che cosa significhi cancellare su righe
+  che `audit_log` e gli eventi continuano a citare è la domanda di
+  [`R15`](12-da-fare.md#cancellare-in-generale), non un dettaglio di una pagina;
 - **il modello di ricavo.** Questa fase esiste per poter fare la domanda, non per
   rispondere.
 
