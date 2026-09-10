@@ -3266,3 +3266,127 @@ chi amministra, che dovrebbe cercarla in un elenco — e l'elenco delle persone 
 un'organizzazione **non esiste ed è aperto apposta** ([ADR-036](#adr-036),
 [ADR-043](#adr-043)). Costruirlo per questo sarebbe riaprire quella domanda per un
 problema di comodità.
+
+---
+
+<a id="adr-052"></a>
+
+## ADR-052 — Il codice di recupero si incolla, non si clicca
+
+**10 settembre 2026.** Scritta **prima** del codice, come il metodo impone e come
+[ADR-051](#adr-051) non è stata. Governa il recupero della password: la forma del
+codice, che cosa fa alle sessioni, che cosa risponde a chi lo chiede e come si limita.
+
+### Il fatto
+
+Le rotte di autenticazione sono quattro — `register`, `login`, `refresh`, `logout` — e
+non c'è **nessun** modo di recuperare una password. Il primo «non mi ricordo la
+password» di un utente vero finisce in una `UPDATE` scritta a mano sul database di
+produzione. È la ragione per cui la posta ([Z1](11-piani-conclusi.md#piano-utenti-veri))
+viene prima: senza un canale non c'è niente da recapitare.
+
+### 1. Un codice da incollare, non un link da cliccare
+
+[ADR-045](#adr-045) ha già deciso questa domanda per l'invito, e l'argomento vale
+identico: **il token è una credenziale**, e un link `/nuova-password/<token>` la scrive
+in tre archivi che nessuno ripulisce — la cronologia del browser, il `Referer` verso
+qualunque risorsa esterna, e i log di ogni proxy davanti al client.
+
+L'email porta quindi un codice e la schermata ha un campo in cui incollarlo. Nessun
+meccanismo nuovo: `OpaqueTokenFactory` e `TokenHash` esistono per l'invito, e in
+database finisce lo hash.
+
+**Il costo è reale e va detto**: incollare è più scomodo di un clic, e succede nel
+momento in cui una persona è già frustrata. L'alternativa — il link, con la pagina che
+ripulisce l'URL e `Referrer-Policy: no-referrer` — chiuderebbe due archivi su tre e
+introdurrebbe **due forme diverse** per due credenziali che si somigliano. Si sceglie la
+coerenza; se un collaudo dirà che l'attrito è troppo, sarà una voce nuova con una misura
+dietro invece di un'ipotesi.
+
+### 2. Confermare revoca **tutte** le sessioni
+
+È la parte che si dimentica, ed è quella che rende il recupero una difesa invece di una
+comodità: chi ha ottenuto l'accesso a un account ha in mano un refresh token che vive
+**trenta giorni**, e cambiare la password senza revocarlo non lo butta fuori.
+
+`SessionRepository::revoke_all_for_user` esiste già — la usa il rilevamento del riuso di
+un token ruotato — quindi è una chiamata e non un meccanismo. Chi recupera resta fuori
+anche lui e rifà l'accesso: è il comportamento giusto, perché non sa quali sessioni
+fossero sue.
+
+**Ma «tutte le sessioni» sono i refresh token, non gli access token**, e la differenza va
+detta perché la frase si legge come «lo butta fuori adesso». L'access token è un JWT
+firmato e **non è revocabile** ([ADR-013](#adr-013)): chi ne ha uno in mano resta dentro
+fino alla scadenza, quindici minuti. La revoca chiude la catena — nessun rinnovo, e da lì
+in poi è fuori — ma la finestra esiste.
+
+È il baratto che ADR-013 ha già scelto, e recuperare la password non lo cambia: chiuderla
+vorrebbe dire una lista di revoca consultata a ogni richiesta, cioè uno stato condiviso
+per ogni chiamata di ogni utente per coprire quindici minuti. **Scoperto scrivendo il
+test**, che asseriva la cosa sbagliata — che la vecchia sessione smettesse subito di
+leggere — e che ora asserisce quella giusta: il refresh non rinnova più.
+
+### 3. La risposta è la stessa per un indirizzo noto e per uno sconosciuto
+
+Regola di [ADR-017](#adr-017), che il modulo degli inviti applica già: distinguere
+sarebbe un oracolo per sapere chi ha un account. La rotta risponde `202` sempre, e la
+schermata dice «se quell'indirizzo ha un account, riceverà un codice» — che è la verità
+e non una scusa.
+
+**E il tempo di risposta è uguale**, che è la metà che si dimentica insieme. Per un
+indirizzo senza account non si crea nessuna riga: un ramo fa una lettura, l'altro fa una
+lettura, calcola uno hash e inserisce. ADR-017 governa il **contenuto** della risposta,
+non la sua durata, e un tempo che distingue è un oracolo come un codice che distingue. Il
+percorso è quindi a **tempo costante**: anche per un indirizzo sconosciuto si calcola lo
+hash di un valore fittizio.
+
+**Ne segue che l'invio non può essere riportato al chiamante.** Si tenta solo per un
+indirizzo che ha un account, quindi qualunque cosa distingua i due rami — un codice di
+errore, un messaggio, una durata — riapre l'oracolo. Un relay caduto è perciò **muto**, e
+il rimedio non sta nella risposta: sta nel controllo di prontezza, che interroga SMTP
+apposta perché una posta ferma si sappia **prima** che la incontri chi è chiuso fuori
+(vedi `Notifier::probe`).
+
+### 4. Il limite agli invii è per **email**, e sta nel modello
+
+Un recupero senza limiti è un modo per far arrivare cinquanta email a un indirizzo
+altrui. Il rimedio **non è il rate limiting per IP**: quello vuole uno stato condiviso, un
+servizio in più da avviare, mettere in sicurezza, monitorare e ripristinare, e non serve
+con una sola istanza — resta fra i trasversali mancanti.
+
+È invece una colonna: quando è stato emesso l'ultimo codice per quell'email, e un rifiuto
+**silenzioso** se è troppo recente. Silenzioso perché dirlo sarebbe di nuovo l'oracolo del
+punto 3.
+
+### 5. Il pool privilegiato è legittimo qui, ed è l'unico posto nuovo in cui lo diventa
+
+La regola 27 di `CLAUDE.md` riserva `begin_privileged()` ai flussi in cui un contesto di
+sicurezza **non può** esistere: registrazione, login, rotazione del refresh token. Chi ha
+dimenticato la password non è autenticato **per definizione**, quindi non ha un contesto
+da installare e la Row Level Security non ha nulla su cui appoggiarsi.
+
+È la differenza con l'accettazione di un invito, dove [ADR-020](#adr-020) ha scelto di
+estendere la RLS invece di aggirarla: là il contesto **esiste** — chi accetta è
+autenticato — e manca solo la membership. Qui non esiste affatto.
+
+Va scritto nel commento del caso d'uso, o alla prossima lettura sembrerà una violazione
+della regola.
+
+### Conseguenze
+
+- una migration nuova: la tabella dei codici, con lo hash e non il codice, una scadenza
+  breve, l'uso singolo e la colonna che regge il limite;
+- due rotte, `POST /api/v1/auth/password-reset` e
+  `POST /api/v1/auth/password-reset/confirm`, e due schermate nel client;
+- una variante nuova di `NotificationContent`, con il suo `Debug` redatto: il codice è
+  una credenziale come il token d'invito;
+- **il cambio password da autenticati non arriva con questa voce.** Sta in
+  [`R7`](12-da-fare.md#interfaccia-e-prodotto) e condivide con il recupero la revoca
+  delle sessioni e la validazione, quindi sembra incluso e non lo è.
+
+### Alternativa scartata
+
+**Una password provvisoria spedita per email.** Toglie la tabella e il giro in due tempi,
+e mette una credenziale **valida** in un archivio che non si ripulisce — la casella di
+posta — invece di un codice a uso singolo che scade. È lo stesso argomento del punto 1,
+peggiorato: il link almeno non era la password.
