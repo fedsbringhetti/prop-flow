@@ -2301,6 +2301,112 @@ async fn accepting_a_tenant_invitation_does_not_demote_an_existing_member() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Il proprio account e l'uscita da un'organizzazione (sezione 6)
+// ---------------------------------------------------------------------------
+
+/// `/api/v1/me` si legge, si corregge, e **non prende mai un identificatore**.
+///
+/// Tre cose in un giro solo: la lettura non porta il ruolo di piattaforma; il
+/// `PATCH` è parziale, con `null` che azzera; e l'email si riconosce e si rifiuta
+/// con un `422` che nomina il campo — non un `200` con l'indirizzo di prima, che
+/// sarebbe il sintomo muto.
+#[tokio::test]
+async fn the_account_reads_and_corrects_itself_and_the_email_stays_put() {
+    let app = require_app!();
+    let email = common::unique_email("me");
+    let (token, _, _) = common::register_and_login_with_email(&app, &email).await;
+
+    let (status, me) = app.send("GET", "/api/v1/me", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {me}");
+    assert_eq!(me["email"], email);
+    assert_eq!(me["full_name"], "Proprietario Test");
+    assert_eq!(me["locale"], "it-IT");
+    assert!(me.get("phone").is_none(), "corpo: {me}");
+    // Non è affare di chi guarda, e non deve nemmeno comparire a `null`.
+    assert!(me.get("platform_role").is_none(), "corpo: {me}");
+    assert!(me.get("failed_login_count").is_none(), "corpo: {me}");
+
+    // Senza `Authorization` non c'è nessuno da leggere.
+    let (status, _) = app.send("GET", "/api/v1/me", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, updated) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "full_name": "  Maria Rossi ", "phone": "+39 333 1234567" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {updated}");
+    assert_eq!(updated["full_name"], "Maria Rossi");
+    assert_eq!(updated["phone"], "+39 333 1234567");
+
+    // Si ricarica, e il telefono è quello: è il criterio di fine del piano.
+    let (_, again) = app.send("GET", "/api/v1/me", Some(&token), None).await;
+    assert_eq!(again["phone"], "+39 333 1234567");
+
+    // `null` azzera, e un campo non menzionato resta.
+    let (status, cleared) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "phone": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cleared}");
+    assert!(cleared.get("phone").is_none(), "corpo: {cleared}");
+    assert_eq!(cleared["full_name"], "Maria Rossi");
+
+    // Un corpo vuoto non è un errore: risponde con i dati invariati.
+    let (status, _) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Un telefono malformato è un `422` che nomina il campo, non un `409` di
+    // vincolo: la regola del `CHECK` è ripetuta nel dominio apposta.
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "phone": "chiamami" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "phone");
+
+    // **L'email non si cambia, e il tentativo lo dice.**
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "email": common::unique_email("altra") })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "email");
+    let (_, me) = app.send("GET", "/api/v1/me", Some(&token), None).await;
+    assert_eq!(me["email"], email, "l'email è cambiata: {me}");
+
+    // **Nessuna rotta proietta un utente per identificatore** (ADR-036): la forma
+    // con l'id nel percorso non esiste, nemmeno per il proprio.
+    let id = me["id"].as_str().expect("id");
+    let (status, _) = app
+        .send("GET", &format!("/api/v1/users/{id}"), Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 /// Gli identificatori dei contratti che un utente vede in un'organizzazione.
 async fn visible_leases(app: &TestApp, token: &str, org: &str) -> Vec<String> {
     let (status, page) = app

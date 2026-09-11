@@ -12,4 +12,4 @@ pub use membership::OrganizationMembership;
 pub use organization::{OrgKind, Organization, Slug};
 pub use password_reset::PasswordResetCode;
 pub use session::{RefreshSession, TokenHash};
-pub use user::{PasswordHash, PlatformRole, User, UserStatus};
+pub use user::{PasswordHash, PlatformRole, User, UserProfileChanges, UserStatus};

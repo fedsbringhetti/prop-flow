@@ -3,6 +3,7 @@ use std::sync::Arc;
 use propflow_application::ports::{
     Notifier, ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
+use propflow_application::use_cases::account::{GetMyAccount, UpdateMyProfile};
 use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{
     ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase, RegisterOwner, RequestPasswordReset,
@@ -61,9 +62,15 @@ pub struct AppState {
     pub request_password_reset: Arc<RequestPasswordReset>,
     pub confirm_password_reset: Arc<ConfirmPasswordReset>,
 
-    /// L'unica rotta che risponde **senza un'organizzazione attiva**: dire quali
-    /// si hanno non appartiene a nessuna di esse.
+    /// Le tre rotte che rispondono **senza un'organizzazione attiva**: dire quali
+    /// si hanno, e leggere o correggere i propri dati, non appartiene a nessuna di
+    /// esse. Pretendere `X-Org-Id` romperebbe proprio il caso in cui servono — chi
+    /// è appena uscito dall'unica in cui abitava.
     pub list_organizations: Arc<ListOrganizations>,
+    /// **Nessuna delle tre prende un identificatore di utente**, ed è la forma che
+    /// tiene chiusa la domanda di ADR-036: chi si legge viene dal token.
+    pub get_my_account: Arc<GetMyAccount>,
+    pub update_my_profile: Arc<UpdateMyProfile>,
 
     /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
     /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
@@ -289,6 +296,11 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             list_organizations: Arc::new(ListOrganizations::new(Arc::clone(&unit_of_work))),
+            get_my_account: Arc::new(GetMyAccount::new(Arc::clone(&unit_of_work))),
+            update_my_profile: Arc::new(UpdateMyProfile::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
             owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),
             create_property: Arc::new(CreateProperty::new(
                 Arc::clone(&unit_of_work),

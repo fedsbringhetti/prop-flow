@@ -108,6 +108,7 @@ impl EventMetadata {
 #[serde(untagged)]
 pub enum DomainEventPayload {
     UserRegistered(UserRegistered),
+    UserProfileUpdated(UserProfileUpdated),
     OrganizationCreated(OrganizationCreated),
     PropertyCreated(PropertyCreated),
     PropertyUpdated(PropertyUpdated),
@@ -156,6 +157,7 @@ impl DomainEventPayload {
     pub const fn event_type(&self) -> &'static str {
         match self {
             Self::UserRegistered(_) => "identity.user.registered",
+            Self::UserProfileUpdated(_) => "identity.user.profile_updated",
             Self::OrganizationCreated(_) => "identity.organization.created",
             Self::PropertyCreated(_) => "property.created",
             Self::PropertyUpdated(_) => "property.updated",
@@ -203,7 +205,7 @@ impl DomainEventPayload {
     #[must_use]
     pub const fn aggregate_type(&self) -> &'static str {
         match self {
-            Self::UserRegistered(_) => "User",
+            Self::UserRegistered(_) | Self::UserProfileUpdated(_) => "User",
             Self::OrganizationCreated(_) => "Organization",
             Self::PropertyCreated(_) | Self::PropertyUpdated(_) | Self::PropertyArchived(_) => {
                 "Property"
@@ -272,6 +274,7 @@ impl DomainEventPayload {
     pub fn aggregate_id(&self) -> uuid::Uuid {
         match self {
             Self::UserRegistered(event) => event.user_id.as_uuid(),
+            Self::UserProfileUpdated(event) => event.user_id.as_uuid(),
             Self::OrganizationCreated(event) => event.org_id.as_uuid(),
             Self::PropertyCreated(event) => event.property_id.as_uuid(),
             Self::PropertyUpdated(event) => event.property_id.as_uuid(),
@@ -319,7 +322,10 @@ impl DomainEventPayload {
     #[must_use]
     pub const fn org_id(&self) -> Option<OrgId> {
         match self {
-            Self::UserRegistered(_) => None,
+            // Nessuna delle due appartiene a un'organizzazione: `/api/v1/me`
+            // risponde anche a chi non ne ha una attiva, e il proprio account non
+            // è affare di nessuna di esse.
+            Self::UserRegistered(_) | Self::UserProfileUpdated(_) => None,
             Self::OrganizationCreated(event) => Some(event.org_id),
             Self::PropertyCreated(event) => Some(event.org_id),
             Self::PropertyUpdated(event) => Some(event.org_id),
@@ -371,6 +377,19 @@ pub struct UserRegistered {
     /// Non c'è l'email: un evento pubblicato su un broker è un dato che viaggia e
     /// si conserva. Chi ha bisogno dell'indirizzo lo legge dall'aggregato.
     pub registered_at: DateTime<Utc>,
+}
+
+/// I dati anagrafici corretti, **per nome di campo e non per valore**.
+///
+/// `docs/04-sicurezza.md` vieta i dati personali negli eventi di dominio, e un
+/// nome e un numero di telefono lo sono: un evento pubblicato su un broker è un
+/// dato che viaggia e si conserva. Chi consuma sa **che cosa** invalidare e legge
+/// il valore dall'aggregato, se gli spetta. È la stessa forma di
+/// [`PropertyUpdated`] e [`TicketReportCorrected`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserProfileUpdated {
+    pub user_id: UserId,
+    pub changed_fields: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
