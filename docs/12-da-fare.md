@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Dodici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Tredici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -15,7 +15,8 @@ e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter); `R7`, 
 5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
 le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
 pianificazione come ciò che quella sezione decide di **non** fare — e `R41` **eseguendo** la
-6, come conseguenza di ciò che quella sezione ha costruito.
+6, come conseguenza di ciò che quella sezione ha costruito, e `R42` **controllando la
+sessione** dopo averla conclusa.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -240,6 +241,12 @@ sezione è il primo client che legge un nome da `app.users`
 |---|---|---|---|
 | R26 | aperta | **Gli elenchi offrono filtri per stati che non possono comparire**, e sono tre elenchi con tre cause diverse | Trovato al punto 2 del collaudo archiviando un immobile e non ritrovandolo nemmeno filtrando per «Archiviato». **Immobili**: archiviare fa due cose nello stesso `UPDATE` (`soft_delete` in `crates/infrastructure/src/db/repositories/property.rs`) — `status = 'archived'` **e** `deleted_at` — ma `list` filtra `deleted_at IS NULL`, quindi la riga esce da ogni elenco, quel filtro compreso; e `find_by_id` ha lo stesso filtro, quindi nemmeno l'URL della scheda funziona più (`404`). Le altre quattro opzioni di quel `<Select>` sono vuote per la ragione di [R1](#lelenco). **Contratti**: l'opzione «Annullato» non può comparire perché `Lease::cancel()` **esiste nel dominio e non la chiama nessuno** — nessuno use case, nessuna rotta. **Chiuso dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3)**, che ha esposto quella transizione: resta la faccia degli immobili e quella delle bollette. **Bollette**: «Pagata» e «Contestata» sono gli stati di [R25](#lelenco), che nessuno scrive. Le tre cause sono diverse ma la domanda è una sola, e conviene rispondere una volta: **un filtro deve offrire solo ciò che può comparire**, e dove lo stato è vero ma la riga è nascosta serve un modo di includerla. **Non toccare l'archiviazione**: che sia un soft delete è giusto |
 | R27 | aperta | **`README.md` e [06](06-sviluppo.md) insegnano ancora il primo avvio a mano** | Trovato scrivendo `R3`. Le due pagine elencano `docker compose up`, `generate-jwt-keys.sh`, il `psql` dei ruoli e i tre `cargo run`, mentre `just setup` fa la stessa cosa in un comando e `just api`/`just worker`/`just web` avviano. Non è sbagliato — quei comandi funzionano, e `CLAUDE.md` §4 dice che la fonte della verità è lui — ma è **più lungo e più facile da sbagliare** proprio nella pagina che un estraneo legge per prima. Da decidere se il `justfile` diventi la via raccomandata anche lì, o se resti uno strumento di comodo per chi già conosce il progetto |
+
+### La durata della sessione
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R42 | aperta | **La sessione non scade mai davvero, e non lo si è mai scelto.** Si vuole un «Ricordami per 30 giorni» | Trovata **controllando la sessione** dopo la sezione 6, non usando il prodotto: una scheda lasciata aperta un giorno con l'API spenta è rientrata da sé, ed è corretto — a tenerla dentro era il cookie del refresh. Controllando *perché*, è uscito che la finestra dei 30 giorni è **scorrevole**: `RefreshSession::issue` in `crates/application/src/use_cases/auth/refresh.rs` costruisce il successore con `expires_at = now + lifetime`, quindi i trenta giorni contano dall'**ultimo uso** e non dal login. Chi apre il prodotto una volta al mese resta dentro per sempre. Non è un difetto — è la forma comune — ma **non risulta scelto**, e [04](04-sicurezza.md) diceva «vita: 30 giorni», che si legge come un tetto: la descrizione è stata corretta, la decisione resta da prendere. **La decisione di prodotto c'è ed è questa: un «Ricordami per 30 giorni» al login, esplicito, e senza la spunta una sessione che finisce con il browser.** Quel che si sa già del lavoro: la durata è **già per riga** — `app.user_sessions.expires_at` — quindi **nessuna migration**; a essere globale è `RefreshTokenFactory::lifetime()`, che il caso d'uso del login dovrà ricevere come parametro invece di leggere dalla configurazione. Il cookie oggi porta **sempre** `Max-Age`, calcolato dalla vita residua del token (`session_reply` in `crates/api/src/routes/auth.rs`): senza la spunta va **omesso**, che è ciò che lo rende un cookie di sessione e lo fa morire con il browser. Servono un campo nel corpo del login, una casella nel form e una stringa nel catalogo. **La trappola è la rotazione**: se la finestra continua a scorrere, il bottone dice «30 giorni» e significa «per sempre» — cioè l'etichetta mente. Scegliere quella spunta implica quindi che il successore **non** superi la scadenza di chi lo precede, ed è la riga che si dimentica, perché oggi il codice fa il contrario e sembra giusto. Da decidere solo il resto: se il rinnovo silenzioso del `refresh` debba comportarsi allo stesso modo per entrambi i casi, e se serva anche un tetto assoluto per chi la spunta ce l'ha. **ADR prima del codice**: è una decisione sulla sicurezza, e cambia una proprietà che [04](04-sicurezza.md) descrive |
 
 ### Contratti: quel che la sezione 3 ha lasciato aperto
 

@@ -47,9 +47,19 @@ autoconsistente resta valido anche dopo un logout. La fonte di verità è la rig
 - In database va solo lo **hash SHA-256**. Un digest semplice basta: con 256 bit di
   entropia non esiste il dizionario che renderebbe utile un KDF lento. Ma una
   copia del dump non deve permettere di impersonare nessuno.
-- Vita: **30 giorni**.
+- Vita: **30 giorni**, e la finestra è **scorrevole**. I trenta giorni contano
+  dall'**ultimo uso** e non dal login: la rotazione emette un token nuovo con
+  `expires_at = now + 30 giorni`, quindi chi apre il prodotto anche una sola volta
+  al mese resta dentro a tempo indeterminato. **Non esiste un tetto assoluto**, né
+  un timeout di inattività più corto, né una scelta di chi entra: vale sempre e per
+  tutti.
+
+  Va scritto perché «vita: 30 giorni» si legge come un tetto, e non lo è. Le uniche
+  cose che chiudono una sessione sono il logout, il cambio o il recupero della
+  password, e il rilevamento del riuso. Che sia la forma giusta è una domanda
+  aperta e ha una voce sua in [12](12-da-fare.md).
 - **Rotazione a uso singolo**: ogni refresh consuma il token presentato ed emette
-  uno nuovo.
+  uno nuovo, con una scadenza nuova.
 - **Viaggia solo in un cookie** `HttpOnly; Secure; SameSite=Strict;
   Path=/api/v1/auth`, e non compare più nel corpo di alcuna risposta. Metterlo
   anche nel JSON del login vanificherebbe `HttpOnly`: un XSS lo leggerebbe da lì
