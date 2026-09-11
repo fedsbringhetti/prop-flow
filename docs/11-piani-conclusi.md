@@ -10209,3 +10209,507 @@ delle credenziali. Gli artefatti sono validati per quello che si può validare s
 vale la pena scriverlo: le sezioni precedenti finivano con una suite verde, questa
 finisce con un elenco di comandi da eseguire. Il criterio di fine non è «gli artefatti
 esistono»: è il punto 4 del runbook.
+
+---
+
+<a id="piano-sezione-6"></a>
+
+## Piano — Sezione 6: le persone
+
+Pianificata il **10 settembre 2026**, dopo il rinvio del deploy. Chiude `R7`, `R16` e
+`R38`. Le prime due erano in elenco; la terza è **uscita verificando le premesse** di
+questo piano contro il codice, ed è il motivo per cui la sezione ha una migration.
+
+**È la prima sezione pianificata senza il collaudo davanti.** Le tre precedenti sono nate
+da un giro vero; questa nasce da una lettura, e va saputo: il rendimento del giro era sei
+voci in mezza giornata contro le quattro di cinque sezioni di lettura. Ciò che segue è un
+ragionamento, non una misura.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| Nessuna rotta legge o scrive l'utente corrente | vero: `crates/api/src/routes/` non ha `/users/me` né equivalenti |
+| `users_update_self` esiste già | vero, `0014`: `USING (id = current_user_id() AND deleted_at IS NULL)`, `WITH CHECK (id = current_user_id())` |
+| `UserRepository::update` è chiamato solo dal pool privilegiato | vero: `Login` e `ConfirmPasswordReset`, entrambi `begin_privileged()` |
+| Un membro **non** può toccare la propria membership | vero: `org_members_update` è `is_org_staff(org_id)` su USING **e** WITH CHECK |
+| L'uscita è rappresentabile senza migration | **falso a metà**: `status` e `deleted_at` ci sono, ma la policy non la ammette e `role` resterebbe scrivibile |
+| `app.users` è coperta dalle invarianti dei privilegi di colonna | **falso**: né `colonna-di-confine-scrivibile` né `colonna-strutturale-scrivibile` la nominano |
+
+### Il difetto che pianificare ha trovato — `R38`
+
+`users_update_self` ha una `WITH CHECK` che nomina **la sola identità della riga**. È
+letteralmente la constatazione della [`0029`](08-decisioni.md#adr-026) su una quinta
+tabella: ciò che il `WITH CHECK` non nomina resta libero, e sul ruolo applicativo non c'è
+nessuna `GRANT UPDATE` di colonna su `app.users`.
+
+La più cara è **`platform_role`**, e la catena va scritta perché non si vede da una riga
+sola:
+
+```
+UPDATE app.users SET platform_role = 'platform_admin' WHERE id = app.current_user_id()
+   → Login legge users.platform_role e lo mette nei claim
+   → il middleware chiama with_platform_admin(...)
+   → l'unità di lavoro installa app.platform_admin = 'on'
+   → app.is_platform_admin() è vera
+   → is_org_member e is_org_staff sono vere su OGNI organizzazione
+```
+
+Seguono `status`, con cui ci si toglie una sospensione, e `failed_login_count` con
+`locked_until`, che sono la difesa dal blocco dopo dieci tentativi descritta in
+[04](04-sicurezza.md#blocco-dopo-tentativi-falliti).
+
+**Non è sfruttabile dall'API**, e va detto con la stessa precisione: nessuna rotta scrive
+quelle colonne, e chi non possiede le credenziali del ruolo applicativo non può emettere
+quella query. È una difesa in profondità mancante, esattamente della classe che ADR-021 e
+ADR-026 hanno già chiuso quattro volte — *una regola applicativa non è un confine*.
+
+**Entra in questa sezione e non in una sua** per una ragione di tempi: `R7` aggiunge la
+**prima rotta che scrive `app.users` dal pool applicativo**. Finché non esiste, la porta è
+chiusa da un privilegio che nessuno usa; da quando esiste, è chiusa solo da un `UPDATE`
+scritto bene.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Come si raggiunge il proprio account | **`/api/v1/me`, che non prende mai un identificatore** | `PATCH /users/{id}`, che riaprirebbe ADR-036 |
+| Che cosa si può correggere | **nome, telefono, lingua** | anche l'email, che è la credenziale d'accesso |
+| Cambiare la password da dentro | **serve quella vecchia**, e revoca **tutte** le sessioni | tenere viva la corrente, che sono due regole invece di una |
+| Che cosa protegge `app.users` | **privilegi di colonna**, più le invarianti | una `WITH CHECK` più larga, che non può confrontare vecchio e nuovo |
+| Come si esce da un'organizzazione | **`status = 'left'` sulla propria riga**, negato con un contratto in essere | un soft delete della membership |
+| Chi garantisce il divieto | **una policy**, non un `if` | il solo service layer |
+
+### Decisioni, con il perché
+
+#### 1. `/api/v1/me`, e mai un identificatore
+
+`GET` e `PATCH` su `/api/v1/me`. Il percorso non prende mai un `user_id`, ed è la forma
+che tiene chiusa la domanda di [ADR-036](08-decisioni.md#adr-036): **nessuna rotta proietta
+un utente per identificatore**. Una `PATCH /users/{id}` che accettasse solo il proprio
+sarebbe la stessa cosa con una guardia applicativa davanti — cioè la porta aperta e un
+cartello.
+
+`GET /me` restituisce ciò che serve a una schermata del proprio profilo: identificatore,
+email, nome, telefono, lingua, e se l'email risulta verificata. **Non** il ruolo di
+piattaforma, che non è affare di chi guarda.
+
+#### 2. L'email non si cambia in questa sezione, e la ragione è scritta
+
+È la scelta che sembra una mancanza e non lo è. `users.email` non è un dato anagrafico: è
+**la credenziale d'accesso**, ed è la chiave con cui tre cose si ritrovano.
+
+- `app.has_pending_invitation` fa `JOIN app.users u ON u.email = i.email`: cambiare
+  l'email **rompe in silenzio** ogni invito pendente per quell'indirizzo;
+- `app.current_user_email()` è ciò su cui poggiano quattro policy della `0018`;
+- `lease_parties.email` è come l'accettazione trova la propria riga.
+
+Cambiarla bene richiede un giro di verifica sul nuovo indirizzo — cioè la verifica
+dell'email, che è **deliberatamente fuori perimetro** — e una decisione su che cosa
+succede agli inviti pendenti. Farla male significa un account che non riceve più niente e
+un invito che non si può più accettare, con un sintomo muto in entrambi i casi.
+
+*Alternativa scartata: permetterla e basta.* È mezza sezione di lavoro e una classe di
+guasti che si manifesta giorni dopo, su una funzione che nessuno ha chiesto.
+
+#### 3. Cambiare la password da dentro **pretende quella vecchia**
+
+`POST /api/v1/me/password`, con `current_password` e `new_password`. La vecchia serve
+perché il contesto è diverso da quello del recupero: là la prova di identità è il controllo
+della casella di posta, qui è una sessione — e una sessione può essere una scheda lasciata
+aperta. Senza la vecchia, chiunque si sieda davanti a un browser non bloccato si prende
+l'account per sempre.
+
+**Revoca tutte le sessioni, compresa la propria**, esattamente come
+[ADR-052](08-decisioni.md#adr-052) fa per il recupero. La scelta è l'uniformità, ed è stata
+presa contro l'alternativa che sembra più gentile — tenere viva la sessione da cui si sta
+cambiando, riconoscendola dal cookie di refresh che la richiesta porta già.
+
+Il ragionamento, perché è la decisione meno ovvia della sezione: *«cambiare la password
+chiude tutto»* è **una frase sola**, e questa frase va scritta in almeno quattro posti — la
+schermata del recupero, quella del proprio account, `docs/04-sicurezza.md` e il corpo
+dell'API. Due regole diverse per due percorsi che una persona non distingue — *«ho cambiato
+la password»* è la stessa cosa dai due lati — sono due frasi da tenere allineate, e la
+seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile: chi cambia
+rientra subito con la password che ha appena scelto.
+
+**Ne segue che questa sezione non ha bisogno di un ADR nuovo.** Con la revoca selettiva
+sarebbe servito — una decisione che diverge da una documentata è una voce in
+`docs/08-decisioni.md`, scritta prima del codice — e con l'uniformità ADR-052 basta a
+spiegare entrambi i percorsi.
+
+Vale anche qui la nota di ADR-052 che si dimentica: si revocano i **refresh token**, non
+gli access token, che sono JWT e vivono i loro quindici minuti. Chi cambia la password non
+è fuori nell'istante in cui la cambia; è fuori quando quel token scade.
+
+#### 4. `app.users` si difende con i privilegi di colonna
+
+Una migration che revoca `UPDATE` su `app.users` al ruolo applicativo e la riconcede sulle
+sole colonne che il prodotto scrive **da una richiesta autenticata**:
+
+| Concesse | Negate |
+|---|---|
+| `full_name`, `phone`, `locale`, `password_hash` | `platform_role`, `status`, `email`, `email_verified_at`, `last_login_at`, `failed_login_count`, `locked_until`, `deleted_at` |
+
+Le negate non sono irraggiungibili: le scrive il pool **privilegiato**, che ha `BYPASSRLS`
+e i privilegi pieni — `Login` aggiorna `last_login_at` e il contatore dei tentativi, il
+recupero password scrive `password_hash`. È la stessa divisione delle quattro migration
+che l'hanno preceduta: ciò che una richiesta autenticata può scrivere è un elenco corto e
+dichiarato, tutto il resto passa da un flusso che il contesto di sicurezza non ha.
+
+Le colonne entrano nelle invarianti di `ops/sql/checks`: `platform_role` e `status` in
+`colonna-di-confine-scrivibile`, perché definiscono che cosa si vede; le altre in
+`colonna-strutturale-scrivibile`. **Le invarianti si aggiornano nello stesso passo della
+migration**, che è la forma che la sezione 5 ha stabilito emendando un controllo di CI.
+
+#### 5. Uscire è uno **stato**, non un soft delete
+
+`status = 'left'` su `app.org_members`, non `deleted_at`. Le due cose non sono
+intercambiabili: `OrgMemberRepository::find` filtra `deleted_at IS NULL`, quindi una
+membership cancellata **non si vede più** — e `org_members_org_user_uk` è unico e non
+parziale, quindi chi è uscito così non potrebbe più rientrare né con un `INSERT` né con un
+`UPDATE` su una riga che non si trova. È esattamente il difetto che la `0029` ha già
+pagato sulle spese co-living.
+
+Con lo stato la riga resta, e qui il piano deve dire una cosa che non si vede dal nome
+della voce: **così com'è, chi esce non rientra lo stesso.**
+[ADR-051](08-decisioni.md#adr-051) fa cercare a `AcceptInvitation` una membership
+**attiva**; su una riga `left` non la trova e prova a inserirne una, che sbatte contro
+`org_members_org_user_uk` — unico e non parziale — e diventa `409
+membership.already_exists`. È esattamente il `409` che quella sezione aveva chiuso, che
+ricompare da un'altra porta.
+
+ADR-051 lo aveva previsto per iscritto — *«il giorno in cui `R16` arriva questo punto
+diventerebbe la porta di servizio»* — e quel giorno è questo. **`AcceptInvitation` va
+esteso in questa sezione**: una membership non attiva si **riattiva** invece di inserirne
+una nuova. Senza quel ramo, `R16` produce persone che escono e non possono più tornare, e
+il sintomo arriverebbe mesi dopo su un invito che sembra buono.
+
+#### 6. Il divieto è una policy, non un `if`
+
+«Non si esce con un contratto in essere» va **verificato e garantito**, ed è la lezione
+della `0029`: là rendere l'uscita un confine vero ha richiesto una policy, perché una
+regola applicativa si legge come una garanzia proprio quando è scritta in tre posti.
+
+Serve quindi una funzione — `app.has_lease_in_force(p_org_id, p_user_id)`, `SECURITY
+DEFINER` con `search_path` come tutte le altre — che passi da `lease_parties.user_id` e da
+`app.lease_in_force`, cioè dalla **stessa** definizione di «in essere» del resto del
+progetto e non da una seconda.
+
+E la `WITH CHECK` della policy nuova deve nominare **`role`**. Oggi `org_members_update` è
+staff soltanto, quindi il ruolo è al sicuro per costruzione; dal momento in cui un membro
+può toccare la propria riga, `role` è la colonna con cui si promuoverebbe a `owner`. Una
+policy non può confrontare la riga vecchia con la nuova, quindi la difesa è un
+**privilegio di colonna**, come al punto 4.
+
+#### 7. Chi esce dall'unica organizzazione in cui abita
+
+Resta con la propria, personale e vuota: è il caso di
+[ADR-045](08-decisioni.md#adr-045) al contrario. Il client deve **dirlo prima**, non
+lasciarlo scoprire dopo con una dashboard vuota e nessuna spiegazione — è la stessa forma
+dell'avviso sulla revoca delle sessioni della 5-quater.
+
+### Decomposizione
+
+##### `A1` — I privilegi di colonna su `app.users` (`R38`)
+
+Migration: `REVOKE UPDATE ON app.users` dal ruolo applicativo, `GRANT UPDATE (full_name,
+phone, locale, password_hash)`. Le colonne entrano nelle due invarianti di
+`ops/sql/checks/schema_invariants.sql` **nello stesso passo**.
+
+`UserRepository` guadagna un `update_profile` che nomina le sole colonne concesse, sulla
+forma di `ChargeRepository::update_status`. `update` resta e resta privilegiato: un test
+che lo chiamasse dal pool applicativo fallirebbe con `permission denied`, ed è la difesa
+che si vuole.
+
+Un test dei privilegi che prova le negate una per una, come quello dei ticket: la sola
+`platform_role` non basta, perché è l'elenco a essere il contratto.
+
+##### `A2` — `/api/v1/me`, lettura e correzione (`R7`)
+
+`GET` e `PATCH /api/v1/me`: nome, telefono, lingua. `PATCH` parziale con la semantica di
+sempre — campo omesso significa invariato, `null` esplicito cancella. Nessun `user_id` nel
+percorso.
+
+Un test che prova che l'email **non** è modificabile e che il tentativo lo dice.
+
+##### `A3` — La password si cambia da dentro (`R7`)
+
+`POST /api/v1/me/password` con la vecchia e la nuova. Sul pool **applicativo**: chi cambia
+la password è autenticato, quindi la regola 27 non ammette il privilegiato.
+
+Due test: la vecchia password sbagliata dà `401` e non cambia niente; dopo il cambio
+**nessuna** sessione rinnova più, compresa quella da cui si è cambiata. Il secondo è quello
+che si scrive sbagliato, ed è lo stesso inciampo della 5-quater: asserire che la vecchia
+sessione smetta di *leggere* fallisce, perché l'access token è un JWT e vive i suoi quindici
+minuti. Ciò che muore è il **rinnovo**.
+
+Il client deve dire la conseguenza **prima** del bottone, con la stessa frase che usa il
+recupero: chi cambia la password si ritrova disconnesso anche sul telefono, e scoprirlo dopo
+sembra un guasto.
+
+##### `A4` — Uscire da un'organizzazione (`R16`)
+
+Migration: `app.has_lease_in_force`, la policy che ammette `user_id =
+app.current_user_id()` con la `WITH CHECK` che vincola `org_id`, `user_id` e `role`, e i
+privilegi di colonna corrispondenti.
+
+`POST /api/v1/organizations/{id}/leave`, e `AcceptInvitation` che riattiva una membership
+non attiva invece di inserirne una.
+
+Tre test: si esce; **non** si esce con un contratto in essere; e chi è uscito **rientra**
+accettando un invito nuovo — che è la porta di servizio di ADR-051, ora percorribile.
+
+##### `A5` — Il client
+
+Una schermata del proprio account con i tre campi e il cambio password, raggiungibile dal
+menù dell'organizzazione. L'uscita sta lì, con l'avviso che dice che cosa resta dopo.
+
+### Trappole
+
+**`UserRepository::update` nomina tutte le colonne.** Dopo `A1`, chiamarlo dal pool
+applicativo fallisce con `permission denied for table users`. Oggi non lo chiama nessuno da
+lì — solo `Login` e il recupero password, entrambi privilegiati — quindi la migration non
+rompe niente **e non lo dimostra**: è `A2` che deve usare il metodo nuovo.
+
+**`role` è la colonna che si dimentica in `A4`.** Aprire `org_members_update` a un membro
+senza negargli `role` è dargli la promozione a `owner`. Una policy non può confrontare
+vecchio e nuovo: la difesa è il privilegio.
+
+**Uscire non è cancellare.** Con `deleted_at` la riga sparisce da `find`, e
+`org_members_org_user_uk` è unico e non parziale: chi esce così non rientra più. È il
+difetto che la `0029` ha già pagato.
+
+**ADR-051 va esteso, non riletto e basta.** La sua guardia sulla membership *attiva* è
+stata scritta prevedendo questo giorno; ciò che non è stato scritto è il ramo di
+riattivazione, perché non serviva. Adesso serve, e senza di esso `R16` produce persone che
+non possono rientrare.
+
+**L'email non si cambia, e va detto nel client.** Un campo disabilitato senza una
+spiegazione si legge come un difetto.
+
+**«Revoca tutte le sessioni» non butta fuori nessuno all'istante.** Si revocano i refresh
+token; l'access token già emesso è un JWT e non è revocabile, quindi vive i suoi quindici
+minuti. È la nota di ADR-052, ed è la stessa su cui un test della 5-quater ha asserito la
+cosa sbagliata: il criterio giusto è che il **rinnovo** non funzioni più.
+
+### Come si saprà che è finita
+
+- si aprono i propri dati, si corregge il telefono, si ricarica e il telefono è quello;
+- si cambia la password dando quella vecchia, e **nessuna** sessione rinnova più — compresa
+  quella da cui si è cambiata, che è la decisione 3;
+- la password vecchia sbagliata non cambia niente e lo dice;
+- si esce da un'organizzazione in cui non si ha un contratto in essere; con un contratto in
+  essere **non** si esce, e il rifiuto arriva dal database e non da un `if`;
+- chi è uscito **rientra** accettando un invito nuovo;
+- una `UPDATE` a mano su `users.platform_role` dal ruolo applicativo fallisce con
+  `permission denied`, e un test lo prova su tutte le colonne negate;
+- `just ci` verde.
+
+### Che cosa **non** entra
+
+- **il cambio dell'email**, per la decisione 2: richiede la verifica dell'indirizzo, che è
+  fuori perimetro, e una decisione sugli inviti pendenti. Il client mostra il campo e non lo
+  rende modificabile, **con una riga che dice perché**: un campo disabilitato senza
+  spiegazione si legge come un difetto. Entra in [12](12-da-fare.md) insieme alla verifica
+  dell'email, che è la sua precondizione;
+- **togliere qualcuno dalla propria organizzazione**, che è il gemello di `R16` e non `R16`.
+  La policy lo ammetterebbe già — `org_members_update` è `is_org_staff` — e manca solo la
+  rotta, ma è una decisione a sé: che ne è dei suoi contratti, dei suoi addebiti e di ciò
+  che ha scritto, e lo stesso divieto va garantito su una persona che **non è chi chiama**.
+  Entra in [12](12-da-fare.md), riconosciuta e non istruita;
+- **la verifica dell'email alla registrazione**, che resta dov'è: cambia il percorso che
+  ogni collaudo attraversa;
+- **la cancellazione del proprio account.** È `R37` e la stessa domanda di `R15`: che cosa
+  significhi il verbo su righe che `audit_log` e gli eventi continuano a citare;
+- **`R9`**, il perimetro dei ruoli: serve prima degli sconosciuti, non prima di un
+  proprietario che conosci;
+- **l'elenco delle persone di un'organizzazione**, che resta chiuso per
+  [ADR-036](08-decisioni.md#adr-036) e [ADR-043](08-decisioni.md#adr-043).
+
+---
+
+<a id="esito-sezione-6"></a>
+
+## Esito — Sezione 6: le persone
+
+Eseguita l'**11 settembre 2026**. Chiude `R7`, `R16` e `R38`.
+
+**Due migration, nessun ADR nuovo, tre eventi di dominio.** I test Rust passano da
+**449 a 459**, quelli del client da 104 a **107**. `just ci` verde, zero `SALTATO`:
+il database c'era, quindi la suite è girata per intero.
+
+Il **nessun ADR** era una conclusione del piano e non una svista: la decisione sulle
+sessioni è stata resa uniforme a [ADR-052](08-decisioni.md#adr-052) apposta per non
+doverne scrivere un secondo, e nulla di ciò che è emerso eseguendo ha cambiato quella
+scelta. Le decisioni nuove sono **applicazioni** di criteri già registrati —
+ADR-021/ADR-026 sui privilegi di colonna, ADR-036 sul non proiettare un utente per
+identificatore, ADR-051 sul rientro — e stanno nei commenti delle migration e in
+[03](03-modello-dati.md), [04](04-sicurezza.md) e [05](05-api.md).
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `A1` | Migration `0038`, `UserRepository::update_profile`, le colonne nelle **due** invarianti, e un test dei privilegi che prova otto negate e quattro concesse |
+| `A2` | `GET` e `PATCH /api/v1/me`. Nessun identificatore nel percorso, e `email` nel corpo **rifiutata** invece che ignorata |
+| `A3` | `POST /api/v1/me/password`, sul pool applicativo. Il test asserisce che muore il **rinnovo**, non la lettura |
+| `A4` | Migration `0039`: `app.has_lease_in_force`, `org_members_update_self`, i privilegi di colonna — e `AcceptInvitation` che **riattiva** |
+| `A5` | `/account`: i tre campi, l'email spiegata, il cambio password con l'avviso, l'uscita con ciò che resta dopo |
+
+### Il piano aveva ragione su tutte e cinque le trappole
+
+È la prima volta che succede, e vale la pena dirlo perché è la prova che serviva:
+questa sezione è stata pianificata **leggendo il codice** e non usando il prodotto, e
+il timore scritto in testa al piano — *«è un ragionamento, non una misura»* — non si è
+avverato sulle trappole. `UserRepository::update` ha fallito con `permission denied`
+esattamente dove previsto, `role` era la colonna da negare, l'uscita come soft delete
+avrebbe chiuso il rientro, `AcceptInvitation` andava esteso e non riletto, e il test
+della revoca si scrive sbagliato.
+
+Quello che il piano **non** aveva previsto è tutto altrove, ed è l'elenco qui sotto.
+
+### Quattro cose che il piano non aveva previsto
+
+**Il divieto sarebbe valso solo per chi non amministra.** È la più importante, ed è
+un difetto che il piano conteneva: le policy permissive si combinano in **OR**, quindi
+la `WITH CHECK` di `org_members_update` — `is_org_staff(org_id)` — avrebbe lasciato
+uscire un proprietario con un contratto in essere, cioè proprio il caso che la
+decisione 6 esiste per chiudere, dalla porta accanto. Il criterio di fine del piano
+(*«il rifiuto arriva dal database e non da un `if`»*) sarebbe stato vero per un
+inquilino e falso per chi amministra, e nessuno se ne sarebbe accorto perché il test
+sarebbe stato scritto con un inquilino.
+
+Il rimedio è una `ALTER POLICY` nella stessa migration, con lo stesso ramo, e non
+allarga niente: `org_members_update` non aveva **nessun** chiamante — a
+`OrgMemberRepository` mancava un `update` — quindi non rompe nulla e chiude in
+anticipo la porta che `R39` percorrerà.
+
+**L'evento va scritto prima dell'`UPDATE` della membership**, ed è un ordine che
+sembra indifferente e non lo è. `domain_events_insert` ammette
+`org_id IS NULL OR org_id = current_org_id() OR is_org_member(org_id)`; la rotta non
+pretende `X-Org-Id` — si esce anche da un'organizzazione che non è quella attiva —
+quindi a reggere è l'ultimo ramo, e `is_org_member` passa da `member_role`, che esige
+`status = 'active'`. Appena la riga diventa `left`, quel ramo diventa falso e
+l'inserimento dell'evento sbatte contro la policy: un `auth.denied_by_policy` — cioè
+«difetto nostro» — su un'operazione riuscita. È la stessa forma dell'ordine di
+`AcceptInvitation`, dove `has_pending_invitation` regge finché l'invito non è marcato.
+
+**L'ultimo proprietario non se ne va, e nessuna policy lo impedisce.** Il piano non lo
+nomina: la decisione 7 dice che chi esce dall'unica organizzazione in cui abita resta
+con la propria, e non contempla che si possa uscire dalla **propria**. Si può, ed è
+`POST /api/v1/organizations/{la mia}/leave`. Lo schema dichiara «almeno un owner per
+org» come invariante del **service layer** — un trigger cross-row sarebbe workflow nel
+database — quindi è l'unico dei tre rifiuti che vive per intero nel caso d'uso. Senza,
+immobili, contratti e addebiti resterebbero in una riga che `organizations_select`
+(`is_org_member(id)`) non mostra più a nessuno, e non esiste nessuna operazione del
+prodotto per rientrarci.
+
+**`revoke_all_for_user` scriveva «refresh token reuse detected» anche per il recupero
+della password.** Un letterale, in una colonna — `user_sessions.revoked_reason` — che
+si legge mesi dopo per capire perché una sessione è caduta. Tre percorsi, tre ragioni,
+una frase, falsa per due di essi. È diventato un enum di dominio, `RevocationReason`,
+passato dal chiamante. La revoca di una **singola** sessione resta dov'era: la deduce
+`SessionRepository::update` dallo stato della riga, dove la ragione è leggibile dalla
+riga stessa.
+
+### Decisioni prese eseguendo
+
+**`email` nel corpo di un `PATCH` si rifiuta, non si ignora.** È l'eccezione alla
+tolleranza dell'API — un campo sconosciuto si ignora ovunque, ed è ciò che permette a
+un client vecchio di parlare con un'API nuova — e la ragione è che l'email **non è un
+campo sconosciuto**: è quello che chiunque proverà a mandare per primo. Ignorarla
+darebbe `200` con l'indirizzo di prima, cioè esattamente il sintomo muto che la
+decisione 2 esiste per non produrre. Il `422` nomina il campo e dice perché.
+
+**Telefono e lingua si validano nel dominio, e non solo nello schema.**
+`app.users.phone` ha un `CHECK` con una forma precisa: senza la stessa regola nel
+dominio, un numero malformato sarebbe morto sul vincolo, cioè con un `409
+conflict.constraint_violated` dove il chiamante merita un `422` che nomina il campo.
+Per `locale` non c'è nemmeno un `CHECK`, e la difesa è più concreta di quanto sembri:
+il client formatta date e importi con `Intl` passando quel valore (regola 19), e
+`Intl.DateTimeFormat` **solleva** su un'etichetta malformata — un `locale` di
+spazzatura accettato qui diventa una schermata che non si apre più, e il rimedio
+sarebbe un `UPDATE` a mano.
+
+**Cambiare la password da dentro non sblocca l'account; il recupero sì.** Due metodi
+di dominio invece di uno: `set_password` azzera il contatore dei tentativi e il
+blocco, `change_password` no. La ragione è doppia e le due si sorreggono. Di
+privilegi: la `0038` non concede `failed_login_count` né `locked_until` al pool
+applicativo, quindi un metodo che li azzerasse mentirebbe al chiamante — la scrittura
+non arriverebbe in database. Di significato: chi recupera ha superato una prova
+**diversa** da quella che il blocco difende, chi cambia da dentro sta rifacendo la
+stessa prova di sempre.
+
+**La password corrente errata non incrementa il contatore dei tentativi.** Il blocco
+dopo dieci tentativi difende il *login*, dove chi prova non è autenticato; qui chi
+prova ha già una sessione, e incrementarlo darebbe a chiunque rubi una scheda il modo
+di bloccare fuori il legittimo proprietario — cioè trasformerebbe una difesa in
+un'arma. Il privilegio di colonna lo impedirebbe comunque, il che è la conferma che
+l'elenco della `0038` è quello giusto.
+
+**Il `204` del cambio password non ripulisce il cookie di refresh.** È una scelta e
+non una dimenticanza: il cookie è limitato a `Path=/api/v1/auth`, quindi quella rotta
+non lo raggiunge nemmeno; e il refresh che porta è ormai revocato, quindi il prossimo
+rinnovo fallisce e il client torna all'accesso da sé.
+
+**`app.has_lease_in_force` non filtra il ruolo della parte contrattuale**, al
+contrario di `app.property_residents`, che esclude i garanti. Le due rispondono a due
+domande diverse: là «chi abita qui», qui «questa persona ha ancora un legame con un
+contratto in corso» — e un garante ce l'ha. `left_at IS NULL` invece vale in entrambe:
+chi ha lasciato il contratto non ne è più parte.
+
+**Tre eventi nuovi, nessuno dei quali porta un valore.** `identity.user.profile_updated`
+porta i **nomi dei campi** e non i valori, perché un nome e un telefono sono dati
+personali e un evento pubblicato viaggia e si conserva — è la forma di
+`PropertyUpdated` e `TicketReportCorrected`. `identity.user.password_changed` porta
+solo il fatto e la data; nemmeno il numero di sessioni revocate, che si leggerebbe
+come una misura e non serve a nessun consumatore. `identity.organization.member_left`
+porta il ruolo che si aveva, che non è un dato personale ed è ciò che dice a chi
+consuma se se n'è andato un inquilino o chi amministrava.
+
+### Una svista del piano, sul valore di un enum
+
+Il piano scrive la catena di `platform_role` come
+`SET platform_role = 'platform_admin'`. Quel valore **non esiste**: `app.platform_role`
+è `('user', 'support', 'admin')`, e il letterale giusto è `'admin'`. La stessa svista
+sta in `R38`. Non cambia niente della decisione né della catena — `app.is_platform_admin()`
+legge un'impostazione di sessione che il contesto installa dai claim, e i claim vengono
+da quella colonna — ma un test scritto copiando la riga del piano sarebbe fallito con un
+errore di enum invece che con `permission denied`, cioè per la ragione sbagliata.
+
+### Che cosa resta aperto
+
+- **il cambio dell'email**, con la verifica dell'indirizzo che ne è la precondizione.
+  Resta in [12](12-da-fare.md), e il client mostra il campo con una riga che dice
+  perché non si tocca;
+- **`R39`, togliere qualcuno dalla propria organizzazione.** Metà del lavoro adesso
+  esiste: `app.has_lease_in_force` c'è, `org_members_update` porta già il divieto anche
+  sul ramo dello staff, e `OrgMemberRepository::update` scrive le due colonne concesse.
+  Quello che manca è la **decisione**: che ne è dei suoi contratti, dei suoi addebiti e
+  di ciò che ha scritto;
+- **non si può chiedere di rientrare.** Chi esce rientra accettando un invito nuovo, e
+  l'invito lo emette chi amministra: non c'è nessuna via per cui una persona torni di
+  propria iniziativa, né per cui segnali di volerlo. È voluto ed è la stessa via sola di
+  ADR-051. L'avviso prima dell'uscita lo dice — *«Se qualcuno ti reinvita potrai
+  rientrare»* — e ciò che resta scoperto è **dopo**: chi ci ripensa non ha niente da
+  guardare, e `membership.already_left` su un secondo tentativo non spiega la via. È
+  `R41`, ed è una riga di testo prima che una rotta;
+- **chi esce non perde niente di ciò che ha lasciato.** Addebiti, pagamenti e
+  segnalazioni restano, e la Row Level Security smette di mostrarglieli perché
+  `member_role` esige `status = 'active'`. Non è stato verificato a mano che nessuna
+  schermata mostri un elenco vuoto invece di dire che si è usciti;
+- **`R9`**, il perimetro dei ruoli, e **`R37`**, la cancellazione: dove erano.
+
+### Che cosa non è stato provato a mano
+
+Tutto, di nuovo, e qui pesa in modo particolare: `A5` è una schermata **nuova e
+intera**, non un ritocco a una che esiste, ed è la prima volta dalla fetta C che se ne
+consegna una senza guardarla. I test del client coprono le tre cose che il piano
+chiedeva di vedere — l'email disabilitata con la sua riga, l'avviso della revoca prima
+del bottone, l'uscita offerta solo dove ha senso — e non coprono l'impressione.
+
+Il punto da percorrere in un giro vero è il **rientro**: uscire, farsi reinvitare,
+accettare. È il cammino più lungo di questa sezione, attraversa due account e la posta,
+e i suoi test lo provano a pezzi.
+

@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **8 settembre 2026**.
+Stato all'**11 settembre 2026**.
 
 ## Come si usa questo documento
 
@@ -31,9 +31,9 @@ Le regole stanno anche in `CLAUDE.md` §3.
 
 ### Layer dati — completo per l'MVP
 
-Le 36 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
+Le 39 migration coprono l'intero perimetro funzionale dell'MVP, non solo la parte
 già esposta dall'API: 24 tabelle più `audit_log` partizionata, 35 enum, 6 domini,
-171 indici, 66 policy RLS, 50 trigger, 4 viste, 34 funzioni.
+171 indici, 67 policy RLS, 50 trigger, 4 viste, 35 funzioni.
 
 Coperti a schema: utenti e organizzazioni, immobili e stanze, contratti e parti
 contrattuali, documenti con allegato polimorfico, segnalazioni con thread e storico,
@@ -80,12 +80,23 @@ regolamenti, registro dei job AI, outbox degli eventi, audit con redazione.
 | Immagine Docker, stack compose | completi |
 | **Posta in uscita**: adattatore SMTP, configurazione obbligatoria all'avvio, raccoglitore locale nel compose, e il relay dentro `/ready` | completo per la 5-quater |
 | **Recupero della password**: un codice da incollare, a uso singolo, che revoca i refresh token ([ADR-052](08-decisioni.md#adr-052)) | completo per la 5-quater |
+| **`app.users` si difende con i privilegi di colonna** (`0038`): una richiesta autenticata scrive `full_name`, `phone`, `locale` e `password_hash`, e nient'altro. `platform_role`, `status` e i due contatori del blocco passano dal pool privilegiato | completo per la sezione 6 |
+| **Il proprio account**: `GET` e `PATCH /api/v1/me`, e `POST /api/v1/me/password` che pretende la vecchia e revoca tutte le sessioni, uniforme ad [ADR-052](08-decisioni.md#adr-052). **Mai un identificatore nel percorso** ([ADR-036](08-decisioni.md#adr-036)) | completo per la sezione 6 |
+| **Si esce da un'organizzazione** (`0039`): `status = 'left'` e non un soft delete, negato con un contratto in essere da una policy e non da un `if`, e **chi esce rientra** accettando un invito nuovo — il ramo che [ADR-051](08-decisioni.md#adr-051) aveva previsto senza scriverlo | completo per la sezione 6 |
 | Artefatti di deploy e di backup — Caddyfile di produzione, compose, copia e ripristino | **scritti e mai eseguiti**: vedi il [runbook](07-operazioni.md#il-primo-deploy--runbook) |
 | Pipeline CI | completa |
 
-449 test: 209 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
-del bordo HTTP, 81 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
-MinIO, 99 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+459 test: 214 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+del bordo HTTP, 82 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 103 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+
+**I dieci della sezione 6 provano soprattutto che i confini sono nel database.** Il
+più denso è quello dei privilegi: otto `UPDATE` scritte a mano come ruolo applicativo
+su `app.users`, una per colonna negata, e quattro sulle concesse — perché è **l'elenco**
+a essere il contratto, e `platform_role` da sola non basterebbe. Gli altri provano che
+non si esce con un contratto in essere, che chi è uscito rientra accettando un invito
+nuovo, e che dopo un cambio password ciò che muore è il **rinnovo** e non la lettura:
+l'access token è un JWT e vive i suoi quindici minuti.
 
 I sette della sezione 5 provano soprattutto **confini**: la segnalazione condivisa che
 arriva al coinquilino *con il thread e lo storico*, quella non condivisa che non gli
@@ -143,6 +154,7 @@ dell'API dietro un reverse proxy.
 | **Il bundle è diviso per rotta**, con i confini di `Suspense` dentro il guscio e con il loro stato | completo per la fetta C |
 | **Il recupero della password**, in una schermata e due tempi, con la conseguenza della revoca detta prima di premere | completo per la 5-quater |
 | **L'informativa sulla privacy**, raggiungibile **senza sessione**: la si legge prima di consegnare i propri dati | completo per la 5-quater |
+| **Il proprio account** (`/account`): nome, telefono e lingua si correggono; l'**email si mostra e non si modifica, con una riga che dice perché**, perché un campo disabilitato senza spiegazione si legge come un difetto; la password si cambia con l'avviso della revoca **prima** del bottone; l'uscita da un'organizzazione dice che cosa resta dopo, e non si offre per la propria | completo per la sezione 6 |
 | I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
 | Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
 | Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
@@ -333,7 +345,21 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [sezione 6](#piano-sezione-6), le persone.** Il deploy è **rinviato in fondo**, ed è
+**Un secondo giro a mano, prima della sezione 7.** È la raccomandazione che questo
+documento fa da tre sezioni e che qui diventa la prima voce, perché il debito si è
+accumulato: dalla 5-bis a oggi sono cambiate le schermate della 5-ter, quelle della
+5-quater e **una schermata nuova e intera**, `/account`, e nessuna di esse è stata vista
+con gli occhi. Il rendimento è misurato — sei voci in mezza giornata di giro contro le
+quattro di cinque sezioni di lettura del codice — e `mailpit` su `localhost:8025` copre
+tutto tranne «arriva fuori dallo spam».
+
+Il punto da percorrere per primo è il **rientro**, che è il cammino più lungo della
+sezione 6: uscire da un'organizzazione, farsi reinvitare, accettare. Attraversa due
+account e la posta, e i suoi test lo provano a pezzi.
+
+**Poi la sezione 7**, cancellare in generale (`R15`), che è la prossima dell'ordine.
+
+Il deploy resta **rinviato in fondo**, ed è
 un rinvio per mancanza di mezzi e non di priorità: il
 [runbook](07-operazioni.md#il-primo-deploy--runbook) è scritto, gli artefatti sono validi
 per quello che si può validare senza una macchina, e servono una VPS, un dominio, un relay
@@ -343,12 +369,16 @@ dell'ordine, con il suo criterio di fine intatto: *aprire il prodotto dal telefo
 
 **Che cosa cambia nel criterio d'ordine, e va detto.** Le sezioni 6-9 dovevano venire dopo
 il mese con un proprietario vero, e *quale per prima lo avrebbe detto quel mese*. Quel mese
-slitta, quindi l'ordine 6 → 7 → 8 → 9 resta ma è **scelto senza quella prova**: chi lo
-esegue ha un ragionamento e non una misura. Il rendimento del collaudo — sei voci in mezza
-giornata contro le quattro di cinque sezioni di lettura del codice — dice che il modo più
-economico di riavere quella prova **senza la VPS** è un secondo giro in locale: `mailpit`
-mostra la posta su `localhost:8025`, e l'unica cosa che resta fuori è «arriva fuori dallo
-spam». Nove schermate sono cambiate da quel giro e nessuno le ha viste con gli occhi.
+slitta, quindi l'ordine 7 → 8 → 9 resta ma è **scelto senza quella prova**: chi lo esegue
+ha un ragionamento e non una misura.
+
+La **sezione 6 è la prova che quel ragionamento può bastare**, e va detto con la stessa
+precisione con cui il suo piano aveva dichiarato il contrario: pianificata leggendo il
+codice e non usando il prodotto, si era premessa di essere *«un ragionamento, non una
+misura»* — e tutte e cinque le trappole che aveva previsto si sono avverate eseguendo.
+Quello che non aveva visto non stava nelle trappole ma altrove, ed è nel suo
+[esito](11-piani-conclusi.md#esito-sezione-6). Non rende inutile il giro a mano: rende
+credibile pianificare a freddo **ciò che un test può vedere**.
 
 **«Pronto» è per un proprietario che conosci, non per chiunque si registri.** Ne segue che
 `R9` — il perimetro dei ruoli, per cui oggi chiunque si registri è owner di una propria
@@ -369,6 +399,20 @@ cosa che l'esito della 5-bis segnala come propria mancanza: le undici righe sono
 riempite alla fine del giro invece che mentre lo si percorreva, e per quattro punti resta
 l'affermazione che sono stati attraversati, senza l'osservazione. **Chi rifarà un
 collaudo tenga il documento aperto accanto al browser.**
+
+**La [sezione 6](11-piani-conclusi.md#esito-sezione-6) è conclusa**: i propri dati si
+guardano e si correggono, la password si cambia da dentro dando la vecchia — e chiude
+tutte le sessioni, come il recupero, che è la decisione meno ovvia della fetta — e da
+un'organizzazione si esce, con il divieto sul contratto in essere garantito da una policy
+e non da un `if`. Chi esce **rientra** accettando un invito nuovo, che è il ramo che
+[ADR-051](08-decisioni.md#adr-051) aveva previsto per iscritto lasciandolo non scritto.
+[Piano](11-piani-conclusi.md#piano-sezione-6) ·
+[esito](11-piani-conclusi.md#esito-sezione-6). **Nessun ADR**, ed era una conclusione del
+piano e non una svista. Due cose da portarsi dietro: le policy permissive si combinano in
+**OR**, quindi un divieto scritto solo nella policy nuova sarebbe valso per l'inquilino e
+non per chi amministra; e un evento va scritto **prima** della scrittura che gli toglie il
+permesso di esistere — `is_org_member` passa da `member_role`, che esige
+`status = 'active'`.
 
 **La [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter) è conclusa**: un inquilino
 che torna rientra dalla stessa porta, il badge dice il fatto e non più la coppia su ogni
@@ -467,321 +511,6 @@ esattamente uno staff.
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
 
-
-<a id="piano-sezione-6"></a>
-
-## Piano — Sezione 6: le persone
-
-Pianificata il **10 settembre 2026**, dopo il rinvio del deploy. Chiude `R7`, `R16` e
-`R38`. Le prime due erano in elenco; la terza è **uscita verificando le premesse** di
-questo piano contro il codice, ed è il motivo per cui la sezione ha una migration.
-
-**È la prima sezione pianificata senza il collaudo davanti.** Le tre precedenti sono nate
-da un giro vero; questa nasce da una lettura, e va saputo: il rendimento del giro era sei
-voci in mezza giornata contro le quattro di cinque sezioni di lettura. Ciò che segue è un
-ragionamento, non una misura.
-
-### Che cosa esiste davvero, verificato e non dedotto
-
-| Premessa | Verifica |
-|---|---|
-| Nessuna rotta legge o scrive l'utente corrente | vero: `crates/api/src/routes/` non ha `/users/me` né equivalenti |
-| `users_update_self` esiste già | vero, `0014`: `USING (id = current_user_id() AND deleted_at IS NULL)`, `WITH CHECK (id = current_user_id())` |
-| `UserRepository::update` è chiamato solo dal pool privilegiato | vero: `Login` e `ConfirmPasswordReset`, entrambi `begin_privileged()` |
-| Un membro **non** può toccare la propria membership | vero: `org_members_update` è `is_org_staff(org_id)` su USING **e** WITH CHECK |
-| L'uscita è rappresentabile senza migration | **falso a metà**: `status` e `deleted_at` ci sono, ma la policy non la ammette e `role` resterebbe scrivibile |
-| `app.users` è coperta dalle invarianti dei privilegi di colonna | **falso**: né `colonna-di-confine-scrivibile` né `colonna-strutturale-scrivibile` la nominano |
-
-### Il difetto che pianificare ha trovato — `R38`
-
-`users_update_self` ha una `WITH CHECK` che nomina **la sola identità della riga**. È
-letteralmente la constatazione della [`0029`](08-decisioni.md#adr-026) su una quinta
-tabella: ciò che il `WITH CHECK` non nomina resta libero, e sul ruolo applicativo non c'è
-nessuna `GRANT UPDATE` di colonna su `app.users`.
-
-La più cara è **`platform_role`**, e la catena va scritta perché non si vede da una riga
-sola:
-
-```
-UPDATE app.users SET platform_role = 'platform_admin' WHERE id = app.current_user_id()
-   → Login legge users.platform_role e lo mette nei claim
-   → il middleware chiama with_platform_admin(...)
-   → l'unità di lavoro installa app.platform_admin = 'on'
-   → app.is_platform_admin() è vera
-   → is_org_member e is_org_staff sono vere su OGNI organizzazione
-```
-
-Seguono `status`, con cui ci si toglie una sospensione, e `failed_login_count` con
-`locked_until`, che sono la difesa dal blocco dopo dieci tentativi descritta in
-[04](04-sicurezza.md#blocco-dopo-tentativi-falliti).
-
-**Non è sfruttabile dall'API**, e va detto con la stessa precisione: nessuna rotta scrive
-quelle colonne, e chi non possiede le credenziali del ruolo applicativo non può emettere
-quella query. È una difesa in profondità mancante, esattamente della classe che ADR-021 e
-ADR-026 hanno già chiuso quattro volte — *una regola applicativa non è un confine*.
-
-**Entra in questa sezione e non in una sua** per una ragione di tempi: `R7` aggiunge la
-**prima rotta che scrive `app.users` dal pool applicativo**. Finché non esiste, la porta è
-chiusa da un privilegio che nessuno usa; da quando esiste, è chiusa solo da un `UPDATE`
-scritto bene.
-
-### Che cosa è stato deciso prima di pianificare
-
-| | Scelta | Alternativa scartata |
-|---|---|---|
-| Come si raggiunge il proprio account | **`/api/v1/me`, che non prende mai un identificatore** | `PATCH /users/{id}`, che riaprirebbe ADR-036 |
-| Che cosa si può correggere | **nome, telefono, lingua** | anche l'email, che è la credenziale d'accesso |
-| Cambiare la password da dentro | **serve quella vecchia**, e revoca **tutte** le sessioni | tenere viva la corrente, che sono due regole invece di una |
-| Che cosa protegge `app.users` | **privilegi di colonna**, più le invarianti | una `WITH CHECK` più larga, che non può confrontare vecchio e nuovo |
-| Come si esce da un'organizzazione | **`status = 'left'` sulla propria riga**, negato con un contratto in essere | un soft delete della membership |
-| Chi garantisce il divieto | **una policy**, non un `if` | il solo service layer |
-
-### Decisioni, con il perché
-
-#### 1. `/api/v1/me`, e mai un identificatore
-
-`GET` e `PATCH` su `/api/v1/me`. Il percorso non prende mai un `user_id`, ed è la forma
-che tiene chiusa la domanda di [ADR-036](08-decisioni.md#adr-036): **nessuna rotta proietta
-un utente per identificatore**. Una `PATCH /users/{id}` che accettasse solo il proprio
-sarebbe la stessa cosa con una guardia applicativa davanti — cioè la porta aperta e un
-cartello.
-
-`GET /me` restituisce ciò che serve a una schermata del proprio profilo: identificatore,
-email, nome, telefono, lingua, e se l'email risulta verificata. **Non** il ruolo di
-piattaforma, che non è affare di chi guarda.
-
-#### 2. L'email non si cambia in questa sezione, e la ragione è scritta
-
-È la scelta che sembra una mancanza e non lo è. `users.email` non è un dato anagrafico: è
-**la credenziale d'accesso**, ed è la chiave con cui tre cose si ritrovano.
-
-- `app.has_pending_invitation` fa `JOIN app.users u ON u.email = i.email`: cambiare
-  l'email **rompe in silenzio** ogni invito pendente per quell'indirizzo;
-- `app.current_user_email()` è ciò su cui poggiano quattro policy della `0018`;
-- `lease_parties.email` è come l'accettazione trova la propria riga.
-
-Cambiarla bene richiede un giro di verifica sul nuovo indirizzo — cioè la verifica
-dell'email, che è **deliberatamente fuori perimetro** — e una decisione su che cosa
-succede agli inviti pendenti. Farla male significa un account che non riceve più niente e
-un invito che non si può più accettare, con un sintomo muto in entrambi i casi.
-
-*Alternativa scartata: permetterla e basta.* È mezza sezione di lavoro e una classe di
-guasti che si manifesta giorni dopo, su una funzione che nessuno ha chiesto.
-
-#### 3. Cambiare la password da dentro **pretende quella vecchia**
-
-`POST /api/v1/me/password`, con `current_password` e `new_password`. La vecchia serve
-perché il contesto è diverso da quello del recupero: là la prova di identità è il controllo
-della casella di posta, qui è una sessione — e una sessione può essere una scheda lasciata
-aperta. Senza la vecchia, chiunque si sieda davanti a un browser non bloccato si prende
-l'account per sempre.
-
-**Revoca tutte le sessioni, compresa la propria**, esattamente come
-[ADR-052](08-decisioni.md#adr-052) fa per il recupero. La scelta è l'uniformità, ed è stata
-presa contro l'alternativa che sembra più gentile — tenere viva la sessione da cui si sta
-cambiando, riconoscendola dal cookie di refresh che la richiesta porta già.
-
-Il ragionamento, perché è la decisione meno ovvia della sezione: *«cambiare la password
-chiude tutto»* è **una frase sola**, e questa frase va scritta in almeno quattro posti — la
-schermata del recupero, quella del proprio account, `docs/04-sicurezza.md` e il corpo
-dell'API. Due regole diverse per due percorsi che una persona non distingue — *«ho cambiato
-la password»* è la stessa cosa dai due lati — sono due frasi da tenere allineate, e la
-seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile: chi cambia
-rientra subito con la password che ha appena scelto.
-
-**Ne segue che questa sezione non ha bisogno di un ADR nuovo.** Con la revoca selettiva
-sarebbe servito — una decisione che diverge da una documentata è una voce in
-`docs/08-decisioni.md`, scritta prima del codice — e con l'uniformità ADR-052 basta a
-spiegare entrambi i percorsi.
-
-Vale anche qui la nota di ADR-052 che si dimentica: si revocano i **refresh token**, non
-gli access token, che sono JWT e vivono i loro quindici minuti. Chi cambia la password non
-è fuori nell'istante in cui la cambia; è fuori quando quel token scade.
-
-#### 4. `app.users` si difende con i privilegi di colonna
-
-Una migration che revoca `UPDATE` su `app.users` al ruolo applicativo e la riconcede sulle
-sole colonne che il prodotto scrive **da una richiesta autenticata**:
-
-| Concesse | Negate |
-|---|---|
-| `full_name`, `phone`, `locale`, `password_hash` | `platform_role`, `status`, `email`, `email_verified_at`, `last_login_at`, `failed_login_count`, `locked_until`, `deleted_at` |
-
-Le negate non sono irraggiungibili: le scrive il pool **privilegiato**, che ha `BYPASSRLS`
-e i privilegi pieni — `Login` aggiorna `last_login_at` e il contatore dei tentativi, il
-recupero password scrive `password_hash`. È la stessa divisione delle quattro migration
-che l'hanno preceduta: ciò che una richiesta autenticata può scrivere è un elenco corto e
-dichiarato, tutto il resto passa da un flusso che il contesto di sicurezza non ha.
-
-Le colonne entrano nelle invarianti di `ops/sql/checks`: `platform_role` e `status` in
-`colonna-di-confine-scrivibile`, perché definiscono che cosa si vede; le altre in
-`colonna-strutturale-scrivibile`. **Le invarianti si aggiornano nello stesso passo della
-migration**, che è la forma che la sezione 5 ha stabilito emendando un controllo di CI.
-
-#### 5. Uscire è uno **stato**, non un soft delete
-
-`status = 'left'` su `app.org_members`, non `deleted_at`. Le due cose non sono
-intercambiabili: `OrgMemberRepository::find` filtra `deleted_at IS NULL`, quindi una
-membership cancellata **non si vede più** — e `org_members_org_user_uk` è unico e non
-parziale, quindi chi è uscito così non potrebbe più rientrare né con un `INSERT` né con un
-`UPDATE` su una riga che non si trova. È esattamente il difetto che la `0029` ha già
-pagato sulle spese co-living.
-
-Con lo stato la riga resta, e qui il piano deve dire una cosa che non si vede dal nome
-della voce: **così com'è, chi esce non rientra lo stesso.**
-[ADR-051](08-decisioni.md#adr-051) fa cercare a `AcceptInvitation` una membership
-**attiva**; su una riga `left` non la trova e prova a inserirne una, che sbatte contro
-`org_members_org_user_uk` — unico e non parziale — e diventa `409
-membership.already_exists`. È esattamente il `409` che quella sezione aveva chiuso, che
-ricompare da un'altra porta.
-
-ADR-051 lo aveva previsto per iscritto — *«il giorno in cui `R16` arriva questo punto
-diventerebbe la porta di servizio»* — e quel giorno è questo. **`AcceptInvitation` va
-esteso in questa sezione**: una membership non attiva si **riattiva** invece di inserirne
-una nuova. Senza quel ramo, `R16` produce persone che escono e non possono più tornare, e
-il sintomo arriverebbe mesi dopo su un invito che sembra buono.
-
-#### 6. Il divieto è una policy, non un `if`
-
-«Non si esce con un contratto in essere» va **verificato e garantito**, ed è la lezione
-della `0029`: là rendere l'uscita un confine vero ha richiesto una policy, perché una
-regola applicativa si legge come una garanzia proprio quando è scritta in tre posti.
-
-Serve quindi una funzione — `app.has_lease_in_force(p_org_id, p_user_id)`, `SECURITY
-DEFINER` con `search_path` come tutte le altre — che passi da `lease_parties.user_id` e da
-`app.lease_in_force`, cioè dalla **stessa** definizione di «in essere» del resto del
-progetto e non da una seconda.
-
-E la `WITH CHECK` della policy nuova deve nominare **`role`**. Oggi `org_members_update` è
-staff soltanto, quindi il ruolo è al sicuro per costruzione; dal momento in cui un membro
-può toccare la propria riga, `role` è la colonna con cui si promuoverebbe a `owner`. Una
-policy non può confrontare la riga vecchia con la nuova, quindi la difesa è un
-**privilegio di colonna**, come al punto 4.
-
-#### 7. Chi esce dall'unica organizzazione in cui abita
-
-Resta con la propria, personale e vuota: è il caso di
-[ADR-045](08-decisioni.md#adr-045) al contrario. Il client deve **dirlo prima**, non
-lasciarlo scoprire dopo con una dashboard vuota e nessuna spiegazione — è la stessa forma
-dell'avviso sulla revoca delle sessioni della 5-quater.
-
-### Decomposizione
-
-##### `A1` — I privilegi di colonna su `app.users` (`R38`)
-
-Migration: `REVOKE UPDATE ON app.users` dal ruolo applicativo, `GRANT UPDATE (full_name,
-phone, locale, password_hash)`. Le colonne entrano nelle due invarianti di
-`ops/sql/checks/schema_invariants.sql` **nello stesso passo**.
-
-`UserRepository` guadagna un `update_profile` che nomina le sole colonne concesse, sulla
-forma di `ChargeRepository::update_status`. `update` resta e resta privilegiato: un test
-che lo chiamasse dal pool applicativo fallirebbe con `permission denied`, ed è la difesa
-che si vuole.
-
-Un test dei privilegi che prova le negate una per una, come quello dei ticket: la sola
-`platform_role` non basta, perché è l'elenco a essere il contratto.
-
-##### `A2` — `/api/v1/me`, lettura e correzione (`R7`)
-
-`GET` e `PATCH /api/v1/me`: nome, telefono, lingua. `PATCH` parziale con la semantica di
-sempre — campo omesso significa invariato, `null` esplicito cancella. Nessun `user_id` nel
-percorso.
-
-Un test che prova che l'email **non** è modificabile e che il tentativo lo dice.
-
-##### `A3` — La password si cambia da dentro (`R7`)
-
-`POST /api/v1/me/password` con la vecchia e la nuova. Sul pool **applicativo**: chi cambia
-la password è autenticato, quindi la regola 27 non ammette il privilegiato.
-
-Due test: la vecchia password sbagliata dà `401` e non cambia niente; dopo il cambio
-**nessuna** sessione rinnova più, compresa quella da cui si è cambiata. Il secondo è quello
-che si scrive sbagliato, ed è lo stesso inciampo della 5-quater: asserire che la vecchia
-sessione smetta di *leggere* fallisce, perché l'access token è un JWT e vive i suoi quindici
-minuti. Ciò che muore è il **rinnovo**.
-
-Il client deve dire la conseguenza **prima** del bottone, con la stessa frase che usa il
-recupero: chi cambia la password si ritrova disconnesso anche sul telefono, e scoprirlo dopo
-sembra un guasto.
-
-##### `A4` — Uscire da un'organizzazione (`R16`)
-
-Migration: `app.has_lease_in_force`, la policy che ammette `user_id =
-app.current_user_id()` con la `WITH CHECK` che vincola `org_id`, `user_id` e `role`, e i
-privilegi di colonna corrispondenti.
-
-`POST /api/v1/organizations/{id}/leave`, e `AcceptInvitation` che riattiva una membership
-non attiva invece di inserirne una.
-
-Tre test: si esce; **non** si esce con un contratto in essere; e chi è uscito **rientra**
-accettando un invito nuovo — che è la porta di servizio di ADR-051, ora percorribile.
-
-##### `A5` — Il client
-
-Una schermata del proprio account con i tre campi e il cambio password, raggiungibile dal
-menù dell'organizzazione. L'uscita sta lì, con l'avviso che dice che cosa resta dopo.
-
-### Trappole
-
-**`UserRepository::update` nomina tutte le colonne.** Dopo `A1`, chiamarlo dal pool
-applicativo fallisce con `permission denied for table users`. Oggi non lo chiama nessuno da
-lì — solo `Login` e il recupero password, entrambi privilegiati — quindi la migration non
-rompe niente **e non lo dimostra**: è `A2` che deve usare il metodo nuovo.
-
-**`role` è la colonna che si dimentica in `A4`.** Aprire `org_members_update` a un membro
-senza negargli `role` è dargli la promozione a `owner`. Una policy non può confrontare
-vecchio e nuovo: la difesa è il privilegio.
-
-**Uscire non è cancellare.** Con `deleted_at` la riga sparisce da `find`, e
-`org_members_org_user_uk` è unico e non parziale: chi esce così non rientra più. È il
-difetto che la `0029` ha già pagato.
-
-**ADR-051 va esteso, non riletto e basta.** La sua guardia sulla membership *attiva* è
-stata scritta prevedendo questo giorno; ciò che non è stato scritto è il ramo di
-riattivazione, perché non serviva. Adesso serve, e senza di esso `R16` produce persone che
-non possono rientrare.
-
-**L'email non si cambia, e va detto nel client.** Un campo disabilitato senza una
-spiegazione si legge come un difetto.
-
-**«Revoca tutte le sessioni» non butta fuori nessuno all'istante.** Si revocano i refresh
-token; l'access token già emesso è un JWT e non è revocabile, quindi vive i suoi quindici
-minuti. È la nota di ADR-052, ed è la stessa su cui un test della 5-quater ha asserito la
-cosa sbagliata: il criterio giusto è che il **rinnovo** non funzioni più.
-
-### Come si saprà che è finita
-
-- si aprono i propri dati, si corregge il telefono, si ricarica e il telefono è quello;
-- si cambia la password dando quella vecchia, e **nessuna** sessione rinnova più — compresa
-  quella da cui si è cambiata, che è la decisione 3;
-- la password vecchia sbagliata non cambia niente e lo dice;
-- si esce da un'organizzazione in cui non si ha un contratto in essere; con un contratto in
-  essere **non** si esce, e il rifiuto arriva dal database e non da un `if`;
-- chi è uscito **rientra** accettando un invito nuovo;
-- una `UPDATE` a mano su `users.platform_role` dal ruolo applicativo fallisce con
-  `permission denied`, e un test lo prova su tutte le colonne negate;
-- `just ci` verde.
-
-### Che cosa **non** entra
-
-- **il cambio dell'email**, per la decisione 2: richiede la verifica dell'indirizzo, che è
-  fuori perimetro, e una decisione sugli inviti pendenti. Il client mostra il campo e non lo
-  rende modificabile, **con una riga che dice perché**: un campo disabilitato senza
-  spiegazione si legge come un difetto. Entra in [12](12-da-fare.md) insieme alla verifica
-  dell'email, che è la sua precondizione;
-- **togliere qualcuno dalla propria organizzazione**, che è il gemello di `R16` e non `R16`.
-  La policy lo ammetterebbe già — `org_members_update` è `is_org_staff` — e manca solo la
-  rotta, ma è una decisione a sé: che ne è dei suoi contratti, dei suoi addebiti e di ciò
-  che ha scritto, e lo stesso divieto va garantito su una persona che **non è chi chiama**.
-  Entra in [12](12-da-fare.md), riconosciuta e non istruita;
-- **la verifica dell'email alla registrazione**, che resta dov'è: cambia il percorso che
-  ogni collaudo attraversa;
-- **la cancellazione del proprio account.** È `R37` e la stessa domanda di `R15`: che cosa
-  significhi il verbo su righe che `audit_log` e gli eventi continuano a citare;
-- **`R9`**, il perimetro dei ruoli: serve prima degli sconosciuti, non prima di un
-  proprietario che conosci;
-- **l'elenco delle persone di un'organizzazione**, che resta chiuso per
-  [ADR-036](08-decisioni.md#adr-036) e [ADR-043](08-decisioni.md#adr-043).
 
 
 <a id="raccolta-da-ordinare"></a>
