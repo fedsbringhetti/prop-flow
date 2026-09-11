@@ -98,7 +98,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` · `expense_group.not_found` · `expense.not_found` · `settlement.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `lease.party_not_found` · `invitation.not_found` · `membership.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` · `expense_group.not_found` · `expense.not_found` · `settlement.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -138,6 +138,9 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `expense_group.membership_unchanged` | 409 | è già uscito, oppure c'è già: l'operazione non avrebbe niente da fare |
 | `expense.payer_not_in_group` | 409 | chi ha anticipato non è un membro attivo. Lo schema non lo impone, e senza il controllo quel credito non comparirebbe in nessun saldo |
 | `settlement.invalid_transition` | 409 | conferma, rifiuto o ritiro non ammessi nello stato attuale: `pending` è l'unico da cui si esce, e ne ha **tre** uscite |
+| `membership.lease_in_force` | 409 | non si esce da un'organizzazione in cui si è parte di un contratto in essere, garanti compresi. Dalla `0039` lo dice anche la RLS: il codice qui è la versione parlante di un rifiuto che la policy darebbe comunque |
+| `membership.last_owner` | 409 | l'ultimo proprietario non esce: l'organizzazione resterebbe senza nessuno che la amministri, e non c'è nessuna operazione del prodotto per rientrarci. È l'unico dei tre che **nessuna policy garantisce** |
+| `membership.already_left` | 409 | si era già usciti. La riga resta — uscire è uno stato — quindi il caso è osservabile e merita un messaggio invece di un secondo `200` muto |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -218,6 +221,10 @@ scrittura, evento o riga di audit.
 | POST | `/api/v1/auth/password-reset` | no | `202` **sempre**, senza corpo. Se quell'indirizzo ha un account, riceve un codice |
 | POST | `/api/v1/auth/password-reset/confirm` | no | `204`. **Revoca tutte le sessioni.** `401` se il codice non vale, `422` se la password è debole |
 
+Il **cambio password da autenticati** non è qui: è
+[`/api/v1/me/password`](#il-proprio-account), sotto, perché chi lo chiede **è** già
+dentro. Le due rotte qui sopra servono a chi **non può entrare**.
+
 #### Il recupero della password
 
 Quattro proprietà, e tre si dimenticano. Vedi [ADR-052](08-decisioni.md#adr-052).
@@ -244,8 +251,9 @@ comunque, e da lì in poi non si rinnova più.
 rifiutato **in silenzio**, con lo stesso `202`. Dirlo sarebbe di nuovo l'oracolo — «troppo
 presto» conferma che l'account esiste.
 
-**Il cambio password da autenticati non esiste ancora**: sta in `R7`. Questa coppia di
-rotte serve a chi **non può entrare**, non a chi è già dentro.
+**Il cambio password da autenticati è [`/api/v1/me/password`](#il-proprio-account)**,
+non qui: questa coppia di rotte serve a chi **non può entrare**, non a chi è già dentro.
+Le due condividono la revoca di tutte le sessioni e la validazione della password.
 
 Risposta di sessione, nella forma attesa da un client OAuth2 **meno il refresh
 token**:
@@ -326,6 +334,7 @@ esiti che per lui sono lo stesso non lo aiuterebbe.
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
 | GET | `/api/v1/organizations` | **autenticato** | `200` con le organizzazioni di cui si è membro attivo, ognuna con `id`, `name`, `slug` e il proprio `role` |
+| POST | `/api/v1/organizations/{id}/leave` | **autenticato** | `200` con `organization_id` e `role`. Esce dall'organizzazione: `status` passa a `left`, **la riga resta**. `404 membership.not_found`, `409 membership.lease_in_force` / `membership.last_owner` / `membership.already_left` |
 
 ```json
 {
@@ -366,6 +375,201 @@ Compaiono le sole appartenenze **attive**. Non è prudenza: `app.member_role` es
 `status = 'active'`, quindi un'appartenenza sospesa o lasciata comparirebbe nel
 menù e poi non concederebbe una sola riga — una schermata vuota senza errore, che è
 il modo peggiore di sbagliare.
+
+#### Uscire da un'organizzazione
+
+`POST /api/v1/organizations/{id}/leave`. Non prende corpo, e **prende un
+identificatore** al contrario di `/api/v1/me`: non si agisce su di sé, si agisce su
+un **rapporto**, e quale sia va detto. Non dev'essere quella attiva — chi ne ha due
+può uscire da quella che non sta guardando — e per questo la rotta non pretende
+`X-Org-Id`.
+
+```json
+{ "organization_id": "019fce41-8a02-7c19-9d33-2b7cc9107ef1", "role": "tenant" }
+```
+
+**Uscire è uno stato, non una cancellazione.** `app.org_members.status` passa a
+`left` e la riga **resta**. Con `deleted_at` sarebbe sparita da
+`OrgMemberRepository::find`, e `org_members_org_user_uk` è unico e **non parziale**:
+chi fosse uscito così non potrebbe più rientrare né con un `INSERT`, che sbatte sul
+vincolo, né con un `UPDATE` su una riga che non si trova. È il difetto che la
+[`0029`](03-modello-dati.md) ha già pagato sulle spese co-living.
+
+**Chi è uscito rientra dalla stessa porta**: accettando un invito nuovo.
+`AcceptInvitation` riattiva una membership non attiva invece di inserirne una — è il
+ramo che [ADR-051](08-decisioni.md#adr-051) aveva previsto per iscritto lasciandolo
+non scritto, *«perché finché non si esce non serve a nessuno»*. Il **ruolo non si
+tocca**: chi era `owner` ed è uscito rientra `owner`, e il privilegio di colonna
+della `0039` lo garantisce comunque, perché `role` non è scrivibile dal pool
+applicativo.
+
+I tre rifiuti, e **chi li garantisce davvero**:
+
+| Codice | Stato | Garantito da |
+|---|---|---|
+| `membership.not_found` | `404` | la Row Level Security: la riga non torna |
+| `membership.lease_in_force` | `409` | la `WITH CHECK` di `org_members_update_self`, che interroga `app.has_lease_in_force` |
+| `membership.last_owner` | `409` | il **service layer**, e niente altro |
+| `membership.already_left` | `409` | il dominio: `OrgMember::leave` su una riga già `left` |
+
+I primi due sono la versione **parlante** di un rifiuto che il database darebbe
+comunque: senza la lettura anticipata, il secondo risponderebbe
+`auth.denied_by_policy`, che nella tassonomia di [ADR-022](08-decisioni.md#adr-022)
+significa «difetto nostro» e manderebbe a cercare un guasto invece di una disdetta.
+Il caso d'uso e la policy interrogano **la stessa funzione**, perché due definizioni
+di «in essere» divergerebbero e il sintomo sarebbe una schermata che dice di sì e
+un'`UPDATE` che dice di no.
+
+Il terzo no, ed è l'unico che vive per intero nel service layer: lo schema dichiara
+«almeno un owner per org» come invariante applicativa, perché un trigger cross-row
+sarebbe workflow nel database. Senza, uscire dalla propria organizzazione personale
+la lascerebbe **senza nessuno che la amministri** — e `organizations_select` è
+`is_org_member(id)`, quindi immobili, contratti e addebiti resterebbero in una riga
+che non è più visibile a nessuno, senza nessuna operazione del prodotto per
+rientrarci.
+
+**Il divieto vale anche per lo staff**, ed è una riga in più nella migration: le
+policy permissive si combinano in **OR**, quindi la `WITH CHECK` di
+`org_members_update` — `is_org_staff(org_id)` — avrebbe lasciato passare l'uscita di
+un proprietario con un contratto in essere, cioè lo stesso caso dalla porta accanto.
+La `0039` la emenda con lo stesso ramo.
+
+**Chi esce dall'unica organizzazione in cui abita resta con la propria**, personale
+e vuota: è il caso di [ADR-045](08-decisioni.md#adr-045) al contrario. Il client lo
+dice **prima**, non lo lascia scoprire dopo con un riepilogo vuoto e nessuna
+spiegazione.
+
+**Togliere qualcun altro dalla propria organizzazione non esiste**, ed è il gemello
+di questa rotta e non questa rotta: vedi [12](12-da-fare.md).
+
+<a id="il-proprio-account"></a>
+
+### Il proprio account
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| GET | `/api/v1/me` | **autenticato** | `200` con identificatore, email, nome, telefono, lingua e la data di verifica dell'email |
+| PATCH | `/api/v1/me` | **autenticato** | `200` con i dati aggiornati. Corpo vuoto: `200` invariato, nessuna scrittura |
+| POST | `/api/v1/me/password` | **autenticato** | `204`. Pretende la password corrente e **revoca tutte le sessioni** |
+
+```json
+{
+  "id": "019fce2b-77aa-7a1e-9d7c-2c0a5e1b44c1",
+  "email": "mario.rossi@example.it",
+  "full_name": "Mario Rossi",
+  "phone": "+39 333 1234567",
+  "locale": "it-IT",
+  "created_at": "2026-01-14T09:12:00Z"
+}
+```
+
+**Il percorso non prende mai un identificatore di utente**, ed è la forma e non una
+comodità: è ciò che tiene chiusa la domanda di
+[ADR-036](08-decisioni.md#adr-036) — nessuna rotta proietta un utente per
+identificatore. Un `PATCH /users/{id}` che accettasse **solo** il proprio sarebbe la
+stessa cosa con una guardia applicativa davanti, cioè la porta aperta e un cartello:
+la prima persona che rimuovesse quella guardia «uniformando» le rotte non
+troverebbe niente che glielo impedisca. Chi si legge viene dal token.
+
+**Risponde senza `X-Org-Id`**, come `/organizations`, e per la stessa ragione: i
+propri dati non appartengono a nessuna organizzazione. Pretenderne una attiva
+romperebbe proprio il caso in cui la rotta serve di più — chi è appena uscito
+dall'unica in cui abitava. Regge perché `users_select` ammette
+`id = app.current_user_id()` come primo ramo, e quel ramo non guarda
+`app.current_org_id()`.
+
+**Non escono `platform_role`, `failed_login_count` e `locked_until`.** Il ruolo di
+piattaforma è una proprietà del sistema e non dell'account, e i due contatori sono
+una difesa: mostrarli direbbe a chi ha rubato una scheda quanto gli manca per
+bloccare fuori il proprietario.
+
+#### Che cosa si corregge, e che cosa no
+
+`full_name`, `phone`, `locale`. Semantica del `PATCH` di sempre: campo omesso
+significa invariato, `null` esplicito cancella — e `phone` è l'unico dei tre che si
+può azzerare.
+
+**L'email si legge e non si modifica**, e questa è la decisione che sembra una
+mancanza e non lo è. `users.email` non è un dato anagrafico: è **la credenziale
+d'accesso**, ed è la chiave con cui tre cose si ritrovano.
+
+- `app.has_pending_invitation` fa `JOIN app.users u ON u.email = i.email`: cambiare
+  l'email **rompe in silenzio** ogni invito pendente per quell'indirizzo;
+- `app.current_user_email()` è ciò su cui poggiano quattro policy della `0018`;
+- `lease_parties.email` è come l'accettazione trova la propria riga.
+
+Cambiarla bene richiede un giro di verifica sul nuovo indirizzo — cioè la verifica
+dell'email, che è deliberatamente fuori perimetro — e una decisione su che cosa
+succede agli inviti pendenti. Farla male significa un account che non riceve più
+niente e un invito che non si può più accettare, con un sintomo muto in entrambi i
+casi.
+
+**`email` nel corpo si riconosce e si rifiuta con `422`**, invece di essere ignorata
+come ogni altro campo sconosciuto. È l'eccezione alla tolleranza dell'API, e la
+ragione è che non è un campo sconosciuto: è quello che chiunque proverà a mandare
+per primo. Ignorarla darebbe `200` con l'indirizzo di prima — cioè esattamente il
+sintomo muto che questa scelta esiste per non produrre.
+
+Il telefono e la lingua sono **validati nel dominio** e non solo nello schema.
+`app.users.phone` ha un `CHECK` con una forma precisa, e senza la stessa regola nel
+dominio un numero malformato morirebbe sul vincolo, cioè con un `409
+conflict.constraint_violated` dove il chiamante merita un `422` che nomina il campo.
+`locale` dev'essere un'etichetta BCP 47 plausibile per una ragione concreta e non
+formale: il client formatta date e importi con `Intl` passando quel valore, e
+`Intl.DateTimeFormat` **solleva** su un'etichetta malformata — un `locale` di
+spazzatura accettato qui diventa una schermata che non si apre più.
+
+#### Cambiare la password da dentro
+
+`POST /api/v1/me/password`, con `current_password` e `new_password`.
+
+**La vecchia serve**, anche se chi chiama è già autenticato, perché il contesto è
+diverso da quello del recupero: là la prova d'identità è il controllo della casella
+di posta, qui è **una sessione** — e una sessione può essere una scheda lasciata
+aperta. Senza la vecchia, chiunque si sieda davanti a un browser non bloccato si
+prende l'account per sempre.
+
+**Revoca tutte le sessioni, compresa la propria**, esattamente come
+[ADR-052](08-decisioni.md#adr-052) fa per il recupero. La scelta è l'**uniformità**,
+ed è stata presa contro l'alternativa che sembra più gentile — tenere viva la
+sessione da cui si sta cambiando, riconoscendola dal cookie di refresh che la
+richiesta porta già. Il motivo: *«cambiare la password chiude tutto»* è **una frase
+sola**, e va scritta in quattro posti — la schermata del recupero, quella del
+proprio account, [04](04-sicurezza.md) e questo documento. Due regole diverse per
+due percorsi che una persona non distingue sono due frasi da tenere allineate, e la
+seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile:
+chi cambia rientra subito con la password che ha appena scelto.
+
+**E «tutte le sessioni» sono i refresh token, non gli access token.** L'access token
+è un JWT firmato e non è revocabile ([ADR-013](08-decisioni.md#adr-013)): chi ne ha
+uno in mano resta dentro fino alla scadenza, quindici minuti. Ciò che muore
+all'istante è il **rinnovo**. È la nota di ADR-052 che si dimentica di continuo, ed
+è la stessa su cui un test della 5-quater aveva asserito la cosa sbagliata.
+
+**La password corrente errata dà `401` e non scrive niente — nemmeno il contatore
+dei tentativi.** Il blocco dopo dieci tentativi difende il *login*, dove chi prova
+non è autenticato; qui chi prova ha già una sessione, e incrementarlo darebbe a
+chiunque rubi una scheda il modo di bloccare fuori il legittimo proprietario. La
+`0038` non concede comunque quella colonna al pool applicativo.
+
+**Il `204` non ripulisce il cookie di refresh**, ed è una scelta: il cookie è
+limitato a `Path=/api/v1/auth`, quindi questa rotta non lo raggiunge nemmeno; e il
+refresh che porta è ormai revocato, quindi il prossimo rinnovo fallisce e il client
+torna all'accesso da sé.
+
+#### Che cosa scrive, e con quale privilegio
+
+Gira sul pool **applicativo** — chi cambia la propria password è autenticato, quindi
+la regola 27 non ammette il privilegiato — e questo è il motivo per cui la
+[`0038`](03-modello-dati.md) esiste. Quella migration revoca al ruolo applicativo
+l'`UPDATE` sull'intera `app.users` e lo riconcede su quattro colonne sole:
+`full_name`, `phone`, `locale`, `password_hash`. Tutto il resto — `platform_role`,
+`status`, `email`, i due contatori del blocco — lo scrive il pool privilegiato, dove
+vivono login e recupero password.
+
+**`/api/v1/me` è la prima rotta che scrive `app.users` dal pool applicativo**, ed è
+la ragione per cui quella migration entra in questa fetta e non in una sua: finché
+non esisteva, la porta era chiusa da un privilegio che nessuno usava.
 
 ### Dashboard
 

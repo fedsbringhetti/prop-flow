@@ -133,6 +133,31 @@ il valore in chiaro esiste solo nell'email.
 ([ADR-013](08-decisioni.md#adr-013)), quindi chi ne ha uno in mano resta dentro fino
 alla scadenza — quindici minuti. La catena si chiude, e da lì in poi non si rinnova più.
 
+### Cambiare la password da dentro chiude tutto, come il recupero
+
+`POST /api/v1/me/password`, e **pretende la password corrente** anche se chi chiama è
+già autenticato. Non è cerimonia: il contesto è diverso da quello del recupero. Là la
+prova d'identità è il controllo della casella di posta; qui è **una sessione**, e una
+sessione può essere una scheda lasciata aperta. Senza la vecchia, chiunque si sieda
+davanti a un browser non bloccato si prende l'account per sempre.
+
+**Revoca tutte le sessioni, compresa quella da cui si è chiesto**, esattamente come il
+recupero — e l'uniformità è la decisione, presa contro l'alternativa che sembra più
+gentile. *«Cambiare la password chiude tutto»* è **una frase sola**, e va scritta in
+quattro posti: la schermata del recupero, quella del proprio account,
+[05](05-api.md#il-proprio-account) e questo documento. Due regole diverse per due
+percorsi che una persona non distingue divergono alla prima modifica. Vale identica la
+precisazione qui sopra: si revocano i **refresh token**, e chi ha un access token in
+mano resta dentro fino alla scadenza — ciò che muore all'istante è il **rinnovo**.
+
+**La password corrente errata dà `401` e non incrementa il contatore dei tentativi**, al
+contrario del login. Il blocco dopo dieci tentativi difende chi *non* è autenticato; qui
+chi prova ha già una sessione, e incrementarlo darebbe a chiunque rubi una scheda il
+modo di bloccare fuori il legittimo proprietario. Per la stessa ragione il cambio da
+dentro **non sblocca** un account bloccato, mentre il recupero sì: le due prove
+d'identità non sono la stessa, e il pool applicativo non ha comunque il privilegio di
+scrivere `locked_until` (migration `0038`).
+
 ### Blocco dopo tentativi falliti
 
 Dieci tentativi consecutivi bloccano l'account per **15 minuti**. Temporaneo e non
@@ -175,7 +200,10 @@ contesto di sicurezza non può esistere:
   definizione, quindi non c'è un `current_user_id` da installare e la Row Level
   Security non ha nulla su cui appoggiarsi ([ADR-052](08-decisioni.md#adr-052)).
 
-Ogni altro uso è un errore di progetto. Il logout, per contrasto, passa dal
+Ogni altro uso è un errore di progetto — e il **cambio password da autenticati** è il
+caso che mostra dove passa il confine: somiglia al recupero, condivide con esso la
+validazione e la revoca delle sessioni, e gira sul pool **applicativo**, perché chi lo
+chiede una sessione ce l'ha. Il logout, per contrasto, passa dal
 contesto normale: la policy su `user_sessions` impedisce di revocare la sessione di
 qualcun altro anche presentandone l'hash corretto.
 

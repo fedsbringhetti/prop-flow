@@ -284,6 +284,29 @@ risultato ha `left_at IS NULL`, cioè si può reintegrare qualcuno e non lo si p
 togliere. La `USING` resta larga, e deve restarlo — stringerla romperebbe il rientro, che
 è un `UPDATE` sulla riga di un altro.
 
+Su `users` le concesse sono quattro — `full_name`, `phone`, `locale`,
+`password_hash` — e sono esattamente ciò che una **richiesta autenticata** scrive di
+sé. La negata più cara è `platform_role`, e la catena vale la pena scriverla perché da
+una riga sola non si vede: `Login` la mette nei claim, il contesto installa
+`app.platform_admin = 'on'`, `app.is_platform_admin()` diventa vera, e con essa
+`is_org_member` e `is_org_staff` su **ogni** organizzazione. Seguono `status`, con cui
+ci si toglie una sospensione, e `failed_login_count` con `locked_until`, che *sono* la
+difesa dal blocco dopo dieci tentativi. `email` è negata benché il prodotto un giorno
+la cambierà: non è un dato anagrafico, è la credenziale d'accesso e la chiave con cui
+inviti pendenti, policy della `0018` e parti contrattuali si ritrovano.
+
+`users_update_self` esiste dalla `0014` con una `WITH CHECK` che nomina la **sola
+identità della riga**, quindi tutto il resto era libero. Non era sfruttabile
+dall'API — nessuna rotta scriveva quelle colonne — ed è la ragione per cui la
+migration `0038` arriva insieme a `/api/v1/me`, che è la **prima rotta che scrive
+`app.users` dal pool applicativo**.
+
+Su `org_members` le concesse sono due, `status` e `joined_at`, e la negata che conta è
+`role`: dalla `0039` un membro può scrivere la **propria** riga per uscire, e senza il
+privilegio uscire e promuoversi a `owner` sarebbero la stessa `UPDATE`. `joined_at` è
+concessa per la stessa ragione della `0029`: **il rientro la riscrive**, e lasciare la
+data vecchia direbbe che la persona è nell'organizzazione da prima di esserci tornata.
+
 **Su `utility_bills` lo strumento non si usa**, ed è la prima volta che il criterio di
 ADR-026 dà «no»: una bolletta si digita, dodici campi alla volta, e la `GRANT` dovrebbe
 nominare quasi ogni colonna. Un elenco che contiene quasi tutto non difende niente.
