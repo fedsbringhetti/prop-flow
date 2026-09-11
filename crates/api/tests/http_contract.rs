@@ -2407,6 +2407,130 @@ async fn the_account_reads_and_corrects_itself_and_the_email_stays_put() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Cambiare la password da dentro pretende quella vecchia e **chiude tutto**.
+///
+/// Il secondo assert è quello che si scrive sbagliato, ed è l'inciampo della
+/// 5-quater: asserire che la vecchia sessione smetta di *leggere* fallirebbe,
+/// perché l'access token è un JWT e vive i suoi quindici minuti. Ciò che muore
+/// è il **rinnovo**, e il test verifica quello — su **entrambe** le sessioni,
+/// compresa quella da cui si è chiesto il cambio.
+#[tokio::test]
+async fn changing_the_password_needs_the_old_one_and_no_session_renews_anymore() {
+    let app = require_app!();
+    let email = common::unique_email("cambia-password");
+    let vecchia = "cavallo batteria graffetta";
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/register",
+            serde_json::json!({ "email": email, "full_name": "Proprietario Test", "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Due sessioni: quella da cui si cambia e «il telefono».
+    let (status, body, desk_cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let desk = body["access_token"].as_str().expect("token").to_owned();
+    let desk_cookie = desk_cookie.expect("cookie di refresh");
+    let (_, _, phone_cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    let phone_cookie = phone_cookie.expect("cookie di refresh");
+
+    let nuova = "cavallo batteria graffetta nuova";
+
+    // La vecchia sbagliata: `401`, e **niente è cambiato** — la vecchia giusta
+    // funziona ancora al login, quindi nessuna scrittura è passata.
+    let (status, problem) = app
+        .post_auth(
+            "/api/v1/me/password",
+            &desk,
+            serde_json::json!({ "current_password": "non è questa, di sicuro", "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {problem}");
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "la vecchia password non vale più dopo un tentativo rifiutato"
+    );
+    // E il rifiuto non ha consumato il rinnovo di nessuno.
+    let (status, _, desk_cookie) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&desk_cookie), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let desk_cookie = desk_cookie.expect("cookie ruotato");
+
+    // Una password nuova debole è un `422` che nomina il campo, prima di toccare
+    // qualunque cosa.
+    let (status, problem) = app
+        .post_auth(
+            "/api/v1/me/password",
+            &desk,
+            serde_json::json!({ "current_password": vecchia, "new_password": "corta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let (status, body) = app
+        .post_auth(
+            "/api/v1/me/password",
+            &desk,
+            serde_json::json!({ "current_password": vecchia, "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // **Nessuna sessione rinnova più**, compresa quella da cui si è cambiata: è la
+    // decisione 3 della sezione, uniforme ad ADR-052.
+    for (name, cookie) in [("scrivania", &desk_cookie), ("telefono", &phone_cookie)] {
+        let (status, body, _) = app
+            .post_with_cookie("/api/v1/auth/refresh", Some(cookie), None)
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "la sessione «{name}» rinnova ancora: {body}"
+        );
+    }
+
+    // L'access token già emesso invece **legge ancora**: è un JWT, non è
+    // revocabile, e vive i suoi quindici minuti. È il baratto di ADR-013, e
+    // asserire il contrario è l'errore che questo test esiste per non rifare.
+    let (status, _) = app.send("GET", "/api/v1/me", Some(&desk), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Si rientra con la nuova, non con la vecchia.
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
 /// Gli identificatori dei contratti che un utente vede in un'organizzazione.
 async fn visible_leases(app: &TestApp, token: &str, org: &str) -> Vec<String> {
     let (status, page) = app

@@ -13,7 +13,7 @@ use crate::expense::{
 };
 use crate::identity::{
     Invitation, OrgMember, Organization, OrganizationMembership, PasswordResetCode, RefreshSession,
-    TokenHash, User,
+    RevocationReason, TokenHash, User,
 };
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
@@ -203,10 +203,25 @@ pub trait SessionRepository: Send {
     ) -> RepositoryResult<Option<RefreshSession>>;
     async fn insert(&mut self, session: &RefreshSession) -> RepositoryResult<()>;
     async fn update(&mut self, session: &RefreshSession) -> RepositoryResult<()>;
-    /// Revoca ogni sessione attiva dell'utente. Usata al rilevamento del riuso di
-    /// un refresh token: se un token è stato replicato non si sa quale delle due
-    /// parti sia legittima, quindi cadono tutte.
-    async fn revoke_all_for_user(&mut self, user_id: UserId) -> RepositoryResult<u64>;
+    /// Revoca ogni sessione attiva dell'utente, **dicendo perché**.
+    ///
+    /// Tre percorsi la chiamano e hanno tre ragioni diverse: il riuso di un
+    /// refresh token — se un token è stato replicato non si sa quale delle due
+    /// parti sia legittima, quindi cadono tutte — il recupero della password e il
+    /// cambio da autenticati. Il motivo è un enum e non una stringa perché finisce
+    /// in `user_sessions.revoked_reason`, che si legge mesi dopo per capire perché
+    /// una sessione è caduta: prima di questa firma era il letterale «refresh token
+    /// reuse detected» **anche per il recupero della password**, cioè una riga che
+    /// diceva il falso.
+    ///
+    /// **Non tocca gli access token**, che sono JWT firmati e non sono revocabili
+    /// ([ADR-013](../../../../docs/08-decisioni.md)): chi ne ha uno in mano resta
+    /// dentro fino alla scadenza. Ciò che muore è il **rinnovo**.
+    async fn revoke_all_for_user(
+        &mut self,
+        user_id: UserId,
+        reason: RevocationReason,
+    ) -> RepositoryResult<u64>;
 }
 
 /// Filtro di elenco degli immobili con paginazione keyset.

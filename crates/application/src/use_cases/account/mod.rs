@@ -10,6 +10,8 @@
 //! Chi si legge è `context.require_user()`, che viene dal token e non dal corpo
 //! della richiesta.
 
+mod password;
 mod profile;
 
+pub use password::{ChangeMyPassword, ChangeMyPasswordCommand};
 pub use profile::{GetMyAccount, UpdateMyProfile, UpdateMyProfileCommand};

@@ -240,6 +240,25 @@ impl User {
         self.locked_until = None;
     }
 
+    /// Sostituisce la password **da dentro**, e non sblocca l'account.
+    ///
+    /// È la differenza con [`User::set_password`], ed è deliberata in due sensi.
+    /// Il primo è di privilegi: la migration `0038` concede al ruolo applicativo
+    /// `full_name`, `phone`, `locale` e `password_hash` e nient'altro, quindi
+    /// `failed_login_count` e `locked_until` **non sono scrivibili** da una
+    /// richiesta autenticata — un metodo che li azzerasse mentirebbe al chiamante,
+    /// perché la scrittura non arriverebbe in database.
+    ///
+    /// Il secondo è di significato: chi recupera la password ha dimostrato di
+    /// controllare la casella di posta, cioè ha superato una prova **diversa** da
+    /// quella che il blocco difende. Chi la cambia da dentro sta rifacendo la
+    /// stessa prova di sempre — conosce la password corrente — e non c'è motivo di
+    /// annullare un blocco che quella prova non supera. Un account bloccato lo
+    /// resta per i suoi quindici minuti.
+    pub fn change_password(&mut self, password_hash: PasswordHash) {
+        self.password_hash = Some(password_hash);
+    }
+
     /// Applica una correzione parziale ai propri dati anagrafici.
     ///
     /// Restituisce `false` quando il chiamante non ha menzionato nessun campo: il
@@ -494,5 +513,30 @@ mod tests {
                 "`{bad}` doveva essere rifiutato"
             );
         }
+    }
+
+    /// Cambiare la password **da dentro** non sblocca l'account, al contrario del
+    /// recupero: la migration `0038` non concede `locked_until` a una richiesta
+    /// autenticata, e un metodo che l'azzerasse mentirebbe al chiamante.
+    #[test]
+    fn changing_the_password_from_the_inside_does_not_lift_a_lockout() {
+        let mut user = user();
+        let now = Utc::now();
+        for _ in 0..User::MAX_FAILED_LOGINS {
+            user.record_failed_login(now, chrono::Duration::minutes(15));
+        }
+
+        user.change_password(PasswordHash::new("$argon2id$nuovo").expect("hash valido"));
+        assert_eq!(
+            user.password_hash().map(PasswordHash::as_str),
+            Some("$argon2id$nuovo")
+        );
+        assert!(user.locked_until().is_some());
+        assert_eq!(user.failed_login_count(), User::MAX_FAILED_LOGINS);
+
+        // Il recupero, invece, sblocca: le due prove d'identità sono diverse.
+        user.set_password(PasswordHash::new("$argon2id$recuperata").expect("hash valido"));
+        assert!(user.locked_until().is_none());
+        assert_eq!(user.failed_login_count(), 0);
     }
 }

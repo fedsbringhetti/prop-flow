@@ -109,6 +109,7 @@ impl EventMetadata {
 pub enum DomainEventPayload {
     UserRegistered(UserRegistered),
     UserProfileUpdated(UserProfileUpdated),
+    UserPasswordChanged(UserPasswordChanged),
     OrganizationCreated(OrganizationCreated),
     PropertyCreated(PropertyCreated),
     PropertyUpdated(PropertyUpdated),
@@ -158,6 +159,7 @@ impl DomainEventPayload {
         match self {
             Self::UserRegistered(_) => "identity.user.registered",
             Self::UserProfileUpdated(_) => "identity.user.profile_updated",
+            Self::UserPasswordChanged(_) => "identity.user.password_changed",
             Self::OrganizationCreated(_) => "identity.organization.created",
             Self::PropertyCreated(_) => "property.created",
             Self::PropertyUpdated(_) => "property.updated",
@@ -205,7 +207,9 @@ impl DomainEventPayload {
     #[must_use]
     pub const fn aggregate_type(&self) -> &'static str {
         match self {
-            Self::UserRegistered(_) | Self::UserProfileUpdated(_) => "User",
+            Self::UserRegistered(_)
+            | Self::UserProfileUpdated(_)
+            | Self::UserPasswordChanged(_) => "User",
             Self::OrganizationCreated(_) => "Organization",
             Self::PropertyCreated(_) | Self::PropertyUpdated(_) | Self::PropertyArchived(_) => {
                 "Property"
@@ -275,6 +279,7 @@ impl DomainEventPayload {
         match self {
             Self::UserRegistered(event) => event.user_id.as_uuid(),
             Self::UserProfileUpdated(event) => event.user_id.as_uuid(),
+            Self::UserPasswordChanged(event) => event.user_id.as_uuid(),
             Self::OrganizationCreated(event) => event.org_id.as_uuid(),
             Self::PropertyCreated(event) => event.property_id.as_uuid(),
             Self::PropertyUpdated(event) => event.property_id.as_uuid(),
@@ -322,10 +327,12 @@ impl DomainEventPayload {
     #[must_use]
     pub const fn org_id(&self) -> Option<OrgId> {
         match self {
-            // Nessuna delle due appartiene a un'organizzazione: `/api/v1/me`
+            // Nessuna delle tre appartiene a un'organizzazione: `/api/v1/me`
             // risponde anche a chi non ne ha una attiva, e il proprio account non
             // è affare di nessuna di esse.
-            Self::UserRegistered(_) | Self::UserProfileUpdated(_) => None,
+            Self::UserRegistered(_)
+            | Self::UserProfileUpdated(_)
+            | Self::UserPasswordChanged(_) => None,
             Self::OrganizationCreated(event) => Some(event.org_id),
             Self::PropertyCreated(event) => Some(event.org_id),
             Self::PropertyUpdated(event) => Some(event.org_id),
@@ -390,6 +397,17 @@ pub struct UserRegistered {
 pub struct UserProfileUpdated {
     pub user_id: UserId,
     pub changed_fields: Vec<&'static str>,
+}
+
+/// La password è cambiata **da dentro**, e con essa sono cadute le sessioni.
+///
+/// Nessun valore, nemmeno il numero di sessioni revocate: l'evento dice che il
+/// fatto è avvenuto e quando. `revoked_sessions` sarebbe un numero che si legge
+/// come una misura e che non serve a nessun consumatore.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserPasswordChanged {
+    pub user_id: UserId,
+    pub changed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

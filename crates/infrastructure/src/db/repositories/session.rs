@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use propflow_domain::identity::{RefreshSession, TokenHash};
+use propflow_domain::identity::{RefreshSession, RevocationReason, TokenHash};
 use propflow_domain::ports::{RepositoryError, RepositoryResult, SessionRepository};
 use propflow_domain::shared::{SessionId, UserId};
 
@@ -79,14 +79,22 @@ impl SessionRepository for PgUnitOfWork {
         Ok(())
     }
 
-    async fn revoke_all_for_user(&mut self, user_id: UserId) -> RepositoryResult<u64> {
+    async fn revoke_all_for_user(
+        &mut self,
+        user_id: UserId,
+        reason: RevocationReason,
+    ) -> RepositoryResult<u64> {
+        // Il motivo arriva dal chiamante e non è più un letterale: erano tre
+        // percorsi con tre ragioni diverse a scrivere la stessa frase, e per due di
+        // essi quella frase era falsa.
         let result = sqlx::query(
             "UPDATE app.user_sessions
                 SET revoked_at = now(),
-                    revoked_reason = 'refresh token reuse detected'
+                    revoked_reason = $2
               WHERE user_id = $1 AND revoked_at IS NULL",
         )
         .bind(user_id.as_uuid())
+        .bind(reason.as_str())
         .execute(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;

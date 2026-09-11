@@ -1,7 +1,8 @@
 use axum::extract::State;
-use axum::routing::get;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use propflow_application::use_cases::account::UpdateMyProfileCommand;
+use propflow_application::use_cases::account::{ChangeMyPasswordCommand, UpdateMyProfileCommand};
 use propflow_domain::DomainError;
 use propflow_domain::identity::{User, UserProfileChanges};
 use propflow_domain::property::Patch;
@@ -26,7 +27,9 @@ use crate::state::AppState;
 /// non appartengono a nessuna organizzazione, e pretenderne una attiva romperebbe
 /// il caso di chi è appena uscito dall'unica in cui abitava.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/me", get(read).patch(update))
+    Router::new()
+        .route("/api/v1/me", get(read).patch(update))
+        .route("/api/v1/me/password", post(change_password))
 }
 
 /// I propri dati.
@@ -122,6 +125,20 @@ impl UpdateMeRequest {
     }
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ChangePasswordRequest {
+    /// La password corrente.
+    ///
+    /// **Serve anche se chi chiama è già autenticato**, e non è cerimonia: qui la
+    /// prova d'identità è una sessione, e una sessione può essere una scheda
+    /// lasciata aperta. Senza, chiunque si sieda davanti a un browser non bloccato
+    /// si prende l'account per sempre.
+    pub current_password: String,
+    /// Almeno 12 caratteri, come alla registrazione.
+    #[schema(example = "cavallo batteria graffetta")]
+    pub new_password: String,
+}
+
 #[utoipa::path(
     get, path = "/api/v1/me", tag = "account",
     security(("bearer" = [])),
@@ -171,4 +188,40 @@ async fn update(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(MeResponse::from_domain(&user)))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/me/password", tag = "account",
+    request_body = ChangePasswordRequest,
+    security(("bearer" = [])),
+    responses(
+        (status = 204, description = "Password cambiata. **Tutte** le sessioni sono revocate, compresa quella da cui si è chiesto: chi cambia rientra con la password nuova. Si revocano i refresh token, non gli access token, che sono JWT e vivono i loro quindici minuti"),
+        (status = 401, description = "Password corrente errata, o assente. Nessuna scrittura, e nessun contatore incrementato", body = crate::error::ProblemDetails),
+        (status = 422, description = "La password nuova non rispetta la politica", body = crate::error::ProblemDetails),
+    )
+)]
+async fn change_password(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Json(request): Json<ChangePasswordRequest>,
+) -> ApiResult<StatusCode> {
+    let request_id = context.request_id().map(str::to_owned);
+    state
+        .change_my_password
+        .execute(
+            &context,
+            ChangeMyPasswordCommand {
+                current_password: request.current_password,
+                new_password: request.new_password,
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    // `204` e non `200` con un corpo: non c'è niente da restituire, e il cookie di
+    // refresh **non** si ripulisce qui. È una scelta e non una dimenticanza: il
+    // cookie è limitato a `Path=/api/v1/auth`, quindi questa rotta non lo
+    // raggiunge nemmeno; e il refresh che porta è ormai revocato, quindi il
+    // prossimo rinnovo fallisce e il client torna all'accesso da sé.
+    Ok(StatusCode::NO_CONTENT)
 }

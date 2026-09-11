@@ -3,7 +3,7 @@ use std::sync::Arc;
 use propflow_application::ports::{
     Notifier, ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
-use propflow_application::use_cases::account::{GetMyAccount, UpdateMyProfile};
+use propflow_application::use_cases::account::{ChangeMyPassword, GetMyAccount, UpdateMyProfile};
 use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{
     ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase, RegisterOwner, RequestPasswordReset,
@@ -71,6 +71,10 @@ pub struct AppState {
     /// tiene chiusa la domanda di ADR-036: chi si legge viene dal token.
     pub get_my_account: Arc<GetMyAccount>,
     pub update_my_profile: Arc<UpdateMyProfile>,
+    /// Pretende la password corrente e revoca **tutte** le sessioni, per
+    /// uniformità con il recupero (ADR-052): due regole diverse per due percorsi
+    /// che una persona non distingue divergono alla prima modifica.
+    pub change_my_password: Arc<ChangeMyPassword>,
 
     /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
     /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
@@ -299,6 +303,11 @@ impl AppState {
             get_my_account: Arc::new(GetMyAccount::new(Arc::clone(&unit_of_work))),
             update_my_profile: Arc::new(UpdateMyProfile::new(
                 Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            change_my_password: Arc::new(ChangeMyPassword::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&hasher),
                 Arc::clone(&clock),
             )),
             owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),

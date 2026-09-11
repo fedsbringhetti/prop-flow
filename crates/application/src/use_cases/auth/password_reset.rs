@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use propflow_domain::identity::PasswordResetCode;
+use propflow_domain::identity::{PasswordResetCode, RevocationReason};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::{Email, PasswordResetCodeId};
 
@@ -194,7 +194,9 @@ impl ConfirmPasswordReset {
         // **Tutte**, e nella stessa transazione del cambio password: se le due cose
         // si separassero, ci sarebbe una finestra in cui la password è nuova e la
         // sessione di chi è entrato con quella vecchia è ancora viva.
-        uow.sessions().revoke_all_for_user(user.id()).await?;
+        uow.sessions()
+            .revoke_all_for_user(user.id(), RevocationReason::PasswordReset)
+            .await?;
         uow.commit().await?;
 
         Ok(())
