@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   TicketCheck,
+  UserCog,
   Banknote,
   Receipt,
   Users,
@@ -253,7 +254,7 @@ export function AppShell() {
  * cui indovinare. `GET /organizations` è la sola rotta che dia il **nome** a chi
  * non è staff, ed è la ragione per cui esiste.
  */
-function useOrganizations() {
+export function useOrganizations() {
   const client = useApi()
   const { session, selectOrganization } = useSession()
 
@@ -374,6 +375,20 @@ function OrganizationMenu() {
           ))}
 
           <DropdownMenu.Separator className="my-1 h-px bg-border-subtle" />
+          {/* **Il proprio account**, e sta qui e non nella navigazione principale
+              per la stessa ragione dell'invito: non è un modulo del prodotto, è una
+              cosa che si fa su di sé, e la si cerca dove si cambia organizzazione e
+              si esce. Vale per staff e inquilini, quindi non passa dal ramo sul
+              ruolo. */}
+          <DropdownMenu.Item asChild>
+            <Link
+              to="/account"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-surface-muted"
+            >
+              <UserCog className="size-4" aria-hidden />
+              {t.nav.account}
+            </Link>
+          </DropdownMenu.Item>
           {/* **Dove si usa un codice d'invito**, e sta qui per una ragione
               precisa: chi ha appena ricevuto un invito arriva in questo menù da
               sé, perché è il posto in cui si va quando ci si accorge di essere

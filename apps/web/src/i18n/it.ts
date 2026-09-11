@@ -178,6 +178,61 @@ export const it = {
     unknownName: 'Organizzazione',
   },
 
+  /**
+   * Il proprio account: i dati anagrafici, il cambio password, l'uscita.
+   *
+   * **Le conseguenze si dicono prima del bottone**, non si scoprono dopo: cambiare
+   * la password disconnette ovunque, e uscire dall'unica organizzazione in cui si
+   * abita lascia con la propria, vuota. Un avviso dopo il fatto si legge come un
+   * guasto.
+   */
+  account: {
+    menuEntry: 'Il mio account',
+    title: 'Il mio account',
+    subtitle: 'I tuoi dati, la password e le organizzazioni a cui appartieni.',
+
+    profileTitle: 'I tuoi dati',
+    fullName: 'Nome e cognome',
+    phone: 'Telefono',
+    phoneHint: 'Facoltativo. Lascialo vuoto per toglierlo.',
+    /** L'email si mostra e **non si modifica**, con la riga che dice perché: un
+     *  campo disabilitato senza spiegazione si legge come un difetto. */
+    email: 'Email',
+    emailLocked:
+      'L’email è la tua credenziale d’accesso e per ora non si cambia da qui.',
+    saveProfile: 'Salva i dati',
+    profileSaved: 'Dati aggiornati.',
+
+    passwordTitle: 'Cambia la password',
+    currentPassword: 'Password attuale',
+    /** La stessa frase del recupero (`auth.resetRevokesSessions`): la conseguenza
+     *  è identica dai due lati — «ho cambiato la password» — e due frasi diverse
+     *  divergerebbero alla prima modifica. */
+    passwordRevokesSessions:
+      'Cambiando la password chiudi le sessioni aperte su tutti i dispositivi, questo compreso: dovrai rientrare con quella nuova.',
+    changePassword: 'Cambia la password',
+    /** Non «fatto e basta»: il cambio disconnette, quindi si dice che si sta per
+     *  tornare all’accesso. */
+    passwordChanged: 'Password cambiata. Entra di nuovo con quella nuova.',
+    /** La vecchia sbagliata è un `401` che non dice altro: qui il messaggio è
+     *  esplicito perché è l’unico errore su cui chi scrive può agire. */
+    currentPasswordWrong: 'La password attuale non è corretta.',
+
+    leaveTitle: 'Esci da un’organizzazione',
+    leaveHint: 'Smetti di far parte di un’organizzazione a cui qualcuno ti ha aggiunto.',
+    leave: 'Esci',
+    /** L’avviso che dice che cosa resta **prima** di uscire: chi esce dall’unica
+     *  organizzazione in cui abita resta con la propria, personale e vuota. */
+    leaveConfirmTitle: 'Vuoi uscire da {org}?',
+    leaveConfirmBody:
+      'Non vedrai più i contratti, gli addebiti e le segnalazioni di questa organizzazione. Se qualcuno ti reinvita potrai rientrare.',
+    leaveConfirm: 'Sì, esci',
+    left: 'Sei uscito da {org}.',
+    /** Accanto alla propria organizzazione, dove il bottone «esci» non c'è: ne sei
+     *  l'unico proprietario, e dirlo è meglio di un bottone che darebbe errore. */
+    leaveLastOwnerShort: 'La tua organizzazione',
+  },
+
   nav: {
     dashboard: 'Riepilogo',
     properties: 'Immobili',
@@ -191,6 +246,7 @@ export const it = {
     /** Solo per chi abita: il denaro fra coinquilini non riguarda chi amministra. */
     expenses: 'Spese',
     main: 'Navigazione principale',
+    account: 'Il mio account',
   },
 
   dashboard: {
@@ -1362,6 +1418,15 @@ export const it = {
      *  dichiarato: due rifiuti diversi, due rimedi diversi. */
     'settlement.not_addressed_to_you': 'A confermare o rifiutare è chi doveva ricevere il denaro.',
     'settlement.not_declared_by_you': 'A ritirare una dichiarazione è chi l’ha fatta.',
+    'membership.not_found': 'Non fai parte di questa organizzazione.',
+    /** I tre rifiuti dell'uscita, ognuno con il proprio rimedio. Il primo arriva
+     *  dalla policy e non da un `if`; il secondo è l'invariante «almeno un owner
+     *  per org»; il terzo è osservabile perché la riga resta. */
+    'membership.lease_in_force':
+      'Hai un contratto in essere in questa organizzazione: non puoi uscirne finché è attivo.',
+    'membership.last_owner':
+      'Sei l’unico proprietario di questa organizzazione e non puoi uscirne: è la tua organizzazione personale.',
+    'membership.already_left': 'Eri già uscito da questa organizzazione.',
     'document.not_found': 'Documento non trovato.',
     'request.payload_too_large': 'Il file è troppo grande.',
     'endpoint.not_found': 'Questa pagina non esiste.',

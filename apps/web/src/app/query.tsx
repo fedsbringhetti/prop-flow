@@ -74,6 +74,9 @@ export const keys = {
   /** Le proprie organizzazioni. **Non dipende da quella attiva**: è l'unica
    *  lettura che non appartenga a nessuna di esse. */
   organizations: ['organizations'] as const,
+  /** Il proprio account. **Non dipende dall'organizzazione attiva**, come le
+   *  organizzazioni: `/me` risponde anche senza. */
+  account: ['account'] as const,
   dashboard: ['dashboard'] as const,
   properties: (filters?: unknown) => ['properties', filters ?? null] as const,
   property: (id: string) => ['property', id] as const,

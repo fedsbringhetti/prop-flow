@@ -1,5 +1,6 @@
 import type { ApiClient } from './client'
 import type {
+  Account,
   BillOcrStatus,
   BillStatus,
   Charge,
@@ -17,6 +18,7 @@ import type {
   LeaseDetail,
   LeaseParty,
   LeasePartyRole,
+  LeftOrganization,
   Organization,
   Page,
   Payment,
@@ -81,6 +83,63 @@ function query(params: Record<string, string | number | boolean | undefined>): s
  */
 export function getOrganizations(client: ApiClient): Promise<Items<Organization>> {
   return client.get<Items<Organization>>('/organizations')
+}
+
+/**
+ * Esce da un'organizzazione.
+ *
+ * **`withoutOrganization`**, come `getOrganizations`: si esce anche da
+ * un'organizzazione che non è quella attiva, e `POST /organizations/{id}/leave`
+ * prende l'identificatore dal percorso — mandare `X-Org-Id` non serve e
+ * confonderebbe il caso in cui si sta uscendo proprio da quella attiva.
+ *
+ * `409 membership.lease_in_force` con un contratto in essere — il rifiuto arriva
+ * dalla policy, non da un `if` — `409 membership.last_owner` per l'ultimo
+ * proprietario, `409 membership.already_left` se si era già usciti.
+ */
+export function leaveOrganization(client: ApiClient, id: Uuid): Promise<LeftOrganization> {
+  return client.post<LeftOrganization>(`/organizations/${id}/leave`, {}, { withoutOrganization: true })
+}
+
+// ---------------------------------------------------------------------------
+// Il proprio account
+
+/**
+ * I propri dati, **senza `X-Org-Id`**: non appartengono a nessuna organizzazione,
+ * e pretenderne una attiva romperebbe il caso di chi è appena uscito dall'unica in
+ * cui abitava.
+ */
+export function getAccount(client: ApiClient): Promise<Account> {
+  return client.get<Account>('/me', { withoutOrganization: true })
+}
+
+/**
+ * Corregge i propri dati anagrafici. `PATCH` parziale: un campo assente resta,
+ * `phone: null` lo azzera.
+ *
+ * **`email` non c'è**, ed è la scelta della sezione: mandarla darebbe `422` con
+ * `errors[].field = "email"`. Non è un campo che il client offre, e per questo il
+ * tipo dell'input non lo prevede.
+ */
+export function updateAccount(
+  client: ApiClient,
+  input: { full_name?: string; phone?: string | null; locale?: string },
+): Promise<Account> {
+  return client.patch<Account>('/me', input, { withoutOrganization: true })
+}
+
+/**
+ * Cambia la password **da dentro**: pretende quella vecchia e revoca **tutte** le
+ * sessioni, compresa la corrente. Il client lo dice prima di mandare.
+ *
+ * `401` per la vecchia sbagliata, `422` per la nuova troppo debole. `204` senza
+ * corpo quando riesce.
+ */
+export function changePassword(
+  client: ApiClient,
+  input: { current_password: string; new_password: string },
+): Promise<void> {
+  return client.post('/me/password', input, { withoutOrganization: true })
 }
 
 // ---------------------------------------------------------------------------

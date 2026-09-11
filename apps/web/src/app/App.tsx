@@ -40,6 +40,9 @@ const AcceptInvitationSignedOutPage = lazy(async () => ({
 const DashboardPage = lazy(async () => ({
   default: (await import('@/features/dashboard/DashboardPage')).DashboardPage,
 }))
+const AccountPage = lazy(async () => ({
+  default: (await import('@/features/account/AccountPage')).AccountPage,
+}))
 const PropertiesPage = lazy(async () => ({
   default: (await import('@/features/properties/PropertiesPage')).PropertiesPage,
 }))
@@ -199,6 +202,9 @@ export function App() {
               di `PaymentsPage`. */}
           <Route path="/spese" element={<ExpenseGroupsPage />} />
           <Route path="/spese/:id" element={<ExpenseGroupDetailPage />} />
+          {/* Il proprio account: dati, password, uscita. Del ruolo non è: ci si
+              arriva dal menù dell'organizzazione, e vale per staff e inquilini. */}
+          <Route path="/account" element={<AccountPage />} />
           <Route path="/invito" element={<AcceptInvitationPage />} />
         </Route>
         {/* Chi è già entrato non deve poter tornare al login da un segnalibro:

@@ -54,6 +54,37 @@ export interface Organization {
   role: OrgRole
 }
 
+/**
+ * Il proprio account, letto da `GET /api/v1/me`.
+ *
+ * **`email` si mostra e non si modifica**: è la credenziale d'accesso, non un dato
+ * anagrafico, e cambiarla richiede la verifica del nuovo indirizzo, che è fuori
+ * perimetro. Il ruolo di piattaforma non c'è, e non è una dimenticanza: non è
+ * affare di chi guarda il proprio profilo.
+ */
+export interface Account {
+  id: Uuid
+  email: string
+  /** Assente finché la verifica dell'email non esiste: il campo c'è già perché il
+   *  client non cambi forma il giorno in cui arriverà. */
+  email_verified_at?: IsoDateTime
+  full_name: string
+  /** Assente quando non c'è un numero, non `null`: l'API lo omette. */
+  phone?: string
+  locale: string
+}
+
+/**
+ * Che cosa resta dopo essere usciti da un'organizzazione.
+ *
+ * Chi esce dall'unica in cui abitava resta con la propria, personale e vuota: il
+ * client lo dice **prima**, non lo lascia scoprire con un riepilogo vuoto.
+ */
+export interface LeftOrganization {
+  organization_id: Uuid
+  role: OrgRole
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
