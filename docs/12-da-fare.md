@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Tredici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Quattordici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -15,8 +15,8 @@ e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter); `R7`, 
 5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
 le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
 pianificazione come ciò che quella sezione decide di **non** fare — e `R41` **eseguendo** la
-6, come conseguenza di ciò che quella sezione ha costruito, e `R42` **controllando la
-sessione** dopo averla conclusa.
+6, come conseguenza di ciò che quella sezione ha costruito, `R42` **controllando la
+sessione** dopo averla conclusa, e `R43` **usando** il prodotto.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -241,6 +241,12 @@ sezione è il primo client che legge un nome da `app.users`
 |---|---|---|---|
 | R26 | aperta | **Gli elenchi offrono filtri per stati che non possono comparire**, e sono tre elenchi con tre cause diverse | Trovato al punto 2 del collaudo archiviando un immobile e non ritrovandolo nemmeno filtrando per «Archiviato». **Immobili**: archiviare fa due cose nello stesso `UPDATE` (`soft_delete` in `crates/infrastructure/src/db/repositories/property.rs`) — `status = 'archived'` **e** `deleted_at` — ma `list` filtra `deleted_at IS NULL`, quindi la riga esce da ogni elenco, quel filtro compreso; e `find_by_id` ha lo stesso filtro, quindi nemmeno l'URL della scheda funziona più (`404`). Le altre quattro opzioni di quel `<Select>` sono vuote per la ragione di [R1](#lelenco). **Contratti**: l'opzione «Annullato» non può comparire perché `Lease::cancel()` **esiste nel dominio e non la chiama nessuno** — nessuno use case, nessuna rotta. **Chiuso dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3)**, che ha esposto quella transizione: resta la faccia degli immobili e quella delle bollette. **Bollette**: «Pagata» e «Contestata» sono gli stati di [R25](#lelenco), che nessuno scrive. Le tre cause sono diverse ma la domanda è una sola, e conviene rispondere una volta: **un filtro deve offrire solo ciò che può comparire**, e dove lo stato è vero ma la riga è nascosta serve un modo di includerla. **Non toccare l'archiviazione**: che sia un soft delete è giusto |
 | R27 | aperta | **`README.md` e [06](06-sviluppo.md) insegnano ancora il primo avvio a mano** | Trovato scrivendo `R3`. Le due pagine elencano `docker compose up`, `generate-jwt-keys.sh`, il `psql` dei ruoli e i tre `cargo run`, mentre `just setup` fa la stessa cosa in un comando e `just api`/`just worker`/`just web` avviano. Non è sbagliato — quei comandi funzionano, e `CLAUDE.md` §4 dice che la fonte della verità è lui — ma è **più lungo e più facile da sbagliare** proprio nella pagina che un estraneo legge per prima. Da decidere se il `justfile` diventi la via raccomandata anche lì, o se resti uno strumento di comodo per chi già conosce il progetto |
+
+### I contatti fra chi affitta e chi abita
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R43 | aperta | **Un inquilino non ha nessun modo di sapere come contattare chi gli affitta casa** | Chiesta **usando il prodotto**. È già vera per **metà**: il proprietario vede email e telefono dell'inquilino nella tabella delle parti sulla scheda del contratto — sono quelli che ha digitato lui per l'invito — e anche due coinquilini sullo **stesso** contratto si vedono fra loro, perché `lease_parties_select` è per contratto. A mancare è la direzione opposta, e i coinquilini con contratti **separati**. **Il perimetro è deciso: solo il rapporto contrattuale**, cioè l'inquilino vede i contatti di chi amministra la propria organizzazione; i coinquilini con contratti separati restano come sono. **Email e telefono**, non la sola email: per contattare chi ti affitta casa il numero è spesso più utile, è sulla stessa riga e non costa lavoro in più. La parte che sorprende è che **non serve nessuna policy e nessuna migration**: `users_select` ammette già `app.is_my_staff(id)` — la `0030` quel ramo lo ha aggiunto apposta *«per tenere in piedi il rapporto proprietario ↔ inquilino»* — quindi il confine è già dove serve, e a mancare è soltanto la **proiezione**. **Non emenda [ADR-036](08-decisioni.md#adr-036)**, e va detto perché sembrerebbe di sì: quella decisione governa il perimetro della **casa**, e sceglie di proiettare da `app.property_residents` il solo nome; questa voce sta sul ramo che la stessa migration ha tenuto aperto, e lo lascia intatto. La forma da riusare è [ADR-049](08-decisioni.md#adr-049): un modello di lettura che **proietta** le colonne scelte sotto `users_select`, mai una rotta che risolva le persone per identificatore — in pratica un `contacts(ids)` accanto a `UserRepository::names(ids)`, e **non** `select_user!`, che legge l'aggregato intero, hash della password compreso. **La trappola è che `is_my_staff` risponde per tutti**: restituisce vero per ogni `owner` e `manager` attivo di un'organizzazione a cui il chiamante appartiene, non per «il proprietario del **mio** contratto». Con un'organizzazione che ha più gestori, un elenco che li mostri tutti non dice chi contattare — e il legame con il contratto non passa da lì. Da decidere: se mostrare il solo `owner`, tutti, o risalire alla persona dal contratto. Da decidere anche **dove**: l'inquilino ha un contratto solo, quindi «chi amministra» ha una risposta sola, e la scheda del contratto è il candidato naturale. **Due cose vanno insieme al codice e si dimenticano**: l'[informativa sulla privacy](11-piani-conclusi.md#esito-utenti-veri) dichiara con chi si condividono i dati, e questo è una comunicazione di dato personale a un destinatario nuovo; e il perimetro scelto diventa **il pavimento** — allargarlo dopo è additivo, stringerlo è una rottura per chi ci contava. **ADR prima del codice** |
 
 ### La durata della sessione
 
