@@ -8,7 +8,7 @@ use propflow_domain::lease::{Lease, LeaseParts};
 use propflow_domain::ports::{
     LeaseLabels, LeasePage, LeaseQuery, LeaseRepository, RepositoryError, RepositoryResult,
 };
-use propflow_domain::shared::{Currency, LeaseId, Money, OrgId, PropertyId, RoomId};
+use propflow_domain::shared::{Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId};
 
 use super::user::try_get;
 use crate::db::db_enums;
@@ -213,6 +213,28 @@ impl LeaseRepository for PgUnitOfWork {
             return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
+    }
+
+    async fn has_in_force_for_user(
+        &mut self,
+        org_id: OrgId,
+        user_id: UserId,
+    ) -> RepositoryResult<bool> {
+        // **La funzione della policy, e non una condizione riscritta.** È la stessa
+        // `app.has_lease_in_force` che `org_members_update_self` interroga: una
+        // seconda definizione di «in essere» divergerebbe dalla prima, e il sintomo
+        // sarebbe una schermata che dice di sì e un'`UPDATE` che dice di no.
+        //
+        // `SECURITY DEFINER`, quindi risponde il vero anche a chi
+        // `leases_select` non mostrerebbe quei contratti — che è il caso di uno
+        // staff che guardi la posizione di un altro.
+        let row: (bool,) = sqlx::query_as("SELECT app.has_lease_in_force($1, $2)")
+            .bind(org_id.as_uuid())
+            .bind(user_id.as_uuid())
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(row.0)
     }
 
     async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>> {

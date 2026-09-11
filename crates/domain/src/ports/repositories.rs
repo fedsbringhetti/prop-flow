@@ -166,6 +166,23 @@ pub trait OrgMemberRepository: Send {
         user_id: UserId,
     ) -> RepositoryResult<Vec<OrganizationMembership>>;
     async fn insert(&mut self, member: &OrgMember) -> RepositoryResult<()>;
+    /// Scrive **stato e data d'ingresso**, e nient'altro.
+    ///
+    /// Sono le due colonne che la migration `0039` concede al ruolo applicativo:
+    /// `role` è negata di proposito, perché aprire la scrittura della propria riga
+    /// senza negarla sarebbe dare a chiunque la promozione a `owner` — e una policy
+    /// non può accorgersene, non vedendo la riga vecchia.
+    ///
+    /// La chiave è `(org_id, user_id)` e non un identificatore: è la coppia che
+    /// `org_members_org_user_uk` rende unica, ed è quella che i due chiamanti hanno
+    /// già in mano.
+    async fn update(&mut self, member: &OrgMember) -> RepositoryResult<()>;
+    /// Quanti proprietari **attivi** ha l'organizzazione.
+    ///
+    /// Serve a un'invariante sola, che lo schema dichiara di proposito come
+    /// invariante del **service layer**: «almeno un owner per org». Un trigger
+    /// cross-row sarebbe workflow nel database, e la conta qui costa una riga.
+    async fn count_active_owners(&mut self, org_id: OrgId) -> RepositoryResult<u64>;
 }
 
 /// Codici di recupero della password.
@@ -401,6 +418,25 @@ pub trait LeaseRepository: Send {
     /// e non in un `JOIN` dentro `list` perché `list` costruisce l'aggregato, e
     /// l'aggregato non ha un posto dove mettere un nome che non è suo.
     async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>>;
+    /// Se la persona sia ancora parte di un contratto **in essere** in quella
+    /// organizzazione, garanti compresi.
+    ///
+    /// Serve a dare un rifiuto **parlante** a chi prova a uscire da
+    /// un'organizzazione in cui ha ancora un contratto. Il confine vero è la
+    /// `WITH CHECK` di `org_members_update_self`, che negherebbe la scrittura
+    /// comunque; senza questa lettura il rifiuto sarebbe `auth.denied_by_policy`,
+    /// che nella tassonomia di ADR-022 significa «difetto nostro» e non «hai
+    /// ancora un contratto».
+    ///
+    /// **Interroga la stessa funzione della policy**, `app.has_lease_in_force`, e
+    /// non una seconda condizione scritta a mano: due definizioni di «in essere»
+    /// divergerebbero, e il sintomo sarebbe una schermata che dice di sì e
+    /// un'`UPDATE` che dice di no.
+    async fn has_in_force_for_user(
+        &mut self,
+        org_id: OrgId,
+        user_id: UserId,
+    ) -> RepositoryResult<bool>;
 }
 
 /// Come si chiama ciò che un contratto affitta.

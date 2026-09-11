@@ -120,33 +120,52 @@ impl AcceptInvitation {
         // consegnato — e siccome `lease_parties.user_id` lo scrive **solo** questo
         // percorso, la persona restava fuori dal contratto nuovo per sempre.
         //
-        // **Attiva, non una qualunque.** Oggi da un'organizzazione non si esce e
-        // `status` vale sempre `active`, quindi la distinzione non cambia niente; il
-        // giorno in cui `R16` permetterà di uscire, una guardia che accettasse una
-        // membership qualsiasi farebbe rientrare chi è stato fatto uscire — cioè
-        // sarebbe questa la porta di servizio, trovata mesi dopo.
+        // **Attiva, non una qualunque**, e da questa sezione la distinzione ha tre
+        // esiti invece di due. La guardia era stata scritta prevedendo il giorno in
+        // cui da un'organizzazione si sarebbe potuti uscire: quel giorno è `R16`, ed
+        // è arrivato.
         //
-        // **Il ruolo non si tocca**: chi è già `owner` o `manager` e viene invitato
-        // come `tenant` resta quello che è. L'invito serve a collegare la parte
-        // contrattuale, non a retrocedere qualcuno — ed è il caso vero di chi affitta
-        // una casa e ne abita un'altra.
+        // - membership **attiva**: non si tocca niente;
+        // - membership **non attiva** (`left`): si **riattiva**. Senza questo ramo,
+        //   `insert` sbatte contro `org_members_org_user_uk` — unico e **non
+        //   parziale** — e l'accettazione muore con `409 membership.already_exists`,
+        //   cioè lo stesso `409` che ADR-051 aveva chiuso, ricomparso da un'altra
+        //   porta. Il sintomo sarebbe arrivato mesi dopo, su un invito che sembra
+        //   buono;
+        // - **nessuna** membership: si inserisce, come prima.
+        //
+        // **Il ruolo non si tocca in nessuno dei tre casi**: chi è già `owner` o
+        // `manager` e viene invitato come `tenant` resta quello che è. L'invito serve
+        // a collegare la parte contrattuale, non a retrocedere qualcuno — ed è il
+        // caso vero di chi affitta una casa e ne abita un'altra. Sulla riattivazione
+        // vale con più forza: chi era proprietario ed è uscito rientra proprietario,
+        // e il privilegio di colonna della `0039` lo garantisce comunque, perché
+        // `role` non è scrivibile da questo pool.
         //
         // L'ordine delle scritture non cambia: `app.has_pending_invitation` è ancora
         // vero quando si collega la parte e quando si marca l'invito, perché a
         // renderlo falso è la terza scrittura e non la prima. La `SELECT` qui sotto
         // passa dal primo ramo di `org_members_select` — `user_id =
         // app.current_user_id()` — che non chiede di essere già membri.
-        let already_member = uow
-            .members()
-            .find(org_id, user_id)
-            .await?
-            .is_some_and(|member| member.is_active());
-        if !already_member {
-            let membership = OrgMember::active(org_id, user_id, invitation.role(), now);
-            uow.members()
-                .insert(&membership)
-                .await
-                .map_err(|error| map_membership_conflict(error.into()))?;
+        //
+        // **La riattivazione precede il collegamento della parte contrattuale**, e
+        // non è indifferente: la `WITH CHECK` di `org_members_update_self` nega
+        // l'uscita di chi ha un contratto in essere, e il ramo `status <> 'left'`
+        // ammette il rientro **in ogni caso** proprio perché quell'ordine non deve
+        // diventare una precondizione da ricordare.
+        match uow.members().find(org_id, user_id).await? {
+            Some(member) if member.is_active() => {}
+            Some(mut member) => {
+                member.rejoin(now);
+                uow.members().update(&member).await?;
+            }
+            None => {
+                let membership = OrgMember::active(org_id, user_id, invitation.role(), now);
+                uow.members()
+                    .insert(&membership)
+                    .await
+                    .map_err(|error| map_membership_conflict(error.into()))?;
+            }
         }
 
         // Collegare la parte contrattuale è ciò che rende visibile il contratto:
@@ -197,14 +216,18 @@ impl AcceptInvitation {
     }
 }
 
-/// Resta per ciò che il ramo su `already_member` non copre: una riga che esiste e
-/// **non** è attiva.
+/// Resta per ciò che i tre rami del `match` non coprono: una riga **soft
+/// deleted**.
 ///
-/// `org_members_org_user_uk` non è parziale su `deleted_at`, e `find` filtra il
-/// soft delete: una membership sospesa o cancellata non si vede e l'`INSERT`
-/// sbatte comunque. Oggi non esiste — nessuno esce da un'organizzazione — e il
-/// giorno in cui `R16` la produrrà questo conflitto sarà la domanda giusta da
-/// porsi, non un errore da nascondere.
+/// Il ramo `left` adesso c'è, ed è la riattivazione. Ma `find` filtra
+/// `deleted_at IS NULL` e `org_members_org_user_uk` non è parziale su quella
+/// colonna: una membership cancellata non si vede, quindi si prende il ramo
+/// `None` e l'`INSERT` sbatte comunque sul vincolo.
+///
+/// **Oggi nessun percorso del prodotto la produce** — è precisamente la ragione
+/// per cui l'uscita è uno stato e non un soft delete — e il giorno in cui qualcosa
+/// la producesse, questo `409` sarebbe la domanda giusta da porsi e non un errore
+/// da nascondere.
 fn map_membership_conflict(error: AppError) -> AppError {
     match &error {
         AppError::Integrity { details } if details.contains("org_members_org_user") => {

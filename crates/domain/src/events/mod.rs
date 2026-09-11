@@ -111,6 +111,7 @@ pub enum DomainEventPayload {
     UserProfileUpdated(UserProfileUpdated),
     UserPasswordChanged(UserPasswordChanged),
     OrganizationCreated(OrganizationCreated),
+    OrganizationMemberLeft(OrganizationMemberLeft),
     PropertyCreated(PropertyCreated),
     PropertyUpdated(PropertyUpdated),
     PropertyArchived(PropertyArchived),
@@ -161,6 +162,7 @@ impl DomainEventPayload {
             Self::UserProfileUpdated(_) => "identity.user.profile_updated",
             Self::UserPasswordChanged(_) => "identity.user.password_changed",
             Self::OrganizationCreated(_) => "identity.organization.created",
+            Self::OrganizationMemberLeft(_) => "identity.organization.member_left",
             Self::PropertyCreated(_) => "property.created",
             Self::PropertyUpdated(_) => "property.updated",
             Self::PropertyArchived(_) => "property.archived",
@@ -210,7 +212,9 @@ impl DomainEventPayload {
             Self::UserRegistered(_)
             | Self::UserProfileUpdated(_)
             | Self::UserPasswordChanged(_) => "User",
-            Self::OrganizationCreated(_) => "Organization",
+            // L'appartenenza non è un aggregato a sé: chi consuma reagisce
+            // all'organizzazione da cui qualcuno è uscito.
+            Self::OrganizationCreated(_) | Self::OrganizationMemberLeft(_) => "Organization",
             Self::PropertyCreated(_) | Self::PropertyUpdated(_) | Self::PropertyArchived(_) => {
                 "Property"
             }
@@ -281,6 +285,7 @@ impl DomainEventPayload {
             Self::UserProfileUpdated(event) => event.user_id.as_uuid(),
             Self::UserPasswordChanged(event) => event.user_id.as_uuid(),
             Self::OrganizationCreated(event) => event.org_id.as_uuid(),
+            Self::OrganizationMemberLeft(event) => event.org_id.as_uuid(),
             Self::PropertyCreated(event) => event.property_id.as_uuid(),
             Self::PropertyUpdated(event) => event.property_id.as_uuid(),
             Self::PropertyArchived(event) => event.property_id.as_uuid(),
@@ -334,6 +339,7 @@ impl DomainEventPayload {
             | Self::UserProfileUpdated(_)
             | Self::UserPasswordChanged(_) => None,
             Self::OrganizationCreated(event) => Some(event.org_id),
+            Self::OrganizationMemberLeft(event) => Some(event.org_id),
             Self::PropertyCreated(event) => Some(event.org_id),
             Self::PropertyUpdated(event) => Some(event.org_id),
             Self::PropertyArchived(event) => Some(event.org_id),
@@ -408,6 +414,18 @@ pub struct UserProfileUpdated {
 pub struct UserPasswordChanged {
     pub user_id: UserId,
     pub changed_at: DateTime<Utc>,
+}
+
+/// Qualcuno è uscito da un'organizzazione, **di propria iniziativa**.
+///
+/// `role` è il ruolo che aveva: è ciò che dice a chi consuma se se n'è andato un
+/// inquilino o chi amministrava, e non è un dato personale.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OrganizationMemberLeft {
+    pub org_id: OrgId,
+    pub user_id: UserId,
+    pub role: &'static str,
+    pub left_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

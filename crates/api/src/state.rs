@@ -28,7 +28,7 @@ use propflow_application::use_cases::lease::{
     ActivateLease, AddLeaseParty, CancelLease, CorrectLeaseParty, DraftLease, GetLease, ListLeases,
     RemoveLeaseParty, TerminateLease,
 };
-use propflow_application::use_cases::organization::ListOrganizations;
+use propflow_application::use_cases::organization::{LeaveOrganization, ListOrganizations};
 use propflow_application::use_cases::payment::{
     ConfirmPayment, DeclarePayment, GetPayment, ListPayments, RecordPayment, RejectPayment,
 };
@@ -75,6 +75,9 @@ pub struct AppState {
     /// uniformità con il recupero (ADR-052): due regole diverse per due percorsi
     /// che una persona non distingue divergono alla prima modifica.
     pub change_my_password: Arc<ChangeMyPassword>,
+    /// Uscire da un'organizzazione. `status = 'left'` e non un soft delete: la
+    /// riga resta, ed è ciò che permette di rientrare accettando un invito nuovo.
+    pub leave_organization: Arc<LeaveOrganization>,
 
     /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
     /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
@@ -308,6 +311,10 @@ impl AppState {
             change_my_password: Arc::new(ChangeMyPassword::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&hasher),
+                Arc::clone(&clock),
+            )),
+            leave_organization: Arc::new(LeaveOrganization::new(
+                Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
             owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),

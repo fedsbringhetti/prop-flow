@@ -109,6 +109,58 @@ impl OrgMemberRepository for PgUnitOfWork {
         .map_err(map_sqlx_error)?;
         Ok(())
     }
+
+    async fn update(&mut self, member: &OrgMember) -> RepositoryResult<()> {
+        // **Due colonne, ed è l'elenco che la `0039` concede.** Nominare `role`
+        // farebbe fallire la query con `permission denied for table org_members`,
+        // ed è la difesa che si vuole: uscire e promuoversi a `owner` sarebbero
+        // altrimenti la stessa `UPDATE`, e la `WITH CHECK` non può accorgersene
+        // perché non vede la riga vecchia.
+        //
+        // `updated_at` non compare perché la scrive il trigger `set_updated_at`.
+        let result = sqlx::query(
+            "UPDATE app.org_members
+                SET status    = $3::app.member_status,
+                    joined_at = $4
+              WHERE org_id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(member.org_id().as_uuid())
+        .bind(member.user_id().as_uuid())
+        .bind(db_enums::member_status_to_db(member.status()))
+        .bind(member.joined_at())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        // Zero righe qui significa che una `WITH CHECK` ha rifiutato: chi chiama ha
+        // appena letto la riga nella stessa transazione, quindi esiste. Il caso
+        // vero è l'uscita con un contratto in essere, che `org_members_update_self`
+        // nega — e il caso d'uso lo intercetta **prima**, così che questo rifiuto
+        // resti quello che deve essere: il segnale di un difetto nostro.
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::RowLevelSecurity);
+        }
+        Ok(())
+    }
+
+    async fn count_active_owners(&mut self, org_id: OrgId) -> RepositoryResult<u64> {
+        // `org_members_select` è `user_id = current_user_id() OR is_org_member(org_id)`:
+        // un membro qualunque vede le righe della propria organizzazione, quindi
+        // anche un inquilino che sta uscendo ottiene la conta vera.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT count(*)
+               FROM app.org_members
+              WHERE org_id = $1
+                AND role = 'owner'
+                AND status = 'active'
+                AND deleted_at IS NULL",
+        )
+        .bind(org_id.as_uuid())
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(u64::try_from(row.0).unwrap_or(0))
+    }
 }
 
 fn map_member(row: PgRow) -> RepositoryResult<OrgMember> {

@@ -24,6 +24,13 @@ pub enum Entity {
     LeaseParty,
     #[error("Invitation not found")]
     Invitation,
+    /// Un'appartenenza che non esiste: si è chiesto di uscire da
+    /// un'organizzazione di cui non si è membri. Ha un codice suo e non quello
+    /// dell'organizzazione perché a mancare è la **relazione**, non l'ente — e
+    /// l'ente, per [ADR-036](../../docs/08-decisioni.md), non si proietta per
+    /// identificatore a chi non vi appartiene.
+    #[error("Membership not found")]
+    Membership,
     #[error("Document not found")]
     Document,
     #[error("Ticket not found")]
@@ -55,6 +62,7 @@ impl Entity {
             Self::Lease => "lease.not_found",
             Self::LeaseParty => "lease.party_not_found",
             Self::Invitation => "invitation.not_found",
+            Self::Membership => "membership.not_found",
             Self::Document => "document.not_found",
             Self::Ticket => "ticket.not_found",
             Self::UtilityBill => "utility_bill.not_found",
@@ -304,6 +312,33 @@ pub enum Invariant {
     #[error("Only a running job can be finished")]
     AiJobNotFinishable,
 
+    /// Si è già usciti da quell'organizzazione.
+    ///
+    /// La riga resta — uscire è uno **stato** e non un soft delete — quindi il
+    /// caso è osservabile e merita un messaggio invece di un secondo `200` muto.
+    #[error("You have already left this organization")]
+    MembershipAlreadyLeft,
+    /// Non si esce da un'organizzazione in cui si ha un contratto in essere.
+    ///
+    /// **La Row Level Security dice la stessa cosa**, dalla migration `0039`: la
+    /// `WITH CHECK` di `org_members_update_self` ammette l'uscita solo se
+    /// `app.has_lease_in_force` è falsa. Questo codice è la versione parlante di un
+    /// rifiuto che la policy darebbe comunque — e serve perché la policy da sola
+    /// risponderebbe `auth.denied_by_policy`, che significa «difetto nostro». È la
+    /// stessa forma di [`Denial::GroupMembershipNotYours`] sulle spese co-living.
+    #[error("You are still party to a lease in force in this organization")]
+    MembershipHasLeaseInForce,
+    /// L'ultimo proprietario non se ne va.
+    ///
+    /// Lo schema dichiara «almeno un owner per org» come invariante **del service
+    /// layer** — un trigger cross-row sarebbe workflow nel database — e questo è
+    /// il posto in cui vive. Senza, uscire dalla propria organizzazione personale
+    /// la lascerebbe senza nessuno che la amministri: gli immobili, i contratti e
+    /// gli addebiti resterebbero in una riga che `organizations_select` non mostra
+    /// più a nessuno, e non c'è nessuna operazione del prodotto per rientrarci.
+    #[error("The last owner of an organization cannot leave it")]
+    LastOwnerCannotLeave,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -387,6 +422,12 @@ impl Invariant {
             // che comparisse in una risposta HTTP sarebbe il segnale che qualcuno
             // ha esposto il ciclo del job come se fosse un comando.
             Self::AiJobNotStartable | Self::AiJobNotFinishable => "ai_job.invalid_transition",
+            // Due codici distinti e non uno: «sei già uscito» e «sei l'ultimo
+            // proprietario» mandano a fare due cose opposte — la prima non chiede
+            // niente, la seconda chiede di nominare qualcun altro prima.
+            Self::MembershipAlreadyLeft => "membership.already_left",
+            Self::MembershipHasLeaseInForce => "membership.lease_in_force",
+            Self::LastOwnerCannotLeave => "membership.last_owner",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }

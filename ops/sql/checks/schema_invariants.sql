@@ -135,7 +135,12 @@ SELECT 'bookkeeping-migration-duplicato', format('%s._sqlx_migrations', n.nspnam
 --     organizzazione. `status` decide se l'account possa autenticarsi. Sono le due
 --     colonne che dicono *che cosa si vede*, e `users_update_self` ha una
 --     `WITH CHECK` che nomina la sola identità della riga. Vedi migrations/0038.
-
+--
+--     `role` di `org_members` sta qui per la stessa ragione vista da vicino: dalla
+--     migration `0039` un membro può scrivere la **propria** riga per uscire, e una
+--     policy non può confrontare la riga vecchia con la nuova — senza il privilegio,
+--     uscire e promuoversi a `owner` sarebbero la stessa `UPDATE`. `org_id` e
+--     `user_id` sono l'identità della riga, come nella `0029`.
 INSERT INTO invariant_violations
 SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
   FROM (
@@ -143,7 +148,9 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
            ('org_invitations', 'role'),     ('org_invitations', 'token_hash'),
            ('org_invitations', 'lease_id'), ('org_invitations', 'expires_at'),
            ('lease_parties',   'org_id'),   ('lease_parties',   'lease_id'),
-           ('users',           'platform_role'), ('users', 'status')
+           ('users',           'platform_role'), ('users', 'status'),
+           ('org_members',     'org_id'),   ('org_members', 'user_id'),
+           ('org_members',     'role')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
@@ -215,7 +222,12 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     `deleted_at` è la disattivazione dell'account. Le scrive tutte il pool
 --     privilegiato, che è dove quei flussi vivono. Vedi migrations/0038.
 --
---     Un nome solo per sei tabelle, e non un controllo per ciascuna: il criterio è
+--     Per la **membership di un'organizzazione** `joined_at` resta invece
+--     **concessa**, come nella `0029` e per la stessa ragione: il rientro la
+--     riscrive, e lasciare la data vecchia direbbe che la persona è
+--     nell'organizzazione da prima di esserci tornata. Vedi migrations/0039.
+--
+--     Un nome solo per sette tabelle, e non un controllo per ciascuna: il criterio è
 --     quello di ADR-026 in tutti i casi, e inventargli un nome nuovo renderebbe
 --     illeggibile la ragione comune.
 INSERT INTO invariant_violations
@@ -248,7 +260,8 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
            ('expense_group_members', 'user_id'),
            ('users', 'email'),              ('users', 'email_verified_at'),
            ('users', 'last_login_at'),      ('users', 'failed_login_count'),
-           ('users', 'locked_until'),       ('users', 'deleted_at')
+           ('users', 'locked_until'),       ('users', 'deleted_at'),
+           ('org_members', 'invited_by'),   ('org_members', 'deleted_at')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');

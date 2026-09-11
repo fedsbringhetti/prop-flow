@@ -2531,6 +2531,239 @@ async fn changing_the_password_needs_the_old_one_and_no_session_renews_anymore()
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// Si esce, non si esce con un contratto in essere, e chi è uscito **rientra**.
+///
+/// Il secondo rifiuto arriva dal database e non da un `if`: il test lo prova
+/// due volte, prima dalla rotta — che dà la versione parlante — e poi con
+/// un'`UPDATE` scritta a mano sotto la Row Level Security dell'inquilino, che è
+/// l'unica prova che il confine non sia solo nel service layer.
+///
+/// Il terzo è la porta di servizio di ADR-051, ora percorribile: senza il ramo di
+/// riattivazione l'accettazione morirebbe con `409 membership.already_exists`.
+#[tokio::test]
+async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "casa-da-cui-si-esce").await;
+    let property = create_property(&app, &owner, "Casa da cui si esce").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("chi-esce");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
+    let (status, _) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Il contratto entra in essere.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 1. **Con un contratto in essere non si esce**, e la risposta dice perché.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.lease_in_force");
+
+    // La stessa scrittura a mano, sotto la RLS dell'inquilino: **zero righe**, che
+    // è il rifiuto della `WITH CHECK` e non di un `if`.
+    let tenant_id = app.send("GET", "/api/v1/me", Some(&tenant), None).await.1["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let mut tx = app
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+        .bind(uuid::Uuid::parse_str(&tenant_id).expect("uuid"))
+        .bind(uuid::Uuid::parse_str(&owner_org).expect("uuid"))
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    let error = sqlx::query(
+        "UPDATE app.org_members SET status = 'left' WHERE org_id = $1 AND user_id = $2",
+    )
+    .bind(uuid::Uuid::parse_str(&owner_org).expect("uuid"))
+    .bind(uuid::Uuid::parse_str(&tenant_id).expect("uuid"))
+    .execute(&mut *tx)
+    .await
+    .expect_err("la policy doveva rifiutare l'uscita con un contratto in essere");
+    assert!(
+        error.to_string().contains("row-level security"),
+        "atteso il rifiuto della policy, ottenuto: {error}"
+    );
+    tx.rollback().await.expect("annullata");
+
+    // Il contratto finisce: si disdice.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/terminate"),
+            &owner,
+            serde_json::json!({ "reason": "Trasloco" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    // 2. **Si esce.** La risposta dice da dove e con che ruolo.
+    let (status, left) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {left}");
+    assert_eq!(left["organization_id"], owner_org);
+    assert_eq!(left["role"], "tenant");
+
+    // Da fuori: l'organizzazione non è più fra le proprie, e ciò che era dentro
+    // non si legge più. Resta la propria, personale e vuota (ADR-045 al contrario).
+    let (_, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    let ids: Vec<&str> = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec![tenant_org.as_str()], "corpo: {orgs}");
+    let (status, _) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/leases",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Due volte no: la riga resta, ed è osservabile.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.already_left");
+
+    // Un'organizzazione di cui non si è mai stati membri: la riga non torna.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{}/leave", uuid::Uuid::now_v7()),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.not_found");
+
+    // 3. **Chi è uscito rientra**, accettando un invito nuovo. È la porta di
+    //    servizio di ADR-051: senza la riattivazione, qui risponderebbe `409`.
+    let second_lease = draft_lease(&app, &owner, &property, None, 30, Some(400)).await;
+    let (_, second_token) = invite_tenant(&app, &owner, &second_lease, &tenant_email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": second_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["organization_id"], owner_org);
+
+    let (_, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    let back = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .count();
+    assert_eq!(
+        back, 1,
+        "chi è rientrato non compare, o compare due volte: {orgs}"
+    );
+    // E vede il contratto nuovo: la parte è collegata, la membership è attiva.
+    assert!(
+        visible_leases(&app, &tenant, &owner_org)
+            .await
+            .contains(&second_lease),
+        "chi è rientrato non vede il contratto nuovo"
+    );
+}
+
+/// **L'ultimo proprietario non se ne va**, e il ruolo non è scrivibile da chi esce.
+///
+/// La prima metà è l'invariante che lo schema delega al service layer: senza,
+/// uscire dalla propria organizzazione personale la lascerebbe senza nessuno che la
+/// amministri, e `organizations_select` non la mostrerebbe più a nessuno.
+///
+/// La seconda è la colonna che si dimentica: aprire la propria riga senza negare
+/// `role` è dare a chiunque la promozione a `owner`. Il privilegio lo nega **prima**
+/// della policy, quindi anche l'`UPDATE` su una riga inesistente fallisce.
+#[tokio::test]
+async fn the_last_owner_cannot_leave_and_nobody_can_promote_themselves() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "ultimo-proprietario").await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.last_owner");
+
+    // Ed è ancora dentro.
+    let (_, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&owner), None)
+        .await;
+    assert_eq!(orgs["items"][0]["id"], owner_org, "corpo: {orgs}");
+    assert_eq!(orgs["items"][0]["role"], "owner");
+
+    for denied in [
+        "UPDATE app.org_members SET role = 'owner' WHERE id = $1",
+        "UPDATE app.org_members SET org_id = $1 WHERE id = $1",
+        "UPDATE app.org_members SET user_id = $1 WHERE id = $1",
+        "UPDATE app.org_members SET deleted_at = now() WHERE id = $1",
+    ] {
+        let error = sqlx::query(denied)
+            .bind(uuid::Uuid::now_v7())
+            .execute(app.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi su `{denied}`, ottenuto: {error}"
+        );
+    }
+}
+
 /// Gli identificatori dei contratti che un utente vede in un'organizzazione.
 async fn visible_leases(app: &TestApp, token: &str, org: &str) -> Vec<String> {
     let (status, page) = app
