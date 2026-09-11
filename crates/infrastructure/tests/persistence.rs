@@ -982,6 +982,70 @@ async fn the_application_role_cannot_repoint_a_lease_party_to_another_lease() {
     );
 }
 
+/// I privilegi di colonna della `0038`, **una colonna per volta**.
+///
+/// `platform_role` da sola non basterebbe, ed è la ragione per cui il test le
+/// prova tutte: **è l'elenco a essere il contratto**. La `WITH CHECK` di
+/// `users_update_self` nomina la sola identità della riga, quindi ciò che il
+/// privilegio non nega resta scrivibile da chiunque abbia le credenziali del ruolo
+/// applicativo.
+///
+/// La più cara è `platform_role`, e la catena è quella scritta in testa alla
+/// migration: `Login` la mette nei claim, il contesto installa
+/// `app.platform_admin = 'on'`, e da lì `is_org_member` e `is_org_staff` sono vere
+/// su **ogni** organizzazione. Seguono `status`, con cui ci si toglie una
+/// sospensione, e `failed_login_count` con `locked_until`, che sono la difesa dal
+/// blocco dopo dieci tentativi.
+///
+/// Il privilegio si verifica **prima** delle policy e prima che le righe vengano
+/// esaminate: il tentativo fallisce anche su un identificatore inesistente, quindi
+/// non serve ricostruire lo scenario per dimostrare che la strada è chiusa.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_what_an_account_is() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    for statement in [
+        "UPDATE app.users SET platform_role = 'admin' WHERE id = $1",
+        "UPDATE app.users SET status = 'active' WHERE id = $1",
+        "UPDATE app.users SET email = 'altro@example.it' WHERE id = $1",
+        "UPDATE app.users SET email_verified_at = now() WHERE id = $1",
+        "UPDATE app.users SET last_login_at = now() WHERE id = $1",
+        "UPDATE app.users SET failed_login_count = 0 WHERE id = $1",
+        "UPDATE app.users SET locked_until = NULL WHERE id = $1",
+        "UPDATE app.users SET deleted_at = NULL WHERE id = $1",
+    ] {
+        let error = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi su `{statement}`, ottenuto: {error}"
+        );
+    }
+
+    // Le quattro concesse restano concesse, ed è la metà che rende il test un
+    // contratto invece di un divieto: `update_profile` nomina esattamente queste.
+    for statement in [
+        "UPDATE app.users SET full_name = 'Nome Nuovo' WHERE id = $1",
+        "UPDATE app.users SET phone = '+39 333 1234567' WHERE id = $1",
+        "UPDATE app.users SET locale = 'it-IT' WHERE id = $1",
+        "UPDATE app.users SET password_hash = '$argon2id$nuovo' WHERE id = $1",
+    ] {
+        let allowed = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await;
+        assert!(
+            allowed.is_ok(),
+            "`{statement}` non doveva essere negata: {:?}",
+            allowed.err()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Documenti
 // ---------------------------------------------------------------------------

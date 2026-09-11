@@ -87,7 +87,29 @@ pub trait UserRepository: Send {
     async fn find_by_id(&mut self, id: UserId) -> RepositoryResult<Option<User>>;
     async fn find_by_email(&mut self, email: &Email) -> RepositoryResult<Option<User>>;
     async fn insert(&mut self, user: &User) -> RepositoryResult<()>;
+    /// L'aggiornamento **completo**, e solo dal pool privilegiato.
+    ///
+    /// Nomina tutte le colonne che il dominio muove — `status`, `last_login_at`,
+    /// `failed_login_count`, `locked_until` — che dalla migration `0038` il ruolo
+    /// applicativo non ha più il privilegio di scrivere. Chiamarlo da una
+    /// transazione aperta con `begin` fallisce con `permission denied for table
+    /// users`, ed è la difesa che si vuole: lo usano `Login` e il recupero
+    /// password, che girano su `begin_privileged` perché chi li attraversa non è
+    /// autenticato.
+    ///
+    /// Da una richiesta autenticata si passa da [`UserRepository::update_profile`].
     async fn update(&mut self, user: &User) -> RepositoryResult<()>;
+    /// I dati che una persona corregge di sé, e la propria password.
+    ///
+    /// **Quattro colonne e non l'aggregato**, sulla forma di
+    /// [`ChargeRepository::update_status`]: sono esattamente quelle che la
+    /// migration `0038` riconcede al ruolo applicativo, e le due liste sono la
+    /// stessa lista. Aggiungerne una qui senza aggiungerla là dà `permission
+    /// denied` nei test di integrazione, che girano come `propflow_app`.
+    ///
+    /// `email` non c'è, e non per dimenticanza: è la credenziale d'accesso, non un
+    /// dato anagrafico. Vedi il commento in testa alla `0038`.
+    async fn update_profile(&mut self, user: &User) -> RepositoryResult<()>;
     /// I nomi di un insieme di persone, per chi ha in mano i loro identificatori.
     ///
     /// **Una query e non una per riga**: un thread ne mostra venticinque, e

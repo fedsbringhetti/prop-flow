@@ -94,6 +94,16 @@ impl UserRepository for PgUnitOfWork {
         Ok(())
     }
 
+    /// **Privilegiato, e da questa migration lo è per davvero.** La `0038` revoca
+    /// l'`UPDATE` sull'intera `app.users` al ruolo applicativo e lo riconcede su
+    /// quattro colonne: `status`, `last_login_at`, `failed_login_count` e
+    /// `locked_until` non sono fra quelle, quindi questa query fallisce con
+    /// `permission denied for table users` se la transazione è stata aperta con
+    /// `begin` invece che con `begin_privileged`.
+    ///
+    /// Non è una regressione da aggirare: `Login` e il recupero password sono i
+    /// soli chiamanti, e sono privilegiati perché chi li attraversa non è ancora
+    /// autenticato. Da una richiesta autenticata si passa da `update_profile`.
     async fn update(&mut self, user: &User) -> RepositoryResult<()> {
         // `updated_at` non è nella SET list: lo scrive il trigger
         // `set_updated_at`, così nessuna scrittura può dimenticarselo.
@@ -129,6 +139,45 @@ impl UserRepository for PgUnitOfWork {
                 details: "aggiornamento utente senza effetto: riga assente o non visibile"
                     .to_owned(),
             });
+        }
+        Ok(())
+    }
+
+    async fn update_profile(&mut self, user: &User) -> RepositoryResult<()> {
+        // **Quattro colonne, ed è l'elenco che la `0038` concede.** Nominarne una
+        // quinta — `email`, `status`, `platform_role` — farebbe fallire la query
+        // con `permission denied for table users`, e fallirebbe nei test di
+        // integrazione, che girano come `propflow_app`. È la stessa forma di
+        // `ChargeRepository::update_status`.
+        //
+        // `password_hash` sta qui insieme ai dati anagrafici perché il cambio
+        // password **da dentro** è una richiesta autenticata come le altre: chi lo
+        // chiede ha una sessione, quindi la regola 27 non ammette il pool
+        // privilegiato. Il recupero — dove una sessione non c'è — resta su `update`.
+        //
+        // `updated_at` non è nella SET list: lo scrive il trigger `set_updated_at`.
+        let result = sqlx::query(
+            "UPDATE app.users
+                SET full_name     = $2,
+                    phone         = $3,
+                    locale        = $4,
+                    password_hash = $5
+              WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user.id().as_uuid())
+        .bind(user.full_name())
+        .bind(user.phone())
+        .bind(user.locale())
+        .bind(user.password_hash().map(PasswordHash::as_str))
+        .execute(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        // `users_update_self` ammette la sola riga del chiamante: zero righe qui
+        // significa che la policy ha rifiutato, non che la riga non esista — chi
+        // chiama ha appena letto il proprio utente nella stessa transazione.
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
     }
