@@ -205,6 +205,13 @@ prende in mano.
 Il motivo è semplice e costoso: un piano che vive fuori dal repository non esiste
 per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
 
+**A esito scritto si pianifica subito la sezione successiva, nello stesso giro di
+lavoro.** Chi ha appena chiuso una sezione ha in testa le trappole incontrate, le
+premesse verificate e ciò che il codice fa *adesso*: è materiale che la sessione dopo
+non avrà, e un piano scritto a freddo lo rideriva — che è dove le premesse si
+sbagliano. Una sezione non è conclusa finché la successiva non è pianificata in
+`docs/09-stato-e-roadmap.md`, con le premesse verificate contro il codice.
+
 **A esito scritto, il piano si sposta in `docs/11-piani-conclusi.md`, nello stesso
 commit.** I due file si dividono per **ciclo di vita** e non per argomento: `09` si
 riscrive a ogni fetta, `11` non si riscrive mai — nemmeno per correggere una
