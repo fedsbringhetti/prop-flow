@@ -10713,3 +10713,101 @@ Il punto da percorrere in un giro vero è il **rientro**: uscire, farsi reinvita
 accettare. È il cammino più lungo di questa sezione, attraversa due account e la posta,
 e i suoi test lo provano a pezzi.
 
+---
+
+<a id="poscritto-sezione-6"></a>
+
+### Poscritto — il giro a mano, l'11 settembre, e ciò che ha trovato in dieci minuti
+
+**Questo esito si emenda in coda e non si riscrive**, come ADR-048 fa con ADR-026:
+la previsione sbagliata resta scritta sopra, perché rileggerla è la parte utile.
+
+La frase da emendare è nella tabella qui sopra, e diceva che `A4` era entrato.
+**Era vero per il server e falso per la schermata dopo.** Il primo giro a mano —
+quello che questo stesso esito raccomandava — ha percorso l'uscita e ha trovato in
+dieci minuti un vicolo cieco che i test non vedevano.
+
+#### La catena, e perché ogni anello sembrava innocuo
+
+1. si esce, e il server fa tutto bene: `status = 'left'`, evento
+   `identity.organization.member_left` scritto e dispatchato, nessun errore in
+   `last_error`. **Questa metà l'esito la descriveva correttamente**;
+2. il client tiene l'organizzazione lasciata come **attiva**: sta in `localStorage`,
+   e fin lì è giusto — nessuno gliel'ha ancora tolta;
+3. `GET /api/v1/organizations` mandava `X-Org-Id`, con la ragione scritta che
+   *«l'eccezione sta nell'endpoint e non nel client»*. Sembrava innocuo, perché la
+   risposta non cambia. **Ma è la richiesta che ripara l'organizzazione attiva
+   quando è sbagliata**, e `Authenticated` risolve il ruolo per qualunque richiesta
+   che porti quell'header: `403 org.not_a_member`, **prima** dell'handler;
+4. React Query tiene i dati dell'ultimo successo quando un refetch fallisce, quindi
+   l'elenco continuava a contenere l'organizzazione lasciata, il riallineamento del
+   guscio la *trovava*, e non correggeva niente.
+
+**Sopravviveva al ricaricamento**, che è ciò che lo rendeva definitivo: al reload il
+ricordo viene riselezionato **prima** che l'elenco sia chiesto, quindi anche la prima
+richiesta dopo il reload portava l'identificatore morto. Né uscire e rientrare
+bastava: la preferenza è per utente e resta.
+
+E prima del `403` c'era una finestra peggiore: per quindici minuti il token porta
+ancora quell'organizzazione, header e token coincidono, e il ruolo **non viene
+riletto** — le richieste passano, ma `app.member_role` pretende `status = 'active'`,
+quindi le policy non restituiscono niente. **Schermate vuote senza errore**, che è il
+modo peggiore di sbagliare e quello che il progetto cita più spesso.
+
+#### La parte che brucia
+
+Il commento nel guscio **descriveva questo scenario** come ciò che quel codice esiste
+per impedire — *«un'appartenenza chiusa, e da quel momento ogni richiesta porta un
+`X-Org-Id` che l'API rifiuta, cioè un'applicazione intera che risponde 403»*. La
+guardia era scritta, ragionata, e non reggeva: **il correttore è a sua volta una
+richiesta, e portava addosso il motivo del rifiuto**.
+
+Non era mai scattata perché fino a questa sezione **nessuna appartenenza poteva
+diventare inattiva dal prodotto**. `R16` non ha introdotto il difetto: lo ha reso
+raggiungibile. È la stessa forma di `R31`, che viveva nella *seconda* volta che
+qualcosa succede alla stessa persona — qui vive nella prima volta che una membership
+smette di essere attiva.
+
+#### La correzione
+
+- `getOrganizations` usa `withoutOrganization: true`. È **la** radice: l'unica
+  chiamata che deve poter rispondere quando il ricordo è sbagliato non deve
+  dichiarare un'organizzazione;
+- l'uscita **toglie l'organizzazione dall'elenco in cache** prima di rileggerlo, così
+  il riallineamento è sincrono con la risposta che lo autorizza invece di aspettare
+  un giro di rete;
+- un test del client che riproduce lo stallo, con il finto server che **rifiuta come
+  rifiuta il vero**: senza quel ramo passerebbe anche con il difetto. Verificato al
+  contrario — rimesso l'header, il test fallisce.
+
+Non si è aggiunta la gestione dell'elenco *in errore* nel riallineamento, ed è una
+scelta: con la radice chiusa quell'elenco non può più fallire per questa ragione, e un
+secondo meccanismo per lo stesso caso è un secondo posto in cui sbagliare.
+
+#### Un test asseriva il difetto come se fosse il comportamento
+
+Correggendo, `shell.test.tsx` ha smesso di passare — e la riga che si è rotta è
+quella che conta: *«corregge l'organizzazione ricordata quando non è più fra le
+proprie»* pretendeva che la **prima** richiesta portasse l'identificatore orfano.
+
+Cioè il test che esisteva per provare la correzione **asseriva la metà rotta del
+meccanismo**: che l'elenco delle organizzazioni dichiarasse l'organizzazione
+sbagliata era scritto nero su bianco come atteso, e il commento accanto spiegava che
+senza la correzione *«ogni richiesta risponderebbe 403»* — senza accorgersi che a
+rispondere `403` sarebbe stata anche quella. Adesso asserisce la proprietà giusta e
+più forte: **l'identificatore orfano non esce mai**.
+
+È la stessa specie del test della 5-quater sulla revoca delle sessioni, e la seconda
+volta in due sezioni: un test scritto per confermare una decisione può fissare
+l'errore accanto ad essa, e passa per mesi.
+
+#### Che cosa portarsi dietro
+
+**Il rendimento del giro a mano è di nuovo quello promesso**, e stavolta contro una
+sezione i cui test erano tutti verdi: dieci minuti contro una suite da 459.
+
+E la lezione sta nella forma del difetto, non nel difetto: **una richiesta che ripara
+uno stato non deve dipendere da quello stato**. Vale per l'elenco delle
+organizzazioni e varrebbe per qualunque altra cosa che si scriva per rimettere in
+sesto un client sbagliato.
+

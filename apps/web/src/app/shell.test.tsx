@@ -219,6 +219,13 @@ describe('il selettore delle organizzazioni', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Casa di Giulia').length).toBeGreaterThan(0)
     })
-    expect(orgHeaders[0]).toBe(orphan)
+
+    // **L'identificatore orfano non esce mai**, e questa riga asseriva il
+    // contrario: pretendeva che la *prima* richiesta lo portasse, cioè descriveva
+    // il difetto come se fosse il comportamento. L'elenco delle organizzazioni è
+    // la richiesta che ripara il ricordo, e dichiarare un'organizzazione è
+    // precisamente ciò che la faceva rifiutare — con l'elenco irraggiungibile, la
+    // correzione non partiva mai. Vedi il poscritto dell'esito della sezione 6.
+    expect(orgHeaders.every((header) => header !== orphan)).toBe(true)
   })
 })

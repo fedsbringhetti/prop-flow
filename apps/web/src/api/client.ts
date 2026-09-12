@@ -12,9 +12,17 @@ export interface ApiRequestInit {
   /**
    * Non mandare `X-Org-Id`.
    *
-   * Serve all'accettazione di un invito, che è l'operazione che **crea**
-   * l'appartenenza: dichiarare un'organizzazione di cui non si è ancora membri
-   * farebbe rispondere `403` a una richiesta legittima.
+   * Serve dove **dichiarare un'organizzazione è ciò che romperebbe la richiesta**,
+   * e i casi sono tre, ai due estremi dell'appartenenza:
+   *
+   * - l'accettazione di un invito, che l'appartenenza la **crea**: dichiarare
+   *   un'organizzazione di cui non si è ancora membri farebbe rispondere `403` a
+   *   una richiesta legittima;
+   * - l'uscita da un'organizzazione, che la **chiude**;
+   * - l'elenco delle organizzazioni e `/me`, che non appartengono a nessuna di
+   *   esse — e il primo è **la richiesta che ripara l'organizzazione attiva quando
+   *   è sbagliata**, quindi mandare l'header la farebbe rifiutare proprio nel caso
+   *   in cui serve.
    */
   withoutOrganization?: boolean
   signal?: AbortSignal

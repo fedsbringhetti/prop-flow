@@ -357,6 +357,15 @@ Il punto da percorrere per primo è il **rientro**, che è il cammino più lungo
 sezione 6: uscire da un'organizzazione, farsi reinvitare, accettare. Attraversa due
 account e la posta, e i suoi test lo provano a pezzi.
 
+**Quel giro è cominciato, e nei primi dieci minuti ha trovato un vicolo cieco che una
+suite da 459 test non vedeva**: chi usciva dall'organizzazione **attiva** restava con
+il suo identificatore in `localStorage`, e l'unica richiesta che avrebbe potuto
+correggerlo — l'elenco delle organizzazioni — lo dichiarava, quindi veniva rifiutata.
+Corretto, con un test che riproduce lo stallo. Il resoconto è nel
+[poscritto dell'esito](11-piani-conclusi.md#poscritto-sezione-6), e la lezione da
+portarsi dietro è più generale del difetto: **una richiesta che ripara uno stato non
+deve dipendere da quello stato**.
+
 **Poi la sezione 7**, cancellare in generale (`R15`), che è la prossima dell'ordine.
 
 Il deploy resta **rinviato in fondo**, ed è

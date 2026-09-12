@@ -4,7 +4,7 @@ import { useState, type ComponentProps } from 'react'
 import { useForm } from 'react-hook-form'
 
 import { changePassword, getAccount, leaveOrganization, updateAccount } from '@/api/endpoints'
-import type { Account, Organization } from '@/api/types'
+import type { Account, Items, Organization } from '@/api/types'
 import { Async, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
@@ -295,8 +295,21 @@ function OrganizationRow({ organization }: { organization: Organization }) {
   const leave = useMutation({
     mutationFn: () => leaveOrganization(client, organization.id),
     onSuccess: async () => {
-      // L'elenco è cambiato: `useOrganizations` riallinea l'organizzazione attiva
-      // da sé quando quella corrente non c'è più.
+      // **Si toglie dall'elenco in cache prima di rileggerlo**, e non è
+      // un'ottimizzazione: se l'organizzazione lasciata era quella attiva, ogni
+      // richiesta fatta da qui in avanti porterebbe il suo `X-Org-Id` e
+      // riceverebbe `403 org.not_a_member` — il riallineamento di
+      // `useOrganizations` parte solo quando l'elenco **non** la contiene più, e
+      // aspettare la rilettura lascerebbe una finestra in cui l'applicazione
+      // intera risponde `403`.
+      //
+      // Scriverlo a mano rende il riallineamento immediato e sincrono con la
+      // risposta che lo autorizza. La rilettura resta, perché è l'elenco vero.
+      queryClient.setQueryData<Items<Organization>>(keys.organizations, (previous) =>
+        previous
+          ? { items: previous.items.filter((item) => item.id !== organization.id) }
+          : previous,
+      )
       await queryClient.invalidateQueries({ queryKey: keys.organizations })
     },
   })

@@ -74,15 +74,34 @@ function query(params: Record<string, string | number | boolean | undefined>): s
  *
  * È la sola rotta dell'API che risponda anche senza un'organizzazione attiva, e
  * non è una deroga: «quali organizzazioni sono mie» non appartiene a nessuna di
- * esse. `ApiClient` manda comunque `X-Org-Id` quando ce n'è una — la risposta non
- * cambia — perché l'eccezione sta nell'endpoint e non nel client, e un secondo
- * modo di non mandare l'header sarebbe un secondo modo di sbagliarlo.
+ * esse.
+ *
+ * # `withoutOrganization`, e perché non era così
+ *
+ * Mandava `X-Org-Id` come ogni altra chiamata, con la ragione scritta che
+ * l'eccezione stesse nell'endpoint e non nel client. Sembrava innocuo — la
+ * risposta non cambia — e non lo era: **questa è la richiesta che ripara
+ * l'organizzazione attiva quando è sbagliata**, e mandare l'header la faceva
+ * rifiutare proprio nel caso in cui serviva.
+ *
+ * `Authenticated` risolve il ruolo per qualunque richiesta che porti `X-Org-Id` e
+ * risponde `403 org.not_a_member` su un'appartenenza non attiva — **prima**
+ * dell'handler. Chi usciva da un'organizzazione restava con il suo identificatore
+ * in `localStorage`, e da quel momento l'unica chiamata che avrebbe potuto
+ * correggerlo portava addosso il motivo del rifiuto. React Query tiene i dati
+ * dell'ultimo successo quando un refetch fallisce, quindi l'elenco continuava a
+ * contenere l'organizzazione lasciata e il riallineamento non partiva mai.
+ * Sopravviveva anche al ricaricamento, perché il ricordo viene riselezionato prima
+ * che l'elenco sia chiesto.
+ *
+ * Questa è quindi la seconda chiamata che l'header non lo manda, e per la stessa
+ * ragione della prima: dichiarare un'organizzazione è ciò che qui va evitato.
  *
  * **Nessun cursore**: le organizzazioni di una persona sono la propria più quelle
  * di chi le affitta casa.
  */
 export function getOrganizations(client: ApiClient): Promise<Items<Organization>> {
-  return client.get<Items<Organization>>('/organizations')
+  return client.get<Items<Organization>>('/organizations', { withoutOrganization: true })
 }
 
 /**
