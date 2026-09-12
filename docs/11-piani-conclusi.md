@@ -10811,3 +10811,17 @@ uno stato non deve dipendere da quello stato**. Vale per l'elenco delle
 organizzazioni e varrebbe per qualunque altra cosa che si scriva per rimettere in
 sesto un client sbagliato.
 
+#### Il giro, completato
+
+Percorso per intero il **12 settembre 2026**, da chi non aveva scritto il codice:
+i propri dati, il cambio password con la seconda scheda aperta, l'uscita con e senza
+un contratto in essere, e il **rientro** — uscire, farsi reinvitare, accettare. Oltre
+al vicolo cieco qui sopra **non ha trovato altro nella sezione**, ed è un esito da
+scrivere quanto l'altro: una fetta che chiude con «tutto bene» dopo un giro fatto
+davvero è una fetta collaudata, non una fetta che il giro non l'ha fatto.
+
+Ha trovato invece due cose **fuori** dalla sezione, usando il prodotto per
+arrivarci: `R43`, che l'inquilino non ha modo di contattare chi gli affitta casa, e
+`R44`, che un immobile nasce in bozza, ci resta, e in bozza si affitta lo stesso.
+Entrambe in [12](12-da-fare.md).
+

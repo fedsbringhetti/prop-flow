@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Quattordici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Quindici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -16,7 +16,8 @@ e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter); `R7`, 
 le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
 pianificazione come ciò che quella sezione decide di **non** fare — e `R41` **eseguendo** la
 6, come conseguenza di ciò che quella sezione ha costruito, `R42` **controllando la
-sessione** dopo averla conclusa, e `R43` **usando** il prodotto.
+sessione** dopo averla conclusa, e `R43` e `R44` **usando** il prodotto — nel giro a
+mano che l'esito della 6 chiedeva.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -155,6 +156,7 @@ alla conversazione successiva un contesto che non può ricostruire.
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
+| R44 | aperta | **Un immobile nasce in «Bozza» e ci resta**, e in bozza si può affittare lo stesso | Trovata **usando il prodotto**, al primo immobile creato. Tre cose si sommano. `draft` è il default alla creazione (`Property::create`) e nessuna transizione lo muove; il form di creazione **non offre lo stato**, quindi si atterra sempre in bozza; e lo stato si cambia solo dentro il dialogo «Modifica» della scheda, che non è dove uno cerca uno stato. La tendina offre tre valori su sei ed è giusto così: `rented` e `partially_rented` sono **derivati** dai contratti (ADR-019) e `archived` ha l'operazione sua. Il sintomo che lo fa sembrare rotto è il doppio badge della 5-ter: `draft` è classificato come *giudizio*, quindi un immobile affittato senza essere mai stato dichiarato disponibile mostra **«Affittato (Bozza)» per sempre** — corretto per costruzione, e insopportabile da guardare. **Due decisioni prese, una da fare.** *Presa:* il form di creazione **offre lo stato**, con «Disponibile» proposto e «Bozza» ancora scegliibile per chi sta compilando; il dominio non cambia default. *Presa:* **in bozza non si affitta** — oggi `draft` non blocca nulla (verificato: nessun caso d'uso lo guarda), e deve invece rifiutare. È una regola del service layer come «almeno un owner»: il legame contratto→immobile è cross-row, quindi non è un trigger. *Da fare:* **dove** rifiutare. «Affittare» nel modello derivato è **l'attivazione** — `rented` discende da `app.lease_in_force`, cioè da un contratto attivo — quindi la lettura naturale è che `ActivateLease` rifiuti su un immobile in bozza, con un codice suo (`property.not_lettable` o simile, `409`), e che una bozza di contratto su una bozza di immobile resti possibile perché sono due cose che si preparano insieme. L'alternativa — rifiutare già `DraftLease` — obbliga a un ordine di compilazione. **La trappola è la porta di servizio**: se `PATCH /properties/{id}` accetta `status = draft` su un immobile con un contratto in essere, l'anomalia rientra dall'altra parte. La regola va quindi scritta in **due** posti — non si attiva su una bozza, e non si riporta in bozza ciò che è affittato — oppure il badge «Affittato (Bozza)» resta raggiungibile. Chiude per costruzione quel doppio badge: se la regola regge, `draft` smette di essere un giudizio che il fatto può smentire, e `propertyJudgements` in `status.tsx` va rivisto di conseguenza |
 | R8 | aperta | **Spiegare come si usa il sito** e che cosa fanno le sezioni | Aperto per intero: non è deciso *dove* stia — primo accesso guidato, pagina d'aiuto, testi contestuali sugli stati vuoti, o una combinazione. Nota: gli stati vuoti **esistono già** e sono progettati (`@/components/state`), e alcuni portano già il gesto che li riempie: è il posto più economico dove far entrare una spiegazione, e va valutato prima di costruire una sezione d'aiuto a sé |
 
 ### Stati che nessuno aggiorna
