@@ -64,6 +64,32 @@ export const it = {
     emptyTitle: 'Non c’è ancora niente',
   },
 
+  /**
+   * La selezione in tabella e l'azione in blocco, che è la sezione 7.
+   *
+   * Nessuna di queste frasi dice «Elimina»: il verbo è dell'entità e sta nel
+   * suo modulo — *Archivia*, *Annulla* — perché il prodotto non cancella niente
+   * e ogni entità esce di scena a modo suo. Qui c'è solo ciò che è uguale per
+   * tutte: contare, scegliere, dire come è andata.
+   */
+  selection: {
+    selectPage: 'Seleziona tutte le righe caricate',
+    selectRow: 'Seleziona',
+    region: 'Righe selezionate',
+    /** «Caricate» e mai «tutte»: gli elenchi sono a cursore, e la pagina è ciò
+     *  che si vede, non l'elenco intero. */
+    count: '{count} selezionate su {total} caricate',
+    progress: 'In corso: {done} di {total}',
+    clear: 'Deseleziona',
+    /**
+     * L'esito di un giro, quando qualcosa non è passato. Le righe non fatte
+     * restano selezionate con il motivo accanto, e questa frase dice solo che
+     * cosa guardare. `{failed}` è il numero di righe rimaste.
+     */
+    partial: '{done} fatte. {failed} non fatte: restano selezionate, con il motivo accanto. Correggi e riprova.',
+  },
+
+
   auth: {
     loginTitle: 'Entra in PropFlow',
     loginSubtitle: 'Amministra i tuoi immobili, i contratti e la contabilità.',
