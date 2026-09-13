@@ -641,94 +641,175 @@ concludersi con la membership, in una transazione: registrarsi e poi accettare i
 passi lascerebbe fra i due un utente senza organizzazione, che è lo stato che la
 risposta 1 esiste per non produrre.
 
-### Che cosa questo piano **non** decide
+### L'ADR è scritto, e il piano dei passi discende da lì
 
-Le risposte sopra sono analisi e non decisioni: sono scritte perché chi apre l'ADR non
-le riderivi. L'ADR può contraddirle, e se lo fa deve dire perché. Ciò che il piano
-decide è **l'ordine**: prima l'ADR, poi la migration, poi il dominio, poi il client, e
-il piano di dettaglio dei passi `F2`–`F5` **si scrive dopo l'ADR**, in questo documento,
-perché dipende da esso in ogni riga.
+[ADR-053](08-decisioni.md#adr-053), **13 settembre 2026**: l'inquilino non ha
+un'organizzazione propria e si registra dall'invito, dentro l'organizzazione di chi lo
+ospita, in una transazione; il proprietario nasce da un invito di piattaforma, in una
+tabella nuova `app.owner_invitations`, emesso da uno script in `ops/` e non da una rotta;
+la verifica è fuori dal prodotto; **il database si svuota**, quindi nessuna migration di
+dati; il login non cambia; `/invito` è l'ingresso per entrambi i generi, con l'email
+vincolata a quella dell'invito e la stessa risposta per «token inesistente» e «token
+usato o scaduto». Le sei domande della sezione precedente sono chiuse lì, con le
+alternative scartate; qui sotto c'è solo ciò che discende.
 
-### Come si lavora su questa sezione — un metodo nuovo, da provare qui
+**Che cosa il piano dà per verificato, oltre alla tabella sopra:**
 
-Deciso il **13 settembre 2026**, prima di cominciare. Fino alla 7 una sola
-conversazione ha pianificato, scritto il codice, verificato e scritto l'esito. Da questa
-sezione i tre ruoli si separano, e il modello che li esegue non è lo stesso:
-
-| Ruolo | Chi | Che cosa |
-|---|---|---|
-| **Decidere e pianificare** | la conversazione principale, con il modello più capace | l'ADR, discusso con chi ha chiesto il lavoro; il piano dettagliato dei passi **dopo** l'ADR, con le premesse verificate contro il codice; le decisioni prese eseguendo |
-| **Scrivere il codice** | un agente con un modello meno oneroso, **uno per passo** | il passo così com'è scritto, con il suo criterio di fine, i test previsti e le verifiche al contrario da fare e da riportare |
-| **Verificare** | la conversazione principale, o un secondo agente con il modello più capace | ogni passo **prima** che cominci il successivo: rileggere il diff contro il piano, **rifare** le verifiche al contrario, `just ci` |
-| **Chiudere** | la conversazione principale | la tabella dei commit, il push con il suo via libera, l'esito in [11](11-piani-conclusi.md) e il piano della sezione 9 |
-
-**Perché separarli.** I passi *decisi e delimitati* — «monta la primitiva su questi tre
-elenchi, con questo verbo e queste stringhe» — sono la parte più lunga di una sezione e
-la meno bisognosa di giudizio; i piani di questo documento sono già scritti per chi non
-era nella conversazione, e un agente è esattamente quel lettore. La parte che ha bisogno
-di giudizio è breve e costa cara se sbagliata.
-
-**Che cosa non si delega, e per quale ragione.** Nella 7 le tre premesse sbagliate del
-piano sono venute fuori *scrivendo il codice*, e ognuna chiedeva di fermarsi e
-riemendare il piano invece di aggirarlo. **Un agente che esegue un piano tende a farlo
-funzionare, non a contestarlo**: quindi l'ADR, il dominio con le sue autorizzazioni, e
-l'esito restano alla conversazione principale, e ogni passo delegato porta scritto
-*«se una premessa del piano si rivela falsa, fermati e riferisci: non aggirarla»*.
-
-**La verifica è una verifica, non una lettura.** La 6 e la 7 hanno mostrato che un test
-verde può asserire il difetto. Chi verifica **rimette il difetto e guarda il test
-cadere**, per ogni test consegnato dall'agente; leggere il diff non basta, e con un
-autore meno forte basta ancora meno.
-
-**Il costo fisso di un agente è il contesto.** Parte a freddo e deve leggere
-`CLAUDE.md`, i documenti pertinenti e il piano prima della prima riga: su un passo
-piccolo quel costo supera il risparmio. Un agente **per passo** — `F2`, `F3`, … — e non
-uno per la sezione: la revisione resta incrementale, e un errore non si porta dietro il
-passo dopo.
-
-**Ciò che non cambia.** I commit si concordano come tabella e si fanno dalla
-conversazione principale; il push è una conferma a parte; niente autoreferenza
-dell'assistente negli artefatti. **L'esito della 8 dice se il metodo ha retto**, con le
-misure che ha: quanti passi delegati, quanti rifiutati alla verifica e perché, e se
-qualche premessa falsa è passata inosservata all'agente.
+| Premessa | Verifica |
+|---|---|
+| `register_and_login` è la porta di ogni test | 108 occorrenze in `crates/api/tests/http_contract.rs`, zero in `persistence.rs`. `register_and_login_with_email` è quella che l'inquilino usa per registrarsi **con l'email dell'invito** prima di accettare |
+| La tabella dei privilegi di colonna è il controllo 12 di `ops/sql/checks/schema_invariants.sql`, e `org_invitations` c'è già con sei colonne | vero, righe 147–149 |
+| I token opachi sono 256 bit in `base64url` senza padding, hash SHA-256 del testo | `crates/infrastructure/src/security/refresh.rs`, `random_token` e `hash_token` |
+| `/registrazione` esiste due volte nel router: da fuori sessione è `RegisterPage`, da dentro rimanda a `returnTo` | `apps/web/src/app/App.tsx`, righe 138 e 217 |
+| `password_reset_codes` è il precedente di una tabella senza `org_id` letta dal pool privilegiato, con RLS attiva e una policy «la riga è tua» solo per l'invariante 2 | migration `0037` |
 
 ### Decomposizione
 
-##### `F1` — L'ADR
+L'ordine è quello del rischio: prima ciò che rompe la suite, poi ciò che la ripara,
+poi il prodotto. Ogni passo è delegabile a un agente per passo, come scritto sopra, con
+il suo criterio di fine; **`F1` è fatto e non si delega mai**.
 
-`docs/08-decisioni.md`, una voce sola: le sei domande, le alternative, la scelta e la
-ragione, e **che cosa succede agli utenti esistenti**. Va discusso e non solo scritto:
-è l'unico passo di questa sezione che una conversazione deve chiudere prima che la
-successiva cominci. Con l'ADR scritto, **il piano dei passi dopo si emenda qui** con
-la stessa precisione delle sezioni precedenti — decisioni prese, trappole, criterio di
-fine — e solo allora si tocca il codice.
+##### `F1` — L'ADR · **fatto**
 
-##### `F2` — Lo schema
+[ADR-053](08-decisioni.md#adr-053). Il resto di questa sezione lo cita e non lo ripete.
 
-Probabilmente una migration: il genere di invito che crea un proprietario, con la sua
-policy — chi lo emette, chi lo accetta — e i privilegi di colonna nella forma della
-`0019`. Il controllo delle invarianti dello schema va esteso, e `docs/03` con lui.
+##### `F2` — Lo schema: `app.owner_invitations`
 
-##### `F3` — Il dominio e i casi d'uso
+Una migration, `0040_owner_invitations.sql`, nella forma della `0037`: `id`, `email`
+(`app.email_address`), `token_hash BYTEA` con indice unico, `expires_at` con il `CHECK`
+sul `created_at`, `accepted_at`, `accepted_by` (FK a `users`, `ON DELETE SET NULL`, con il
+suo indice per l'invariante 4), `revoked_at`, `created_at`. **Nessun `org_id`**: la
+tabella è di piattaforma, e il controllo 1 delle invarianti va aggiornato perché la
+riconosca come lo fa per `users` e `password_reset_codes`. **Nessun `updated_at`**, per
+la ragione della `0037`. Un indice parziale unico su `email WHERE accepted_at IS NULL
+AND revoked_at IS NULL`: un solo invito pendente per indirizzo, come `org_invitations_pending_uk`.
+RLS attiva con una policy che nega tutto al ruolo applicativo (`USING (false)`): la
+scrive il migratore dallo script, la legge il pool privilegiato; il controllo 2 vuole
+una policy, e questa è la più stretta che soddisfi il controllo. `GRANT SELECT, UPDATE
+(accepted_at, accepted_by)` al ruolo applicativo — è ciò che l'accettazione scrive — e
+la coppia nel controllo 12. `docs/03` con la tabella e la ragione.
 
-`RegisterOwner` smette di essere aperto; nasce la registrazione dell'inquilino
-**dall'invito**; nasce l'emissione dell'invito per un proprietario, dietro
-`is_platform_admin`. `begin_privileged()` resta ai soli flussi senza contesto —
-regola 27 — e la verifica del token in quei flussi va scritta sapendo che **non c'è
-Row Level Security** a proteggerla.
+**Criterio di fine:** `./ops/ci/check-schema.sh` verde sul container effimero; un test
+di persistenza che prova che `propflow_app` non può né inserire né leggere la tabella
+fuori dal pool privilegiato, e che l'`UPDATE` su `email` o `token_hash` è `permission
+denied`.
 
-##### `F4` — Il client
+##### `F3` — Lo script che emette il token, e il runbook
 
-La registrazione diventa due porte: dall'invito, e da un token di proprietario. Lo
-stato «nessuna organizzazione» entra nel guscio come stato di prima classe se l'ADR
-sceglie la risposta 1. `/invito` resta l'ingresso di chi è invitato, e smette di
-mandare a una registrazione che crea un'organizzazione.
+`ops/dev/issue-owner-invitation.sh <email> [giorni]`: genera 32 byte casuali con
+`openssl rand`, li codifica `base64url` senza padding **esattamente come
+`random_token`** (il test di `F4` incolla un token prodotto dallo script, quindi le due
+codifiche devono coincidere), calcola lo hash SHA-256 con `openssl dgst -binary`,
+inserisce la riga con il ruolo del migratore (`psql` o il client dell'immagine, come gli
+altri script di `ops/`) e stampa il token in chiaro una volta sola. Scadenza di default:
+sette giorni, la stessa dell'invito all'inquilino. Il runbook in [07](07-operazioni.md):
+quando si emette, come si consegna, come si revoca (`UPDATE … SET revoked_at`), come si
+potano gli scaduti — tutto con il ruolo del migratore, come per `password_reset_codes`.
 
-##### `F5` — L'harness, i documenti, l'esito
+**Criterio di fine:** lo script gira contro il database di sviluppo, `bash -n` in CI
+come per gli altri script, e la riga in `07` con il comando esatto.
 
-I test che costruiscono inquilini cambiano forma **prima** dei test nuovi; [04](04-sicurezza.md)
-e [05](05-api.md) per i flussi di registrazione; l'esito in [11](11-piani-conclusi.md)
-e **il piano della sezione 9** scritto subito dopo.
+##### `F4` — Il dominio e i casi d'uso, **con la porta vecchia ancora aperta**
+
+Le rotte nuove si aggiungono; `POST /auth/register` resta com'è fino a `F6`, così la
+suite non va mai in rosso e l'harness si può spostare un pezzo alla volta.
+
+- `OwnerInvitation` nel dominio (`identity`), con `accept(now)` e le sue invarianti —
+  pendente, non scaduta, non revocata — e senza `issue`: la emette lo script. Un
+  `Invariant` con codice proprio, e la rotta che lo appiattisce su
+  `401 auth.invalid_credentials` come per l'invito (decisione 6 dell'ADR);
+- porta `OwnerInvitationRepository` con `find_pending_by_hash` e `mark_accepted`,
+  implementazione su `PgUnitOfWork`, letta **dal pool privilegiato**;
+- `AcceptOwnerInvitation`: il corpo di `RegisterOwner` di oggi più il token, stesso
+  `begin_privileged`, la verifica del token per hash e per stato, l'email dell'invito al
+  posto di quella del corpo. L'evento `UserRegistered` resta. Rotta:
+  `POST /auth/accept-owner-invitation` (`token`, `full_name`, `password`,
+  `organization_name?`), `201` con la sessione e il cookie come il login;
+- `RegisterTenantFromInvitation`: `begin_privileged`, verifica del token in
+  `org_invitations` per hash e per stato, `User::register` con l'email dell'invito, poi
+  **le tre scritture di `AcceptInvitation` nello stesso ordine** — membership, parte
+  contrattuale, invito marcato — e il suo evento. Non chiama `AcceptInvitation`: quello
+  legge sotto `has_pending_invitation`, che qui non c'è; ne **condivide** le tre
+  scritture attraverso una funzione del modulo, non una copia. Rotta:
+  `POST /auth/register-from-invitation` (`token`, `full_name`, `password`), `201` con
+  la sessione e il cookie;
+- `AcceptInvitation` resta per chi ha già un account (ADR-051);
+- rate limit come il login su entrambe; [05](05-api.md) e `openapi.rs`.
+
+**Criterio di fine:** i test di contratto — un token da proprietario apre un account e
+un'organizzazione; un token da inquilino apre un account **dentro** l'organizzazione di
+chi ha invitato, con zero organizzazioni proprie e la parte collegata; token
+inesistente, usato, scaduto e revocato rispondono **la stessa cosa**; un'email diversa
+da quella dell'invito non è nemmeno un campo. La suite vecchia è ancora verde: la porta
+vecchia è aperta.
+
+##### `F5` — L'harness dei test passa dalle porte nuove
+
+È la trappola più cara della sezione ed è il passo che la disinnesca, **prima** che la
+porta vecchia si chiuda. Oggi ogni inquilino di test nasce con
+`register_and_login_with_email` (owner della propria organizzazione) e poi accetta.
+L'harness guadagna:
+
+- `issue_owner_invitation(&app, email) -> token`, che scrive la riga **come farà lo
+  script** — un `INSERT` con il ruolo del migratore attraverso la connessione di
+  bootstrap che `common` già usa — così `register_and_login` diventa «emetti, accetta
+  con il token, entra» e i **108** chiamanti non cambiano;
+- `register_tenant_from_invitation(&app, token, name, password) -> (access_token, user_id)`,
+  e `coliving_tenant` e simili passano da lì invece che da «registrati come owner, poi
+  accetta».
+
+Se la suite verde con l'harness nuovo richiede un comportamento del prodotto che l'ADR
+non prevede, **ci si ferma**: è la premessa falsa da riferire, non da aggirare.
+
+**Criterio di fine:** nessun test costruisce più un inquilino come owner; i test che
+provavano proprio quel fatto — ad esempio quelli che contano le organizzazioni di un
+inquilino — sono riscritti con l'aspettativa nuova, e **il vecchio valore compare nel
+messaggio dell'assert** come cosa che non deve tornare. Suite verde.
+
+##### `F6` — La porta vecchia si chiude
+
+`POST /auth/register` **sparisce**: non «richiede un token», perché un corpo con un
+campo in più su una rotta che si chiama ancora `register` insegnerebbe il contrario di
+ciò che l'ADR decide. `RegisterOwner` viene rimosso; `openapi.rs`, [05](05-api.md) e il
+test che elenca le rotte aperte senza sessione si aggiornano. Un test di contratto prova
+che `POST /auth/register` risponde `404 endpoint.not_found`.
+
+##### `F7` — Il client
+
+- `/invito` chiede il codice; se non c'è una sessione, il passo dopo è il form di
+  registrazione **con il codice già dentro** e senza il campo email — il nome
+  dell'organizzazione compare solo se il server, alla verifica del codice, dice che è
+  un invito da proprietario. Serve quindi una rotta di **sola lettura** del genere
+  dell'invito? **No**: il form chiede nome e password e manda a
+  `register-from-invitation`; se il token è da proprietario il server risponde
+  `409 invitation.owner_token` e il client rimanda lo stesso corpo, più il nome
+  dell'organizzazione, a `accept-owner-invitation`. Il codice esce **solo a chi
+  possiede un token valido**, quindi non è un oracolo sui token emessi: chi indovina
+  riceve `401` come per un token inesistente. L'ADR va emendato con questa riga se il
+  passo la conferma;
+- `/registrazione` da fuori sessione **smette di esistere come pagina aperta**: rimanda
+  a `/invito` con una riga che dice che si entra su invito. Il link «Non hai un
+  account? Registrati» della pagina di accesso porta lì;
+- lo stato «nessuna organizzazione» nel guscio: quando `getOrganizations` risponde
+  con zero elementi, il guscio mostra una schermata dedicata — chi si è, che l'accesso
+  passa da un invito, l'uscita — e **nessuna navigazione**. Non è un errore e non è un
+  vuoto di un elenco: è il terzo stato del guscio, accanto a «fuori sessione» e
+  «dentro»;
+- `AuthPage` perde il form di registrazione libera; i test che lo coprivano
+  (`AuthPage.test.tsx`, i percorsi da tastiera) si spostano sul form nuovo.
+
+**Criterio di fine:** tre test del client — la registrazione dall'invito che manda il
+token e non un'email; il form che mostra il campo dell'organizzazione solo dopo il
+`422`; il guscio con zero organizzazioni che mostra la schermata dedicata e **nessuna
+richiesta con `X-Org-Id`** (è la proprietà del poscritto della 6, riapplicata).
+
+##### `F8` — I documenti, l'esito, il piano della 9
+
+[04](04-sicurezza.md) per i due flussi di registrazione e per il token di piattaforma;
+[05](05-api.md) per le rotte; [07](07-operazioni.md) per il runbook; `R9` esce da
+[12](12-da-fare.md); l'esito in [11](11-piani-conclusi.md) **con le misure del
+metodo** — passi delegati, rifiutati alla verifica, premesse false passate inosservate;
+e il piano della sezione 9 (`R8`, spiegare come si usa il sito) scritto subito dopo.
 
 ### Trappole
 
@@ -751,9 +832,10 @@ guardia e qui non ci sono. Il token va cercato per hash e per **stato**, e l'ema
 dell'invito va confrontata con quella che si registra.
 
 **L'harness dei test dà per scontato che ogni inquilino sia owner di qualcosa.**
-`register_and_login_with_email` seguita dall'accettazione è in decine di test; il
-cambiamento va fatto **prima** nell'harness, con la suite verde, e poi nel prodotto —
-altrimenti si corregge il prodotto guardando test che descrivono il mondo vecchio.
+`register_and_login_with_email` seguita dall'accettazione è in 108 test; l'harness
+si sposta sulle porte nuove **mentre la vecchia è ancora aperta** (`F5` prima di
+`F6`), con la suite verde a ogni passo — altrimenti si corregge il prodotto guardando
+test che descrivono il mondo vecchio, o si chiude la porta con cento test rossi.
 
 **`platform_role = 'admin'` si assegna solo a mano**, e il valore è `'admin'`, non
 `'platform_admin'`. Un runbook in [07](07-operazioni.md) è il minimo; una rotta è un

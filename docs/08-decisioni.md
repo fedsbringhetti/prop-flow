@@ -3390,3 +3390,155 @@ della regola.
 e mette una credenziale **valida** in un archivio che non si ripulisce — la casella di
 posta — invece di un codice a uso singolo che scade. È lo stesso argomento del punto 1,
 peggiorato: il link almeno non era la password.
+
+---
+
+<a id="adr-053"></a>
+
+## ADR-053 — Si entra per invito: l'inquilino nel conto di chi lo ospita, il proprietario con un token di piattaforma
+
+**13 settembre 2026.** Scritta **prima** del codice, come il metodo impone: è il primo
+passo della [sezione 8](09-stato-e-roadmap.md#piano-sezione-8), e la sezione non scrive
+una riga finché queste sei domande non hanno una risposta. Chiude la parte di `R9` che è
+una decisione; il resto di `R9` è il codice che ne discende.
+
+### Il fatto
+
+Chiunque si registri diventa **owner di un'organizzazione propria**: `RegisterOwner` è
+l'unico caso d'uso di registrazione e chiama `Organization::personal(...)` e
+`OrgMember::active(..., OrgRole::Owner, ...)` senza un ramo. Un inquilino invitato deve
+registrarsi *prima* di accettare — `AcceptInvitation` è `Authenticated` — quindi **ogni
+inquilino è anche owner di un'organizzazione vuota**, dove può registrare immobili a
+ragione: la Row Level Security e `ensure_staff` glielo concedono, e il client lì gli
+mostra «Registra un immobile» perché `useIsStaff()` dice il vero.
+
+[ADR-042](#adr-042) lo dichiarava: il ramo sul ruolo nel client è una scelta di che cosa
+offrire e **non un confine**. Il confine mancava nel modello, ed è tollerabile finché il
+prodotto è «per un proprietario che conosci». Smette di esserlo il giorno in cui la
+registrazione è aperta a sconosciuti — cioè il deploy.
+
+Verificando le premesse del piano sono emerse altre due cose che questa decisione deve
+coprire: il login preferisce la membership `Owner` (`pick_default_membership`), quindi un
+inquilino appena registrato atterra **nella propria organizzazione vuota** e non in
+quella di chi lo ha invitato; e un utente **senza nessuna organizzazione** è uno stato
+che il guscio non conosce — l'effetto di riallineamento esce su `items.length === 0`, e
+ogni elenco risponderebbe `403 org.not_selected`.
+
+### 1. Un utente nato inquilino non ha un'organizzazione propria
+
+La membership arriva **solo con l'invito**. La registrazione di un inquilino parte
+dall'invito — il codice ricevuto per email, incollato come in [ADR-045](#adr-045) — e
+finisce nell'organizzazione di chi lo ha invitato, con la parte contrattuale collegata,
+**in una sola transazione**: utente, membership, collegamento, invito marcato. Non
+esiste un istante in cui l'inquilino è registrato e senza organizzazione.
+
+*Alternativa scartata: l'organizzazione personale come oggi, nascosta meglio.* È `R9`
+stesso; nascondere non è un confine, e ADR-042 l'aveva già detto.
+
+*Alternativa scartata: un'organizzazione personale «spenta»*, con una colonna e un ramo
+in ogni policy dello staff. Sembra economica ed è una migration larga più un **secondo
+criterio di staff** da tenere allineato al primo per sempre: `is_org_staff` è chiamata
+in ogni policy di scrittura dello schema.
+
+**Conseguenza sul guscio.** Lo stato «nessuna organizzazione» diventa uno stato di
+prima classe, anche se la transazione sopra fa sì che nessun utente nuovo ci nasca:
+ci si arriva **uscendo** dall'unica organizzazione che si aveva (sezione 6, `R16`),
+o quando l'invito che ci aveva portati dentro viene revocato. Il guscio mostra una
+schermata che dice che cosa si è e che cosa si aspetta — un invito — invece di una
+navigazione vuota che risponde `403`. `getOrganizations` e `/me` funzionano già senza
+`X-Org-Id` per la ragione del [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6).
+
+### 2. Un proprietario nasce da un invito di piattaforma
+
+Un genere di invito nuovo, **senza organizzazione**: la crea l'accettazione. Chi lo
+accetta si registra e riceve ciò che `RegisterOwner` dà oggi a chiunque — utente,
+organizzazione personale, membership `owner` — in una transazione, dietro un token.
+`RegisterOwner` smette di essere una rotta aperta.
+
+**Tabella nuova, `app.owner_invitations`**, e non `org_invitations` con `org_id`
+annullabile: `org_invitations_staff` è `FOR ALL USING (is_org_staff(org_id))`, e un
+`org_id` nullo la renderebbe falsa o da riscrivere; l'indice parziale
+`org_invitations_pending_uk` è su `(org_id, email)`; e ogni query su quella tabella
+erediterebbe un ramo «senza organizzazione» che oggi non ha. La tabella nuova ha la forma
+di `password_reset_codes` (migration `0037`, [ADR-052](#adr-052)): `email`,
+`token_hash`, `expires_at`, `accepted_at`, `accepted_by`, `revoked_at`, `created_at`,
+nessun `org_id`, nessun `deleted_at`. Lo hash è SHA-256 del token in chiaro, come
+`OpaqueTokenGenerator` fa per inviti e sessioni.
+
+*Alternativa scartata: registrazione libera più una colonna «verificato»* che sblocca lo
+staff. Lascia aperta la porta della registrazione e sposta il confine in ogni policy
+dello staff — lo stesso costo dell'organizzazione «spenta», con in più un utente che
+esiste e non può fare niente.
+
+### 3. La verifica è fuori dal prodotto, e il token si emette da un runbook
+
+Come si accerti che una persona sia un proprietario — un'email, una telefonata, un
+documento — è una decisione di chi amministra la piattaforma e **non vive nel prodotto**.
+Nel prodotto vive solo il fatto che il token esiste.
+
+Il token lo emette uno **script in `ops/`**, con il ruolo del migratore, documentato in
+[07](07-operazioni.md): genera 256 bit casuali, li codifica come fa
+`OpaqueTokenGenerator` (`base64url` senza padding), scrive lo hash nella tabella e
+stampa il token in chiaro **una volta**, perché lo si mandi. Nessuna rotta HTTP:
+sarebbe la prima rotta *di piattaforma* del prodotto, un perimetro di sicurezza nuovo
+da difendere e testare per un gesto che oggi si fa qualche volta al mese. `platform_role`
+resta com'è — assegnato a mano, valore `'admin'` — e **questa decisione non lo usa**: il
+giorno in cui l'emissione diventa una rotta, `is_platform_admin()` è il suo guardiano,
+ed è già scritto.
+
+### 4. Gli utenti esistenti: il database si svuota
+
+Non c'è produzione, e non c'è nessun utente che non sia un dato di prova: il primo
+deploy è [rinviato](12-da-fare.md#lordine-di-esecuzione) per mancanza di mezzi, e i
+database locali si ricreano. **Nessuna migration di dati**, nessuna regola per
+distinguere «chi è un proprietario» da «chi si era registrato per un invito», nessuna
+archiviazione di organizzazioni personali vuote. Chi ha un database locale con dei dati
+lo azzera (`just down-hard`, poi `just setup`) quando prende questa sezione.
+
+Va detto che cosa questa scelta **non** copre, perché è il caso che tornerà: il giorno in
+cui ci sarà un database con utenti veri, un cambiamento della stessa specie avrà bisogno
+della migration che qui non si scrive. Questo ADR non la anticipa.
+
+### 5. Il login non cambia
+
+`pick_default_membership` preferisce `Owner`, poi `Manager`, poi `Tenant`. Con la
+decisione 1 un inquilino non ha una membership `Owner` da preferire, e con la 4 non
+esistono utenti vecchi che ce l'abbiano: il caso che rendeva l'ordine sbagliato
+**sparisce** invece di essere corretto. Per chi è owner di un'organizzazione e inquilino
+in un'altra — il caso vero di [01](01-prodotto.md) — preferire quella che amministra
+resta giusto.
+
+### 6. `/invito` è l'ingresso di chi è invitato, per entrambi i generi
+
+Un codice incollato in un campo, come [ADR-045](#adr-045); se la persona non ha un
+account, la registrazione **parte da lì** e porta il codice con sé, invece di mandare a
+una registrazione che crea un'organizzazione. I due generi di invito si distinguono dal
+codice — il server sa in quale tabella cercarlo — e il form chiede le stesse cose:
+nome, password. Il nome dell'organizzazione lo chiede solo a chi accetta un invito da
+proprietario, perché solo lui ne crea una.
+
+**L'email della registrazione è quella dell'invito**, e non un campo: un invito è per
+una persona, e la policy `has_pending_invitation` confronta l'email dell'utente con
+quella dell'invito. Chi vuole un altro indirizzo chiede un altro invito.
+
+**Le risposte a «token inesistente» e a «token valido, ma già usato o scaduto» sono la
+stessa** (`401 auth.invalid_credentials`, come già per l'invito e per il codice di
+recupero): un token è una credenziale, e distinguere i due casi darebbe un oracolo su
+quali token sono stati emessi.
+
+### Conseguenze
+
+- `RegisterOwner` diventa l'accettazione di un invito da proprietario; nasce la
+  registrazione dell'inquilino dall'invito; `AcceptInvitation` resta per chi **ha già**
+  un account — l'inquilino che torna di [ADR-051](#adr-051), o chi è owner altrove;
+- entrambe le registrazioni girano sul pool privilegiato (regola 27: prima
+  dell'autenticazione non c'è contesto) e **senza Row Level Security**: la prova di
+  possesso del token è dell'applicazione, per hash e per stato, e l'email dell'invito
+  vincola quella dell'utente;
+- il guscio ha uno stato «nessuna organizzazione»;
+- l'harness dei test smette di costruire ogni inquilino come owner di qualcosa: è la
+  prima cosa da cambiare, con la suite verde, **prima** del prodotto;
+- una migration (`app.owner_invitations`, con la sua policy e i privilegi di colonna
+  nella forma della `0019`), uno script in `ops/`, un runbook in [07](07-operazioni.md);
+- `R9` esce da [12](12-da-fare.md) con l'esito della sezione 8; `R41` — chiedere di
+  rientrare — resta dov'è: questa decisione non la tocca.
