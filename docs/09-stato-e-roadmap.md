@@ -649,6 +649,49 @@ decide è **l'ordine**: prima l'ADR, poi la migration, poi il dominio, poi il cl
 il piano di dettaglio dei passi `F2`–`F5` **si scrive dopo l'ADR**, in questo documento,
 perché dipende da esso in ogni riga.
 
+### Come si lavora su questa sezione — un metodo nuovo, da provare qui
+
+Deciso il **13 settembre 2026**, prima di cominciare. Fino alla 7 una sola
+conversazione ha pianificato, scritto il codice, verificato e scritto l'esito. Da questa
+sezione i tre ruoli si separano, e il modello che li esegue non è lo stesso:
+
+| Ruolo | Chi | Che cosa |
+|---|---|---|
+| **Decidere e pianificare** | la conversazione principale, con il modello più capace | l'ADR, discusso con chi ha chiesto il lavoro; il piano dettagliato dei passi **dopo** l'ADR, con le premesse verificate contro il codice; le decisioni prese eseguendo |
+| **Scrivere il codice** | un agente con un modello meno oneroso, **uno per passo** | il passo così com'è scritto, con il suo criterio di fine, i test previsti e le verifiche al contrario da fare e da riportare |
+| **Verificare** | la conversazione principale, o un secondo agente con il modello più capace | ogni passo **prima** che cominci il successivo: rileggere il diff contro il piano, **rifare** le verifiche al contrario, `just ci` |
+| **Chiudere** | la conversazione principale | la tabella dei commit, il push con il suo via libera, l'esito in [11](11-piani-conclusi.md) e il piano della sezione 9 |
+
+**Perché separarli.** I passi *decisi e delimitati* — «monta la primitiva su questi tre
+elenchi, con questo verbo e queste stringhe» — sono la parte più lunga di una sezione e
+la meno bisognosa di giudizio; i piani di questo documento sono già scritti per chi non
+era nella conversazione, e un agente è esattamente quel lettore. La parte che ha bisogno
+di giudizio è breve e costa cara se sbagliata.
+
+**Che cosa non si delega, e per quale ragione.** Nella 7 le tre premesse sbagliate del
+piano sono venute fuori *scrivendo il codice*, e ognuna chiedeva di fermarsi e
+riemendare il piano invece di aggirarlo. **Un agente che esegue un piano tende a farlo
+funzionare, non a contestarlo**: quindi l'ADR, il dominio con le sue autorizzazioni, e
+l'esito restano alla conversazione principale, e ogni passo delegato porta scritto
+*«se una premessa del piano si rivela falsa, fermati e riferisci: non aggirarla»*.
+
+**La verifica è una verifica, non una lettura.** La 6 e la 7 hanno mostrato che un test
+verde può asserire il difetto. Chi verifica **rimette il difetto e guarda il test
+cadere**, per ogni test consegnato dall'agente; leggere il diff non basta, e con un
+autore meno forte basta ancora meno.
+
+**Il costo fisso di un agente è il contesto.** Parte a freddo e deve leggere
+`CLAUDE.md`, i documenti pertinenti e il piano prima della prima riga: su un passo
+piccolo quel costo supera il risparmio. Un agente **per passo** — `F2`, `F3`, … — e non
+uno per la sezione: la revisione resta incrementale, e un errore non si porta dietro il
+passo dopo.
+
+**Ciò che non cambia.** I commit si concordano come tabella e si fanno dalla
+conversazione principale; il push è una conferma a parte; niente autoreferenza
+dell'assistente negli artefatti. **L'esito della 8 dice se il metodo ha retto**, con le
+misure che ha: quanti passi delegati, quanti rifiutati alla verifica e perché, e se
+qualche premessa falsa è passata inosservata all'agente.
+
 ### Decomposizione
 
 ##### `F1` — L'ADR
