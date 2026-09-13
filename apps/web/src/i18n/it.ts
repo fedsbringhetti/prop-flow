@@ -20,6 +20,13 @@ export const it = {
   common: {
     save: 'Salva',
     cancel: 'Annulla',
+    /**
+     * Il bottone che **non fa niente** in una conferma. Non «Annulla»: tre
+     * entità si *annullano*, e una modale con «Annulla» a sinistra e «Annulla» a
+     * destra — una lascia stare, l'altra annulla l'addebito — è una domanda a cui
+     * si risponde a caso. Trovata montando il verbo in blocco, esisteva da prima.
+     */
+    keep: 'Lascia com’è',
     close: 'Chiudi',
     create: 'Crea',
     edit: 'Modifica',
