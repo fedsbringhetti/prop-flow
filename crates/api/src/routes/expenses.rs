@@ -42,6 +42,16 @@ use crate::state::AppState;
 /// l'handler a scegliere il controllo guardando il corpo, cioè a fare
 /// autorizzazione.
 ///
+/// # `POST /expenses/{id}/cancel` è il soft delete, e non un `DELETE`
+///
+/// Una spesa non ha uno stato, quindi annullarla **è** `deleted_at` — la `0028`
+/// concede la colonna per questo. Il verbo è `POST …/cancel` e non `DELETE` per
+/// coerenza con le altre uscite di scena del prodotto e perché la risposta
+/// **porta la spesa** annullata, che un `204` non potrebbe. Dopo, la riga non si
+/// legge più — `expenses_select` filtra `deleted_at IS NULL` — e un secondo
+/// annullamento risponde `404`, non `409`: è la stessa forma di immobili, stanze e
+/// documenti, e il client la conosce.
+///
 /// # `DELETE /groups/{id}/members/{user_id}` esce, non cancella
 ///
 /// La riga resta, con `left_at` valorizzato. Deve restare: le quote intestate a
@@ -69,6 +79,7 @@ pub fn router() -> Router<AppState> {
             get(list_expenses).post(record_expense),
         )
         .route("/api/v1/expenses/{id}", get(expense_detail))
+        .route("/api/v1/expenses/{id}/cancel", post(cancel_expense))
         .route(
             "/api/v1/expense-groups/{id}/settlements",
             get(list_settlements).post(declare_settlement),
@@ -459,6 +470,12 @@ pub struct ExpenseResponse {
     pub group_id: Uuid,
     /// Chi ha anticipato: è il verso del credito.
     pub paid_by_user_id: Uuid,
+    /// Chi l'ha registrata, che può non essere chi ha anticipato. Serve al
+    /// client per offrire l'annullamento a chi può farlo — chi l'ha registrata,
+    /// chi l'ha anticipata, o lo staff — invece di un bottone che risponde `403`.
+    /// Nullo su una riga scritta fuori da un contesto di richiesta.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
     pub category: ExpenseCategoryDto,
     pub description: String,
     pub amount: String,
@@ -482,6 +499,7 @@ impl ExpenseResponse {
             organization_id: expense.org_id().as_uuid(),
             group_id: expense.group_id().as_uuid(),
             paid_by_user_id: expense.paid_by_user_id().as_uuid(),
+            created_by: expense.created_by().map(UserId::as_uuid),
             category: expense.category().into(),
             description: expense.description().to_owned(),
             amount: format_amount(expense.amount().amount()),
@@ -1006,6 +1024,32 @@ async fn expense_detail(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(ExpenseResponse::from_domain(&expense, Some(&shares))))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/expenses/{id}/cancel", tag = "spese co-living",
+    params(("id" = Uuid, Path, description = "Identificatore della spesa")),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Annullata: esce dai saldi del gruppo, **anche se dei regolamenti erano già stati confermati** — un regolamento salda un saldo, non una spesa, e i saldi si spostano di conseguenza. Dopo, la spesa non si legge più: il dettaglio risponde `404` e l'elenco non la contiene", body = ExpenseResponse),
+        (status = 403, description = "A annullare è chi ha registrato la spesa, chi l'ha anticipata, o lo staff (`expense.not_yours`)", body = crate::error::ProblemDetails),
+        (status = 404, description = "Spesa non trovata — anche se è già stata annullata", body = crate::error::ProblemDetails),
+        (status = 409, description = "Il gruppo è archiviato (`expense_group.archived`)", body = crate::error::ProblemDetails),
+    )
+)]
+async fn cancel_expense(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<ExpenseResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let expense = state
+        .cancel_expense
+        .execute(&context, ExpenseId::from_uuid(id))
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(ExpenseResponse::from_domain(&expense, None)))
 }
 
 #[utoipa::path(

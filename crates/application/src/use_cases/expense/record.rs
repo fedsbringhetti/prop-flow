@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use propflow_domain::events::{DomainEventPayload, ExpenseRecorded};
+use propflow_domain::events::{DomainEventPayload, ExpenseCancelled, ExpenseRecorded};
 use propflow_domain::expense::{
     Expense, ExpenseCategory, ExpenseShare, NewExpense, RecordedExpense, SplitMethod,
 };
@@ -223,5 +223,95 @@ impl GetExpense {
             .ok_or(AppError::not_found(Entity::Expense))?;
         let shares = uow.expenses().list_shares(expense.id()).await?;
         Ok((expense, shares))
+    }
+}
+
+/// Annulla una spesa: `deleted_at`, ed **esce dai saldi da sola**.
+///
+/// È l'unico passo con del backend della sezione 7, e la decisione l'aveva già
+/// presa la migration `0028`: `deleted_at` è fra le colonne concesse *«per
+/// l'annullamento»*, scritto nel suo commento, e `app.v_expense_group_balances`
+/// filtra `e.deleted_at IS NULL` dalla `0027`. Nessuna vista da toccare, nessuna
+/// migration: la porta era preparata e mai aperta.
+///
+/// # Chi può, e perché non è la policy a dirlo
+///
+/// Chi l'ha registrata, chi l'ha anticipata, o lo staff. **La `USING` di
+/// `expenses_update` è più larga** — ammette qualunque membro attivo del gruppo,
+/// verificato eseguendo e non «chi l'ha registrata o lo staff» come il piano
+/// diceva — quindi il confine sta qui, nel contratto dell'API, e non è un confine
+/// di sicurezza: un coinquilino non deve poter far sparire dai saldi una spesa che
+/// non ha né scritto né anticipato, ma se lo facesse con una query a mano la
+/// policy lo lascerebbe fare. È la stessa forma di `LeaveGroup` prima della
+/// `0029`. Chi ha anticipato entra perché è il suo credito che la riga afferma;
+/// chi l'ha registrata potrebbe essere uscito dal gruppo, e allora resta chi ha
+/// anticipato, o lo staff.
+///
+/// # Il gruppo deve essere aperto
+///
+/// `open_group` e non `visible_group`, come ogni scrittura del modulo: un conto
+/// chiuso non accetta più spese né rimborsi, e disfare una spesa è una scrittura
+/// sul conto. Chi trova una spesa sbagliata su un gruppo archiviato non ha una
+/// via, ed è coerente con il fatto che l'archiviazione non si disfa.
+///
+/// # Annullare una spesa già regolata cambia i saldi
+///
+/// Ed è giusto: un regolamento salda un **saldo**, non una spesa, e togliere una
+/// spesa sbagliata dopo un regolamento sposta il saldo esattamente come chi
+/// annulla vuole. Non si controlla che nessun regolamento la «citi», perché
+/// nessun regolamento cita una spesa. Il test del bordo HTTP prova che i saldi
+/// scendono; il client lo dice nella conferma.
+pub struct CancelExpense {
+    unit_of_work: Arc<dyn UnitOfWorkFactory>,
+    clock: Arc<dyn Clock>,
+}
+
+impl CancelExpense {
+    #[must_use]
+    pub const fn new(unit_of_work: Arc<dyn UnitOfWorkFactory>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            unit_of_work,
+            clock,
+        }
+    }
+
+    pub async fn execute(&self, context: &RequestContext, id: ExpenseId) -> AppResult<Expense> {
+        authorization::ensure_member(context)?;
+        let caller = context
+            .user_id()
+            .ok_or(AppError::Forbidden(Denial::AuthenticationRequired))?;
+        let now = self.clock.now();
+
+        let mut uow = self.unit_of_work.begin(context).await?;
+        let mut expense = uow
+            .expenses()
+            .find_by_id(id)
+            .await?
+            .ok_or(AppError::not_found(Entity::Expense))?;
+        open_group(uow.as_mut(), expense.group_id()).await?;
+
+        // Un `403` con un codice proprio e non un `404`: la riga il chiamante la
+        // vede — `expenses_select` la mostra a tutto il gruppo — e nascondergliela
+        // adesso sarebbe incoerente. Il codice gli dice chi può.
+        let mine = expense.created_by() == Some(caller) || expense.paid_by_user_id() == caller;
+        if !mine && !context.is_staff() {
+            return Err(AppError::Forbidden(Denial::ExpenseNotYours));
+        }
+
+        expense.cancel(now)?;
+        uow.expenses().cancel(&expense).await?;
+
+        append_all(
+            uow.as_mut(),
+            context,
+            now,
+            vec![DomainEventPayload::ExpenseCancelled(ExpenseCancelled::new(
+                &expense, caller,
+            ))],
+        )
+        .await?;
+
+        uow.commit().await?;
+        Ok(expense)
     }
 }

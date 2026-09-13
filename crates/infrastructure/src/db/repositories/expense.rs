@@ -1,11 +1,13 @@
 use async_trait::async_trait;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use propflow_domain::expense::{Expense, ExpenseParts, ExpenseShare, ExpenseShareParts, Weight};
-use propflow_domain::ports::{ExpensePage, ExpenseQuery, ExpenseRepository, RepositoryResult};
+use propflow_domain::ports::{
+    ExpensePage, ExpenseQuery, ExpenseRepository, RepositoryError, RepositoryResult,
+};
 use propflow_domain::shared::{
     Currency, ExpenseGroupId, ExpenseId, ExpenseShareId, Money, OrgId, UserId,
 };
@@ -38,7 +40,8 @@ macro_rules! select_expense {
            notes,
            created_by,
            created_at,
-           updated_at
+           updated_at,
+           deleted_at
       FROM app.expenses
 "
     };
@@ -227,6 +230,33 @@ impl ExpenseRepository for PgUnitOfWork {
         .map_err(map_sqlx_error)?;
         rows.iter().map(map_share).collect()
     }
+
+    async fn cancel(&mut self, expense: &Expense) -> RepositoryResult<()> {
+        // `deleted_at` e nient'altro: `updated_at` non è fra le colonne concesse
+        // dalla `0028` — la scrive il trigger — e nominarla qui sarebbe un
+        // `permission denied` su un'operazione approvata. È la differenza con
+        // `documents`, dove il privilegio è sulla tabella intera.
+        let result = sqlx::query(
+            "UPDATE app.expenses
+                SET deleted_at = $2
+              WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(expense.id().as_uuid())
+        .bind(expense.cancelled_at().unwrap_or_else(Utc::now))
+        .execute(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        // Zero righe con RLS attiva significa «non aggiornabile da questo
+        // contesto»: la `USING` di `expenses_update` chiede un membro attivo del
+        // gruppo o lo staff, e lo use case ha già riletto la spesa sotto la
+        // stessa policy. Se scatta è un difetto nostro, o una corsa con un
+        // secondo annullamento — e la riga non c'è più in entrambi i casi.
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::RowLevelSecurity);
+        }
+        Ok(())
+    }
 }
 
 fn invalid(
@@ -266,6 +296,7 @@ fn map_expense(row: &PgRow) -> RepositoryResult<Expense> {
         created_by: created_by.map(UserId::from_uuid),
         created_at: try_get(row, "created_at")?,
         updated_at: try_get(row, "updated_at")?,
+        cancelled_at: try_get::<Option<DateTime<Utc>>>(row, "deleted_at")?,
     }))
 }
 

@@ -132,6 +132,18 @@ pub enum Denial {
     /// aperto. Lo staff può, perché è chi amministra.
     #[error("Only staff can remove someone else from an expense group")]
     GroupMembershipNotYours,
+    /// Una spesa la annulla chi l'ha registrata, chi l'ha anticipata, o lo staff.
+    ///
+    /// **Qui la Row Level Security è più larga**: la `USING` di `expenses_update`
+    /// ammette qualunque membro attivo del gruppo — verificato eseguendo, e non
+    /// «chi l'ha registrata o lo staff» come il piano della sezione 7 diceva.
+    /// Questo è quindi un confine del **contratto dell'API** e non di sicurezza,
+    /// come `LeaveGroup` prima della `0029`: un coinquilino non deve poter far
+    /// sparire dai saldi una spesa che non ha né scritto né anticipato. Chi ha
+    /// anticipato entra perché è il suo credito che la riga afferma, e chi l'ha
+    /// registrata potrebbe essere uscito dal gruppo.
+    #[error("Only whoever recorded or paid an expense, or staff, can cancel it")]
+    ExpenseNotYours,
 
     // Da qui in giù: mai in risposta, solo nei log.
     #[error("The account is not active")]
@@ -162,6 +174,7 @@ impl Denial {
             Self::SettlementNotAddressedToYou => "settlement.not_addressed_to_you",
             Self::SettlementNotDeclaredByYou => "settlement.not_declared_by_you",
             Self::GroupMembershipNotYours => "expense_group.membership_not_yours",
+            Self::ExpenseNotYours => "expense.not_yours",
             Self::AccountInactive => "account.inactive",
             Self::AccountLocked => "account.locked",
             Self::NoLocalCredentials => "account.no_local_credentials",
@@ -287,6 +300,11 @@ pub enum Invariant {
 
     #[error("An archived expense group cannot be modified")]
     ExpenseGroupArchived,
+    /// La spesa è già annullata. In pratica non si raggiunge dall'API — una
+    /// spesa annullata non si legge più, e la seconda richiesta trova `404` —
+    /// ma l'aggregato deve poterlo dire a chi lo costruisce a mano.
+    #[error("The expense is already cancelled")]
+    ExpenseCancelled,
     #[error("This person has already left the group")]
     GroupMemberAlreadyLeft,
     #[error("This person is already an active member of the group")]
@@ -401,6 +419,7 @@ impl Invariant {
                 "payment.invalid_transition"
             }
             Self::ExpenseGroupArchived => "expense_group.archived",
+            Self::ExpenseCancelled => "expense.cancelled",
             // Le due membership condividono un codice: il rimedio è lo stesso,
             // rileggere la composizione del gruppo. Sono varianti distinte perché
             // il messaggio non lo è — «è già uscito» e «c'è già» mandano la
@@ -520,6 +539,7 @@ mod tests {
             Denial::SettlementNotAddressedToYou.code(),
             Denial::SettlementNotDeclaredByYou.code(),
             Denial::GroupMembershipNotYours.code(),
+            Denial::ExpenseNotYours.code(),
             Denial::AccountInactive.code(),
             Denial::AccountLocked.code(),
             Denial::NoLocalCredentials.code(),
@@ -558,6 +578,7 @@ mod tests {
             Invariant::PaymentNotConfirmable.code(),
             Invariant::PaymentNotRejectable.code(),
             Invariant::ExpenseGroupArchived.code(),
+            Invariant::ExpenseCancelled.code(),
             Invariant::GroupMemberAlreadyLeft.code(),
             Invariant::GroupMemberAlreadyIn.code(),
             Invariant::ExpensePayerNotInGroup.code(),

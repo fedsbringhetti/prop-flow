@@ -109,6 +109,7 @@ use utoipa::{Modify, OpenApi};
         crate::routes::expenses::record_expense,
         crate::routes::expenses::list_expenses,
         crate::routes::expenses::expense_detail,
+        crate::routes::expenses::cancel_expense,
         crate::routes::expenses::declare_settlement,
         crate::routes::expenses::list_settlements,
         crate::routes::expenses::confirm_settlement,

@@ -17,9 +17,9 @@ use propflow_application::use_cases::document::{
     ArchiveDocument, DownloadDocument, ListDocuments, UploadDocument,
 };
 use propflow_application::use_cases::expense::{
-    AddGroupMember, ArchiveExpenseGroup, CancelSettlement, ConfirmSettlement, CreateExpenseGroup,
-    DeclareSettlement, GetExpense, GetExpenseGroup, GetGroupBalances, LeaveGroup,
-    ListExpenseGroups, ListExpenses, ListSettlements, RecordExpense, RejectSettlement,
+    AddGroupMember, ArchiveExpenseGroup, CancelExpense, CancelSettlement, ConfirmSettlement,
+    CreateExpenseGroup, DeclareSettlement, GetExpense, GetExpenseGroup, GetGroupBalances,
+    LeaveGroup, ListExpenseGroups, ListExpenses, ListSettlements, RecordExpense, RejectSettlement,
 };
 use propflow_application::use_cases::invitation::{
     AcceptInvitation, InviteTenant, RevokeInvitation,
@@ -183,6 +183,9 @@ pub struct AppState {
     pub record_expense: Arc<RecordExpense>,
     pub get_expense: Arc<GetExpense>,
     pub list_expenses: Arc<ListExpenses>,
+    /// L'annullamento è il soft delete, ed **esce dai saldi da sola**: la `0028`
+    /// concede `deleted_at` per questo, e la vista lo filtra dalla `0027`.
+    pub cancel_expense: Arc<CancelExpense>,
     /// I saldi si **leggono** dalla vista e non si ricalcolano: due definizioni
     /// dello stesso numero si contraddicono al primo caso limite.
     pub get_group_balances: Arc<GetGroupBalances>,
@@ -527,6 +530,10 @@ impl AppState {
             )),
             get_expense: Arc::new(GetExpense::new(Arc::clone(&unit_of_work))),
             list_expenses: Arc::new(ListExpenses::new(Arc::clone(&unit_of_work))),
+            cancel_expense: Arc::new(CancelExpense::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
             get_group_balances: Arc::new(GetGroupBalances::new(Arc::clone(&unit_of_work))),
             declare_settlement: Arc::new(DeclareSettlement::new(
                 Arc::clone(&unit_of_work),

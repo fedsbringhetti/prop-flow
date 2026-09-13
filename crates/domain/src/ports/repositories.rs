@@ -1250,6 +1250,17 @@ pub trait ExpenseRepository: Send {
 
     /// Le quote di una spesa.
     async fn list_shares(&mut self, expense_id: ExpenseId) -> RepositoryResult<Vec<ExpenseShare>>;
+
+    /// Annulla la spesa: scrive `deleted_at`, e **solo quello**.
+    ///
+    /// Non `updated_at`, che non è fra le colonne concesse dalla migration `0028`
+    /// — la scrive il trigger `set_updated_at`, che è `BEFORE UPDATE` e non è
+    /// soggetto ai privilegi del chiamante. Nominarla qui darebbe `permission
+    /// denied` su un'operazione che il dominio ha appena approvato.
+    ///
+    /// Le quote non si toccano: restano scritte e sommano ancora all'importo, e
+    /// la vista dei saldi le ignora insieme alla spesa.
+    async fn cancel(&mut self, expense: &Expense) -> RepositoryResult<()>;
 }
 
 /// Filtro di elenco dei regolamenti di un gruppo, con paginazione keyset.

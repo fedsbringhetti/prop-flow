@@ -93,6 +93,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `settlement.not_addressed_to_you` | 403 | confermare o rifiutare un regolamento spetta a **chi riceve**: è l'unico che sa se il bonifico è arrivato |
 | `settlement.not_declared_by_you` | 403 | ritirare un regolamento spetta a **chi lo ha dichiarato**. A chi riceve tocca il rifiuto, che è un fatto diverso |
 | `expense_group.membership_not_yours` | 403 | si esce da un gruppo di spesa per sé stessi; togliere qualcun altro richiede lo staff. Dalla `0029` lo dice anche la RLS: il codice qui è la versione parlante di un rifiuto che la policy darebbe comunque |
+| `expense.not_yours` | 403 | una spesa la annulla chi l'ha **registrata**, chi l'ha **anticipata**, o lo staff. Qui la RLS è più larga — `expenses_update` ammette qualunque membro attivo del gruppo — quindi è un confine del contratto dell'API e non di sicurezza |
 
 **Risorse non trovate**
 
@@ -1665,6 +1666,7 @@ riga di questo modulo entra nella sua contabilità.
 | POST | `/api/v1/expense-groups/{id}/expenses` | membro | `201` con le **quote** |
 | GET | `/api/v1/expense-groups/{id}/expenses` | membro | `200`, pagina keyset |
 | GET | `/api/v1/expenses/{id}` | membro | `200` con le quote |
+| POST | `/api/v1/expenses/{id}/cancel` | **chi l'ha registrata o anticipata**, o staff | `200`. Soft delete: **esce dai saldi**, anche dopo un regolamento |
 | POST | `/api/v1/expense-groups/{id}/settlements` | membro | `201`, stato **`pending`**: non muove i saldi |
 | GET | `/api/v1/expense-groups/{id}/settlements` | membro | `200`. `?status=pending` è la coda di chi deve confermare |
 | POST | `/api/v1/settlements/{id}/confirm` | **chi riceve**, o staff | `200`. Da qui i saldi si muovono |
@@ -1676,6 +1678,27 @@ concessione: le policy della migration `0014` erano già scritte così —
 `expense_groups_insert` chiede `is_org_member`, tutto il resto chiede
 `can_access_expense_group`. Un co-living che non può organizzarsi da sé non è il
 prodotto descritto in [01 — Prodotto](01-prodotto.md).
+
+#### Una spesa sbagliata si annulla, e i saldi cambiano
+
+`POST /expenses/{id}/cancel` scrive `deleted_at` — la migration `0028` concede la
+colonna «per l'annullamento», e `app.expenses` non ha uno stato: il soft delete **è**
+l'annullamento. `app.v_expense_group_balances` filtra `deleted_at IS NULL` dalla
+`0027`, quindi la spesa esce dai saldi da sola, senza nessuna vista da toccare.
+
+**Annullare una spesa già regolata cambia i saldi**, ed è voluto: un regolamento salda
+un *saldo*, non una spesa. Se Marco ha rimborsato 33,33 € a Giulia per una spesa che
+poi si rivela sbagliata, annullarla lascia il regolamento e toglie la spesa — e Giulia
+si ritrova in debito di 33,33 € verso Marco, che è esattamente lo stato vero. Il
+client lo dice nella conferma; l'API non chiede nulla di più.
+
+Dopo, la spesa **non si legge più**: `GET /expenses/{id}` risponde `404`, l'elenco non
+la contiene, e un secondo annullamento risponde `404` e non `409` — è la stessa forma
+di immobili, stanze e documenti, e un client che agisce su più righe la tratta come
+«era già così». Non esiste un ripristino: una spesa annullata per sbaglio si riscrive.
+
+Su un gruppo **archiviato** non si annulla (`409 expense_group.archived`): disfare una
+spesa è una scrittura sul conto, e un conto chiuso non ne accetta.
 
 #### Chi crea un gruppo ne è già membro
 

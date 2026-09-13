@@ -148,6 +148,7 @@ pub enum DomainEventPayload {
     ExpenseGroupMemberJoined(ExpenseGroupMemberJoined),
     ExpenseGroupMemberLeft(ExpenseGroupMemberLeft),
     ExpenseRecorded(ExpenseRecorded),
+    ExpenseCancelled(ExpenseCancelled),
     SettlementDeclared(SettlementDeclared),
     SettlementConfirmed(SettlementConfirmed),
     SettlementRejected(SettlementRejected),
@@ -199,6 +200,7 @@ impl DomainEventPayload {
             Self::ExpenseGroupMemberJoined(_) => "expense.group.member.joined",
             Self::ExpenseGroupMemberLeft(_) => "expense.group.member.left",
             Self::ExpenseRecorded(_) => "expense.recorded",
+            Self::ExpenseCancelled(_) => "expense.cancelled",
             Self::SettlementDeclared(_) => "expense.settlement.declared",
             Self::SettlementConfirmed(_) => "expense.settlement.confirmed",
             Self::SettlementRejected(_) => "expense.settlement.rejected",
@@ -268,7 +270,7 @@ impl DomainEventPayload {
             // propria riga di audit. Le quote non producono un evento loro —
             // sono la spesa vista dall'altro lato, e nascono nella stessa
             // transazione.
-            Self::ExpenseRecorded(_) => "Expense",
+            Self::ExpenseRecorded(_) | Self::ExpenseCancelled(_) => "Expense",
             // E il regolamento pure, per la stessa ragione del pagamento: ciclo
             // di vita proprio, autorizzazione propria, audit proprio.
             Self::SettlementDeclared(_)
@@ -322,6 +324,7 @@ impl DomainEventPayload {
             Self::ExpenseGroupMemberJoined(event) => event.group_id.as_uuid(),
             Self::ExpenseGroupMemberLeft(event) => event.group_id.as_uuid(),
             Self::ExpenseRecorded(event) => event.expense_id.as_uuid(),
+            Self::ExpenseCancelled(event) => event.expense_id.as_uuid(),
             Self::SettlementDeclared(event) => event.settlement_id.as_uuid(),
             Self::SettlementConfirmed(event) => event.settlement_id.as_uuid(),
             Self::SettlementRejected(event) => event.settlement_id.as_uuid(),
@@ -376,6 +379,7 @@ impl DomainEventPayload {
             Self::ExpenseGroupMemberJoined(event) => Some(event.org_id),
             Self::ExpenseGroupMemberLeft(event) => Some(event.org_id),
             Self::ExpenseRecorded(event) => Some(event.org_id),
+            Self::ExpenseCancelled(event) => Some(event.org_id),
             Self::SettlementDeclared(event) => Some(event.org_id),
             Self::SettlementConfirmed(event) => Some(event.org_id),
             Self::SettlementRejected(event) => Some(event.org_id),
@@ -1236,6 +1240,33 @@ impl ExpenseRecorded {
             category: expense.category().as_str(),
             split_method: expense.split_method().as_str(),
             share_count,
+        }
+    }
+}
+
+/// Una spesa è stata annullata, e **i saldi sono cambiati**.
+///
+/// Porta chi aveva anticipato per la stessa ragione di [`ExpenseRecorded`]: è il
+/// credito che sparisce, e chi consuma deve sapere di chi era senza rileggere una
+/// riga che non si legge più. Nessun importo e nessuna descrizione, come là.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpenseCancelled {
+    pub expense_id: ExpenseId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    pub paid_by_user_id: UserId,
+    pub cancelled_by: UserId,
+}
+
+impl ExpenseCancelled {
+    #[must_use]
+    pub const fn new(expense: &Expense, cancelled_by: UserId) -> Self {
+        Self {
+            expense_id: expense.id(),
+            org_id: expense.org_id(),
+            group_id: expense.group_id(),
+            paid_by_user_id: expense.paid_by_user_id(),
+            cancelled_by,
         }
     }
 }

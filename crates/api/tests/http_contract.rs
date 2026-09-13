@@ -6497,6 +6497,292 @@ async fn a_coliving_group_splits_a_hundred_euros_and_closes_the_account() {
     assert_eq!(status, StatusCode::OK, "un conto chiuso si consulta");
 }
 
+/// Annullare una spesa **fa scendere i saldi**, anche dopo un regolamento.
+///
+/// È il criterio di fine della sezione 7 per il suo unico passo con backend: la
+/// migration `0028` concedeva `deleted_at` «per l'annullamento» e nessuna rotta
+/// lo faceva. Il giro: cento euro divisi in tre, il secondo salda e il primo
+/// conferma, poi la spesa viene annullata — e il saldo del primo scende da
+/// +33,34 a **−33,33**, perché il regolamento resta e la spesa no. Un regolamento
+/// salda un saldo, non una spesa.
+///
+/// Intorno, i tre rifiuti: il terzo coinquilino — che non l'ha registrata né
+/// anticipata — riceve `403 expense.not_yours`; il secondo annullamento trova
+/// `404`, non `409`, perché la riga non si legge più; e la spesa è sparita
+/// dall'elenco.
+#[tokio::test]
+async fn cancelling_an_expense_lowers_the_balances_even_after_a_settlement() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-annulla").await;
+    let property = create_property(&app, &owner, "Casa che annulla").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (first, first_id) = coliving_tenant(&app, &owner, &lease, "annulla-uno").await;
+    let (second, second_id) = coliving_tenant(&app, &owner, &lease, "annulla-due").await;
+    let (third, third_id) = coliving_tenant(&app, &owner, &lease, "annulla-tre").await;
+
+    let (status, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "name": "Casa di via Annulla", "property_id": property })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {group}");
+    let group_id = group["id"].as_str().expect("id").to_owned();
+    for user in [&second_id, &third_id] {
+        let (status, added) = app
+            .send_in_org(
+                "POST",
+                &format!("/api/v1/expense-groups/{group_id}/members"),
+                Some(&first),
+                Some(&owner_org),
+                Some(serde_json::json!({ "user_id": user })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "corpo: {added}");
+    }
+
+    let (status, expense) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "description": "Spesa sbagliata",
+                "amount": "100.00",
+                "category": "groceries",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {expense}");
+    let expense_id = expense["id"].as_str().expect("id").to_owned();
+
+    let balance_of = |body: &serde_json::Value, user: &str| -> rust_decimal::Decimal {
+        body["items"]
+            .as_array()
+            .expect("saldi")
+            .iter()
+            .find(|item| item["user_id"] == user)
+            .map(|item| {
+                item["net_balance"]
+                    .as_str()
+                    .expect("saldo")
+                    .parse::<rust_decimal::Decimal>()
+                    .expect("decimale")
+            })
+            .unwrap_or_else(|| panic!("nessun saldo per {user}"))
+    };
+    let balances = |token: &str| {
+        let path = format!("/api/v1/expense-groups/{group_id}/balances");
+        let token = token.to_owned();
+        let owner_org = owner_org.clone();
+        let app = &app;
+        async move {
+            let (status, body) = app
+                .send_in_org("GET", &path, Some(&token), Some(&owner_org), None)
+                .await;
+            assert_eq!(status, StatusCode::OK, "corpo: {body}");
+            body
+        }
+    };
+
+    // Il secondo salda la propria quota e il primo conferma: il saldo del primo
+    // scende da +66,67 a +33,34, e il secondo è in pari.
+    let before = balances(&first).await;
+    let debt = balance_of(&before, &second_id).abs().to_string();
+    let (status, settlement) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/settlements"),
+            Some(&second),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "to_user_id": first_id,
+                "amount": debt,
+                "method": "bank_transfer",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {settlement}");
+    let settlement_id = settlement["id"].as_str().expect("id").to_owned();
+    let (status, confirmed) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/settlements/{settlement_id}/confirm"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {confirmed}");
+
+    let settled = balances(&first).await;
+    let creditor_before = balance_of(&settled, &first_id);
+    assert!(creditor_before > rust_decimal::Decimal::ZERO);
+    assert_eq!(
+        balance_of(&settled, &second_id),
+        rust_decimal::Decimal::ZERO
+    );
+
+    // **Il terzo non può**: non l'ha registrata né anticipata, e non è staff. Un
+    // `403` con il codice che dice chi può, non un `404`: la spesa lui la vede.
+    let (status, refused) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{expense_id}/cancel"),
+            Some(&third),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {refused}");
+    assert_eq!(refused["code"], "expense.not_yours");
+
+    // Chi l'ha registrata annulla.
+    let (status, cancelled) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{expense_id}/cancel"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cancelled}");
+    assert_eq!(cancelled["id"], expense_id);
+
+    // **I saldi scendono.** La spesa è uscita e il regolamento è rimasto: il
+    // primo, che ha ricevuto 33,33 per una spesa che non c'è più, è ora in
+    // **debito** di quella cifra verso il secondo, e la somma fa ancora zero.
+    let after = balances(&first).await;
+    let creditor_after = balance_of(&after, &first_id);
+    assert!(
+        creditor_after < creditor_before,
+        "il saldo di chi aveva anticipato deve scendere: prima {creditor_before}, dopo {creditor_after}"
+    );
+    assert!(creditor_after < rust_decimal::Decimal::ZERO);
+    assert_eq!(balance_of(&after, &second_id), -creditor_after);
+    assert_eq!(balance_of(&after, &third_id), rust_decimal::Decimal::ZERO);
+    let sum: rust_decimal::Decimal = after["items"]
+        .as_array()
+        .expect("saldi")
+        .iter()
+        .map(|item| {
+            item["net_balance"]
+                .as_str()
+                .expect("saldo")
+                .parse::<rust_decimal::Decimal>()
+                .expect("decimale")
+        })
+        .sum();
+    assert_eq!(
+        sum,
+        rust_decimal::Decimal::ZERO,
+        "la somma dei saldi fa ancora zero"
+    );
+
+    // La spesa non si legge più: `404` sul dettaglio, sparita dall'elenco, e un
+    // secondo annullamento trova lo stesso `404` — non un `409`. È la forma del
+    // soft delete, e il client la classifica come «era già così».
+    let (status, gone) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expenses/{expense_id}"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {gone}");
+    assert_eq!(gone["code"], "expense.not_found");
+    let (status, again) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{expense_id}/cancel"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {again}");
+    let (status, list) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {list}");
+    assert!(
+        list["items"].as_array().expect("elenco").is_empty(),
+        "una spesa annullata non è in nessun elenco"
+    );
+
+    // Lo staff può, su una spesa che non ha né registrato né anticipato: il
+    // proprietario annulla quella registrata dal terzo.
+    let (status, other) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&third),
+            Some(&owner_org),
+            Some(serde_json::json!({ "description": "Bombola", "amount": "30.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {other}");
+    let other_id = other["id"].as_str().expect("id").to_owned();
+    let (status, by_staff) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{other_id}/cancel"),
+            Some(&owner),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {by_staff}");
+
+    // E su un conto chiuso non si annulla: è una scrittura sul conto.
+    let (status, third_expense) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "description": "Ultima", "amount": "3.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {third_expense}");
+    let third_expense_id = third_expense["id"].as_str().expect("id").to_owned();
+    let (status, archived) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/archive"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {archived}");
+    let (status, closed) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{third_expense_id}/cancel"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {closed}");
+    assert_eq!(closed["code"], "expense_group.archived");
+}
+
 /// La ripartizione pesata dal bordo HTTP, e il peso che viaggia con le quote.
 #[tokio::test]
 async fn a_weighted_split_carries_the_weight_onto_the_wire() {
