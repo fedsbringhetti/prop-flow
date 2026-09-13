@@ -227,7 +227,15 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     riscrive, e lasciare la data vecchia direbbe che la persona è
 --     nell'organizzazione da prima di esserci tornata. Vedi migrations/0039.
 --
---     Un nome solo per sette tabelle, e non un controllo per ciascuna: il criterio è
+--     Per gli **inviti da proprietario**: la tabella è di piattaforma e non ha un
+--     confine di organizzazione da difendere (il controllo 11 non la riguarda),
+--     ma le stesse cinque colonne di `org_invitations` — meno `org_id`, `role` e
+--     `lease_id`, che qui non esistono — non hanno un motivo legittimo di cambiare
+--     una volta emesso l'invito. Restano concesse solo `accepted_at` e
+--     `accepted_by`, che sono ciò che l'accettazione scrive. Vedi migrations/0040
+--     e ADR-053.
+--
+--     Un nome solo per otto tabelle, e non un controllo per ciascuna: il criterio è
 --     quello di ADR-026 in tutti i casi, e inventargli un nome nuovo renderebbe
 --     illeggibile la ragione comune.
 INSERT INTO invariant_violations
@@ -261,7 +269,10 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
            ('users', 'email'),              ('users', 'email_verified_at'),
            ('users', 'last_login_at'),      ('users', 'failed_login_count'),
            ('users', 'locked_until'),       ('users', 'deleted_at'),
-           ('org_members', 'invited_by'),   ('org_members', 'deleted_at')
+           ('org_members', 'invited_by'),   ('org_members', 'deleted_at'),
+           ('owner_invitations', 'email'),        ('owner_invitations', 'token_hash'),
+           ('owner_invitations', 'expires_at'),   ('owner_invitations', 'revoked_at'),
+           ('owner_invitations', 'created_at')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');

@@ -370,6 +370,40 @@ l'aggiornamento non trova righe. La riempie `app.tg_ticket_reference`, che è
 non scrivibile perché riportarlo indietro farebbe collidere il prossimo valore con uno
 già emesso. Vedi [ADR-027](08-decisioni.md#adr-027).
 
+### Una tabella che il ruolo applicativo non vede mai: `owner_invitations`
+
+`app.owner_invitations` è l'invito da cui nasce un proprietario ([ADR-053](08-decisioni.md#adr-053)):
+`email`, `token_hash` (hash SHA-256, mai il token in chiaro, come
+`org_invitations` e `password_reset_codes`), `expires_at`, `accepted_at`,
+`accepted_by`, `revoked_at`, `created_at`.
+
+**Nessun `org_id`**: a differenza di `org_invitations`, che appartiene
+all'organizzazione che invita, questo invito **precede** l'organizzazione — la crea
+l'accettazione, come `RegisterOwner` fa oggi per chiunque si registri. È una
+tabella di piattaforma, non di business. **Nessun `deleted_at` né `updated_at`**,
+per la stessa ragione di `password_reset_codes` (migration `0037`): non è
+un'entità che si corregge nel tempo, è una credenziale a scadenza breve.
+
+**La RLS è attiva con un'unica policy, `USING (false)`**: nega ogni riga, per ogni
+comando, a chi è soggetto alla Row Level Security. Non è un'omissione — è la
+policy più stretta che soddisfi il controllo 2 delle invarianti (RLS attiva senza
+policy nega tutto a tutti, ed è un errore) — ed è l'unica scelta coerente: un
+invito da proprietario non appartiene a nessuno finché non è accettato, e chi lo
+accetta non ha ancora un `current_user_id()` da confrontare, perché accettarlo
+*è* la registrazione. Non c'è una policy «la riga è tua» possibile.
+
+Ne segue che **due ruoli soli toccano questa tabella, e nessuno dei due passa
+dalla RLS**: lo script in `ops/` che emette l'invito si connette come
+`propflow_migrator`, proprietario della tabella; l'accettazione legge e scrive
+`accepted_at`/`accepted_by` dal pool **privilegiato** (`propflow_worker`, che ha
+`BYPASSRLS`) perché verifica un token prima che un contesto di sicurezza possa
+esistere (regola 27). `propflow_worker` ha comunque bisogno di una `GRANT`
+esplicita — `BYPASSRLS` ignora le policy, non i privilegi di tabella, e una
+tabella nuova non eredita nulla dal `GRANT` generale della `0015` — così come
+`propflow_app`, a cui la migration concede `SELECT, UPDATE (accepted_at,
+accepted_by)` in una forma innocua sotto `USING (false)` ma dichiarata, per il
+controllo 12 e per coerenza con `password_reset_codes_own`. Vedi migration `0040`.
+
 ## Soft delete
 
 `deleted_at TIMESTAMPTZ NULL` sulle entità di business. Una riga cancellata resta,

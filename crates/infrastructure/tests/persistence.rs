@@ -14,6 +14,7 @@ mod common;
 use std::sync::Arc;
 
 use propflow_application::ports::ObjectStorage as _;
+use propflow_application::ports::OpaqueTokenFactory;
 use propflow_application::use_cases::ai::{ProcessAiJob, Processed};
 use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
 use propflow_application::use_cases::billing::{
@@ -6277,4 +6278,137 @@ async fn the_names_come_from_the_policy_that_0030_left_in_place() {
             .name_of(seen_by_owner.ticket.reported_by())
             .is_some()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Inviti da proprietario
+// ---------------------------------------------------------------------------
+
+/// `app.owner_invitations` non ha una policy che ammetta il ruolo applicativo:
+/// `owner_invitations_none` è `USING (false)` su ogni comando (migration `0040`,
+/// ADR-053). Il ruolo applicativo non ha nemmeno il privilegio `INSERT` — la riga
+/// la scrive solo lo script in `ops/`, con il ruolo del migratore — quindi il
+/// tentativo è respinto **prima** che la RLS entri in gioco, con
+/// `permission denied` e non con zero righe.
+#[tokio::test]
+async fn the_application_role_cannot_insert_an_owner_invitation() {
+    let env = require_db!();
+    let hash = OpaqueTokenGenerator.generate().expect("hash di prova").hash;
+
+    let attempt = sqlx::query(
+        "INSERT INTO app.owner_invitations (id, email, token_hash, expires_at)
+         VALUES ($1, $2::app.email_address, $3, now() + interval '7 days')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(common::unique_email("proprietario-insert"))
+    .bind(hash.as_bytes().as_slice())
+    .execute(env.pools.application())
+    .await;
+
+    let error = attempt.expect_err("l'inserimento doveva essere negato");
+    assert!(
+        error.to_string().contains("permission denied"),
+        "atteso un rifiuto per privilegi, ottenuto: {error}"
+    );
+}
+
+/// Il ruolo applicativo ha il privilegio `SELECT` — la migration lo concede per
+/// esteso, dopo un `REVOKE ALL` che disfa il default della `0015` — e
+/// `owner_invitations_none` nega comunque ogni riga:
+/// una riga inserita dal pool privilegiato resta invisibile. La differenza con il
+/// test precedente è voluta: lì il privilegio manca e l'errore è
+/// `permission denied`; qui il privilegio c'è e la riga sparisce senza errore,
+/// perché è la RLS e non il sistema dei privilegi a fermare la lettura.
+#[tokio::test]
+async fn the_application_role_cannot_see_an_owner_invitation_inserted_by_the_privileged_role() {
+    let env = require_db!();
+    let hash = OpaqueTokenGenerator.generate().expect("hash di prova").hash;
+    let id = uuid::Uuid::now_v7();
+
+    // Il pool privilegiato è quello che lo script userebbe in produzione (qui
+    // con il ruolo `propflow_worker`, l'unica connessione che i test hanno con il
+    // privilegio di scrivere questa tabella: vedi la nota nella migration `0040`
+    // sul perché `propflow_worker` riceve anche `INSERT`).
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (id, email, token_hash, expires_at)
+         VALUES ($1, $2::app.email_address, $3, now() + interval '7 days')",
+    )
+    .bind(id)
+    .bind(common::unique_email("proprietario-select"))
+    .bind(hash.as_bytes().as_slice())
+    .execute(env.pools.privileged())
+    .await
+    .expect("inserimento privilegiato riuscito");
+
+    let seen_by_app: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM app.owner_invitations WHERE id = $1")
+            .bind(id)
+            .fetch_one(env.pools.application())
+            .await
+            .expect("la SELECT in sé non deve fallire: il privilegio SELECT c'è");
+    assert_eq!(
+        seen_by_app, 0,
+        "il ruolo applicativo ha visto una riga che `USING (false)` deve negare"
+    );
+
+    // Il pool privilegiato, che ha BYPASSRLS, la vede: prova che la riga esiste
+    // davvero e che il test precedente non passava semplicemente a vuoto.
+    let seen_by_privileged: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM app.owner_invitations WHERE id = $1")
+            .bind(id)
+            .fetch_one(env.pools.privileged())
+            .await
+            .expect("query privilegiata");
+    assert_eq!(seen_by_privileged, 1, "la riga inserita non si trova più");
+}
+
+/// Le colonne che identificano l'invito — cosa promette e a chi — non sono
+/// aggiornabili dal ruolo applicativo, come per `org_invitations` (ADR-021) e per
+/// le altre tabelle di credenziali. Solo `accepted_at` e `accepted_by`, ciò che
+/// l'accettazione scrive, restano concesse: è la coppia del controllo 12.
+///
+/// Il privilegio si verifica **prima** delle policy e prima che le righe vengano
+/// esaminate, quindi il rifiuto arriva come `permission denied` anche su un
+/// identificatore inesistente — stessa forma di
+/// `the_application_role_cannot_rewrite_what_an_account_is`.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_the_identity_of_an_owner_invitation() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    for statement in [
+        "UPDATE app.owner_invitations SET email = 'altro@example.test' WHERE id = $1",
+        "UPDATE app.owner_invitations SET token_hash = '\\xdeadbeef' WHERE id = $1",
+        "UPDATE app.owner_invitations SET expires_at = now() WHERE id = $1",
+        "UPDATE app.owner_invitations SET revoked_at = now() WHERE id = $1",
+        "UPDATE app.owner_invitations SET created_at = now() WHERE id = $1",
+    ] {
+        let error = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi su `{statement}`, ottenuto: {error}"
+        );
+    }
+
+    // Le due concesse non falliscono per privilegio — `USING (false)` le negherà
+    // comunque a livello di riga, ma è la RLS a fermarle, non la `GRANT`, ed è
+    // esattamente la distinzione che il test precedente stabilisce.
+    for statement in [
+        "UPDATE app.owner_invitations SET accepted_at = now() WHERE id = $1",
+        "UPDATE app.owner_invitations SET accepted_by = NULL WHERE id = $1",
+    ] {
+        let allowed = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await;
+        assert!(
+            allowed.is_ok(),
+            "l'aggiornamento di `{statement}` non doveva essere negato per privilegio: {:?}",
+            allowed.err()
+        );
+    }
 }
