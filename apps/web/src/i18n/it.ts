@@ -89,7 +89,6 @@ export const it = {
     partial: '{done} fatte. {failed} non fatte: restano selezionate, con il motivo accanto. Correggi e riprova.',
   },
 
-
   auth: {
     loginTitle: 'Entra in PropFlow',
     loginSubtitle: 'Amministra i tuoi immobili, i contratti e la contabilità.',
@@ -1215,6 +1214,17 @@ export const it = {
     archiveExplain:
       'Non accetterà più spese né rimborsi. Non è una cancellazione: saldi e spese restano leggibili a tutti. Si chiude anche con dei conti aperti, e quelli restano aperti.',
     archivedNote: 'Il conto è chiuso: niente più spese né rimborsi. I saldi restano leggibili.',
+    /**
+     * Il verbo della spesa: **Annulla**, che qui è il soft delete — la spesa non
+     * ha uno stato. La conseguenza da dire è quella che chi annulla non pensa:
+     * i regolamenti già confermati restano, e i saldi si spostano.
+     */
+    cancel: 'Annulla',
+    cancelConfirm: 'Annullare questa spesa?',
+    cancelConfirmMany: 'Annullare {count} spese?',
+    cancelExplain:
+      'Esce dai saldi del gruppo. I rimborsi già confermati restano: se questa spesa era già stata regolata, i saldi cambiano di conseguenza.',
+    cancelled: 'Spesa annullata.',
 
     members: 'Chi c’è dentro',
     /** L'intestazione della colonna dei nomi, dove «Chi c'è dentro» sarebbe falsa:
@@ -1451,6 +1461,7 @@ export const it = {
     'expense_group.membership_exists': 'Questa persona è già nel gruppo.',
     'expense_group.membership_unchanged': 'Non c’è niente da cambiare: è già così.',
     'expense.not_found': 'Spesa non trovata.',
+    'expense.not_yours': 'A annullare una spesa è chi l’ha registrata o chi l’ha anticipata.',
     'expense.payer_not_in_group': 'Chi ha anticipato non è un membro attivo del gruppo.',
     'settlement.not_found': 'Rimborso non trovato.',
     'settlement.invalid_transition': 'Questo rimborso non è più in attesa.',

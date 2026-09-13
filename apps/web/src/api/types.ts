@@ -880,6 +880,13 @@ export interface Expense {
   group_id: Uuid
   /** Chi ha anticipato: è il verso del credito. Sempre un **membro attivo**. */
   paid_by_user_id: Uuid
+  /**
+   * Chi l'ha registrata, che può non essere chi ha anticipato. Serve a offrire
+   * l'annullamento a chi può farlo — chi l'ha registrata, chi l'ha anticipata, o
+   * lo staff — invece di un bottone che risponde `403 expense.not_yours`. Assente
+   * su una riga scritta fuori da un contesto di richiesta.
+   */
+  created_by?: Uuid
   category: ExpenseCategory
   description: string
   amount: Amount

@@ -1230,6 +1230,18 @@ export function getExpense(client: ApiClient, id: Uuid): Promise<Expense> {
   return client.get<Expense>(`/expenses/${id}`)
 }
 
+/**
+ * Annulla una spesa: soft delete, ed **esce dai saldi da sola**.
+ *
+ * Anche dopo un regolamento confermato, e i saldi cambiano di conseguenza: un
+ * regolamento salda un saldo, non una spesa. Chi può: chi l'ha registrata, chi
+ * l'ha anticipata, o lo staff — altrimenti `403 expense.not_yours`. Dopo, la
+ * spesa non si legge più, e un secondo annullamento risponde `404`.
+ */
+export function cancelExpense(client: ApiClient, id: Uuid): Promise<Expense> {
+  return client.post<Expense>(`/expenses/${id}/cancel`, {})
+}
+
 export interface RecordExpenseInput {
   description: string
   amount: string
