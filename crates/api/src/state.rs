@@ -6,7 +6,8 @@ use propflow_application::ports::{
 use propflow_application::use_cases::account::{ChangeMyPassword, GetMyAccount, UpdateMyProfile};
 use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{
-    ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase, RegisterOwner, RequestPasswordReset,
+    AcceptOwnerInvitation, ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase,
+    RegisterOwner, RegisterTenantFromInvitation, RequestPasswordReset,
 };
 use propflow_application::use_cases::billing::{
     GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, MarkUtilityBillPaid,
@@ -54,6 +55,10 @@ use propflow_infrastructure::DatabasePools;
 #[derive(Clone)]
 pub struct AppState {
     pub register_owner: Arc<RegisterOwner>,
+    /// Le due rotte da invito di ADR-053, aggiunte accanto a `register_owner`
+    /// e non al suo posto: la porta vecchia resta aperta fino a `F6`.
+    pub accept_owner_invitation: Arc<AcceptOwnerInvitation>,
+    pub register_tenant_from_invitation: Arc<RegisterTenantFromInvitation>,
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
@@ -285,6 +290,22 @@ impl AppState {
             register_owner: Arc::new(RegisterOwner::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&hasher),
+                Arc::clone(&clock),
+            )),
+            accept_owner_invitation: Arc::new(AcceptOwnerInvitation::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&hasher),
+                Arc::clone(&tokens),
+                Arc::clone(&refresh_tokens),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&clock),
+            )),
+            register_tenant_from_invitation: Arc::new(RegisterTenantFromInvitation::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&hasher),
+                Arc::clone(&tokens),
+                Arc::clone(&refresh_tokens),
+                Arc::clone(&invitation_tokens),
                 Arc::clone(&clock),
             )),
             login: Arc::new(Login::new(

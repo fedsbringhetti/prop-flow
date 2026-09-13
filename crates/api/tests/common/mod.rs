@@ -14,8 +14,8 @@ use axum::http::{Request, Response, StatusCode};
 use chrono::Duration;
 use propflow_api::state::{AppState, Dependencies};
 use propflow_application::ports::{
-    Notification, NotificationContent, Notifier, NotifyError, ObjectStorage, StorageError,
-    StoredObject,
+    Notification, NotificationContent, Notifier, NotifyError, ObjectStorage, OpaqueTokenFactory,
+    StorageError, StoredObject,
 };
 use propflow_infrastructure::db::PoolSettings;
 use propflow_infrastructure::security::{
@@ -515,6 +515,37 @@ pub fn refresh_cookie_of(response: &Response<Body>) -> Option<String> {
 /// Email irripetibile fra esecuzioni.
 pub fn unique_email(prefix: &str) -> String {
     format!("{prefix}-{}@example.test", uuid::Uuid::now_v7().simple())
+}
+
+/// Scrive un invito da proprietario **come farà lo script**
+/// (`ops/dev/issue-owner-invitation.sh`): genera un token opaco con lo stesso
+/// generatore che gli use case usano per gli inviti, ne inserisce lo hash con
+/// il ruolo privilegiato — `propflow_worker` ha `INSERT` su
+/// `app.owner_invitations` proprio per questo, vedi la migration `0040` — e
+/// restituisce il token in chiaro perché il test lo presenti a un'API.
+///
+/// `common` non ha un pool con il ruolo del migratore: `test-integration.sh`
+/// passa a `cargo test` solo `PROPFLOW_TEST_APP_URL` e
+/// `PROPFLOW_TEST_PRIVILEGED_URL`. Il pool privilegiato basta qui perché è
+/// esattamente quello che l'accettazione userà per leggere la riga.
+pub async fn issue_owner_invitation(app: &TestApp, email: &str) -> String {
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let now = chrono::Utc::now();
+    let expires_at = now + Duration::days(7);
+
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at)
+         VALUES ($1::app.email_address, $2, $3, $4)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(expires_at)
+    .bind(now)
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito da proprietario inserito");
+
+    token.plaintext
 }
 
 /// Registra un proprietario e restituisce (access_token, org_id).

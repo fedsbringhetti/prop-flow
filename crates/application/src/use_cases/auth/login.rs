@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use chrono::Duration;
 use propflow_domain::RequestContext;
-use propflow_domain::identity::{OrgMember, OrgRole, RefreshSession, User};
+use propflow_domain::identity::{OrgMember, OrgRole, User};
 use propflow_domain::ports::{Clock, UnitOfWork, UnitOfWorkFactory};
-use propflow_domain::shared::{Email, SessionId};
+use propflow_domain::shared::Email;
 
-use super::AuthenticatedSession;
+use super::{AuthenticatedSession, issue_session};
 use crate::error::{AppError, AppResult};
-use crate::ports::{AccessTokenClaims, PasswordHasher, RefreshTokenFactory, TokenIssuer};
+use crate::ports::{PasswordHasher, RefreshTokenFactory, TokenIssuer};
 
 /// Durata del blocco dopo troppi tentativi falliti.
 const LOCKOUT_DURATION_MINUTES: i64 = 15;
@@ -104,50 +104,20 @@ impl Login {
         uow.users().update(&user).await?;
 
         let default_membership = pick_default_membership(&mut uow, &user).await?;
-        let session = self
-            .issue_session(&mut uow, &user, default_membership.as_ref(), now)
-            .await?;
+        let membership = default_membership.as_ref().map(|m| (m.org_id(), m.role()));
+        let session = issue_session(
+            &mut uow,
+            &self.tokens,
+            &self.refresh_tokens,
+            &user,
+            membership,
+            now,
+        )
+        .await?;
 
         uow.commit().await?;
         let _ = context;
         Ok(session)
-    }
-
-    async fn issue_session(
-        &self,
-        uow: &mut Box<dyn UnitOfWork>,
-        user: &User,
-        membership: Option<&OrgMember>,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<AuthenticatedSession> {
-        let refresh = self.refresh_tokens.generate().map_err(AppError::internal)?;
-        let refresh_session = RefreshSession::issue(
-            SessionId::generate(),
-            user.id(),
-            refresh.hash,
-            now,
-            self.refresh_tokens.lifetime(),
-        )?;
-        uow.sessions().insert(&refresh_session).await?;
-
-        let claims = AccessTokenClaims {
-            user_id: user.id(),
-            org_id: membership.map(OrgMember::org_id),
-            org_role: membership.map(OrgMember::role),
-            platform_role: user.platform_role(),
-            expires_at: now + self.tokens.access_token_lifetime(),
-        };
-        let access_token = self.tokens.issue(&claims).map_err(AppError::internal)?;
-
-        Ok(AuthenticatedSession {
-            user_id: user.id(),
-            access_token,
-            access_token_expires_at: claims.expires_at,
-            refresh_token: refresh.plaintext,
-            refresh_token_expires_at: refresh_session.expires_at(),
-            org_id: claims.org_id,
-            org_role: claims.org_role,
-        })
     }
 }
 

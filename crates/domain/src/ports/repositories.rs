@@ -12,8 +12,8 @@ use crate::expense::{
     SettlementStatus,
 };
 use crate::identity::{
-    Invitation, OrgMember, Organization, OrganizationMembership, PasswordResetCode, RefreshSession,
-    RevocationReason, TokenHash, User,
+    Invitation, OrgMember, Organization, OrganizationMembership, OwnerInvitation,
+    PasswordResetCode, RefreshSession, RevocationReason, TokenHash, User,
 };
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
@@ -500,6 +500,36 @@ pub trait InvitationRepository: Send {
     ) -> RepositoryResult<Option<Invitation>>;
     async fn insert(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
     async fn update(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
+}
+
+/// Inviti da proprietario: un token di piattaforma che l'accettazione consuma
+/// per creare utente e organizzazione insieme (ADR-053).
+///
+/// **Nessun `insert`**: la riga la scrive uno script in `ops/`, con il ruolo del
+/// migratore, che è proprietario della tabella e non passa da questa porta.
+/// L'applicazione la legge e la marca accettata soltanto — dal pool
+/// privilegiato, perché prima della registrazione non esiste un contesto di
+/// sicurezza (regola 27).
+#[async_trait]
+pub trait OwnerInvitationRepository: Send {
+    /// Cerca per hash del token, in **qualunque stato**: accettato, scaduto e
+    /// revocato compresi. È il dominio
+    /// ([`OwnerInvitation::ensure_acceptable`](crate::identity::OwnerInvitation::ensure_acceptable))
+    /// a decidere se la riga è ancora spendibile, con la stessa forma di
+    /// [`InvitationRepository::find_by_token_hash`]: `token_hash` è unico
+    /// (`owner_invitations_token_uk`), quindi la riga — se esiste — è una sola.
+    async fn find_pending_by_hash(
+        &mut self,
+        token_hash: &TokenHash,
+    ) -> RepositoryResult<Option<OwnerInvitation>>;
+
+    /// Marca l'invito accettato.
+    ///
+    /// **Guardata da `accepted_at IS NULL` nella `WHERE`**, come
+    /// [`PasswordResetCodeRepository::mark_used`]: due richieste concorrenti con
+    /// lo stesso token passerebbero entrambe la verifica in memoria, e a
+    /// decidere quale vince è questa riga.
+    async fn mark_accepted(&mut self, invitation: &OwnerInvitation) -> RepositoryResult<()>;
 }
 
 /// Filtro di elenco dei documenti di un owner, con paginazione keyset.

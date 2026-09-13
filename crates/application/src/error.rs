@@ -58,6 +58,20 @@ pub enum Conflict {
     /// vincolo è l'unica difesa.
     #[error("This person is already a member of this expense group")]
     GroupMembershipAlreadyExists,
+    /// Un token da proprietario, pendente e valido, presentato a
+    /// `/auth/register-from-invitation`.
+    ///
+    /// **Solo** un token valido dà questo `409`: il client sa allora di dover
+    /// chiedere il nome dell'organizzazione e rimandare lo stesso corpo a
+    /// `/auth/accept-owner-invitation`. Un token inesistente, scaduto, usato o
+    /// revocato — in **entrambe** le tabelle — resta
+    /// `401 auth.invalid_credentials`, identico in ogni caso: distinguerli
+    /// sarebbe un secondo oracolo su quali token esistono, oltre a
+    /// `auth.email_taken` (ADR-053).
+    #[error(
+        "This token belongs to a pending owner invitation: retry with the organization name against accept-owner-invitation"
+    )]
+    OwnerInvitationToken,
 }
 
 impl Conflict {
@@ -72,6 +86,7 @@ impl Conflict {
             Self::DuplicateUtilityBill => "utility_bill.duplicate",
             Self::PaymentIdempotencyKeyReused => "payment.idempotency_key_reused",
             Self::GroupMembershipAlreadyExists => "expense_group.membership_exists",
+            Self::OwnerInvitationToken => "invitation.owner_token",
         }
     }
 }
@@ -268,6 +283,7 @@ mod tests {
             Conflict::DuplicateUtilityBill.code(),
             Conflict::PaymentIdempotencyKeyReused.code(),
             Conflict::GroupMembershipAlreadyExists.code(),
+            Conflict::OwnerInvitationToken.code(),
         ];
         let mut unique = codes.to_vec();
         unique.sort_unstable();

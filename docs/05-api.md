@@ -115,6 +115,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `utility_bill.duplicate` | 409 | fattura già registrata per questo fornitore: `utility_bills_dedup_uk` è unico su `(org_id, supplier_vat, invoice_number)` e scatta solo quando **entrambi** sono valorizzati |
 | `payment.idempotency_key_reused` | 409 | la chiave di idempotenza è già stata usata per un **altro** pagamento. Non è il doppio invio, che risponde `200`: è la stessa chiave verso un addebito diverso, oppure una chiave già usata da qualcuno di cui il chiamante non vede i pagamenti |
 | `expense_group.membership_exists` | 409 | la persona è già membro attivo del gruppo. `expense_group_members_group_user_uk` non è parziale: il rientro è un aggiornamento, non un secondo inserimento |
+| `invitation.owner_token` | 409 | `register-from-invitation` ha ricevuto un token da **proprietario**, pendente e valido: il client deve rimandare lo stesso corpo, più il nome dell'organizzazione, a `accept-owner-invitation` |
 | `conflict.constraint_violated` | 409 | vincolo violato che l'API non sa ancora nominare |
 
 **Stato non ammesso**
@@ -221,6 +222,8 @@ scrittura, evento o riga di audit.
 | POST | `/api/v1/auth/logout` | sì, più il cookie | `204`, idempotente. Cancella il cookie |
 | POST | `/api/v1/auth/password-reset` | no | `202` **sempre**, senza corpo. Se quell'indirizzo ha un account, riceve un codice |
 | POST | `/api/v1/auth/password-reset/confirm` | no | `204`. **Revoca tutte le sessioni.** `401` se il codice non vale, `422` se la password è debole |
+| POST | `/api/v1/auth/accept-owner-invitation` | no | `201` con la sessione e il cookie, come il login. Crea proprietario e organizzazione personale dietro un token di piattaforma (ADR-053) |
+| POST | `/api/v1/auth/register-from-invitation` | no | `201` con la sessione e il cookie, come il login. Registra un inquilino **dentro l'organizzazione di chi lo ha invitato**, con zero organizzazioni proprie (ADR-053) |
 
 Il **cambio password da autenticati** non è qui: è
 [`/api/v1/me/password`](#il-proprio-account), sotto, perché chi lo chiede **è** già
@@ -329,6 +332,50 @@ ragione per cui il refresh non separa già oggi «scaduto» da «riusato».
 Il **logout senza cookie resta `204`**. Non c'è nulla da revocare, il cookie si
 cancella comunque, e costringere un client che l'ha già perso a distinguere due
 esiti che per lui sono lo stesso non lo aiuterebbe.
+
+#### Registrarsi è entrare su invito, non aprire una porta
+
+[ADR-053](08-decisioni.md#adr-053): `POST /auth/register` **resta com'è per ora**
+— sparisce in una fetta successiva — ma le due vie sotto sono quelle su cui il
+prodotto atterra. Entrambe rispondono `201` con la stessa `SessionResponse` e lo
+stesso cookie del login: chi le chiama è dentro, non deve rifare un secondo
+`POST /auth/login`.
+
+**`POST /auth/accept-owner-invitation`** (`token`, `full_name`, `password`,
+`organization_name?`): crea un proprietario e la sua organizzazione personale,
+esattamente come `register` fa oggi, ma dietro un token emesso da uno script in
+`ops/` e non su una rotta aperta a chiunque. Il token è quello che
+[07 — Operazioni](07-operazioni.md#emettere-un-invito-da-proprietario) descrive
+come emetterlo e consegnarlo.
+
+**`POST /auth/register-from-invitation`** (`token`, `full_name`, `password`):
+registra un inquilino **a partire dall'invito** che oggi vive in
+`/auth/register` + `/auth/accept-invitation` in due passi — e li fa insieme, in
+una transazione: non esiste un istante in cui l'inquilino è registrato e senza
+organizzazione. Chi si registra così entra **nell'organizzazione di chi lo ha
+invitato**, con zero organizzazioni proprie: non passa da `RegisterOwner`, e
+quindi non erediterebbe mai un'organizzazione personale vuota. **Nessun campo
+`email`**: è quella dell'invito, e si riconosce e si rifiuta con `422` se il
+corpo la porta, con la stessa forma di `email` in `PATCH /me` — un campo
+sconosciuto si ignora ovunque nell'API, ma questo non lo è: è quello che
+chiunque proverà a mandare per primo.
+
+**Le quattro cause di rifiuto rispondono tutte `401 auth.invalid_credentials`**,
+identico in ogni caso, su entrambe le rotte: token inesistente, scaduto, usato
+o revocato. Distinguerle sarebbe un oracolo su quali token sono stati emessi —
+la stessa ragione di [ADR-017](08-decisioni.md#adr-017) per l'invito
+all'inquilino e per il codice di recupero. **Un'eccezione sola**, e solo su
+`register-from-invitation`: un token che corrisponde a un invito da
+**proprietario** pendente e valido dà `409 invitation.owner_token` invece di
+`401`, perché il client deve chiedere il nome dell'organizzazione e rimandare
+lo stesso corpo a `accept-owner-invitation`. Resta vero che un token che non
+esiste, in **nessuna** delle due tabelle, o che non è più valido in
+**entrambe**, dà sempre `401`: il `409` esce solo a chi possiede davvero un
+token da proprietario, quindi non è un secondo oracolo.
+
+Rate limit: **nessuno**, oggi, né su queste due rotte né su `login` — è una
+premessa del piano che l'esecuzione ha trovato imprecisa, non un debito
+introdotto qui.
 
 ### Organizzazioni
 

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, InvitationAccepted};
-use propflow_domain::identity::{OrgMember, OrgRole};
-use propflow_domain::ports::{Clock, UnitOfWorkFactory};
-use propflow_domain::shared::{LeaseId, OrgId};
+use propflow_domain::identity::{Invitation, OrgMember, OrgRole};
+use propflow_domain::ports::{Clock, UnitOfWork, UnitOfWorkFactory};
+use propflow_domain::shared::{LeaseId, OrgId, UserId};
 use propflow_domain::{DomainError, RequestContext};
 
 use crate::authorization;
@@ -111,109 +112,152 @@ impl AcceptInvitation {
             return Err(AppError::Unauthenticated);
         }
 
-        let org_id = invitation.org_id();
-        // ADR-051. Un inquilino che torna passa da qui, e non da una rotta sua: il contratto
-        // scade, con la stessa persona se ne fa un altro, e l'invito è il gesto che
-        // il proprietario compie comunque. Senza questo ramo `insert` sbatteva contro
-        // `org_members_org_user_uk` e l'accettazione moriva con `409
-        // membership.already_exists`, su un codice che il proprietario aveva appena
-        // consegnato — e siccome `lease_parties.user_id` lo scrive **solo** questo
-        // percorso, la persona restava fuori dal contratto nuovo per sempre.
-        //
-        // **Attiva, non una qualunque**, e da questa sezione la distinzione ha tre
-        // esiti invece di due. La guardia era stata scritta prevedendo il giorno in
-        // cui da un'organizzazione si sarebbe potuti uscire: quel giorno è `R16`, ed
-        // è arrivato.
-        //
-        // - membership **attiva**: non si tocca niente;
-        // - membership **non attiva** (`left`): si **riattiva**. Senza questo ramo,
-        //   `insert` sbatte contro `org_members_org_user_uk` — unico e **non
-        //   parziale** — e l'accettazione muore con `409 membership.already_exists`,
-        //   cioè lo stesso `409` che ADR-051 aveva chiuso, ricomparso da un'altra
-        //   porta. Il sintomo sarebbe arrivato mesi dopo, su un invito che sembra
-        //   buono;
-        // - **nessuna** membership: si inserisce, come prima.
-        //
-        // **Il ruolo non si tocca in nessuno dei tre casi**: chi è già `owner` o
-        // `manager` e viene invitato come `tenant` resta quello che è. L'invito serve
-        // a collegare la parte contrattuale, non a retrocedere qualcuno — ed è il
-        // caso vero di chi affitta una casa e ne abita un'altra. Sulla riattivazione
-        // vale con più forza: chi era proprietario ed è uscito rientra proprietario,
-        // e il privilegio di colonna della `0039` lo garantisce comunque, perché
-        // `role` non è scrivibile da questo pool.
-        //
-        // L'ordine delle scritture non cambia: `app.has_pending_invitation` è ancora
-        // vero quando si collega la parte e quando si marca l'invito, perché a
-        // renderlo falso è la terza scrittura e non la prima. La `SELECT` qui sotto
-        // passa dal primo ramo di `org_members_select` — `user_id =
-        // app.current_user_id()` — che non chiede di essere già membri.
-        //
-        // **La riattivazione precede il collegamento della parte contrattuale**, e
-        // non è indifferente: la `WITH CHECK` di `org_members_update_self` nega
-        // l'uscita di chi ha un contratto in essere, e il ramo `status <> 'left'`
-        // ammette il rientro **in ogni caso** proprio perché quell'ordine non deve
-        // diventare una precondizione da ricordare.
-        match uow.members().find(org_id, user_id).await? {
-            Some(member) if member.is_active() => {}
-            Some(mut member) => {
-                member.rejoin(now);
-                uow.members().update(&member).await?;
-            }
-            None => {
-                let membership = OrgMember::active(org_id, user_id, invitation.role(), now);
-                uow.members()
-                    .insert(&membership)
-                    .await
-                    .map_err(|error| map_membership_conflict(error.into()))?;
-            }
-        }
-
-        // Collegare la parte contrattuale è ciò che rende visibile il contratto:
-        // `app.can_access_lease` passa da `lease_parties.user_id`.
-        if let Some(lease_id) = invitation.lease_id() {
-            let parties = uow.lease_parties().list_for_lease(lease_id).await?;
-            let mut party = parties
-                .into_iter()
-                .find(|party| party.email() == Some(invitation.email()))
-                .ok_or_else(|| {
-                    // L'invito nomina un contratto in cui non esiste una riga con
-                    // questa email: nessuna scrittura, e un errore interno, perché
-                    // è `InviteTenant` a doverla avere creata.
-                    AppError::internal(
-                        "invito legato a un contratto senza la corrispondente parte contrattuale",
-                    )
-                })?;
-            party.link_user(user_id, now)?;
-            uow.lease_parties().update(&party).await?;
-        }
-
-        invitation.accept(user_id, now)?;
-        uow.invitations().update(&invitation).await?;
-
-        uow.events()
-            .append(&DomainEvent::new(
-                DomainEventPayload::InvitationAccepted(InvitationAccepted {
-                    invitation_id: invitation.id(),
-                    org_id,
-                    user_id,
-                    lease_id: invitation.lease_id(),
-                    role: invitation.role().as_str(),
-                }),
-                now,
-                EventMetadata::from_context(context),
-            ))
-            .await?;
+        link_accepted_invitation(
+            &mut uow,
+            &mut invitation,
+            user_id,
+            now,
+            EventMetadata::from_context(context),
+        )
+        .await?;
         // Le tre scritture e l'evento vivono o cadono insieme: una membership senza
         // il collegamento al contratto darebbe un inquilino che non vede nulla, e un
         // invito marcato senza membership lo lascerebbe fuori per sempre.
         uow.commit().await?;
 
         Ok(AcceptedInvitation {
-            org_id,
+            org_id: invitation.org_id(),
             role: invitation.role(),
             lease_id: invitation.lease_id(),
         })
     }
+}
+
+/// Le tre scritture che rendono una persona effettivamente parte
+/// dell'organizzazione dopo un invito da inquilino — membership, parte
+/// contrattuale, invito marcato — più l'evento che le racconta insieme.
+///
+/// **Condivisa da [`AcceptInvitation`] e da
+/// `RegisterTenantFromInvitation`** (ADR-053), attraverso una funzione e non una
+/// copia: i due differiscono solo per come arrivano a `user_id` — uno lo ha già
+/// da un'autenticazione, l'altro lo ha appena generato registrando l'utente — e
+/// per il pool su cui girano, ma le tre scritture e il loro ordine sono gli
+/// stessi.
+///
+/// **L'ordine non cambia fra i due chiamanti**, anche se solo il primo gira
+/// sotto la Row Level Security che quell'ordine protegge
+/// (`app.has_pending_invitation`, che diventa falso solo dopo la terza
+/// scrittura): il secondo gira sul pool privilegiato, che non è soggetto alla
+/// RLS, ma un secondo ordine da spiegare costerebbe più di quanto
+/// risparmierebbe. Vedi il commento su ciascun ramo, invariato da
+/// `AcceptInvitation`.
+pub(crate) async fn link_accepted_invitation(
+    uow: &mut Box<dyn UnitOfWork>,
+    invitation: &mut Invitation,
+    user_id: UserId,
+    now: DateTime<Utc>,
+    metadata: EventMetadata,
+) -> AppResult<()> {
+    let org_id = invitation.org_id();
+
+    // ADR-051. Un inquilino che torna passa da qui, e non da una rotta sua: il contratto
+    // scade, con la stessa persona se ne fa un altro, e l'invito è il gesto che
+    // il proprietario compie comunque. Senza questo ramo `insert` sbatteva contro
+    // `org_members_org_user_uk` e l'accettazione moriva con `409
+    // membership.already_exists`, su un codice che il proprietario aveva appena
+    // consegnato — e siccome `lease_parties.user_id` lo scrive **solo** questo
+    // percorso, la persona restava fuori dal contratto nuovo per sempre.
+    //
+    // **Attiva, non una qualunque**, e da questa sezione la distinzione ha tre
+    // esiti invece di due. La guardia era stata scritta prevedendo il giorno in
+    // cui da un'organizzazione si sarebbe potuti uscire: quel giorno è `R16`, ed
+    // è arrivato.
+    //
+    // - membership **attiva**: non si tocca niente;
+    // - membership **non attiva** (`left`): si **riattiva**. Senza questo ramo,
+    //   `insert` sbatte contro `org_members_org_user_uk` — unico e **non
+    //   parziale** — e l'accettazione muore con `409 membership.already_exists`,
+    //   cioè lo stesso `409` che ADR-051 aveva chiuso, ricomparso da un'altra
+    //   porta. Il sintomo sarebbe arrivato mesi dopo, su un invito che sembra
+    //   buono;
+    // - **nessuna** membership: si inserisce, come prima. È l'unico ramo che
+    //   `RegisterTenantFromInvitation` incontra davvero: un utente appena
+    //   registrato non può avere una membership precedente in nessuna
+    //   organizzazione.
+    //
+    // **Il ruolo non si tocca in nessuno dei tre casi**: chi è già `owner` o
+    // `manager` e viene invitato come `tenant` resta quello che è. L'invito serve
+    // a collegare la parte contrattuale, non a retrocedere qualcuno — ed è il
+    // caso vero di chi affitta una casa e ne abita un'altra. Sulla riattivazione
+    // vale con più forza: chi era proprietario ed è uscito rientra proprietario,
+    // e il privilegio di colonna della `0039` lo garantisce comunque, perché
+    // `role` non è scrivibile da questo pool.
+    //
+    // L'ordine delle scritture non cambia: `app.has_pending_invitation` è ancora
+    // vero quando si collega la parte e quando si marca l'invito, perché a
+    // renderlo falso è la terza scrittura e non la prima. La `SELECT` qui sotto
+    // passa dal primo ramo di `org_members_select` — `user_id =
+    // app.current_user_id()` — che non chiede di essere già membri; sotto il pool
+    // privilegiato la Row Level Security non si applica affatto, ma l'ordine
+    // resta lo stesso per non avere due ordini da spiegare.
+    //
+    // **La riattivazione precede il collegamento della parte contrattuale**, e
+    // non è indifferente: la `WITH CHECK` di `org_members_update_self` nega
+    // l'uscita di chi ha un contratto in essere, e il ramo `status <> 'left'`
+    // ammette il rientro **in ogni caso** proprio perché quell'ordine non deve
+    // diventare una precondizione da ricordare.
+    match uow.members().find(org_id, user_id).await? {
+        Some(member) if member.is_active() => {}
+        Some(mut member) => {
+            member.rejoin(now);
+            uow.members().update(&member).await?;
+        }
+        None => {
+            let membership = OrgMember::active(org_id, user_id, invitation.role(), now);
+            uow.members()
+                .insert(&membership)
+                .await
+                .map_err(|error| map_membership_conflict(error.into()))?;
+        }
+    }
+
+    // Collegare la parte contrattuale è ciò che rende visibile il contratto:
+    // `app.can_access_lease` passa da `lease_parties.user_id`.
+    if let Some(lease_id) = invitation.lease_id() {
+        let parties = uow.lease_parties().list_for_lease(lease_id).await?;
+        let mut party = parties
+            .into_iter()
+            .find(|party| party.email() == Some(invitation.email()))
+            .ok_or_else(|| {
+                // L'invito nomina un contratto in cui non esiste una riga con
+                // questa email: nessuna scrittura, e un errore interno, perché
+                // è `InviteTenant` a doverla avere creata.
+                AppError::internal(
+                    "invito legato a un contratto senza la corrispondente parte contrattuale",
+                )
+            })?;
+        party.link_user(user_id, now)?;
+        uow.lease_parties().update(&party).await?;
+    }
+
+    invitation.accept(user_id, now)?;
+    uow.invitations().update(invitation).await?;
+
+    uow.events()
+        .append(&DomainEvent::new(
+            DomainEventPayload::InvitationAccepted(InvitationAccepted {
+                invitation_id: invitation.id(),
+                org_id,
+                user_id,
+                lease_id: invitation.lease_id(),
+                role: invitation.role().as_str(),
+            }),
+            now,
+            metadata,
+        ))
+        .await?;
+
+    Ok(())
 }
 
 /// Resta per ciò che i tre rami del `match` non coprono: una riga **soft

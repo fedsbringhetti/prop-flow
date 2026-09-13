@@ -227,6 +227,13 @@ pub enum Invariant {
     InvitationAlreadyAccepted,
     #[error("An invitation that was already accepted cannot be revoked")]
     AcceptedInvitationCannotBeRevoked,
+    /// Un invito da proprietario già accettato. Codice **proprio** e non
+    /// `invitation.already_accepted`: sono due tabelle e due aggregati diversi
+    /// (ADR-053), e il caso d'uso che lo produce lo appiattisce comunque su
+    /// `401 auth.invalid_credentials` insieme a scaduto e revocato — la
+    /// distinzione resta perché il tipo la richiede e perché nei log serve.
+    #[error("The owner invitation has already been accepted")]
+    OwnerInvitationAlreadyAccepted,
 
     #[error("The document is already archived")]
     DocumentArchived,
@@ -383,6 +390,7 @@ impl Invariant {
             Self::InvitationAlreadyAccepted | Self::AcceptedInvitationCannotBeRevoked => {
                 "invitation.already_accepted"
             }
+            Self::OwnerInvitationAlreadyAccepted => "owner_invitation.already_accepted",
             Self::DocumentArchived => "document.archived",
             // Sette varianti, un codice: il rimedio è lo stesso — rileggere lo
             // stato attuale e chiedere una transizione ammessa — e le tre
@@ -558,6 +566,7 @@ mod tests {
             }
             .code(),
             Invariant::InvitationAlreadyAccepted.code(),
+            Invariant::OwnerInvitationAlreadyAccepted.code(),
             Invariant::DocumentArchived.code(),
             Invariant::TicketNotTriageable.code(),
             Invariant::TicketNotAssignable.code(),
@@ -620,6 +629,16 @@ mod tests {
         assert_eq!(
             Invariant::InvitationAlreadyAccepted.code(),
             Invariant::AcceptedInvitationCannotBeRevoked.code()
+        );
+    }
+
+    /// L'invito da proprietario ha una tabella e un aggregato suoi: un codice
+    /// condiviso con l'invito da inquilino direbbe che sono la stessa cosa.
+    #[test]
+    fn owner_invitation_already_accepted_has_its_own_code() {
+        assert_ne!(
+            Invariant::OwnerInvitationAlreadyAccepted.code(),
+            Invariant::InvitationAlreadyAccepted.code()
         );
     }
 

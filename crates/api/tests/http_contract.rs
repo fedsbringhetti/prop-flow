@@ -7649,3 +7649,446 @@ async fn the_dashboard_needs_authentication() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
     assert_eq!(body["code"], "auth.token_missing", "corpo: {body}");
 }
+
+// ---------------------------------------------------------------------------
+// ADR-053: si entra per invito, non da una rotta aperta a chiunque.
+//
+// `POST /auth/register` resta montata (F6 la chiude) — la suite sopra lo prova
+// ancora — ma le due rotte qui sotto sono quelle su cui il prodotto atterra:
+// un token da proprietario apre un account e un'organizzazione, un token da
+// inquilino apre un account **dentro** l'organizzazione di chi ha invitato.
+// ---------------------------------------------------------------------------
+
+/// Scrive un invito da proprietario **già scaduto**, retrodatando sia
+/// `created_at` sia `expires_at`: il vincolo `owner_invitations_expiry_ck`
+/// impone `expires_at > created_at`, quindi non basta spostare indietro la
+/// sola scadenza di una riga già inserita da `common::issue_owner_invitation`.
+async fn issue_owner_invitation_expired(app: &TestApp, email: &str) -> String {
+    use propflow_application::ports::OpaqueTokenFactory as _;
+    use propflow_infrastructure::security::OpaqueTokenGenerator;
+
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let created_at = chrono::Utc::now() - chrono::Duration::days(9);
+    let expires_at = chrono::Utc::now() - chrono::Duration::days(2);
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at)
+         VALUES ($1::app.email_address, $2, $3, $4)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(expires_at)
+    .bind(created_at)
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito scaduto inserito");
+    token.plaintext
+}
+
+/// Scrive un invito da proprietario **già revocato**, direttamente in
+/// `INSERT` e non con una `UPDATE` successiva: il runbook revoca con `UPDATE
+/// … SET revoked_at`, ma quella `UPDATE` gira con il ruolo del **migratore**
+/// (`docs/07-operazioni.md`), che i test non hanno — la migration `0040`
+/// concede a `propflow_worker`, il ruolo privilegiato dei test, `INSERT` senza
+/// restrizioni di colonna e `UPDATE` sulle sole `accepted_at`/`accepted_by`.
+/// Una riga che nasce già revocata produce lo stesso stato che il runbook
+/// produrrebbe con una scrittura in più.
+async fn issue_owner_invitation_revoked(app: &TestApp, email: &str) -> String {
+    use propflow_application::ports::OpaqueTokenFactory as _;
+    use propflow_infrastructure::security::OpaqueTokenGenerator;
+
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let now = chrono::Utc::now();
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at, revoked_at)
+         VALUES ($1::app.email_address, $2, $3, $4, $5)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(now + chrono::Duration::days(7))
+    .bind(now)
+    .bind(now)
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito revocato inserito");
+    token.plaintext
+}
+
+#[tokio::test]
+async fn accepting_an_owner_invitation_creates_an_account_and_an_organization() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-invitato");
+    let token = common::issue_owner_invitation(&app, &email).await;
+
+    let (status, body, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": "Proprietario Invitato",
+                "password": "cavallo batteria graffetta",
+                "organization_name": "L'organizzazione di Proprietario Invitato",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+    // Sessione e cookie come il login: nessun secondo giro per entrare.
+    assert!(body["access_token"].as_str().is_some_and(|t| !t.is_empty()));
+    assert_eq!(body["role"], "owner", "corpo: {body}");
+    let org_id = body["organization_id"]
+        .as_str()
+        .expect("organizzazione")
+        .to_owned();
+    assert!(
+        cookie.is_some(),
+        "atteso il cookie di sessione, come il login"
+    );
+    let token = body["access_token"].as_str().expect("access token");
+
+    // L'organizzazione esiste davvero ed è l'unica di questo utente, con il
+    // ruolo `owner` — esattamente ciò che `RegisterOwner` dà oggi a chiunque.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let items = orgs["items"].as_array().expect("elenco organizzazioni");
+    assert_eq!(items.len(), 1, "corpo: {orgs}");
+    assert_eq!(items[0]["id"], org_id, "corpo: {orgs}");
+    assert_eq!(items[0]["role"], "owner", "corpo: {orgs}");
+}
+
+/// I quattro stati non validi di un invito da proprietario rispondono **la
+/// stessa cosa**: token inesistente, scaduto, revocato o già accettato. È il
+/// criterio di fine di F4 e la decisione 6 dell'ADR-053 — distinguerli sarebbe
+/// un oracolo su quali token sono stati emessi.
+#[tokio::test]
+async fn owner_invitation_token_states_respond_identically() {
+    let app = require_app!();
+
+    let nonexistent = "token-mai-emesso-1234567890123456789012345";
+
+    let expired_email = common::unique_email("owner-scaduto");
+    let expired = issue_owner_invitation_expired(&app, &expired_email).await;
+
+    let revoked =
+        issue_owner_invitation_revoked(&app, &common::unique_email("owner-revocato")).await;
+
+    let accepted_email = common::unique_email("owner-accettato");
+    let accepted = common::issue_owner_invitation(&app, &accepted_email).await;
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": accepted,
+                "full_name": "Proprietario Accettato",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+
+    for (label, token) in [
+        ("inesistente", nonexistent.to_owned()),
+        ("scaduto", expired),
+        ("revocato", revoked),
+        ("già accettato", accepted),
+    ] {
+        let (status, body) = app
+            .post(
+                "/api/v1/auth/accept-owner-invitation",
+                serde_json::json!({
+                    "token": token,
+                    "full_name": "Non deve importare",
+                    "password": "cavallo batteria graffetta",
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "caso «{label}», corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.invalid_credentials",
+            "caso «{label}», corpo: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn registering_from_a_tenant_invitation_lands_inside_the_inviters_organization() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "invita-da-zero").await;
+    let property = create_property(&app, &owner, "Immobile per invito diretto").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let tenant_email = common::unique_email("registrato-da-invito");
+    let (_, token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+
+    let (status, body, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": "Inquilino Diretto",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+    assert_eq!(body["role"], "tenant", "corpo: {body}");
+    assert_eq!(body["organization_id"], owner_org, "corpo: {body}");
+    assert!(
+        cookie.is_some(),
+        "atteso il cookie di sessione, come il login"
+    );
+    let tenant_token = body["access_token"].as_str().expect("access token");
+
+    // Zero organizzazioni proprie: non è passato da `RegisterOwner`, quindi non
+    // esiste un'organizzazione personale da nascondere o da ripulire.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(tenant_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let items = orgs["items"].as_array().expect("elenco organizzazioni");
+    assert_eq!(
+        items.len(),
+        1,
+        "un solo elemento, quello di chi ha invitato: {orgs}"
+    );
+    assert_eq!(items[0]["id"], owner_org, "corpo: {orgs}");
+    assert_eq!(items[0]["role"], "tenant", "corpo: {orgs}");
+
+    // La parte contrattuale è collegata: è ciò che rende visibile il contratto.
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    let party = detail["parties"]
+        .as_array()
+        .expect("parti del contratto")
+        .iter()
+        .find(|party| party["email"] == tenant_email)
+        .expect("la parte esiste");
+    assert!(
+        party.get("user_id").is_some(),
+        "la parte doveva collegarsi all'utente appena registrato: {detail}"
+    );
+
+    // E l'inquilino stesso vede il proprio contratto, con l'header di
+    // organizzazione: la regola 24 non ha eccezioni per chi è appena entrato.
+    let (status, mine) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(tenant_token),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {mine}");
+}
+
+/// I quattro stati non validi di un invito da inquilino rispondono **la
+/// stessa cosa** su questa rotta nuova — identico a `owner_invitation_token_states_respond_identically`,
+/// ma sull'altra tabella: inesistente, scaduto, usato o revocato.
+#[tokio::test]
+async fn register_from_invitation_token_states_respond_identically() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "stati-invito-inquilino").await;
+    let property = create_property(&app, &owner, "Immobile per gli stati").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let nonexistent = "token-mai-emesso-su-org-invitations-0000000";
+
+    let (expired_id, expired_token) = invite_tenant(
+        &app,
+        &owner,
+        &lease,
+        &common::unique_email("tenant-scaduto"),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE app.org_invitations
+            SET created_at = now() - interval '9 days',
+                expires_at = now() - interval '2 days'
+          WHERE id = $1",
+    )
+    .bind(uuid::Uuid::parse_str(&expired_id).expect("uuid"))
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito retrodatato");
+
+    let (revoked_id, revoked_token) = invite_tenant(
+        &app,
+        &owner,
+        &lease,
+        &common::unique_email("tenant-revocato"),
+    )
+    .await;
+    let (status, _) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/invitations/{revoked_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let used_email = common::unique_email("tenant-usato");
+    let (_, used_token) = invite_tenant(&app, &owner, &lease, &used_email).await;
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": used_token,
+                "full_name": "Inquilino Usato",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+
+    for (label, token) in [
+        ("inesistente", nonexistent.to_owned()),
+        ("scaduto", expired_token),
+        ("revocato", revoked_token),
+        ("già usato", used_token),
+    ] {
+        let (status, body) = app
+            .post(
+                "/api/v1/auth/register-from-invitation",
+                serde_json::json!({
+                    "token": token,
+                    "full_name": "Non deve importare",
+                    "password": "cavallo batteria graffetta",
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "caso «{label}», corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.invalid_credentials",
+            "caso «{label}», corpo: {body}"
+        );
+    }
+}
+
+/// Un'email nel corpo non è un campo: si riconosce e si rifiuta con `422`,
+/// come `email` in `PATCH /me` — non si ignora silenziosamente, perché
+/// ignorarla darebbe un account collegato a un indirizzo diverso da quello
+/// scritto nel corpo, senza alcun indizio.
+#[tokio::test]
+async fn register_from_invitation_rejects_an_email_field_in_the_body() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "email-nel-corpo").await;
+    let property = create_property(&app, &owner, "Immobile per il campo email").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let tenant_email = common::unique_email("email-invito");
+    let (_, token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": "Prova Campo Email",
+                "password": "cavallo batteria graffetta",
+                "email": "un-indirizzo-diverso@example.test",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
+    assert_eq!(body["code"], "validation.failed", "corpo: {body}");
+    assert_eq!(body["errors"][0]["field"], "email", "corpo: {body}");
+}
+
+/// Il `409` riservato a un token da proprietario: solo un token **valido**
+/// nella tabella dei proprietari lo produce, per non aprire un secondo oracolo
+/// accanto ad `auth.email_taken` (ADR-053, precisazione della sezione 8).
+#[tokio::test]
+async fn a_valid_owner_token_on_the_tenant_route_asks_for_the_organization_name() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-alla-porta-sbagliata");
+    let owner_token = common::issue_owner_invitation(&app, &email).await;
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": owner_token,
+                "full_name": "Proprietario Confuso",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {body}");
+    assert_eq!(body["code"], "invitation.owner_token", "corpo: {body}");
+
+    // Lo stesso token, alla porta giusta, funziona davvero: il `409` sopra non
+    // era un rifiuto del token, ma della rotta.
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": owner_token,
+                "full_name": "Proprietario Confuso",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+}
+
+/// **Solo** un token da proprietario valido dà il `409`. Un token da
+/// proprietario scaduto o revocato, e un token che non esiste in nessuna delle
+/// due tabelle, restano `401` — altrimenti il `409` diventerebbe un secondo
+/// modo di sapere quali token da proprietario esistono.
+#[tokio::test]
+async fn only_a_valid_owner_token_yields_the_409_every_other_case_is_401() {
+    let app = require_app!();
+
+    let expired_email = common::unique_email("owner-scaduto-sulla-rotta-inquilino");
+    let expired_owner_token = issue_owner_invitation_expired(&app, &expired_email).await;
+
+    let revoked_owner_token = issue_owner_invitation_revoked(
+        &app,
+        &common::unique_email("owner-revocato-sulla-rotta-inquilino"),
+    )
+    .await;
+
+    let nonexistent = "nessuna-tabella-conosce-questo-token-1234567";
+
+    for (label, token) in [
+        ("proprietario scaduto", expired_owner_token),
+        ("proprietario revocato", revoked_owner_token),
+        ("inesistente ovunque", nonexistent.to_owned()),
+    ] {
+        let (status, body) = app
+            .post(
+                "/api/v1/auth/register-from-invitation",
+                serde_json::json!({
+                    "token": token,
+                    "full_name": "Non deve importare",
+                    "password": "cavallo batteria graffetta",
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "caso «{label}», corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.invalid_credentials",
+            "caso «{label}», corpo: {body}"
+        );
+    }
+}

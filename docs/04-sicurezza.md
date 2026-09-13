@@ -208,7 +208,14 @@ contesto di sicurezza non può esistere:
 - rotazione del refresh token — il chiamante presenta un token, non un'identità;
 - **recupero della password** — chi l'ha dimenticata non è autenticato per
   definizione, quindi non c'è un `current_user_id` da installare e la Row Level
-  Security non ha nulla su cui appoggiarsi ([ADR-052](08-decisioni.md#adr-052)).
+  Security non ha nulla su cui appoggiarsi ([ADR-052](08-decisioni.md#adr-052));
+- **accettazione di un invito da proprietario** e **registrazione di un
+  inquilino da invito** — le due rotte di [ADR-053](08-decisioni.md#adr-053):
+  come la registrazione, creano utente (e per la prima, organizzazione) quando
+  nessuno dei due esiste ancora. La prova di possesso del token è tutta
+  dell'applicazione — hash e stato, con la stessa forma del recupero della
+  password — perché qui non c'è nessuna Row Level Security a fare da seconda
+  guardia, a differenza dell'accettazione di un invito da inquilino qui sotto.
 
 Ogni altro uso è un errore di progetto — e il **cambio password da autenticati** è il
 caso che mostra dove passa il confine: somiglia al recupero, condivide con esso la
@@ -246,6 +253,33 @@ distinguerli e i codici esistono, ma il caso d'uso li ripiega tutti su
 `auth.invalid_credentials` prima della risposta ([ADR-022](08-decisioni.md#adr-022)). La scadenza è di **sette
 giorni**: abbastanza perché un'email non urgente venga letta, poco perché una casella
 compromessa mesi dopo valga ancora come credenziale.
+
+### Inviti da proprietario
+
+Stessa forma dell'invito da inquilino — token opaco a 256 bit, hash SHA-256 in
+database, sette giorni di validità di default — con due differenze che discendono
+da [ADR-053](08-decisioni.md#adr-053).
+
+**Nessuna prova aggiuntiva oltre il token.** L'invito da inquilino ha due controlli
+indipendenti: l'hash del token e la policy che verifica un invito pendente per
+l'email di chi è già autenticato. Qui non c'è un'email da confrontare con quella di
+un utente esistente — l'utente non esiste ancora — quindi il token è l'unica prova
+che esiste, ed è anche per questo che lo emette uno script con il ruolo del
+migratore e non una rotta: verificare che il possessore del token sia davvero un
+proprietario è un giudizio umano che sta fuori dal prodotto.
+
+**Quattro esiti, una sola risposta.** Scaduto, revocato e **già accettato** danno lo
+stesso `401 auth.invalid_credentials` di un token inesistente — a differenza
+dell'invito da inquilino, dove "già accettato" resta un `409` distinto perché chi lo
+presenta è già autenticato e merita di saperlo. Qui non lo è: distinguere "già
+accettato" da "mai esistito" sarebbe un oracolo su quali token sono stati emessi,
+esattamente come per un token mai emesso.
+
+**Il token non sblocca da solo il ruolo di piattaforma.** `platform_role = 'admin'`
+resta assegnato a mano — ADR-053 non lo tocca — e l'invito da proprietario dà
+soltanto ciò che `RegisterOwner` dà oggi a chiunque: un'organizzazione personale con
+sé stesso come `owner`. Le due cose restano indipendenti finché non nasce una rotta
+che usi `is_platform_admin()`.
 
 ## Dati personali
 
