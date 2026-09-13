@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Ban } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 
 import { listCharges, voidCharge, writeOffCharge } from '@/api/endpoints'
@@ -9,12 +10,25 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmAction } from '@/components/ui/confirm'
 import { PageHeader } from '@/components/ui/page'
-import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
+import {
+  TableCaption,
+  TableFrame,
+  Td,
+  TdNumeric,
+  TdSelect,
+  Th,
+  ThNumeric,
+  ThSelect,
+  Tr,
+  useSelection,
+  type Selection,
+} from '@/components/ui/table'
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { isNegative } from '@/lib/decimal'
 import { formatAmount, formatDate } from '@/lib/format'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { ChargeStatusBadge } from '../shared/status'
 
@@ -35,6 +49,29 @@ type FilterableStatus = (typeof FILTERABLE)[number]
 
 function filterableStatus(raw: string | null): FilterableStatus | undefined {
   return FILTERABLE.find((status) => status === raw)
+}
+
+/**
+ * Il verbo di questa tabella è **Annulla**, e non «Elimina»: un addebito
+ * annullato resta visibile a chi doveva pagarlo — la `0023` nega `deleted_at`
+ * apposta — e la conferma della scheda lo dice. Lo storno non entra nel blocco:
+ * è un giudizio su una perdita, e resta per riga.
+ */
+const VOID: Verb = {
+  label: t.charge.void,
+  confirmOne: t.charge.voidConfirm,
+  confirmMany: t.charge.voidConfirmMany,
+  explain: t.charge.voidExplain,
+}
+
+/**
+ * `void` è ammesso dal solo `issued`: su un addebito con del denaro dentro
+ * direbbe che la richiesta non è mai esistita, e l'API risponde `409`. Le altre
+ * righe non si offrono alla selezione — un bottone che produce sempre un errore
+ * è peggio di un bottone assente — e la via per quelle è lo storno.
+ */
+function voidable(charge: Charge): boolean {
+  return charge.status === 'issued'
 }
 
 /**
@@ -62,10 +99,24 @@ export function ChargesPage() {
   }
 
   const isStaff = useIsStaff()
+  const queryClient = useQueryClient()
 
   const query = usePagedQuery({
     queryKey: keys.charges({ outstanding, status: status ?? null }),
     fetchPage: (after) => listCharges(client, { ...filters, after }),
+  })
+
+  // Annullare è dello staff: chi la subisce non ha la colonna.
+  const selection = useSelection(
+    isStaff ? (query.data ?? []).filter(voidable).map((charge) => charge.id) : [],
+  )
+  const discard = useBulkAction({
+    selection,
+    action: (id) => voidCharge(client, id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['charges'] })
+      await queryClient.invalidateQueries({ queryKey: keys.dashboard })
+    },
   })
 
   return (
@@ -117,6 +168,10 @@ export function ChargesPage() {
           </label>
         </div>
 
+        {isStaff ? (
+          <BulkBar selection={selection} verb={VOID} bulk={discard} icon={<Ban aria-hidden />} />
+        ) : null}
+
         <Async
           query={query}
           isEmpty={(items) => items.length === 0}
@@ -129,6 +184,7 @@ export function ChargesPage() {
               <TableCaption>{t.charge.title}</TableCaption>
               <thead>
                 <tr>
+                  {isStaff ? <ThSelect selection={selection} /> : null}
                   <Th>{t.charge.type}</Th>
                   <Th>{t.charge.status}</Th>
                   <Th>{t.charge.dueDate}</Th>
@@ -142,7 +198,13 @@ export function ChargesPage() {
               </thead>
               <tbody>
                 {items.map((charge) => (
-                  <ChargeRow key={charge.id} charge={charge} />
+                  <ChargeRow
+                    key={charge.id}
+                    charge={charge}
+                    selection={selection}
+                    failure={discard.failureFor(charge.id)}
+                    runVoid={discard.run}
+                  />
                 ))}
               </tbody>
             </TableFrame>
@@ -159,7 +221,17 @@ export function ChargesPage() {
   )
 }
 
-function ChargeRow({ charge }: { charge: Charge }) {
+function ChargeRow({
+  charge,
+  selection,
+  failure,
+  runVoid,
+}: {
+  charge: Charge
+  selection: Selection
+  failure: string | undefined
+  runVoid: (ids: readonly string[]) => Promise<unknown>
+}) {
   const client = useApi()
   const isStaff = useIsStaff()
   const queryClient = useQueryClient()
@@ -169,7 +241,6 @@ function ChargeRow({ charge }: { charge: Charge }) {
     await queryClient.invalidateQueries({ queryKey: keys.dashboard })
   }
 
-  const discard = useMutation({ mutationFn: () => voidCharge(client, charge.id), onSuccess: refresh })
   const writeOff = useMutation({
     mutationFn: () => writeOffCharge(client, charge.id),
     onSuccess: refresh,
@@ -182,17 +253,21 @@ function ChargeRow({ charge }: { charge: Charge }) {
   const settled =
     charge.status === 'void' || charge.status === 'written_off' || charge.status === 'paid'
   const noActions = !isStaff || settled
-  // `void` è ammesso dal solo `issued`: su un addebito con del denaro dentro
-  // direbbe che la richiesta non è mai esistita, e l'API risponde `409`. Un
-  // bottone che produce sempre un errore è peggio di un bottone assente — la via
-  // è lo storno, che da `partially_paid` è invece ammesso.
-  const voidable = charge.status === 'issued'
   // Un residuo **negativo** è un credito verso l'inquilino: non compensa gli
   // altri insoluti e non compare nella dashboard, quindi almeno qui va detto.
   const credit = isNegative(charge.outstanding_amount)
 
   return (
     <Tr>
+      {isStaff ? (
+        <TdSelect
+          selection={selection}
+          id={charge.id}
+          label={`${t.charge.types[charge.charge_type]} ${formatDate(charge.due_date)}`}
+          failure={failure}
+          disabled={!voidable(charge)}
+        />
+      ) : null}
       <Td>
         {/* Al **dettaglio dell'addebito**, e non più al contratto: è lì che si
             registra un incasso, ed è il gesto che questa fetta ha aggiunto. Il
@@ -229,17 +304,14 @@ function ChargeRow({ charge }: { charge: Charge }) {
       <Td className="text-right whitespace-nowrap">
         {noActions ? null : (
           <span className="inline-flex gap-1">
-            {voidable ? (
-              <ConfirmAction
-                trigger={
-                  <Button size="sm" variant="ghost">
-                    {t.charge.void}
-                  </Button>
-                }
-                title={t.charge.voidConfirm}
-                explanation={t.charge.voidExplain}
-                confirmLabel={t.charge.void}
-                onConfirm={() => discard.mutateAsync()}
+            {/* La riga singola passa dallo stesso giro del blocco: stesso verbo,
+                stessa conferma, stesso esito accanto alla riga. */}
+            {voidable(charge) ? (
+              <VerbButton
+                verb={VOID}
+                ids={[charge.id]}
+                run={runVoid}
+                rowLabel={`${t.charge.types[charge.charge_type]} ${formatDate(charge.due_date)}`}
               />
             ) : null}
             <ConfirmAction

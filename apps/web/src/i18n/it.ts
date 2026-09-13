@@ -728,8 +728,9 @@ export const it = {
      *  sul proprio stato. */
     reopenExplain:
       'Torna aperta, e la nota su com’era andata a finire viene cancellata: fa parte della chiusura. Quello che deve restare va scritto nel thread.',
-    cancel: 'Annulla la segnalazione',
+    cancel: 'Annulla',
     cancelTitle: 'Annullare questa segnalazione?',
+    cancelTitleMany: 'Annullare {count} segnalazioni?',
     cancelExplain:
       'Vuol dire «non serve più». Resta visibile con la sua storia, e non si modifica più.',
     /** L'API risponde `ticket.not_yours` e non `org.staff_role_required`: non
@@ -861,6 +862,7 @@ export const it = {
     paidAt: 'Pagata il',
     void: 'Annulla',
     voidConfirm: 'Annullare questa bolletta?',
+    voidConfirmMany: 'Annullare {count} bollette?',
     voidExplain: 'Sparisce dagli elenchi e il numero fattura torna reinseribile. La traccia resta.',
     voided: 'Bolletta annullata.',
     correctionUndoesValidation:
@@ -993,6 +995,7 @@ export const it = {
     lease: 'Contratto',
     void: 'Annulla',
     voidConfirm: 'Annullare questo addebito?',
+    voidConfirmMany: 'Annullare {count} addebiti?',
     voidExplain:
       'Vuol dire «non doveva essere chiesto». Resta visibile a chi doveva pagarlo, e il residuo va a zero.',
     voided: 'Addebito annullato.',

@@ -112,7 +112,12 @@ export function BillDetailPage() {
                     onConfirm={() => pay.mutateAsync()}
                   />
                 ) : null}
-                {data.status === 'allocated' || data.status === 'void' ? null : (
+                {/* Solo finché è modificabile — `draft`, `pending_review`,
+                    `validated` — come `BillStatus::is_editable`: da `paid` l'API
+                    risponde `409`, e il bottone c'era. Allineato nella sezione 7. */}
+                {data.status === 'draft' ||
+                data.status === 'pending_review' ||
+                data.status === 'validated' ? (
                   <ConfirmAction
                     trigger={
                       <Button variant="dangerGhost">
@@ -125,7 +130,7 @@ export function BillDetailPage() {
                     confirmLabel={t.bill.void}
                     onConfirm={() => discard.mutateAsync()}
                   />
-                )}
+                ) : null}
                 </>
               )
             }

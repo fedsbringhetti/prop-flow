@@ -1,18 +1,31 @@
-import { Plus } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Ban, Plus } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 
-import { listBills } from '@/api/endpoints'
-import type { BillStatus, UtilityType } from '@/api/types'
+import { listBills, voidBill } from '@/api/endpoints'
+import type { BillStatus, UtilityBill, UtilityType } from '@/api/types'
 import { Async, Empty } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Select } from '@/components/ui/field'
 import { PageHeader } from '@/components/ui/page'
-import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
+import {
+  TableCaption,
+  TableFrame,
+  Td,
+  TdNumeric,
+  TdSelect,
+  Th,
+  ThNumeric,
+  ThSelect,
+  Tr,
+  useSelection,
+} from '@/components/ui/table'
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDate } from '@/lib/format'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { BillStatusBadge } from '../shared/status'
 
@@ -39,9 +52,32 @@ const TYPES: UtilityType[] = [
   'other',
 ]
 
+/**
+ * Il verbo di questa tabella è **Annulla**: una bolletta annullata sparisce
+ * dagli elenchi e libera il numero di fattura, e la conferma della scheda lo
+ * dice. Nessun «Elimina».
+ */
+const VOID: Verb = {
+  label: t.bill.void,
+  confirmOne: t.bill.voidConfirm,
+  confirmMany: t.bill.voidConfirmMany,
+  explain: t.bill.voidExplain,
+}
+
+/**
+ * Si annulla finché la bolletta è **modificabile**: `draft`, `pending_review`,
+ * `validated` — è `BillStatus::is_editable` nel dominio. Da `allocated` in poi è
+ * la base di un addebito già emesso, e `paid` è un fatto contabile: l'API
+ * risponderebbe `409 utility_bill.invalid_transition`, e la riga non si offre.
+ */
+function voidable(bill: UtilityBill): boolean {
+  return bill.status === 'draft' || bill.status === 'pending_review' || bill.status === 'validated'
+}
+
 export function BillsPage() {
   const client = useApi()
   const isStaff = useIsStaff()
+  const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const status = (params.get('stato') ?? '') as BillStatus | ''
   const utilityType = (params.get('utenza') ?? '') as UtilityType | ''
@@ -54,6 +90,19 @@ export function BillsPage() {
         utility_type: utilityType || undefined,
         after,
       }),
+  })
+
+  // Annullare è dello staff: l'inquilino legge, e non ha la colonna.
+  const selection = useSelection(
+    isStaff ? (query.data ?? []).filter(voidable).map((bill) => bill.id) : [],
+  )
+  const discard = useBulkAction({
+    selection,
+    action: (id) => voidBill(client, id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['bills'] })
+      await queryClient.invalidateQueries({ queryKey: keys.dashboard })
+    },
   })
 
   function setParam(key: string, value: string) {
@@ -122,6 +171,10 @@ export function BillsPage() {
           </div>
         </div>
 
+        {isStaff ? (
+          <BulkBar selection={selection} verb={VOID} bulk={discard} icon={<Ban aria-hidden />} />
+        ) : null}
+
         <Async
           query={query}
           isEmpty={(items) => items.length === 0}
@@ -146,16 +199,31 @@ export function BillsPage() {
               <TableCaption>{t.bill.title}</TableCaption>
               <thead>
                 <tr>
+                  {isStaff ? <ThSelect selection={selection} /> : null}
                   <Th>{t.bill.utilityType}</Th>
                   <Th>{t.bill.supplierName}</Th>
                   <Th>{t.bill.status}</Th>
                   <Th>{t.bill.periodStart}</Th>
                   <ThNumeric>{t.bill.totalAmount}</ThNumeric>
+                  {isStaff ? (
+                    <Th>
+                      <span className="sr-only">{t.common.actions}</span>
+                    </Th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
                 {items.map((bill) => (
                   <Tr key={bill.id}>
+                    {isStaff ? (
+                      <TdSelect
+                        selection={selection}
+                        id={bill.id}
+                        label={`${t.bill.types[bill.utility_type]} ${bill.invoice_number ?? formatDate(bill.period_start)}`}
+                        failure={discard.failureFor(bill.id)}
+                        disabled={!voidable(bill)}
+                      />
+                    ) : null}
                     <Td>
                       <Link
                         to={`/bollette/${bill.id}`}
@@ -179,6 +247,18 @@ export function BillsPage() {
                     <TdNumeric>
                       {formatAmount(bill.total_amount, { currency: bill.currency })}
                     </TdNumeric>
+                    {isStaff ? (
+                      <Td className="text-right whitespace-nowrap">
+                        {voidable(bill) ? (
+                          <VerbButton
+                            verb={VOID}
+                            ids={[bill.id]}
+                            run={discard.run}
+                            rowLabel={`${t.bill.types[bill.utility_type]} ${bill.invoice_number ?? formatDate(bill.period_start)}`}
+                          />
+                        ) : null}
+                      </Td>
+                    ) : null}
                   </Tr>
                 ))}
               </tbody>
