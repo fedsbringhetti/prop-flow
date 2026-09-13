@@ -10825,3 +10825,441 @@ arrivarci: `R43`, che l'inquilino non ha modo di contattare chi gli affitta casa
 `R44`, che un immobile nasce in bozza, ci resta, e in bozza si affitta lo stesso.
 Entrambe in [12](12-da-fare.md).
 
+
+---
+
+
+<a id="piano-sezione-7"></a>
+
+## Piano — Sezione 7: cancellare, in generale
+
+Pianificata il **12 settembre 2026**, subito dopo l'esito della 6 e il giro a mano che
+l'ha collaudata — è la prima sezione pianificata sotto la regola che una sezione
+conclusa pianifica **subito** la successiva. Chiude `R15`. Come la 6, nasce da una
+lettura del codice e non da un collaudo; a differenza della 6, il collaudo che
+l'avrebbe potuta trovare **c'è stato** e non l'ha nominata: nessuno ha sentito la
+mancanza di una cancellazione in blocco con dieci righe in tabella. È un'indicazione
+sul peso della voce, e va detta prima delle decisioni.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| «Elimina» non è un'operazione sola | vero, e le operazioni sono **quattordici** rotte su undici entità: si **archivia** (immobile, stanza, documento, gruppo di spesa), si **annulla** (contratto in bozza, addebito, bolletta, segnalazione, regolamento), si **disdice** (contratto attivo), si **revoca** (invito), si **rifiuta** (pagamento, regolamento), si **toglie** (parte contrattuale, membro di un gruppo), si **esce** (organizzazione) |
+| Nessuna rotta accetta più identificatori | vero: tutte prendono `{id}` nel percorso, e nessuna risposta ha la forma «per identificatore» |
+| Le tabelle passano da `@/components/ui/table` | vero, e la primitiva ha `TableFrame`, `Tr`, `Td`, `Th` e **nessuna selezione**: niente checkbox, niente stato |
+| Gli elenchi hanno azioni per riga | **falso per cinque su sette**: solo addebiti e pagamenti agiscono dall'elenco. Immobili, contratti, segnalazioni, bollette e gruppi di spesa agiscono **solo dalla scheda** — «cancellare una sola riga» dall'elenco oggi non esiste per loro |
+| Una spesa co-living si annulla | **falso, ed è la trovata di questa verifica**: la `0028` concede `expenses.deleted_at` al ruolo applicativo *«per l'annullamento»*, scritto nel suo commento, e la vista dei saldi filtra `deleted_at IS NULL`. **Nessun caso d'uso e nessuna rotta lo fanno.** La porta è stata preparata e mai aperta: una spesa sbagliata oggi resta nei saldi per sempre |
+| Ripetere un'operazione già fatta è un errore | falso: archiviare un archiviato dà `409 property.archived`, annullare un annullato `409 *.invalid_transition`. Sono codici che dicono «era già così», e un'azione in blocco deve leggerli come tali |
+| `ConfirmAction` esiste | vero: `trigger`, `title`, `explanation`, `confirmLabel`, `variant` |
+
+### Il difetto che pianificare ha trovato — la spesa che non si annulla
+
+Non ha ancora un identificatore in [12](12-da-fare.md) perché **entra qui**: è
+letteralmente «cancellare, in generale» sull'unica entità in cui la cancellazione è
+stata preparata dallo schema — la `GRANT` della `0028` nomina `deleted_at` con la
+ragione scritta — e mai costruita. Una spesa registrata per sbaglio, o con l'importo
+sbagliato, resta nei saldi del gruppo, e l'unico rimedio è una spesa opposta, che è
+un trucco contabile e non un'operazione.
+
+È l'unico passo di questa sezione con del **backend**, e la sezione lo dichiara:
+il perimetro scritto in [12](12-da-fare.md) era «client trasversale», ed è vero per
+tutto il resto.
+
+### Che cosa è stato deciso prima di pianificare
+
+| | Scelta | Alternativa scartata |
+|---|---|---|
+| Come si chiama il bottone | **il verbo dell'entità**: Archivia, Annulla, Disdici | «Elimina», che direbbe il falso su almeno tre entità |
+| Come si esegue un'azione su N righe | **N chiamate dal client, in sequenza**, con un esito per riga | una rotta in blocco per entità |
+| Che cosa vede chi ha selezionato dieci righe e sette sono passate | **le sette spariscono, le tre restano selezionate con il motivo accanto**; nessun ritentativo automatico | tutto-o-niente; oppure ritentare da soli |
+| «Era già così» | **non è un errore**: si mostra come fatto | rosso su una riga che è già nello stato chiesto |
+| Dove vive la selezione | **nella primitiva della tabella**, una volta | in ogni elenco, sette volte |
+| Quali elenchi entrano | immobili, stanze, documenti, addebiti, bollette, segnalazioni, spese | contratti e pagamenti, per le ragioni sotto |
+| «Seleziona tutto» | **la pagina**, non l'intero elenco | tutte le 340 righe di un elenco a cursore |
+
+### Decisioni, con il perché
+
+#### 1. Il bottone dice il verbo dell'entità, e mai «Elimina»
+
+`R15` chiede di «cancellare», e la parola è quella che un utente usa; ma il prodotto
+non cancella niente — il ruolo applicativo non ha il privilegio `DELETE`
+([ADR-003](08-decisioni.md#adr-003)), e ogni entità ha **il suo** modo di uscire di
+scena, che non è lo stesso. Un immobile archiviato resta leggibile con la sua storia;
+un addebito annullato resta **visibile a chi se l'era visto chiedere** (la `0023` nega
+`deleted_at` apposta); una bolletta annullata libera il numero di fattura. Tre cose
+diverse con tre conseguenze diverse, e un bottone unico che dicesse «Elimina» le
+nasconderebbe tutte e tre proprio nel momento in cui una persona sta decidendo.
+
+Ogni tabella è di **una** entità, quindi ogni tabella ha **un** verbo — e la
+conferma dice la conseguenza di *quel* verbo, riusando la frase che la scheda
+mostra già per l'azione singola. Non si scrive una seconda frase per il blocco: si
+cambia il numero.
+
+#### 2. N chiamate dal client, e nessuna rotta in blocco
+
+*Alternativa scartata: `POST /charges/void` con un elenco di identificatori,* e
+così per ogni entità. Sono sei rotte nuove, una forma di risposta nuova — un esito
+per identificatore — e una domanda di semantica transazionale che non ha una risposta
+buona: tutto-o-niente fa fallire nove annullamenti per un addebito già annullato;
+riga-per-riga in una transazione sola è N transazioni travestite da una.
+
+Le rotte singole fanno già tutto ciò che serve: autorizzano sotto Row Level Security
+riga per riga, rispondono con un codice che dice perché, e sono idempotenti nel senso
+che conta — ripeterle su una riga già fatta risponde `409` con un codice
+riconoscibile. Il client le chiama **in sequenza**, non in parallelo: una pagina sono
+al più venticinque righe, la sequenza rende l'esito leggibile nell'ordine della
+tabella, e soprattutto evita che venticinque `401` simultanei facciano venticinque
+rinnovi — che il singolo volo di [ADR-044](08-decisioni.md#adr-044) gestirebbe, ma
+che non c'è motivo di provocare.
+
+**Il costo è dichiarato**: venticinque round trip invece di uno. Su una rete mobile
+sono secondi, non minuti, e la barra di avanzamento li mostra.
+
+#### 3. L'esito parziale è per riga, e non si ritenta da solo
+
+Dopo il giro, tre cose possono essere successe a ogni riga:
+
+| Esito | Come si riconosce | Che cosa si mostra |
+|---|---|---|
+| **fatta** | `2xx` | la riga sparisce con la rilettura |
+| **era già così** | `409 property.archived`, `409 *.invalid_transition`, `409 document.archived` | la riga sparisce come le altre — non è un errore, è la conferma che lo stato chiesto c'è |
+| **non fatta** | `403`, `404`, `409` di altro tipo, rete | la riga **resta selezionata**, con il motivo accanto, tradotto dal `code` |
+
+La terza è quella che va progettata. La riga resta selezionata perché chi ha appena
+premuto «Annulla 10» e ne vede 3 restare vuole **riprovare quelle 3**, non
+riselezionarle a mano; e il motivo sta *accanto alla riga* e non in un avviso in cima,
+perché con tre motivi diversi su tre righe un avviso cumulativo non dice quale.
+
+**Nessun ritentativo automatico.** Un `403` non cambia riprovando, un `404` nemmeno,
+e su un errore di rete la persona ha già il bottone davanti. Ritentare da soli
+nasconderebbe il motivo e, sulle rotte che non sono idempotenti nel senso pieno,
+raddoppierebbe un'azione.
+
+**Il giro non si interrompe al primo errore.** Fermarsi lascerebbe le righe dopo in
+uno stato ignoto — «le ho annullate o no?» — che è peggio di un errore per riga.
+
+#### 4. La selezione vive nella primitiva della tabella
+
+`@/components/ui/table` guadagna una colonna di selezione — checkbox per riga,
+checkbox di intestazione per la pagina — e una **barra di selezione** che compare
+quando c'è almeno una riga selezionata, con il conteggio e il verbo. Sette elenchi
+che la scrivessero da sé sarebbero sette occasioni per una checkbox che non si
+raggiunge da tastiera, o per un conteggio che non torna dopo un refetch.
+
+**La selezione è un insieme di identificatori, non di righe**: dopo una rilettura, gli
+identificatori che non sono più nella pagina **escono dalla selezione**. Senza questa
+regola, «3 selezionati» resta scritto sopra una tabella in cui ne restano 2, e il
+bottone agisce su una riga che non c'è.
+
+**«Seleziona tutto» è la pagina.** Gli elenchi sono a cursore (keyset), quindi «tutte
+le 340 righe» non è un'operazione che il client possa fare senza scaricarle tutte, e
+scaricarle tutte per annullarle è il caso in cui una persona dovrebbe fermarsi a
+pensare. Il conteggio dice «25 su questa pagina», mai «tutti».
+
+#### 5. Quali elenchi entrano, e perché due no
+
+Entrano quelli in cui il verbo è **uno** e non richiede niente per riga: immobili,
+stanze e documenti (*archivia*), addebiti, bollette e segnalazioni (*annulla*), e
+le spese co-living (*annulla*, che è il passo `E5`).
+
+**I contratti no.** Una selezione conterrebbe bozze — che si *annullano* — e attivi —
+che si *disdicono*, con una data e un motivo **per contratto**. Due verbi in una
+tabella, e uno dei due vuole un dialogo per riga: un blocco che disdicesse cinque
+contratti con la stessa data e lo stesso motivo sarebbe quasi sempre sbagliato.
+Restano azioni dalla scheda, come sono.
+
+**I pagamenti no.** Rifiutare una dichiarazione è un giudizio su quella dichiarazione
+— «non è arrivato niente» — e rifiutarne dieci insieme è dieci giudizi con un clic.
+L'elenco ha già le azioni per riga dalla fetta A, e basta.
+
+#### 6. La spesa co-living si annulla, e il backend è questo solo
+
+`POST /api/v1/expenses/{id}/cancel`, che scrive `deleted_at` — la `0028` l'ha
+concessa per questo e il commento lo dice. La vista dei saldi filtra già
+`e.deleted_at IS NULL` (verificato nella `0027`), quindi una spesa annullata **esce
+dai saldi da sola**: nessuna vista da toccare, nessuna migration.
+
+Chi può: chi l'ha registrata, o lo staff — è la `USING` di `expenses_update`, e va
+verificata eseguendo. Fino a quando: finché nessun regolamento la cita? **No**: un
+regolamento salda un saldo, non una spesa, e togliere una spesa dopo un regolamento
+sposta il saldo — che è esattamente ciò che una persona vuole quando la spesa era
+sbagliata. Il saldo si riequilibra, ed è il trigger `expense_shares_balanced` a
+garantire che le quote restino coerenti. Va scritto nella scheda: «annullare una spesa
+già regolata cambia i saldi».
+
+#### 7. `R37` resta fuori, e la 7 non lo tocca
+
+Cancellare i dati di una persona è un'altra domanda — che cosa significhi il verbo su
+righe che `audit_log` e gli eventi continuano a citare — e ha un runbook nel
+frattempo. Questa sezione riguarda **le righe di lavoro**, non le persone.
+
+### Decomposizione
+
+##### `E1` — La selezione, nella primitiva
+
+`@/components/ui/table`: colonna di selezione, checkbox di intestazione per la
+pagina, barra con conteggio e azione. La selezione è un `Set` di identificatori che
+si **pota** a ogni cambio di dati. Test: la potatura dopo un refetch; tastiera; il
+conteggio dice «su questa pagina».
+
+##### `E2` — Il giro, nel livello dei dati
+
+Una funzione in `@/api` (o `@/lib`) che riceve N identificatori e una mutazione
+singola, li esegue **in sequenza**, classifica ogni esito in *fatta / era già così /
+non fatta* leggendo il `code`, e restituisce l'elenco. Invalida **una volta** alla
+fine, non N. Test: l'esito parziale; la classificazione del `409` «già fatto»; il
+giro che non si ferma al primo errore; nessun ritentativo.
+
+##### `E3` — Archiviare: immobili, stanze, documenti
+
+I tre elenchi con `E1` + `E2` e il verbo *Archivia*, e l'azione **per riga** dove
+manca (immobili). La conferma riusa la frase della scheda con il numero.
+
+##### `E4` — Annullare: addebiti, bollette, segnalazioni
+
+Come `E3` con il verbo *Annulla*. Gli addebiti hanno già l'azione per riga: si
+allinea alla primitiva invece di tenerne due.
+
+##### `E5` — La spesa si annulla
+
+Dominio (`Expense::cancel`), caso d'uso, rotta, test che prova che **i saldi
+scendono**. Poi il client, per riga e in blocco. È il solo passo con backend, e va
+per ultimo fra quelli di codice perché è il solo che può trovare qualcosa nello schema.
+
+##### `E6` — Le stringhe, i documenti, l'esito
+
+Le frasi di conferma in `i18n`, `05-api.md` per `E5`, l'esito in `11` — e **il piano
+della sezione 8 scritto subito dopo**, che è la regola nuova.
+
+### Trappole
+
+**«Era già così» sembra un errore e non lo è.** Il `409` che torna su una riga già
+archiviata o già annullata è la conferma dello stato chiesto. Trattarlo come
+fallimento lascia righe rosse selezionate che non si possono «sistemare», e la
+persona riprova all'infinito.
+
+**La selezione sopravvive alla rilettura se non la si pota.** Dopo il giro le righe
+fatte spariscono dalla pagina; se la selezione è di righe e non di identificatori, o
+se non si pota, il conteggio mente e il bottone agisce su fantasmi.
+
+**Il link della riga e la checkbox si contendono il clic.** Le righe degli elenchi
+sono collegamenti alla scheda: la checkbox deve fermare la propagazione, e la riga
+intera non deve diventare «seleziona» — chi vuole aprire la scheda deve poterlo fare
+ancora.
+
+**Venticinque `401` insieme.** Se il giro fosse parallelo e l'access token scadesse a
+metà, venticinque richieste chiederebbero il rinnovo insieme: il singolo volo di
+ADR-044 regge, ma in sequenza il caso non si presenta. Il test del giro va scritto
+con una scadenza a metà, così se qualcuno lo rende parallelo il test lo dice.
+
+**I contratti tentano.** «Tanto è la stessa tabella» — non lo è: due verbi, e uno
+vuole un dialogo per riga. La decisione 5 è scritta perché la tentazione arriverà.
+
+**Annullare una spesa già regolata cambia i saldi**, ed è giusto, ma va detto nella
+conferma: chi annulla non pensa ai regolamenti fatti dopo.
+
+**`R37` si infila.** «Visto che stiamo cancellando…» — no. È un'altra domanda, con
+una migration e un ADR probabili, e questa sezione è il posto sbagliato per farla di
+passaggio.
+
+### Come si saprà che è finita
+
+- si selezionano tre immobili, si preme *Archivia*, la conferma dice «3 immobili» e
+  la conseguenza, e spariscono;
+- si selezionano tre addebiti di cui uno già annullato: due si annullano, il terzo
+  sparisce anch'esso, **niente in rosso**;
+- si spegne l'API a metà del giro: le righe non processate restano selezionate con
+  «rete non raggiungibile» accanto, quelle fatte sono fatte, si riprova con un clic;
+- da ogni elenco che entra si agisce **anche su una riga sola**, con lo stesso verbo
+  e la stessa conferma;
+- una spesa co-living si annulla, e il saldo del gruppo cambia di conseguenza;
+- nessun bottone del prodotto dice «Elimina»;
+- `just ci` verde, e **il piano della sezione 8 scritto nello stesso commit
+  dell'esito**.
+
+### Che cosa **non** entra
+
+- **i contratti e i pagamenti in blocco**, per le decisioni 5: due verbi con un
+  dialogo per riga, e dieci giudizi con un clic;
+- **«seleziona tutte le righe» oltre la pagina**, per la decisione 4;
+- **l'annullamento di un'operazione** (undo): ogni verbo ha già la sua via di ritorno
+  o non ce l'ha per scelta — un immobile archiviato non si riapre (è scritto nel
+  dominio), un addebito annullato si riemette. Un «annulla l'ultima azione» generico
+  sarebbe una seconda semantica sopra le prime;
+- **`R37`**, la cancellazione delle persone, per la decisione 7;
+- **una rotta in blocco**, per la decisione 2. Se un giorno un elenco avrà migliaia
+  di righe da agire insieme, sarà una voce nuova con una misura dietro.
+
+---
+
+<a id="esito-sezione-7"></a>
+
+## Esito — Sezione 7: cancellare, in generale
+
+Eseguita il **12 settembre 2026**. Chiude `R15`.
+
+**Una rotta, nessuna migration, nessun ADR, un evento di dominio.** I test Rust
+passano da **459 a 461**, quelli del client da 107 a **124**. `just ci` verde, zero
+`SALTATO`.
+
+Il **nessun ADR** era una conclusione del piano e non una svista: l'unica decisione
+di backend l'aveva già presa la migration `0028`, che concede `expenses.deleted_at`
+*«per l'annullamento»* e lo scrive nel suo commento; il resto è client, e le sue
+decisioni — il verbo dell'entità, N chiamate in sequenza, la selezione nella
+primitiva — sono nel piano e restano lì.
+
+### Che cosa è entrato
+
+| Passo | Esito |
+|---|---|
+| `E1` | `useSelection`, `ThSelect`, `TdSelect`, `RowCheckbox`, `SelectionBar` in `@/components/ui/table`: la selezione è un `Set` di identificatori **derivato** per intersezione a ogni render, non potato da un effetto. Cinque test, la potatura verificata al contrario |
+| `E2` | `@/api/batch.ts`: `runInSequence` e `classifyFailure`. Nove test, fra cui la scadenza del token a metà con il singolo volo **spento** — e la versione parallela dello stesso giro, eseguita nello stesso file, che fa cadere la catena. Sopra, `@/features/shared/bulk.tsx`: `useBulkAction`, `VerbButton`, `BulkBar` — il pezzo che i sette elenchi montano identico |
+| `E3` | Immobili con l'azione per riga che mancava; stanze con l'archiviazione **spostata dalla modale alla riga**; allegati, che sono un `<ul>` e non una tabella |
+| `E4` | Addebiti allineati alla primitiva — lo storno resta per riga e fuori dal blocco; bollette e segnalazioni con l'azione per riga che mancava |
+| `E5` | `Expense::cancel`, `ExpenseRepository::cancel`, `CancelExpense`, `POST /expenses/{id}/cancel`, `ExpenseCancelled`, `Denial::ExpenseNotYours`, `created_by` su `ExpenseResponse`. Un test di contratto che prova che **i saldi scendono** anche dopo un regolamento confermato, più i tre rifiuti |
+| `E6` | Le stringhe, [05](05-api.md), questo esito, e il [piano della sezione 8](09-stato-e-roadmap.md#piano-sezione-8) |
+
+### Il piano aveva tre premesse sbagliate, e una era nella tabella delle verifiche
+
+**«Archiviare un archiviato dà `409 property.archived`.»** Falso, ed era scritto
+nella tabella *«verificato e non dedotto»*: era dedotto dal codice del dominio —
+`Property::archive` rifiuta con `PropertyArchived` — senza guardare da dove arriva
+l'aggregato. `find_by_id` legge con `deleted_at IS NULL`, quindi una seconda
+archiviazione **non trova la riga** e risponde `404 property.not_found`. Vale per
+tutta la famiglia del soft delete: immobili, stanze, documenti, e adesso le spese.
+Il `409` esiste solo per chi cambia stato e resta visibile — addebiti, bollette,
+segnalazioni.
+
+La conseguenza sulla classificazione è che **il `404` sta con «era già così» e non
+con «non fatta»**, ed è un'emendazione della decisione 3 e non un aggiramento: una
+riga che era in tabella e adesso risponde `404` è una riga che la prossima
+rilettura non mostrerà, perché elenco e dettaglio passano dalle stesse policy e
+dallo stesso filtro. Un motivo scritto accanto a una riga che sta per sparire non
+dice niente a nessuno — e con la potatura sarebbe sparito con lei nello stesso
+istante, quindi le due classificazioni sarebbero state indistinguibili a schermo e
+diverse solo nel conteggio del riepilogo. Il test di `classifyFailure` lo fissa con
+la ragione accanto.
+
+**«Chi può annullare una spesa: chi l'ha registrata, o lo staff — è la `USING` di
+`expenses_update`.»** La `USING` è **più larga**: `deleted_at IS NULL AND org_id =
+current_org_id() AND can_access_expense_group(group_id)`, cioè *qualunque membro
+attivo del gruppo*. Verificato eseguendo, come il piano chiedeva. Il confine che il
+piano voleva sta quindi nel caso d'uso — `Denial::ExpenseNotYours`, `403
+expense.not_yours` — ed è un confine del contratto dell'API e non di sicurezza, la
+stessa forma di `LeaveGroup` prima della `0029`. Si è aggiunto **chi ha anticipato**
+a chi l'ha registrata: è il suo credito che la riga afferma, e chi l'ha registrata
+potrebbe essere uscito dal gruppo. Non si è stretta la policy: sarebbe una
+migration per un confine che il modulo tratta ovunque come applicativo.
+
+**«Le tabelle passano da `@/components/ui/table`.»** Vero per sei elenchi su
+sette: gli allegati sono un `<ul>`, e lo sono per una ragione scritta —
+`AttachmentsCard` è un componente solo per sei owner, alcuni dentro una modale
+larga la metà. La primitiva è quindi **la selezione**, e la colonna della tabella
+è un involucro sopra `RowCheckbox` e `SelectAllCheckbox`; l'elenco degli allegati
+monta gli stessi due pezzi in un `<li>`. Il piano diceva «nella primitiva della
+tabella, una volta», e la sostanza regge: un solo insieme, una sola potatura, una
+sola barra.
+
+### Che cosa il piano non aveva previsto
+
+**Due bottoni «Annulla» nella stessa modale, con effetti opposti.** `ConfirmAction`
+chiudeva con `t.common.cancel` — *Annulla* — e il verbo di destra su addebiti,
+bollette e segnalazioni era *Annulla*. Esisteva da prima, su ogni conferma di
+annullamento del prodotto; montare il verbo in blocco l'ha reso impossibile da non
+vedere. Il bottone che non fa niente dice ora **«Lascia com'è»**, ed è una stringa
+sola in `common` per tutte le conferme.
+
+**Il bottone «Annulla» della scheda di una bolletta compariva anche su `paid`**, e
+rispondeva `409`: la condizione era «non `allocated` e non `void`», mentre
+`BillStatus::is_editable` è `draft | pending_review | validated`. Allineato, e la
+stessa regola decide quali righe si offrono alla selezione.
+
+**Il nome accessibile incolla i nodi di testo senza spazio.** «Annulla» seguito da
+uno `<span class="sr-only"> — Canone</span>` si legge *«Annulla— Canone»*, ed è la
+forma che `RoomDialog` usa per «Modifica». Il bottone del verbo porta il nome della
+riga in `aria-label`; la modale della stanza non è stata toccata, e resta un difetto
+di lettura minore da sistemare quando la si riapre.
+
+**Un immobile con un contratto in essere si archivia senza che nulla protesti.**
+Trovato con il giro a mano di questa sezione, archiviando due immobili in blocco: uno
+aveva un contratto attivo, ed è uscito dagli elenchi come l'altro, lasciando il
+contratto a citare un immobile che le risposte chiamano «Immobile archiviato». Non è
+di questa sezione — `ArchiveProperty` è della fetta 1 e non guarda i contratti — ed
+è `R45` in [12](12-da-fare.md).
+
+### Decisioni prese eseguendo
+
+**«La pagina» sono le righe caricate.** Gli elenchi non hanno pagine: hanno «Carica
+altri», e ciò che si vede è l'accumulo. Il conteggio dice *«N selezionate su M
+caricate»*, e non «su questa pagina» come il piano scriveva: «caricate» è la parola
+vera, e dice da sé perché non è «tutte».
+
+**Una riga su cui il verbo non si applica ha la casella spenta, non assente**, negli
+elenchi in cui la colonna c'è — addebiti pagati, bollette riaddebitate — perché le
+righe restano allineate e una casella spenta dice «non questa» meglio di un vuoto.
+Dove **nessuna** riga si può agire da chi guarda — un inquilino sulle segnalazioni in
+lavorazione, un membro sulle spese altrui — la colonna non si monta affatto: venti
+caselle spente non dicono niente.
+
+**Chi ha segnalato annulla in blocco le proprie segnalazioni aperte**, con lo stesso
+criterio della scheda: staff finché è in lavorazione, chi ha segnalato solo su
+`open`. La funzione `cancellable` in `TicketsPage` **ripete** quella di
+`TicketActions`, e deve restarle uguale.
+
+**`created_by` esce su `ExpenseResponse`.** Senza, il client non può sapere chi ha
+registrato una spesa e offrirebbe l'annullamento a chi riceverebbe `403`. È un
+identificatore, come `reported_by` e `uploaded_by`, e non un dato personale.
+
+**Una spesa su un conto chiuso non si annulla**: `open_group`, come ogni scrittura
+del modulo, con `409 expense_group.archived`. Chi trova una spesa sbagliata su un
+gruppo archiviato non ha una via, ed è coerente con il fatto che l'archiviazione non
+si disfa. Il piano non lo diceva; è la scelta più stretta, e allargarla dopo costa
+una riga.
+
+**`ExpenseCancelled` porta chi aveva anticipato e chi ha annullato**, e niente
+altro: è il credito che sparisce, e chi consuma deve sapere di chi era senza
+rileggere una riga che non si legge più.
+
+**L'avanzamento resta finché la rilettura non è finita**, non finché l'ultima
+chiamata non risponde: il lavoro non è concluso finché la tabella non lo mostra, e
+nel frattempo il bottone non c'è, così un secondo clic non parte su righe vecchie.
+
+**Lo storno resta per riga e fuori dal blocco**, ed era implicito nel piano — il
+verbo degli addebiti è *Annulla* — ma va detto: rinunciare a incassare è un giudizio
+su una perdita, e dieci giudizi con un clic è la ragione per cui i pagamenti sono
+fuori.
+
+### Verificato al contrario, quattro volte
+
+Dopo la 6 e la 5-quater — due test che asserivano il difetto — questa sezione non
+consegna un test senza averlo visto fallire:
+
+- `runInSequence` riscritta con `Promise.all`: **due** test cadono — il massimo di
+  richieste in volo, e il token che scade a metà. Il terzo test del file esegue la
+  versione parallela apposta, e prova che la catena cade;
+- `useSelection` con `selected = chosen` invece dell'intersezione: il test della
+  potatura cade, «2 selezionate» sopra una riga sola;
+- `classifyFailure` con il `409` «era già così» letto come errore: il test di pagina
+  degli addebiti cade, perché `beta` resta selezionata;
+- `onSettled` chiamato per riga invece che alla fine: lo stesso test cade sul
+  conteggio delle riletture, tre invece di una.
+
+### Che cosa è stato provato a mano
+
+Con l'API di questa sezione su una porta a parte e un account di prova creato
+apposta, in locale: la selezione e l'archiviazione in blocco di due immobili dall'elenco,
+con la conferma che dice «2 immobili» e la conseguenza; l'annullamento per riga di
+una spesa co-living, con i saldi che scendono da 79,40 € a 49,40 € alla rilettura;
+la selezione di tutti gli addebiti dallo scadenzario. **Non** provati a mano: la rete
+che cade a metà del giro — il test di pagina lo copre con una `fetch` che solleva —
+e i 375 px, che le tabelle già reggevano e a cui questa sezione aggiunge una colonna
+stretta.
+
+### Che cosa resta aperto
+
+- **`R45`**, l'immobile con un contratto in essere che si archivia;
+- **il nome accessibile di «Modifica» sulla stanza**, che legge *«Modifica— Camera A»*:
+  la forma giusta è in `VerbButton`, e si applica quando si riapre quella modale;
+- **`R37`**, la cancellazione delle persone, dove era: questa sezione ha toccato le
+  righe di lavoro e nessun dato personale.
