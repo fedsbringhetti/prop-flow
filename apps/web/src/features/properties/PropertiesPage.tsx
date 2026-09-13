@@ -1,7 +1,8 @@
-import { Plus } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Archive, Plus } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 
-import { listProperties } from '@/api/endpoints'
+import { archiveProperty, listProperties } from '@/api/endpoints'
 import { Async, Empty } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -12,14 +13,18 @@ import {
   TableFrame,
   Td,
   TdNumeric,
+  TdSelect,
   Th,
   ThNumeric,
+  ThSelect,
   Tr,
+  useSelection,
 } from '@/components/ui/table'
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { formatDecimal } from '@/lib/format'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { PropertyStatusBadge } from '../shared/status'
 
@@ -35,9 +40,22 @@ import { PropertyStatusBadge } from '../shared/status'
  */
 const STATUSES = ['draft', 'available', 'maintenance', 'archived'] as const
 
+/**
+ * Il verbo di questa tabella è **Archivia**, e la conferma è quella della scheda
+ * con il numero al posto di «questo». Nessun «Elimina»: un immobile archiviato
+ * resta leggibile con la sua storia, e il bottone deve dirlo.
+ */
+const ARCHIVE: Verb = {
+  label: t.property.archive,
+  confirmOne: t.property.archiveConfirm,
+  confirmMany: t.property.archiveConfirmMany,
+  explain: t.property.archiveExplain,
+}
+
 export function PropertiesPage() {
   const client = useApi()
   const isStaff = useIsStaff()
+  const queryClient = useQueryClient()
   // Il filtro sta nell'URL e non in uno stato locale: un elenco filtrato è un
   // indirizzo condivisibile, e il tasto «indietro» torna al filtro precedente
   // invece di uscire dalla schermata.
@@ -55,6 +73,19 @@ export function PropertiesPage() {
         ...(occupancy ? { occupied: occupancy === 'occupati' } : {}),
         after,
       }),
+  })
+
+  // Archiviare è dello staff: a chi abita la colonna non compare. Le righe
+  // caricate sono tutte archiviabili, perché un immobile archiviato non è in
+  // nessun elenco.
+  const selection = useSelection(isStaff ? (query.data ?? []).map((property) => property.id) : [])
+  const archive = useBulkAction({
+    selection,
+    action: (id) => archiveProperty(client, id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['properties'] })
+      await queryClient.invalidateQueries({ queryKey: keys.dashboard })
+    },
   })
 
   return (
@@ -130,6 +161,10 @@ export function PropertiesPage() {
           ) : null}
         </div>
 
+        {isStaff ? (
+          <BulkBar selection={selection} verb={ARCHIVE} bulk={archive} icon={<Archive aria-hidden />} />
+        ) : null}
+
         <Async
           query={query}
           isEmpty={(items) => items.length === 0}
@@ -154,16 +189,30 @@ export function PropertiesPage() {
               <TableCaption>{t.property.title}</TableCaption>
               <thead>
                 <tr>
+                  {isStaff ? <ThSelect selection={selection} /> : null}
                   <Th>{t.property.label}</Th>
                   <Th>{t.property.type}</Th>
                   <Th>{t.property.city}</Th>
                   <Th>{t.property.status}</Th>
                   <ThNumeric>{t.property.surface}</ThNumeric>
+                  {isStaff ? (
+                    <Th>
+                      <span className="sr-only">{t.common.actions}</span>
+                    </Th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
                 {items.map((property) => (
                   <Tr key={property.id}>
+                    {isStaff ? (
+                      <TdSelect
+                        selection={selection}
+                        id={property.id}
+                        label={property.label}
+                        failure={archive.failureFor(property.id)}
+                      />
+                    ) : null}
                     <Td>
                       <Link
                         to={`/immobili/${property.id}`}
@@ -186,6 +235,18 @@ export function PropertiesPage() {
                     <TdNumeric>
                       {property.size_sqm ? `${formatDecimal(property.size_sqm)} m²` : t.common.none}
                     </TdNumeric>
+                    {isStaff ? (
+                      <Td className="text-right whitespace-nowrap">
+                        {/* La riga singola è un giro di lunghezza uno: stesso
+                            verbo, stessa conferma, stesso esito accanto alla riga. */}
+                        <VerbButton
+                          verb={ARCHIVE}
+                          ids={[property.id]}
+                          run={archive.run}
+                          rowLabel={property.label}
+                        />
+                      </Td>
+                    ) : null}
                   </Tr>
                 ))}
               </tbody>

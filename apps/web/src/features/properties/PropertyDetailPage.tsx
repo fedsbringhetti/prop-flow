@@ -20,13 +20,25 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmAction, FormDialog } from '@/components/ui/confirm'
 import { Field, Input, Select } from '@/components/ui/field'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
-import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
+import {
+  TableCaption,
+  TableFrame,
+  Td,
+  TdNumeric,
+  TdSelect,
+  Th,
+  ThNumeric,
+  ThSelect,
+  Tr,
+  useSelection,
+} from '@/components/ui/table'
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
 import { compareDecimals, parseDecimal } from '@/lib/decimal'
 import { formatAmount, formatDecimal } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { RoomStatusBadge } from '../shared/status'
 import { PropertyStatusBadge } from '../shared/status'
 
@@ -42,6 +54,14 @@ const ENERGY_CLASSES: EnergyClass[] = ['A4', 'A3', 'A2', 'A1', 'A', 'B', 'C', 'D
  * riceverlo da un `PATCH`.
  */
 const EDITABLE_STATUSES = ['draft', 'available', 'maintenance'] as const
+
+/** Il verbo delle stanze: **Archivia**, con la frase della scheda e il numero. */
+const ARCHIVE_ROOM: Verb = {
+  label: t.room.archive,
+  confirmOne: t.room.archiveConfirm,
+  confirmMany: t.room.archiveConfirmMany,
+  explain: t.room.archiveExplain,
+}
 
 export function PropertyDetailPage() {
   const { id = '' } = useParams()
@@ -360,9 +380,23 @@ function EditPropertyDialog({ property }: { property: Property }) {
 function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boolean }) {
   const canManage = !archived
   const client = useApi()
+  const queryClient = useQueryClient()
   const rooms = useQuery({
     queryKey: keys.rooms(propertyId),
     queryFn: () => listRooms(client, propertyId),
+  })
+
+  // L'archiviazione in blocco vive qui e non nella modale della stanza: è lo
+  // stesso giro della riga singola, e la modale resta il posto dove si corregge.
+  const selection = useSelection(canManage ? (rooms.data?.items ?? []).map((room) => room.id) : [])
+  const archive = useBulkAction({
+    selection,
+    action: (id) => archiveRoom(client, id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
+      // Il conteggio dei locali sta sull'immobile: una stanza archiviata lo cambia.
+      await queryClient.invalidateQueries({ queryKey: keys.property(propertyId) })
+    },
   })
 
   return (
@@ -371,6 +405,9 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
         <CardTitle>{t.room.title}</CardTitle>
         {archived ? null : <NewRoomDialog propertyId={propertyId} />}
       </CardHeader>
+      {canManage ? (
+        <BulkBar selection={selection} verb={ARCHIVE_ROOM} bulk={archive} icon={<Archive aria-hidden />} />
+      ) : null}
       <Async
         query={rooms}
         isEmpty={(data) => data.items.length === 0}
@@ -381,6 +418,7 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
             <TableCaption>{t.room.title}</TableCaption>
             <thead>
               <tr>
+                {canManage ? <ThSelect selection={selection} /> : null}
                 <Th>{t.room.name}</Th>
                 <Th>{t.room.status}</Th>
                 <Th>{t.room.privateBathroom}</Th>
@@ -392,6 +430,14 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
             <tbody>
               {data.items.map((room) => (
                 <Tr key={room.id}>
+                  {canManage ? (
+                    <TdSelect
+                      selection={selection}
+                      id={room.id}
+                      label={room.name}
+                      failure={archive.failureFor(room.id)}
+                    />
+                  ) : null}
                   <Td>{room.name}</Td>
                   <Td>
                     <RoomStatusBadge status={room.status} effectiveStatus={room.effective_status} />
@@ -406,8 +452,16 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
                       : t.common.none}
                   </TdNumeric>
                   {canManage ? (
-                    <Td>
-                      <RoomDialog room={room} propertyId={propertyId} />
+                    <Td className="whitespace-nowrap">
+                      <span className="inline-flex gap-1">
+                        <RoomDialog room={room} propertyId={propertyId} />
+                        <VerbButton
+                          verb={ARCHIVE_ROOM}
+                          ids={[room.id]}
+                          run={archive.run}
+                          rowLabel={room.name}
+                        />
+                      </span>
                     </Td>
                   ) : null}
                 </Tr>
@@ -658,14 +712,6 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
     onError: setError,
   })
 
-  const archive = useMutation({
-    mutationFn: () => archiveRoom(client, room.id),
-    onSuccess: async () => {
-      await reread()
-      setOpen(false)
-    },
-  })
-
   return (
     <FormDialog
       trigger={
@@ -715,18 +761,6 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
             )}
           </Field>
           <div className="flex flex-wrap justify-end gap-2">
-            <ConfirmAction
-              trigger={
-                <Button variant="dangerGhost">
-                  <Archive aria-hidden />
-                  {t.room.archive}
-                </Button>
-              }
-              title={t.room.archiveConfirm}
-              explanation={t.room.archiveExplain}
-              confirmLabel={t.room.archive}
-              onConfirm={() => archive.mutateAsync()}
-            />
             <Button type="submit" variant="primary" disabled={save.isPending}>
               {save.isPending ? t.common.saving : t.common.save}
             </Button>

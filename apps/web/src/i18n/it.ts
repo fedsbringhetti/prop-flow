@@ -329,6 +329,8 @@ export const it = {
     notes: 'Note',
     archive: 'Archivia',
     archiveConfirm: 'Archiviare questo immobile?',
+    /** In blocco cambia il numero, non la frase: la conseguenza è la stessa. */
+    archiveConfirmMany: 'Archiviare {count} immobili?',
     archiveExplain:
       'Non viene cancellato: sparisce dagli elenchi e non è più modificabile. La traccia resta.',
     archived: 'Immobile archiviato.',
@@ -394,9 +396,10 @@ export const it = {
      *  la cosa da dire a chi crea una stanza — e non era detta da nessuna parte. */
     newExplain: 'Non serve avere tutto adesso: ogni dato si corregge dopo, aprendo la stanza dall’elenco.',
     /** L'unica superficie che una stanza abbia: `GET /rooms/{id}` non esiste. */
-    dialogExplain: 'Correggi i dati della stanza, o archiviala per liberarne il nome.',
-    archive: 'Archivia la stanza',
+    dialogExplain: 'Correggi i dati della stanza. Per liberarne il nome, archiviala dall’elenco.',
+    archive: 'Archivia',
     archiveConfirm: 'Archiviare questa stanza?',
+    archiveConfirmMany: 'Archiviare {count} stanze?',
     archiveExplain: 'Il nome torna libero per una stanza nuova. La traccia resta.',
     created: 'Stanza aggiunta.',
     updated: 'Stanza aggiornata.',
@@ -544,8 +547,9 @@ export const it = {
     uploadHint: 'PDF o immagine, fino a 25 MB.',
     download: 'Scarica',
     empty: 'Nessun allegato.',
-    archive: 'Archivia l’allegato',
+    archive: 'Archivia',
     archiveConfirm: 'Archiviare questo allegato?',
+    archiveConfirmMany: 'Archiviare {count} allegati?',
     /** La policy ammette lo staff **oppure** chi ha caricato: il messaggio non
      *  promette un ruolo, perché all'uploader quel ruolo non serve. */
     archiveExplain:

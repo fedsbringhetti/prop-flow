@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Trash2, Upload } from 'lucide-react'
+import { Archive, Upload } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 
 import {
@@ -15,11 +15,36 @@ import type { StoredDocument } from '@/api/types'
 import { Async, Empty, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
-import { ConfirmAction } from '@/components/ui/confirm'
+import { RowCheckbox, SelectAllCheckbox, useSelection, type Selection } from '@/components/ui/table'
 import { keys } from '@/app/query'
 import { useApi, useIsStaff, useSession } from '@/app/session'
 import { t } from '@/i18n'
 import { formatBytes } from '@/lib/format'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from './bulk'
+
+/** Il verbo degli allegati: **Archivia**, con la frase della scheda e il numero. */
+const ARCHIVE: Verb = {
+  label: t.document.archive,
+  confirmOne: t.document.archiveConfirm,
+  confirmMany: t.document.archiveConfirmMany,
+  explain: t.document.archiveExplain,
+}
+
+/**
+ * Chi può archiviare, **come lo dice la policy**: staff *oppure* chi ha caricato.
+ *
+ * È la `USING` di `documents_update` letta alla lettera, e per questo la riga
+ * non si accontenta di `useIsStaff()`. Il codice che l'API restituisce a chi non
+ * può è `org.staff_role_required` — vero solo a metà, perché all'uploader quel
+ * ruolo non serve — e il modo migliore di non ripetere quella mezza verità è non
+ * offrire il bottone a chi lo riceverebbe.
+ *
+ * **Non è un confine di sicurezza**: a negare è la policy di riga. Qui si evita
+ * soltanto di offrire ciò che verrebbe rifiutato.
+ */
+function canArchive(document: StoredDocument, isStaff: boolean, userId: string | undefined) {
+  return isStaff || (document.uploaded_by !== null && document.uploaded_by === userId)
+}
 
 /**
  * Gli allegati di un oggetto, **uno solo per tutti e sei**.
@@ -85,6 +110,8 @@ export function AttachmentsCard({
 }) {
   const client = useApi()
   const queryClient = useQueryClient()
+  const isStaff = useIsStaff()
+  const { session } = useSession()
   const input = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<unknown>(null)
 
@@ -93,6 +120,21 @@ export function AttachmentsCard({
   const documents = useQuery({
     queryKey,
     queryFn: () => listDocuments(client, owner),
+  })
+
+  // Un elenco e non una tabella, e la selezione è la stessa: l'insieme di
+  // identificatori vive nella primitiva, e qui ci si monta sopra una casella per
+  // riga invece di una colonna. Si offrono solo le righe che la policy lascerebbe
+  // archiviare a chi guarda.
+  const selection = useSelection(
+    (documents.data?.items ?? [])
+      .filter((document) => canArchive(document, isStaff, session?.userId))
+      .map((document) => document.id),
+  )
+  const archive = useBulkAction({
+    selection,
+    action: (id) => archiveDocument(client, id),
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
   })
 
   const upload = useMutation({
@@ -145,6 +187,7 @@ export function AttachmentsCard({
           ) : null}
         </div>
       </CardHeader>
+      <BulkBar selection={selection} verb={ARCHIVE} bulk={archive} icon={<Archive aria-hidden />} />
       <CardBody className="flex flex-col gap-3">
         <InlineError error={error} />
         <Async
@@ -154,8 +197,23 @@ export function AttachmentsCard({
         >
           {(page) => (
             <ul className="divide-y divide-border-subtle">
+              {/* L'intestazione di una tabella che non c'è: la casella della
+                  pagina, solo se c'è almeno una riga da offrire. */}
+              {selection.total > 0 ? (
+                <li className="flex items-center gap-3 py-2 text-xs text-ink-muted">
+                  <SelectAllCheckbox selection={selection} />
+                  <span>{t.selection.selectPage}</span>
+                </li>
+              ) : null}
               {page.items.map((document) => (
-                <AttachmentRow key={document.id} document={document} queryKey={queryKey} />
+                <AttachmentRow
+                  key={document.id}
+                  document={document}
+                  selection={selection}
+                  selectable={canArchive(document, isStaff, session?.userId)}
+                  failure={archive.failureFor(document.id)}
+                  run={archive.run}
+                />
               ))}
             </ul>
           )}
@@ -167,40 +225,35 @@ export function AttachmentsCard({
 
 function AttachmentRow({
   document,
-  queryKey,
+  selection,
+  selectable,
+  failure,
+  run,
 }: {
   document: StoredDocument
-  queryKey: readonly unknown[]
+  selection: Selection
+  selectable: boolean
+  failure: string | undefined
+  run: (ids: readonly string[]) => Promise<unknown>
 }) {
-  const client = useApi()
-  const queryClient = useQueryClient()
-  const isStaff = useIsStaff()
-  const { session } = useSession()
-
-  /**
-   * Chi può archiviare, **come lo dice la policy**: staff *oppure* chi ha caricato.
-   *
-   * È la `USING` di `documents_update` letta alla lettera, e per questo la riga
-   * non si accontenta di `useIsStaff()`. Il codice che l'API restituisce a chi non
-   * può è `org.staff_role_required` — vero solo a metà, perché all'uploader quel
-   * ruolo non serve — e il modo migliore di non ripetere quella mezza verità è non
-   * offrire il bottone a chi lo riceverebbe.
-   *
-   * **Non è un confine di sicurezza**: a negare è la policy di riga. Qui si evita
-   * soltanto di offrire ciò che verrebbe rifiutato.
-   */
-  const canArchive = isStaff || (document.uploaded_by !== null && document.uploaded_by === session?.userId)
-
-  const archive = useMutation({
-    mutationFn: () => archiveDocument(client, document.id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
-  })
-
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-      <span className="min-w-0 flex-1">
-        <span className="block truncate">{document.original_filename}</span>
-        <span className="block text-xs text-ink-muted">{formatBytes(document.size_bytes)}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-3">
+        {/* Spenta e non assente su chi non può archiviare: le righe restano
+            allineate, e una casella spenta dice «non tua» meglio di un vuoto. */}
+        {selection.total > 0 ? (
+          <RowCheckbox
+            selection={selection}
+            id={document.id}
+            label={document.original_filename}
+            failure={failure}
+            disabled={!selectable}
+          />
+        ) : null}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{document.original_filename}</span>
+          <span className="block text-xs text-ink-muted">{formatBytes(document.size_bytes)}</span>
+        </span>
       </span>
       <span className="flex shrink-0 items-center gap-3">
         <a
@@ -211,17 +264,12 @@ function AttachmentRow({
         >
           {t.document.download}
         </a>
-        {canArchive ? (
-          <ConfirmAction
-            trigger={
-              <Button size="sm" variant="dangerGhost" aria-label={t.document.archive}>
-                <Trash2 aria-hidden />
-              </Button>
-            }
-            title={t.document.archiveConfirm}
-            explanation={t.document.archiveExplain}
-            confirmLabel={t.document.archive}
-            onConfirm={() => archive.mutateAsync()}
+        {selectable ? (
+          <VerbButton
+            verb={ARCHIVE}
+            ids={[document.id]}
+            run={run}
+            rowLabel={document.original_filename}
           />
         ) : null}
       </span>
