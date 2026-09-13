@@ -265,6 +265,57 @@ La funzione è idempotente e revoca la scrittura sulle nuove partizioni. Esiste 
 partizione `DEFAULT`, quindi un cron mancato non causa errori di inserimento — solo
 una partizione che cresce.
 
+### Emettere un invito da proprietario
+
+ADR-053: chi diventa proprietario non si registra da una rotta aperta a
+chiunque, ma da un invito emesso qui, dietro un token. Come si verifichi che
+una persona sia un proprietario vero — un'email, una telefonata, un documento —
+è una decisione di chi amministra la piattaforma e non vive nel prodotto: nel
+prodotto vive solo il fatto che il token esiste.
+
+**Emissione**, con il ruolo del migratore, come per `password_reset_codes`:
+
+```bash
+set -a; source .env; set +a   # carica PROPFLOW__DATABASE__MIGRATOR_URL
+./ops/dev/issue-owner-invitation.sh mario.rossi@example.it
+# ./ops/dev/issue-owner-invitation.sh mario.rossi@example.it 3   # scadenza a 3 giorni
+```
+
+Stampa il token in chiaro **una volta sola**, sull'ultima riga di stdout: non si
+rilegge più da nessuna parte, perché in database ne resta solo lo hash SHA-256
+(la stessa forma di ogni credenziale opaca del progetto). Va consegnato fuori
+banda — non per email non cifrata, che il perimetro di questa decisione lascia
+esplicitamente fuori — a chi accetterà l'invito su `POST
+/api/v1/auth/accept-owner-invitation`.
+
+**Consegna.** Chi lo riceve incolla il token nel form di registrazione da
+proprietario: nessun link, per la stessa ragione del codice di recupero della
+password e dell'invito all'inquilino ([ADR-045](08-decisioni.md#adr-045),
+[ADR-052](08-decisioni.md#adr-052)) — un token in un URL finisce nella
+cronologia, nel `Referer` e nei log di ogni proxy davanti al client.
+
+**Revoca**, con il ruolo del migratore:
+
+```sql
+UPDATE app.owner_invitations
+   SET revoked_at = now()
+ WHERE email = 'mario.rossi@example.it'
+   AND accepted_at IS NULL
+   AND revoked_at IS NULL;
+```
+
+**Potatura degli scaduti**, periodica e non obbligatoria: una riga scaduta,
+accettata o revocata resta innocua — il ruolo applicativo non ha comunque il
+privilegio `DELETE` ([ADR-003](08-decisioni.md#adr-003)) — e la cancellazione
+è un'operazione del runbook, con il ruolo del migratore, non un trigger che
+nessuno guarda:
+
+```sql
+DELETE FROM app.owner_invitations
+ WHERE expires_at < now() - INTERVAL '30 days'
+   AND accepted_at IS NULL;
+```
+
 ## Sonde
 
 | Endpoint | Uso | Comportamento |
