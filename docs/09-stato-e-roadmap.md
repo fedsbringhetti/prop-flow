@@ -663,6 +663,76 @@ alternative scartate; qui sotto c'è solo ciò che discende.
 | `/registrazione` esiste due volte nel router: da fuori sessione è `RegisterPage`, da dentro rimanda a `returnTo` | `apps/web/src/app/App.tsx`, righe 138 e 217 |
 | `password_reset_codes` è il precedente di una tabella senza `org_id` letta dal pool privilegiato, con RLS attiva e una policy «la riga è tua» solo per l'invariante 2 | migration `0037` |
 
+### Come si lavora su questa sezione — un metodo nuovo, da provare qui
+
+Deciso il **13 settembre 2026**, prima di cominciare. Fino alla 7 una sola
+conversazione ha pianificato, scritto il codice, verificato e scritto l'esito. Da questa
+sezione i tre ruoli si separano, e il modello che li esegue non è lo stesso:
+
+| Ruolo | Chi | Che cosa |
+|---|---|---|
+| **Decidere e pianificare** | la conversazione principale, con il modello più capace | l'ADR, discusso con chi ha chiesto il lavoro; il piano dettagliato dei passi **dopo** l'ADR, con le premesse verificate contro il codice; le decisioni prese eseguendo |
+| **Scrivere il codice** | un agente con un modello meno oneroso, **uno per passo** | il passo così com'è scritto, con il suo criterio di fine, i test previsti e le verifiche al contrario da fare e da riportare |
+| **Verificare** | **un agente a sé con il modello più capace, a contesto pulito** — non la conversazione principale | ogni passo **prima** che cominci il successivo: rileggere il diff contro il piano e l'ADR, **rifare** le verifiche al contrario, `just ci`, e riferire alla conversazione principale ciò che non regge |
+| **Chiudere** | la conversazione principale | la tabella dei commit, il push con il suo via libera, l'esito in [11](11-piani-conclusi.md) e il piano della sezione 9 |
+
+**Perché separarli.** I passi *decisi e delimitati* — «monta la primitiva su questi tre
+elenchi, con questo verbo e queste stringhe» — sono la parte più lunga di una sezione e
+la meno bisognosa di giudizio; i piani di questo documento sono già scritti per chi non
+era nella conversazione, e un agente è esattamente quel lettore. La parte che ha bisogno
+di giudizio è breve e costa cara se sbagliata.
+
+**Che cosa non si delega, e per quale ragione.** Nella 7 le tre premesse sbagliate del
+piano sono venute fuori *scrivendo il codice*, e ognuna chiedeva di fermarsi e
+riemendare il piano invece di aggirarlo. **Un agente che esegue un piano tende a farlo
+funzionare, non a contestarlo**: quindi l'ADR, il dominio con le sue autorizzazioni, e
+l'esito restano alla conversazione principale, e ogni passo delegato porta scritto
+*«se una premessa del piano si rivela falsa, fermati e riferisci: non aggirarla»*.
+
+**La verifica è una verifica, non una lettura.** La 6 e la 7 hanno mostrato che un test
+verde può asserire il difetto. Chi verifica **rimette il difetto e guarda il test
+cadere**, per ogni test consegnato dall'agente; leggere il diff non basta, e con un
+autore meno forte basta ancora meno.
+
+**Chi verifica non è chi ha pianificato.** Deciso il 13 settembre, dopo che le prime
+tre revisioni (`F2`, `F3`, `F4`) le aveva fatte la conversazione principale: chi ha
+scritto il piano e l'ADR è condizionato dal proprio contesto — legge il diff cercando
+ciò che si aspettava di trovare, e ha già deciso che le premesse sono vere. Un agente
+di revisione **a contesto pulito**, con il modello più capace, parte da `CLAUDE.md`,
+dall'ADR, dal passo del piano, dal rapporto dell'autore e dal diff, e da niente altro:
+non sa che cosa la conversazione ha discusso e non ha interesse a confermarlo. Riceve
+gli stessi obblighi dell'autore — leggere prima di giudicare, rifare le verifiche al
+contrario, `just ci` — e riferisce alla conversazione principale, che decide se
+rimandare all'autore o proporre i commit. Il costo è un secondo contesto a freddo per
+passo; è il prezzo di un giudizio che non sia il proprio.
+
+**E la stessa regola vale per i documenti.** Questa sottosezione era stata scritta e
+committata, ed è **sparita nel commit successivo**: riscrivendo i passi del piano si è
+sostituito un intervallo di testo che la conteneva, e chi ha fatto la sostituzione non
+se n'è accorto perché sapeva che cosa aveva scritto e non ha riletto. Ripristinata dal
+commit che l'aveva introdotta. Un revisore a contesto pulito guarda anche il diff dei
+documenti, e un intervallo cancellato lo vede.
+
+**Il costo fisso di un agente è il contesto.** Parte a freddo e deve leggere
+`CLAUDE.md`, i documenti pertinenti e il piano prima della prima riga: su un passo
+piccolo quel costo supera il risparmio. Un agente **per passo** — `F2`, `F3`, … — e non
+uno per la sezione: la revisione resta incrementale, e un errore non si porta dietro il
+passo dopo.
+
+**La conversazione principale non legge i diff.** Deciso il 15 settembre, dopo le
+prime cinque revisioni. Il coordinatore è il contesto più caro del metodo — porta
+tutta la sezione precedente, i documenti letti e ciò che ha già rivisto, e lo ripaga a
+ogni turno — e su `F2`–`F4` ha letto i diff per intero trovando solo cosmetica: spesa
+doppia per un giudizio peggiore di quello del revisore pulito. Da qui legge i **rapporti**
+(dell'autore e del revisore), scrive i brief, decide, scrive i documenti. Il diff lo
+legge chi non ha il piano in testa.
+
+**Ciò che non cambia.** I commit si concordano come tabella e si fanno dalla
+conversazione principale, dopo il rapporto del revisore; il push è una conferma a
+parte; niente autoreferenza dell'assistente negli artefatti. **L'esito della 8 dice se il metodo ha retto**, con le
+misure che ha: quanti passi delegati, quanti rifiutati alla verifica e perché, e se
+qualche premessa falsa è passata inosservata all'agente.
+
 ### Decomposizione
 
 L'ordine è quello del rischio: prima ciò che rompe la suite, poi ciò che la ripara,
@@ -810,6 +880,53 @@ richiesta con `X-Org-Id`** (è la proprietà del poscritto della 6, riapplicata)
 [12](12-da-fare.md); l'esito in [11](11-piani-conclusi.md) **con le misure del
 metodo** — passi delegati, rifiutati alla verifica, premesse false passate inosservate;
 e il piano della sezione 9 (`R8`, spiegare come si usa il sito) scritto subito dopo.
+
+### Diario dell'esecuzione — le misure per l'esito
+
+Si scrive a ogni passo, qui e non in un file di lavoro fuori dal repository: è ciò che
+`F8` deve leggere per dire se il metodo ha retto, e una conversazione nuova non
+avrebbe altro.
+
+| Passo | Autore | Token · tool use · durata | Revisione | Esito |
+|---|---|---|---|---|
+| `F2` | Sonnet, 1 lancio | ~233 k · 105 · 15 min | conversazione principale | accettato; una correzione cosmetica (grant esplicito) |
+| `F3`+`F4` | Sonnet, 1 lancio | ~502 k · 234 · 38 min | conversazione principale | accettato; una correzione minore (controllo numerico nello script) |
+| `F5` | Sonnet, 1 lancio + 2 riprese per limiti di utilizzo | ~356 k · ~70 · ~10 min effettivi | **Opus a contesto pulito**: ~181 k · 66 · 8 min | accettato con 4 correzioni minori; **`R46`** (difetto di prodotto) e **`R47`** (errore sistemico nei docs) trovati dal revisore |
+
+**Che cosa gli autori hanno trovato di vero che il piano non sapeva:** `ALTER DEFAULT
+PRIVILEGES` della `0015` concede a `propflow_app` ogni tabella nuova (il commento della
+`0037` è falso per quel ruolo); `psql -c` non interpola `:'var'`, solo `-f`; `bash -n`
+in CI non esiste; il login non ha rate limit; `TestEnv` di `persistence` non aveva
+`TokenIssuer` né `RefreshTokenFactory`; `RegisterOwner` era usato 71 volte in
+`persistence.rs` (il piano contava solo `register_and_login`). Nessuna aggirata: tutte
+riferite.
+
+**Decisioni prese dagli autori oltre il piano, accettate:** grant esplicito a
+`propflow_worker` (è il pool privilegiato, e ha già `INSERT` ovunque dalla `0015`); le
+rotte nuove in `auth.rs`; `email` nel corpo rifiutata con `422` come per `PATCH /me`;
+`Denial::InvitationExpired/Revoked` riusati; fixture scaduti/revocati via `INSERT`
+perché il worker non ha `UPDATE` su `revoked_at` — prova pratica del confine.
+
+**Dove l'autore ha sbagliato a classificare:** in `F5` il token vecchio che continua a
+dare accesso dopo l'uscita è stato letto come «assunzione del test» e coperto con un
+login di comodo; era un difetto di prodotto (`R46`), e l'ha detto il revisore pulito
+togliendo il login e guardando il `200` con il contratto nel corpo. È la ragione per cui
+la seconda fase non è opzionale.
+
+**Dove il coordinatore ha sbagliato:** ha creduto ai rapporti di `F2`–`F4` verificando
+ciò che l'autore diceva di aver verificato; ha cancellato la sottosezione sul metodo
+riscrivendo i passi (`d2944f8`) e non se n'è accorto rivedendo il proprio commit; ha
+scritto nel brief di `F2` due premesse false (`password_reset_codes` documentata in
+`03`, una «connessione di bootstrap» in `common`).
+
+**Quel che il revisore pulito ha misurato e che nessun altro avrebbe visto:**
+`coliving_tenant` rimesso sulla porta vecchia non è visto da **nessuno** degli undici
+test chiamanti — il criterio «nessun inquilino nasce owner» è garantito dal `grep`, non
+da un assert. Va saputo per `F6`.
+
+**Limiti di utilizzo:** hanno colpito due volte l'autore di `F5` (limite di sessione,
+poi settimanale). La ripresa con `SendMessage` allo stesso agente ha conservato il
+contesto e il lavoro nell'albero; il costo è stato piccolo.
 
 ### Trappole
 
