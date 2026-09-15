@@ -16,7 +16,7 @@ use std::sync::Arc;
 use propflow_application::ports::ObjectStorage as _;
 use propflow_application::ports::OpaqueTokenFactory;
 use propflow_application::use_cases::ai::{ProcessAiJob, Processed};
-use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
+use propflow_application::use_cases::auth::{AcceptOwnerInvitation, AcceptOwnerInvitationCommand};
 use propflow_application::use_cases::billing::{
     GetCharge, IssueCharge, IssueChargeCommand, ListCharges, ListChargesQuery, ListUtilityBills,
     ListUtilityBillsQuery, RechargeUtilityBill, RechargeUtilityBillCommand, RegisterUtilityBill,
@@ -94,26 +94,47 @@ fn address(city: &str) -> Address {
 }
 
 /// Registra un proprietario e restituisce il contesto della sua organizzazione.
+///
+/// Passa da `AcceptOwnerInvitation` (ADR-053) e non più dal vecchio caso d'uso
+/// di registrazione libera: un invito da proprietario nella tabella
+/// `app.owner_invitations`, inserito con il ruolo privilegiato da
+/// `common::issue_owner_invitation` **come farà lo script**, e poi
+/// l'accettazione — lo stesso caso d'uso e lo stesso pool privilegiato che
+/// userà la rotta vera. Il vecchio caso d'uso sparisce in `F6`: i test di
+/// persistenza non devono dipendere da qualcosa che sta per sparire.
 async fn register_owner(env: &common::TestEnv, label: &str) -> RequestContext {
-    let use_case = RegisterOwner::new(
+    let email = common::unique_email(label);
+    let token = common::issue_owner_invitation(&env.pools, &email).await;
+
+    let use_case = AcceptOwnerInvitation::new(
         Arc::clone(&env.factory),
         Arc::clone(&env.hasher),
+        Arc::clone(&env.tokens),
+        Arc::clone(&env.refresh_tokens),
+        Arc::clone(&env.invitation_tokens),
         Arc::clone(&env.clock) as Arc<dyn propflow_domain::ports::Clock>,
     );
-    let result = use_case
+    let session = use_case
         .execute(
             &RequestContext::anonymous(),
-            RegisterOwnerCommand {
-                email: common::unique_email(label),
+            AcceptOwnerInvitationCommand {
+                token,
                 full_name: format!("Proprietario {label}"),
                 password: "cavallo batteria graffetta".to_owned(),
                 organization_name: Some(format!("Org {label}")),
             },
         )
         .await
-        .expect("registrazione riuscita");
+        .expect("accettazione dell'invito da proprietario riuscita");
 
-    RequestContext::authenticated(result.user_id).with_org(result.org_id, OrgRole::Owner)
+    RequestContext::authenticated(session.user_id).with_org(
+        session
+            .org_id
+            .expect("un proprietario ha sempre un'organizzazione"),
+        session
+            .org_role
+            .expect("un proprietario ha sempre un ruolo"),
+    )
 }
 
 #[tokio::test]

@@ -10,31 +10,49 @@
 
 use std::sync::Arc;
 
-use propflow_application::ports::PasswordHasher;
+use chrono::Duration;
+use propflow_application::ports::{
+    OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
+};
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_infrastructure::db::PoolSettings;
-use propflow_infrastructure::security::Argon2PasswordHasher;
+use propflow_infrastructure::security::{
+    Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
+    OpaqueTokenGenerator,
+};
 use propflow_infrastructure::{DatabasePools, PgUnitOfWorkFactory, SystemClock};
 
 pub const APP_URL_VAR: &str = "PROPFLOW_TEST_APP_URL";
 pub const PRIVILEGED_URL_VAR: &str = "PROPFLOW_TEST_PRIVILEGED_URL";
+pub const JWT_PRIVATE_KEY_VAR: &str = "PROPFLOW_TEST_JWT_PRIVATE_KEY";
+pub const JWT_PUBLIC_KEY_VAR: &str = "PROPFLOW_TEST_JWT_PUBLIC_KEY";
 
 pub struct TestEnv {
     pub pools: DatabasePools,
     pub factory: Arc<dyn UnitOfWorkFactory>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub clock: Arc<SystemClock>,
+    /// Servono solo a `register_owner`, che passa da `AcceptOwnerInvitation`
+    /// (ADR-053) invece che dal vecchio caso d'uso di registrazione libera:
+    /// quel caso d'uso emette sempre una sessione completa, come farebbe la
+    /// rotta vera, e per farlo ha bisogno di firmare un access token e
+    /// generare un refresh token — cose che il vecchio caso d'uso non faceva.
+    pub tokens: Arc<dyn TokenIssuer>,
+    pub refresh_tokens: Arc<dyn RefreshTokenFactory>,
+    pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,
 }
 
 /// Prepara l'ambiente, oppure `None` se il database di test non è configurato.
 pub async fn setup() -> Option<TestEnv> {
-    let (Ok(app_url), Ok(privileged_url)) = (
+    let (Ok(app_url), Ok(privileged_url), Ok(private_key), Ok(public_key)) = (
         std::env::var(APP_URL_VAR),
         std::env::var(PRIVILEGED_URL_VAR),
+        std::env::var(JWT_PRIVATE_KEY_VAR),
+        std::env::var(JWT_PUBLIC_KEY_VAR),
     ) else {
         eprintln!(
-            "SALTATO: impostare {APP_URL_VAR} e {PRIVILEGED_URL_VAR} \
-             (vedi ops/ci/test-integration.sh)"
+            "SALTATO: impostare {APP_URL_VAR}, {PRIVILEGED_URL_VAR}, {JWT_PRIVATE_KEY_VAR} e \
+             {JWT_PUBLIC_KEY_VAR} (vedi ops/ci/test-integration.sh)"
         );
         return None;
     };
@@ -43,12 +61,53 @@ pub async fn setup() -> Option<TestEnv> {
         .await
         .expect("connessione al database di test");
 
+    let tokens: Arc<dyn TokenIssuer> = Arc::new(
+        EdDsaTokenIssuer::new(&JwtSettings {
+            private_key_pem: std::fs::read_to_string(private_key).expect("chiave privata"),
+            public_key_pem: std::fs::read_to_string(public_key).expect("chiave pubblica"),
+            issuer: "propflow".to_owned(),
+            audience: "propflow-api".to_owned(),
+            access_token_lifetime: Duration::minutes(15),
+        })
+        .expect("chiavi valide"),
+    );
+
     Some(TestEnv {
         factory: Arc::new(PgUnitOfWorkFactory::new(pools.clone())),
         hasher: Arc::new(Argon2PasswordHasher::new().expect("Argon2 inizializzato")),
         clock: Arc::new(SystemClock),
+        tokens,
+        refresh_tokens: Arc::new(OpaqueRefreshTokenFactory::new(Duration::days(30))),
+        invitation_tokens: Arc::new(OpaqueTokenGenerator),
         pools,
     })
+}
+
+/// Scrive un invito da proprietario **come farà lo script**
+/// (`ops/dev/issue-owner-invitation.sh`), con il ruolo privilegiato.
+///
+/// Copiata da `crates/api/tests/common::issue_owner_invitation`: i due
+/// `common` sono binari di test di crate diverse e non condividono un crate di
+/// supporto, quindi la forma è duplicata invece che astratta in una
+/// dipendenza nuova.
+pub async fn issue_owner_invitation(pools: &DatabasePools, email: &str) -> String {
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let now = chrono::Utc::now();
+    let expires_at = now + Duration::days(7);
+
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at)
+         VALUES ($1::app.email_address, $2, $3, $4)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(expires_at)
+    .bind(now)
+    .execute(pools.privileged())
+    .await
+    .expect("invito da proprietario inserito");
+
+    token.plaintext
 }
 
 /// Email irripetibile: i test girano sullo stesso database, e un vincolo unique

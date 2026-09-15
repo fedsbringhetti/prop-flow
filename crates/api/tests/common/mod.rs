@@ -459,8 +459,8 @@ impl TestApp {
 
     /// Come [`TestApp::send`] ma con l'header `X-Org-Id`.
     ///
-    /// Serve all'inquilino: il suo access token porta l'organizzazione personale,
-    /// e per leggere i dati dell'organizzazione del proprietario deve dichiararla.
+    /// Serve all'inquilino: la regola 24 vuole `X-Org-Id` sempre, anche quando è
+    /// l'unica organizzazione che ha — quella di chi lo ospita, dopo ADR-053.
     pub async fn send_in_org(
         &self,
         method: &str,
@@ -554,32 +554,36 @@ pub async fn register_and_login(app: &TestApp, prefix: &str) -> (String, String)
     (token, org)
 }
 
-/// Come [`register_and_login`] ma con un'email scelta dal chiamante: serve
-/// all'inquilino, che deve registrarsi con **la stessa** email dell'invito.
+/// Come [`register_and_login`] ma con un'email scelta dal chiamante: serve a chi
+/// ha bisogno di un **proprietario** con un'email nota — ad esempio per farlo
+/// accettare in seguito un invito da inquilino, con la stessa persona.
 /// Restituisce (access_token, org_id, email).
+///
+/// Passa da un invito da proprietario (ADR-053): `POST /auth/register` sparisce
+/// in `F6`, e questo helper non deve dipendere dalla porta che sta per
+/// chiudersi. «Emetti l'invito, accettalo con il token» sostituisce «registrati,
+/// poi accedi» — `AcceptOwnerInvitation` restituisce già una sessione come il
+/// login, quindi non serve un secondo giro.
 pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (String, String, String) {
     let email = email.to_owned();
     let password = "cavallo batteria graffetta";
+    let invitation_token = issue_owner_invitation(app, &email).await;
 
-    let (status, _) = app
+    let (status, body) = app
         .post(
-            "/api/v1/auth/register",
+            "/api/v1/auth/accept-owner-invitation",
             serde_json::json!({
-                "email": email,
+                "token": invitation_token,
                 "full_name": "Proprietario Test",
                 "password": password,
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "registrazione non riuscita");
-
-    let (status, body, _) = app
-        .post_returning_cookie(
-            "/api/v1/auth/login",
-            serde_json::json!({ "email": email, "password": password }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "login non riuscito: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "accettazione dell'invito da proprietario non riuscita: {body}"
+    );
 
     let token = body["access_token"]
         .as_str()
@@ -590,6 +594,51 @@ pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (Strin
         .expect("organizzazione")
         .to_owned();
     (token, org, email)
+}
+
+/// Registra un inquilino **a partire da un invito da inquilino** (`RegisterTenantFromInvitation`,
+/// ADR-053): niente organizzazione personale, membership dentro quella di chi ha
+/// invitato, in una transazione sola. Restituisce (access_token, user_id).
+///
+/// Sostituisce il vecchio «`register_and_login_with_email` con l'email
+/// dell'invito, poi `POST /auth/accept-invitation`»: quella via faceva nascere
+/// l'inquilino owner della propria organizzazione vuota, che è esattamente il
+/// difetto che l'ADR chiude. Chi ha già un account — l'inquilino che torna, o un
+/// proprietario invitato altrove — continua ad accettare con
+/// `POST /auth/accept-invitation` da autenticato: questo helper è solo per il
+/// primo ingresso.
+pub async fn register_tenant_from_invitation(
+    app: &TestApp,
+    token: &str,
+    full_name: &str,
+    password: &str,
+) -> (String, String) {
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": full_name,
+                "password": password,
+            }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "registrazione dall'invito da inquilino non riuscita: {body}"
+    );
+
+    let access_token = body["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_owned();
+    let (status, me) = app
+        .send("GET", "/api/v1/me", Some(&access_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {me}");
+    let user_id = me["id"].as_str().expect("id").to_owned();
+    (access_token, user_id)
 }
 
 /// Chiave dell'advisory lock che serializza i test dell'OCR.

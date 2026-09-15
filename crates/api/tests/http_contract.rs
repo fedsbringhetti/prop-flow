@@ -102,10 +102,11 @@ async fn registering_the_same_email_twice_is_a_conflict() {
 async fn wrong_credentials_are_indistinguishable_from_an_unknown_account() {
     let app = require_app!();
     let email = common::unique_email("credenziali");
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
+        "/api/v1/auth/accept-owner-invitation",
         serde_json::json!({
-            "email": email,
+            "token": invitation_token,
             "full_name": "Tizio",
             "password": "cavallo batteria graffetta",
         }),
@@ -235,9 +236,10 @@ async fn refresh_rotates_the_token_and_reuse_revokes_the_chain() {
     let app = require_app!();
     let email = common::unique_email("rotazione");
     let password = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
-        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+        "/api/v1/auth/accept-owner-invitation",
+        serde_json::json!({ "token": invitation_token, "full_name": "Tizio", "password": password }),
     )
     .await;
     let (_, session, first_refresh) = app
@@ -332,9 +334,10 @@ async fn the_session_cookie_is_refused_by_business_routes() {
     let app = require_app!();
     let email = common::unique_email("csrf");
     let password = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
-        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+        "/api/v1/auth/accept-owner-invitation",
+        serde_json::json!({ "token": invitation_token, "full_name": "Tizio", "password": password }),
     )
     .await;
     let (_, _, cookie) = app
@@ -377,9 +380,10 @@ async fn logout_clears_the_cookie_and_is_idempotent() {
     let app = require_app!();
     let email = common::unique_email("uscita");
     let password = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
-        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+        "/api/v1/auth/accept-owner-invitation",
+        serde_json::json!({ "token": invitation_token, "full_name": "Tizio", "password": password }),
     )
     .await;
     let (_, session, cookie) = app
@@ -1237,15 +1241,13 @@ async fn a_party_with_a_user_keeps_its_email_and_its_place() {
 
     let tenant_email = common::unique_email("inquilino-collegato");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Collegato",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     let (_, detail) = app
         .send(
@@ -1599,21 +1601,15 @@ async fn a_tenant_becomes_real_and_sees_only_what_is_theirs() {
     // `Decimal` va sul filo come stringa, con la scala che ha nel database.
     assert_eq!(party["share_percent"], "100.00");
 
-    // L'inquilino si registra con la stessa email e accetta.
-    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    assert_ne!(tenant_org, owner_org);
-
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
-    assert_eq!(accepted["organization_id"], owner_org);
-    assert_eq!(accepted["role"], "tenant");
-    assert_eq!(accepted["lease_id"], lease);
+    // L'inquilino si registra dall'invito: nasce direttamente dentro
+    // l'organizzazione di chi lo ospita, senza una propria (ADR-053).
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Reale",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // Da qui l'inquilino vede il proprio contratto nell'organizzazione del
     // proprietario: la visibilità arriva da `lease_parties.user_id`.
@@ -1753,15 +1749,13 @@ async fn the_organizations_of_a_user_come_back_with_their_names() {
 
     let tenant_email = common::unique_email("inquilino");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, body) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Test",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // **Senza `X-Org-Id`**: è la condizione che la decisione dichiara possibile.
     let (status, page) = app
@@ -1770,13 +1764,14 @@ async fn the_organizations_of_a_user_come_back_with_their_names() {
     assert_eq!(status, StatusCode::OK, "corpo: {page}");
 
     let items = page["items"].as_array().expect("elenco");
-    assert_eq!(items.len(), 2, "due organizzazioni attese: {page}");
-
-    let personal = items
-        .iter()
-        .find(|item| item["id"] == serde_json::Value::String(tenant_org.clone()))
-        .expect("l'organizzazione personale dell'inquilino");
-    assert_eq!(personal["role"], "owner");
+    // Una sola organizzazione, quella di chi ha invitato: prima di ADR-053
+    // l'inquilino ne aveva anche una propria vuota, e questo elenco ne contava
+    // **due**.
+    assert_eq!(
+        items.len(),
+        1,
+        "un inquilino ha una sola organizzazione, quella di chi lo ha invitato: prima di ADR-053 ne aveva due (la propria e quella di chi lo ha invitato). corpo: {page}"
+    );
 
     let rented = items
         .iter()
@@ -1875,6 +1870,10 @@ async fn a_revoked_invitation_no_longer_works_and_leaves_no_membership() {
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
 
+    // Serve un account che esiste già a prescindere dal token revocato:
+    // `register_tenant_from_invitation` non ne creerebbe uno da un token non
+    // valido, e non resterebbe nulla su cui verificare «nessuna scrittura
+    // parziale» qui sotto.
     let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
     let (status, body) = app
         .post_auth(
@@ -1942,11 +1941,12 @@ async fn a_forgotten_password_can_be_recovered_and_the_old_sessions_die() {
     let app = require_app!();
     let email = common::unique_email("smemorato");
     let vecchia = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     let (status, _) = app
         .post(
-            "/api/v1/auth/register",
+            "/api/v1/auth/accept-owner-invitation",
             serde_json::json!({
-                "email": email,
+                "token": invitation_token,
                 "full_name": "Proprietario Test",
                 "password": vecchia,
             }),
@@ -2191,18 +2191,13 @@ async fn a_returning_tenant_can_accept_a_second_invitation() {
     let first_lease = draft_lease(&app, &owner, &property, Some(&first_room), 0, Some(365)).await;
     let tenant_email = common::unique_email("torna");
     let (_, first_token) = invite_tenant(&app, &owner, &first_lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": first_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
-    assert_eq!(accepted["organization_id"], owner_org);
-    assert_eq!(accepted["role"], "tenant");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &first_token,
+        "Inquilino Che Torna",
+        "cavallo batteria graffetta",
+    )
+    .await;
     assert_eq!(visible_leases(&app, &tenant, &owner_org).await.len(), 1);
 
     // CASO 2 — la stessa persona, un contratto nuovo. Qui rispondeva `409`.
@@ -2271,6 +2266,10 @@ async fn a_returning_tenant_can_accept_a_second_invitation() {
 async fn accepting_a_tenant_invitation_does_not_demote_an_existing_member() {
     let app = require_app!();
     let email = common::unique_email("proprietario-inquilino");
+    // Un proprietario con un'organizzazione propria, non un inquilino al primo
+    // ingresso: è lui il caso che il test prova, quindi passa da
+    // `register_and_login_with_email` (invito da proprietario) e non da
+    // `register_tenant_from_invitation`.
     let (owner, owner_org, _) = common::register_and_login_with_email(&app, &email).await;
     let property = create_property(&app, &owner, "Casa dove abita chi la possiede").await;
     let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
@@ -2419,10 +2418,11 @@ async fn changing_the_password_needs_the_old_one_and_no_session_renews_anymore()
     let app = require_app!();
     let email = common::unique_email("cambia-password");
     let vecchia = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     let (status, _) = app
         .post(
-            "/api/v1/auth/register",
-            serde_json::json!({ "email": email, "full_name": "Proprietario Test", "password": vecchia }),
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({ "token": invitation_token, "full_name": "Proprietario Test", "password": vecchia }),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -2549,15 +2549,13 @@ async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come
 
     let tenant_email = common::unique_email("chi-esce");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, _) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Che Esce",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // Il contratto entra in essere.
     let (status, _) = app
@@ -2635,7 +2633,10 @@ async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come
     assert_eq!(left["role"], "tenant");
 
     // Da fuori: l'organizzazione non è più fra le proprie, e ciò che era dentro
-    // non si legge più. Resta la propria, personale e vuota (ADR-045 al contrario).
+    // non si legge più. **Nessuna** organizzazione resta: prima di ADR-053
+    // l'inquilino aveva una propria organizzazione personale vuota e ci
+    // ricadeva uscendo dall'unica che aveva; dopo, un inquilino non ne ha mai
+    // avuta una.
     let (_, orgs) = app
         .send("GET", "/api/v1/organizations", Some(&tenant), None)
         .await;
@@ -2645,7 +2646,35 @@ async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come
         .iter()
         .filter_map(|item| item["id"].as_str())
         .collect();
-    assert_eq!(ids, vec![tenant_org.as_str()], "corpo: {orgs}");
+    assert_eq!(
+        ids,
+        Vec::<&str>::new(),
+        "un inquilino senza organizzazioni non ne ha più nessuna: prima di ADR-053 gli restava la propria organizzazione personale, qui rappresentata da un id che non esiste più. corpo: {orgs}"
+    );
+
+    // Un token nuovo. Quello vecchio porta ancora `org_id: owner_org` nei suoi
+    // claim, e `middleware::context` si fida del ruolo del token **quando
+    // l'organizzazione richiesta coincide con quella del token**
+    // (`crates/api/src/middleware/context.rs`) — un access token già emesso
+    // non si revoca a metà vita, lo stesso baratto di ADR-012. Prima di ADR-053
+    // questo passo funzionava per una ragione incidentale: il token
+    // dell'inquilino portava la **propria** organizzazione personale, mai
+    // quella di chi lo ospitava, quindi l'organizzazione richiesta era sempre
+    // diversa da quella del token e la lettura della membership era sempre
+    // dal vivo. Un login nuovo, dopo l'uscita, riflette lo stato vero — nessuna
+    // organizzazione — e forza di nuovo quella lettura dal vivo.
+    let (status, login_body, _) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": tenant_email, "password": "cavallo batteria graffetta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {login_body}");
+    let tenant = login_body["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_owned();
+
     let (status, _) = app
         .send_in_org(
             "GET",
@@ -2977,15 +3006,13 @@ async fn a_tenant_attaches_to_their_own_lease_and_sees_nothing_else() {
 
     let tenant_email = common::unique_email("inquilino-doc");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Documenti",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // Il proprietario allega un documento al contratto dell'inquilino.
     let (status, by_owner) = app
@@ -3002,8 +3029,8 @@ async fn a_tenant_attaches_to_their_own_lease_and_sees_nothing_else() {
     assert_eq!(status, StatusCode::CREATED, "corpo: {by_owner}");
     let owner_document = by_owner["id"].as_str().expect("id").to_owned();
 
-    // L'inquilino allega il proprio. Serve `X-Org-Id`: la sua organizzazione
-    // predefinita resta quella personale (debito noto in docs/09).
+    // L'inquilino allega il proprio. Serve `X-Org-Id` per la regola 24: sempre,
+    // anche quando quella dichiarata è l'unica organizzazione che ha.
     let (status, by_tenant) = app
         .upload(common::Upload {
             path: &format!("/api/v1/leases/{lease}/documents"),
@@ -3233,18 +3260,16 @@ async fn the_relationship_runs_in_both_directions() {
     // L'inquilino diventa reale.
     let tenant_email = common::unique_email("inquilino-ticket");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Segnalazioni",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
-    // 1. L'inquilino apre la segnalazione sul proprio immobile. Serve `X-Org-Id`:
-    //    la sua organizzazione predefinita resta quella personale (debito noto).
+    // 1. L'inquilino apre la segnalazione sul proprio immobile. Serve `X-Org-Id`
+    //    per la regola 24: sempre, anche quando è l'unica organizzazione che ha.
     let (ticket, reference) = open_ticket(
         &app,
         &tenant,
@@ -3503,11 +3528,11 @@ async fn a_tenant_can_speak_but_not_drive_the_handling() {
 
     let tenant_email = common::unique_email("inquilino-ruoli");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Ruoli",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -3599,18 +3624,19 @@ async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
 
     // Due inquilini sullo stesso contratto.
     let mut tokens = Vec::new();
-    for prefix in ["coinquilino-uno", "coinquilino-due"] {
+    for (prefix, name) in [
+        ("coinquilino-uno", "Coinquilino Uno"),
+        ("coinquilino-due", "Coinquilino Due"),
+    ] {
         let email = common::unique_email(prefix);
         let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-        let (token, _, _) = common::register_and_login_with_email(&app, &email).await;
-        let (status, accepted) = app
-            .post_auth(
-                "/api/v1/auth/accept-invitation",
-                &token,
-                serde_json::json!({ "token": accept_token }),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+        let (token, _tenant_id) = common::register_tenant_from_invitation(
+            &app,
+            &accept_token,
+            name,
+            "cavallo batteria graffetta",
+        )
+        .await;
         tokens.push(token);
     }
     let (reporter, cotenant) = (&tokens[0], &tokens[1]);
@@ -3721,11 +3747,11 @@ async fn the_report_is_corrected_from_a_route_of_its_own() {
 
     let email = common::unique_email("inquilino-correzione");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Correzione",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -4548,15 +4574,13 @@ async fn a_bill_says_how_much_of_it_has_already_been_recharged() {
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {activated}");
     let (_, accept_token) = invite_tenant(&app, &owner, &first, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Giulia Neri",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     let (status, read) = app
         .send_in_org(
@@ -4651,15 +4675,13 @@ async fn a_bill_becomes_a_charge_the_tenant_can_read() {
     assert_eq!(status, StatusCode::OK, "corpo: {activated}");
 
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Bollette",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/H/1").await;
 
@@ -4832,11 +4854,11 @@ async fn a_voided_charge_stays_visible_and_a_voided_bill_frees_its_invoice_numbe
     )
     .await;
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Annulli",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -5060,11 +5082,11 @@ async fn a_tenant_reads_the_accounting_but_never_writes_it() {
     )
     .await;
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Contabile",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -5387,11 +5409,11 @@ async fn charge_with_a_real_tenant(app: &TestApp, label: &str) -> (String, Strin
     )
     .await;
     let (_, accept_token) = invite_tenant(app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        app,
+        &accept_token,
+        "Inquilino Pagante",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -6144,42 +6166,12 @@ async fn filtering_by_lease_goes_through_the_charge_and_the_nested_route_is_unch
 async fn coliving_tenant(app: &TestApp, owner: &str, lease: &str, label: &str) -> (String, String) {
     let email = common::unique_email(label);
     let (_, accept_token) = invite_tenant(app, owner, lease, &email).await;
-    let (token, _, _) = common::register_and_login_with_email(app, &email).await;
-
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &token,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
-
-    // **Il `user_id` si legge dalle parti del contratto**, e qui la lettura passa
-    // dal proprietario: `POST /auth/accept-invitation` restituisce l'organizzazione
-    // e il ruolo, non l'utente.
-    //
-    // **Questi test usano un contratto unico condiviso dai tre**, che è il caso in
-    // cui questa via basta: `can_access_lease` ammette lo staff oppure chi è parte
-    // di *quel* contratto. Nel co-living **per stanza** — dove ognuno ha il proprio
-    // — non basterebbe, e la via è
-    // `GET /properties/{id}/residents`: la percorre
-    // `a_housemate_finds_the_other_and_adds_them_to_the_group_alone`, dove il
-    // proprietario non passa niente a mano.
-    let (status, detail) = app
-        .send("GET", &format!("/api/v1/leases/{lease}"), Some(owner), None)
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
-    let user_id = detail["parties"]
-        .as_array()
-        .expect("parti del contratto")
-        .iter()
-        .find(|party| party["email"] == email)
-        .and_then(|party| party["user_id"].as_str())
-        .expect("la parte è collegata all'utente dopo l'accettazione")
-        .to_owned();
-
-    (token, user_id)
+    // `register_tenant_from_invitation` restituisce già (access_token, user_id):
+    // prima di ADR-053 l'utente si otteneva registrandosi come proprietario e
+    // poi accettando, e il `user_id` andava riletto dalle parti del contratto
+    // perché `POST /auth/accept-invitation` non lo restituisce.
+    common::register_tenant_from_invitation(app, &accept_token, label, "cavallo batteria graffetta")
+        .await
 }
 
 /// Il giro a mano del modulo, contro il router vero.
@@ -6998,15 +6990,13 @@ async fn resident_of_room(
 
     let email = common::unique_email(label);
     let (_, accept_token) = invite_tenant(app, owner, &lease, &email).await;
-    let (token, _, _) = common::register_and_login_with_email(app, &email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &token,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (token, _tenant_id) = common::register_tenant_from_invitation(
+        app,
+        &accept_token,
+        label,
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     let (status, activated) = app
         .send(
@@ -7433,11 +7423,11 @@ async fn the_ocr_route_is_staff_only_and_unknown_bills_are_not_found() {
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {activated}");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino OCR",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -7745,7 +7735,8 @@ async fn accepting_an_owner_invitation_creates_an_account_and_an_organization() 
     let token = body["access_token"].as_str().expect("access token");
 
     // L'organizzazione esiste davvero ed è l'unica di questo utente, con il
-    // ruolo `owner` — esattamente ciò che `RegisterOwner` dà oggi a chiunque.
+    // ruolo `owner` — esattamente ciò che la vecchia registrazione libera dava
+    // oggi a chiunque.
     let (status, orgs) = app
         .send("GET", "/api/v1/organizations", Some(token), None)
         .await;
@@ -7842,8 +7833,9 @@ async fn registering_from_a_tenant_invitation_lands_inside_the_inviters_organiza
     );
     let tenant_token = body["access_token"].as_str().expect("access token");
 
-    // Zero organizzazioni proprie: non è passato da `RegisterOwner`, quindi non
-    // esiste un'organizzazione personale da nascondere o da ripulire.
+    // Zero organizzazioni proprie: non è passato dalla vecchia registrazione
+    // libera, quindi non esiste un'organizzazione personale da nascondere o da
+    // ripulire.
     let (status, orgs) = app
         .send("GET", "/api/v1/organizations", Some(tenant_token), None)
         .await;
