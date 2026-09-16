@@ -51,10 +51,14 @@ use crate::error::{AppError, AppResult};
 ///
 /// # Chi esce dall'unica organizzazione in cui abita
 ///
-/// Resta con la propria, personale e vuota: è il caso di
-/// [ADR-045](../../../../../docs/08-decisioni.md) al contrario. **Il client deve
-/// dirlo prima**, non lasciarlo scoprire dopo con un riepilogo vuoto e nessuna
-/// spiegazione.
+/// Con [ADR-053](../../../../../docs/08-decisioni.md) resta **senza nessuna
+/// organizzazione**, e non con una propria vuota come prima di quella
+/// decisione: un inquilino non ne ha mai avuta una sua. Chi esce può essere un
+/// inquilino, un gestore, o un proprietario che non è l'ultimo — l'unico caso
+/// escluso è **l'ultimo** proprietario, fermato da `membership.last_owner`
+/// finché resta lui a doverla amministrare. È lo stato di prima classe che il
+/// guscio del client mostra con una schermata dedicata, non con un riepilogo
+/// vuoto che risponde `403`.
 pub struct LeaveOrganization {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
     clock: Arc<dyn Clock>,

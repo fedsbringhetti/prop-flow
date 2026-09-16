@@ -46,56 +46,111 @@ async fn an_invalid_token_is_refused() {
     assert_eq!(body["code"], "auth.token_invalid", "corpo: {body}");
 }
 
+/// `F6` ha chiuso `POST /auth/register`: la validazione della password alla
+/// registrazione si prova adesso sulle due rotte da invito (ADR-053), che sono
+/// le sole rimaste. `password_policy::validate` è condivisa da entrambe —
+/// `create_owner_account`, dietro `accept-owner-invitation`, e
+/// `RegisterTenantFromInvitation` — quindi un `422` mancante su una delle due
+/// sarebbe una regressione della condivisione, non solo del test.
 #[tokio::test]
 async fn weak_passwords_are_rejected_with_field_errors() {
     let app = require_app!();
+
+    let owner_email = common::unique_email("debole-proprietario");
+    let owner_token = common::issue_owner_invitation(&app, &owner_email).await;
     let (status, body) = app
         .post(
-            "/api/v1/auth/register",
+            "/api/v1/auth/accept-owner-invitation",
             serde_json::json!({
-                "email": common::unique_email("debole"),
+                "token": owner_token,
                 "full_name": "Tizio",
                 "password": "corta",
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
+    assert_eq!(body["code"], "validation.failed", "corpo: {body}");
+    assert_eq!(body["errors"][0]["field"], "password", "corpo: {body}");
+
+    let (owner, _) = common::register_and_login(&app, "debole-inquilino").await;
+    let property = create_property(&app, &owner, "Immobile per password debole").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let tenant_email = common::unique_email("debole-inquilino-invitato");
+    let (_, tenant_invite_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": tenant_invite_token,
+                "full_name": "Caio",
+                "password": "corta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
     assert_eq!(body["code"], "validation.failed", "corpo: {body}");
     assert_eq!(body["errors"][0]["field"], "password", "corpo: {body}");
 }
 
+/// Sulle rotte da invito l'email **non è un campo**: è quella dell'invito
+/// (ADR-053, decisione 6), quindi un indirizzo malformato non può più
+/// arrivarci — non c'è dove scriverlo. La validazione del formato vive adesso
+/// dove un invito nasce, `POST /leases/{id}/invitations`, che prima non aveva
+/// un test di contratto dedicato.
 #[tokio::test]
-async fn malformed_email_is_rejected() {
+async fn malformed_email_is_rejected_where_an_invitation_is_issued() {
     let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "email-malformata").await;
+    let property = create_property(&app, &owner, "Immobile per email malformata").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
     let (status, body) = app
-        .post(
-            "/api/v1/auth/register",
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            &owner,
             serde_json::json!({
                 "email": "non-una-email",
                 "full_name": "Tizio",
-                "password": "cavallo batteria graffetta",
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
     assert_eq!(body["errors"][0]["field"], "email", "corpo: {body}");
 }
 
+/// Nessun test di F4 provava già questo caso sulle rotte nuove: l'oracolo
+/// dell'email esiste ed è voluto (ADR-053, «l'oracolo delle email esiste
+/// già»), ma resta uno solo — `auth.email_taken` — anche quando ad accettare
+/// due inviti da proprietario distinti è la stessa persona.
 #[tokio::test]
-async fn registering_the_same_email_twice_is_a_conflict() {
+async fn accepting_two_owner_invitations_for_the_same_email_is_a_conflict() {
     let app = require_app!();
-    let email = common::unique_email("duplicata");
-    let payload = serde_json::json!({
-        "email": email,
-        "full_name": "Tizio",
-        "password": "cavallo batteria graffetta",
-    });
+    let email = common::unique_email("proprietario-duplicato");
+    let full_name = "Proprietario Duplicato";
+    let password = "cavallo batteria graffetta";
 
-    let (first, _) = app.post("/api/v1/auth/register", payload.clone()).await;
-    assert_eq!(first, StatusCode::CREATED);
+    let first_token = common::issue_owner_invitation(&app, &email).await;
+    let (first, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({ "token": first_token, "full_name": full_name, "password": password }),
+        )
+        .await;
+    assert_eq!(first, StatusCode::CREATED, "corpo: {body}");
 
-    let (second, body) = app.post("/api/v1/auth/register", payload).await;
+    // L'indice unico su `owner_invitations` è parziale sui soli inviti
+    // pendenti: il primo è ormai accettato, quindi un secondo invito per lo
+    // stesso indirizzo si emette senza sbattere contro di lui — è il
+    // `409 auth.email_taken` dell'account, non un conflitto sull'invito.
+    let second_token = common::issue_owner_invitation(&app, &email).await;
+    let (second, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({ "token": second_token, "full_name": full_name, "password": password }),
+        )
+        .await;
     assert_eq!(second, StatusCode::CONFLICT, "corpo: {body}");
+    assert_eq!(body["code"], "auth.email_taken", "corpo: {body}");
 }
 
 #[tokio::test]
@@ -7643,11 +7698,32 @@ async fn the_dashboard_needs_authentication() {
 // ---------------------------------------------------------------------------
 // ADR-053: si entra per invito, non da una rotta aperta a chiunque.
 //
-// `POST /auth/register` resta montata (F6 la chiude) — la suite sopra lo prova
-// ancora — ma le due rotte qui sotto sono quelle su cui il prodotto atterra:
-// un token da proprietario apre un account e un'organizzazione, un token da
-// inquilino apre un account **dentro** l'organizzazione di chi ha invitato.
+// `POST /auth/register` è sparita (F6): il test più sotto prova il `404`. Le
+// due rotte qui sotto sono quelle su cui il prodotto atterra: un token da
+// proprietario apre un account e un'organizzazione, un token da inquilino
+// apre un account **dentro** l'organizzazione di chi ha invitato.
 // ---------------------------------------------------------------------------
+
+/// `POST /auth/register` non «richiede un token»: **non esiste più**. Un `404`
+/// e non un `405`, per qualunque corpo: la rotta è sparita per ogni verbo, non
+/// solo per `POST` — vedi `unknown_routes_return_problem_details_too` per la
+/// stessa forma su una rotta che non è mai esistita.
+#[tokio::test]
+async fn registering_freely_is_gone() {
+    let app = require_app!();
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register",
+            serde_json::json!({
+                "email": common::unique_email("porta-vecchia"),
+                "full_name": "Tizio",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
+    assert_eq!(body["code"], "endpoint.not_found", "corpo: {body}");
+}
 
 /// Scrive un invito da proprietario **già scaduto**, retrodatando sia
 /// `created_at` sia `expires_at`: il vincolo `owner_invitations_expiry_ck`

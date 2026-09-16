@@ -94,12 +94,13 @@ async fn list(
     }))
 }
 
-/// Che cosa resta dopo essere usciti.
+/// Che cosa si è appena lasciato.
 ///
-/// Due campi e non un corpo vuoto: chi esce dall'unica organizzazione in cui
-/// abitava resta con la **propria**, personale e vuota — è il caso di
-/// [ADR-045](../../../../../docs/08-decisioni.md) al contrario — e il client deve
-/// poter dire dove si trova adesso senza rileggere l'elenco per indovinarlo.
+/// Due campi e non un corpo vuoto: l'organizzazione e il ruolo che si avevano
+/// lì, non quella in cui si atterra — con [ADR-053](../../../../../docs/08-decisioni.md)
+/// uscire dall'unica organizzazione che si aveva lascia **senza nessuna
+/// organizzazione**, e il client lo mostra con la schermata dedicata del
+/// guscio invece di indovinare un atterraggio che potrebbe non esistere più.
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct LeftOrganizationResponse {
     pub organization_id: Uuid,

@@ -19,7 +19,6 @@ use utoipa::{Modify, OpenApi};
     paths(
         crate::routes::health::liveness,
         crate::routes::health::readiness,
-        crate::routes::auth::register,
         crate::routes::auth::login,
         crate::routes::auth::refresh,
         crate::routes::auth::logout,
@@ -125,8 +124,6 @@ use utoipa::{Modify, OpenApi};
         crate::error::ProblemDetails,
         crate::error::FieldError,
         crate::routes::health::HealthResponse,
-        crate::routes::auth::RegisterRequest,
-        crate::routes::auth::RegisterResponse,
         crate::routes::auth::LoginRequest,
         crate::routes::auth::SessionResponse,
         crate::routes::auth::PasswordResetRequest,

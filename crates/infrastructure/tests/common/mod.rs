@@ -32,11 +32,10 @@ pub struct TestEnv {
     pub factory: Arc<dyn UnitOfWorkFactory>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub clock: Arc<SystemClock>,
-    /// Servono solo a `register_owner`, che passa da `AcceptOwnerInvitation`
-    /// (ADR-053) invece che dal vecchio caso d'uso di registrazione libera:
-    /// quel caso d'uso emette sempre una sessione completa, come farebbe la
-    /// rotta vera, e per farlo ha bisogno di firmare un access token e
-    /// generare un refresh token — cose che il vecchio caso d'uso non faceva.
+    /// Servono all'helper `register_owner` di `persistence.rs`, che passa da
+    /// `AcceptOwnerInvitation` (ADR-053): quel caso d'uso emette sempre una
+    /// sessione completa, come farebbe la rotta vera, e per farlo ha bisogno
+    /// di firmare un access token e generare un refresh token.
     pub tokens: Arc<dyn TokenIssuer>,
     pub refresh_tokens: Arc<dyn RefreshTokenFactory>,
     pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,

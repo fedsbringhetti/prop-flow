@@ -17,13 +17,14 @@ pub struct AcceptOwnerInvitationCommand {
     pub full_name: String,
     pub password: String,
     /// Nome dell'organizzazione personale. Se assente si usa il nome
-    /// dell'utente, come in [`RegisterOwner`](super::RegisterOwner).
+    /// dell'utente.
     pub organization_name: Option<String>,
 }
 
 /// Accetta un invito da proprietario: crea utente e organizzazione personale
-/// come [`RegisterOwner`](super::RegisterOwner) fa oggi per chiunque, ma dietro
-/// un token invece che su una rotta aperta (ADR-053).
+/// esattamente come faceva `RegisterOwner`, la rotta libera che `F6` ha
+/// chiuso, ma dietro un token invece che su una rotta aperta a chiunque
+/// (ADR-053).
 ///
 /// Gira sul pool privilegiato per **due** ragioni, non una sola: non solo
 /// perché utente e organizzazione non esistono ancora (regola 27), ma perché

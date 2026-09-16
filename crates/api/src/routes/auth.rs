@@ -4,8 +4,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 use propflow_application::use_cases::auth::{
     AcceptOwnerInvitationCommand, AuthenticatedSession, ConfirmPasswordResetCommand, LoginCommand,
-    LogoutCommand, RefreshSessionCommand, RegisterOwnerCommand,
-    RegisterTenantFromInvitationCommand, RequestPasswordResetCommand,
+    LogoutCommand, RefreshSessionCommand, RegisterTenantFromInvitationCommand,
+    RequestPasswordResetCommand,
 };
 use propflow_domain::shared::Email;
 use propflow_domain::{DomainError, DomainResult};
@@ -18,18 +18,19 @@ use crate::state::AppState;
 /// Le rotte dell'autenticazione, e le sole che il cookie di sessione
 /// raggiunge: `Path=/api/v1/auth` lo limita a questo prefisso.
 ///
-/// Registrazione e login restano `Anonymous` perché non c'è ancora nessuno da
-/// autenticare; **anche il refresh lo è**, e non è una svista — chi lo chiama
-/// presenta un token, non un'identità, e pretendere un `Authorization` valido
-/// renderebbe impossibile rinnovare proprio quando serve, cioè con l'access token
-/// già scaduto.
+/// Login e le due registrazioni da invito restano `Anonymous` perché non c'è
+/// ancora nessuno da autenticare; **anche il refresh lo è**, e non è una svista
+/// — chi lo chiama presenta un token, non un'identità, e pretendere un
+/// `Authorization` valido renderebbe impossibile rinnovare proprio quando
+/// serve, cioè con l'access token già scaduto.
 ///
-/// **`/register` resta com'è fino a `F6`** (ADR-053): le due rotte da invito
-/// sono aggiunte, non sostituzioni — la porta vecchia resta aperta perché la
-/// suite di test non deve mai andare in rosso durante la fetta.
+/// **Nessun `/register`** (ADR-053, `F6`): si entra solo da un invito, da
+/// proprietario o da inquilino. La rotta non risponde più a nessun verbo —
+/// vedi `docs/05-api.md` — invece di accettare un corpo con un token in più,
+/// che su una rotta chiamata ancora `register` insegnerebbe il contrario di
+/// ciò che questa decisione stabilisce.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/auth/register", post(register))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/refresh", post(refresh))
         .route("/api/v1/auth/logout", post(logout))
@@ -49,20 +50,6 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
-pub struct RegisterRequest {
-    #[schema(example = "mario.rossi@example.it")]
-    pub email: String,
-    #[schema(example = "Mario Rossi")]
-    pub full_name: String,
-    /// Almeno 12 caratteri.
-    #[schema(example = "cavallo batteria graffetta")]
-    pub password: String,
-    /// Nome dell'organizzazione personale. Se omesso si usa il nome dell'utente.
-    #[serde(default)]
-    pub organization_name: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 pub struct PasswordResetRequest {
     #[schema(example = "mario.rossi@example.it")]
     pub email: String,
@@ -79,12 +66,6 @@ pub struct PasswordResetConfirmRequest {
     /// Almeno 12 caratteri, come alla registrazione.
     #[schema(example = "cavallo batteria graffetta")]
     pub new_password: String,
-}
-
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-pub struct RegisterResponse {
-    pub user_id: Uuid,
-    pub organization_id: Uuid,
 }
 
 /// Accetta un invito da proprietario: crea utente e organizzazione insieme,
@@ -207,45 +188,6 @@ fn session_reply(
     let mut headers = HeaderMap::new();
     headers.insert(header::SET_COOKIE, cookie);
     Ok((headers, Json(SessionResponse::from_session(session, now))))
-}
-
-#[utoipa::path(
-    post, path = "/api/v1/auth/register", tag = "autenticazione",
-    request_body = RegisterRequest,
-    responses(
-        (status = 201, description = "Proprietario e organizzazione personale creati", body = RegisterResponse),
-        (status = 409, description = "Email già registrata", body = crate::error::ProblemDetails),
-        (status = 422, description = "Dati non validi", body = crate::error::ProblemDetails),
-    )
-)]
-async fn register(
-    State(state): State<AppState>,
-    Anonymous(context): Anonymous,
-    Json(request): Json<RegisterRequest>,
-) -> ApiResult<(StatusCode, Json<RegisterResponse>)> {
-    let result = state
-        .register_owner
-        .execute(
-            &context,
-            RegisterOwnerCommand {
-                email: request.email,
-                full_name: request.full_name,
-                password: request.password,
-                organization_name: request.organization_name,
-            },
-        )
-        .await
-        .map_err(|error| {
-            ApiError::from(error).with_request_id(context.request_id().map(str::to_owned))
-        })?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(RegisterResponse {
-            user_id: result.user_id.as_uuid(),
-            organization_id: result.org_id.as_uuid(),
-        }),
-    ))
 }
 
 #[utoipa::path(

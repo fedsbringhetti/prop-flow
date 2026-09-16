@@ -5,83 +5,12 @@ use propflow_domain::events::{
     DomainEvent, DomainEventPayload, EventMetadata, OrganizationCreated, UserRegistered,
 };
 use propflow_domain::identity::{OrgMember, OrgRole, Organization, User};
-use propflow_domain::ports::{Clock, UnitOfWork, UnitOfWorkFactory};
+use propflow_domain::ports::{Clock, UnitOfWork};
 use propflow_domain::shared::{Email, OrgId, UserId};
 
 use crate::error::{AppError, AppResult, Conflict};
 use crate::password_policy;
 use crate::ports::PasswordHasher;
-
-#[derive(Debug, Clone)]
-pub struct RegisterOwnerCommand {
-    pub email: String,
-    pub full_name: String,
-    pub password: String,
-    /// Nome dell'organizzazione personale. Se assente si usa il nome dell'utente.
-    pub organization_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct RegisterOwnerResult {
-    pub user_id: UserId,
-    pub org_id: OrgId,
-}
-
-/// Registra un proprietario e la sua organizzazione personale.
-///
-/// È l'unico use case che apre una transazione privilegiata: crea utente,
-/// organizzazione e membership quando nessuna delle tre esiste ancora, quindi non
-/// esiste un contesto di sicurezza da cui la Row Level Security possa dedurre una
-/// visibilità. Tutto avviene in una sola transazione: un utente senza
-/// organizzazione non potrebbe fare nulla, e un'organizzazione senza owner non
-/// sarebbe amministrabile da nessuno.
-pub struct RegisterOwner {
-    unit_of_work: Arc<dyn UnitOfWorkFactory>,
-    hasher: Arc<dyn PasswordHasher>,
-    clock: Arc<dyn Clock>,
-}
-
-impl RegisterOwner {
-    #[must_use]
-    pub const fn new(
-        unit_of_work: Arc<dyn UnitOfWorkFactory>,
-        hasher: Arc<dyn PasswordHasher>,
-        clock: Arc<dyn Clock>,
-    ) -> Self {
-        Self {
-            unit_of_work,
-            hasher,
-            clock,
-        }
-    }
-
-    pub async fn execute(
-        &self,
-        context: &RequestContext,
-        command: RegisterOwnerCommand,
-    ) -> AppResult<RegisterOwnerResult> {
-        let email = Email::parse(&command.email)?;
-
-        let mut uow = self.unit_of_work.begin_privileged().await?;
-        let account = create_owner_account(
-            &mut uow,
-            &self.hasher,
-            &self.clock,
-            context,
-            email,
-            &command.full_name,
-            &command.password,
-            command.organization_name.as_deref(),
-        )
-        .await?;
-        uow.commit().await?;
-
-        Ok(RegisterOwnerResult {
-            user_id: account.user.id(),
-            org_id: account.org_id,
-        })
-    }
-}
 
 /// Utente e organizzazione appena creati da [`create_owner_account`], prima che
 /// il chiamante li leghi a una sessione o a un invito appena marcato accettato.
@@ -94,13 +23,15 @@ pub(super) struct NewOwnerAccount {
 /// personale e membership `owner`, **dentro una transazione privilegiata già
 /// aperta dal chiamante**.
 ///
-/// Condivisa da [`RegisterOwner`] e da
-/// [`AcceptOwnerInvitation`](super::AcceptOwnerInvitation) (ADR-053): il secondo
-/// differisce solo per dove prende l'email — quella dell'invito, non quella del
-/// corpo — e per la scrittura in più che fa dopo (marcare l'invito accettato),
-/// nella stessa transazione. **Non apre né chiude la transazione**: chi chiama
-/// decide quando fare `commit`, perché `AcceptOwnerInvitation` deve ancora
-/// marcare l'invito prima di considerarsi conclusa.
+/// L'unico chiamante è [`AcceptOwnerInvitation`](super::AcceptOwnerInvitation):
+/// prima di `F6` (ADR-053) esisteva anche `RegisterOwner`, la rotta aperta a
+/// chiunque, e questa funzione era condivisa fra le due. Resta separata dal
+/// caso d'uso invece di essere inglobata in lui perché è la parte che non
+/// dipende dal token — costruire l'account — e la sua forma non cambierebbe se
+/// domani nascesse un secondo modo di arrivarci. **Non apre né chiude la
+/// transazione**: chi chiama decide quando fare `commit`, perché
+/// `AcceptOwnerInvitation` deve ancora marcare l'invito prima di considerarsi
+/// conclusa.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn create_owner_account(
     uow: &mut Box<dyn UnitOfWork>,

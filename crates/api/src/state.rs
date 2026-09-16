@@ -7,7 +7,7 @@ use propflow_application::use_cases::account::{ChangeMyPassword, GetMyAccount, U
 use propflow_application::use_cases::ai::GetBillOcrStatus;
 use propflow_application::use_cases::auth::{
     AcceptOwnerInvitation, ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase,
-    RegisterOwner, RegisterTenantFromInvitation, RequestPasswordReset,
+    RegisterTenantFromInvitation, RequestPasswordReset,
 };
 use propflow_application::use_cases::billing::{
     GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, MarkUtilityBillPaid,
@@ -54,9 +54,8 @@ use propflow_infrastructure::DatabasePools;
 /// di aggirare il service layer e la Row Level Security.
 #[derive(Clone)]
 pub struct AppState {
-    pub register_owner: Arc<RegisterOwner>,
-    /// Le due rotte da invito di ADR-053, aggiunte accanto a `register_owner`
-    /// e non al suo posto: la porta vecchia resta aperta fino a `F6`.
+    /// Le due rotte da invito di ADR-053: `F6` ha chiuso `POST /auth/register`,
+    /// quindi sono l'unico modo di registrarsi che resta.
     pub accept_owner_invitation: Arc<AcceptOwnerInvitation>,
     pub register_tenant_from_invitation: Arc<RegisterTenantFromInvitation>,
     pub login: Arc<Login>,
@@ -287,11 +286,6 @@ impl AppState {
         } = dependencies;
 
         Self {
-            register_owner: Arc::new(RegisterOwner::new(
-                Arc::clone(&unit_of_work),
-                Arc::clone(&hasher),
-                Arc::clone(&clock),
-            )),
             accept_owner_invitation: Arc::new(AcceptOwnerInvitation::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&hasher),

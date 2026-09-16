@@ -14,7 +14,6 @@ pub use password_reset::{
     RequestPasswordResetCommand,
 };
 pub use refresh::{RefreshSessionCommand, RefreshSessionUseCase};
-pub use register_owner::{RegisterOwner, RegisterOwnerCommand, RegisterOwnerResult};
 pub use register_tenant_from_invitation::{
     RegisterTenantFromInvitation, RegisterTenantFromInvitationCommand,
 };

@@ -559,11 +559,10 @@ pub async fn register_and_login(app: &TestApp, prefix: &str) -> (String, String)
 /// accettare in seguito un invito da inquilino, con la stessa persona.
 /// Restituisce (access_token, org_id, email).
 ///
-/// Passa da un invito da proprietario (ADR-053): `POST /auth/register` sparisce
-/// in `F6`, e questo helper non deve dipendere dalla porta che sta per
-/// chiudersi. «Emetti l'invito, accettalo con il token» sostituisce «registrati,
-/// poi accedi» — `AcceptOwnerInvitation` restituisce già una sessione come il
-/// login, quindi non serve un secondo giro.
+/// Passa da un invito da proprietario (ADR-053): `POST /auth/register` non
+/// esiste più da `F6`. «Emetti l'invito, accettalo con il token» sostituisce
+/// «registrati, poi accedi» — `AcceptOwnerInvitation` restituisce già una
+/// sessione come il login, quindi non serve un secondo giro.
 pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (String, String, String) {
     let email = email.to_owned();
     let password = "cavallo batteria graffetta";

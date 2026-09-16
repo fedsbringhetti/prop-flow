@@ -216,14 +216,13 @@ scrittura, evento o riga di audit.
 
 | Metodo | Percorso | Auth | Esito |
 |---|---|---|---|
-| POST | `/api/v1/auth/register` | no | `201` con `user_id` e `organization_id`. Crea utente e organizzazione personale in una transazione |
 | POST | `/api/v1/auth/login` | no | `200` con la sessione, più il **cookie** del refresh token |
 | POST | `/api/v1/auth/refresh` | cookie | `200`, ruota il refresh token e riposa il cookie. **Nessun corpo** |
 | POST | `/api/v1/auth/logout` | sì, più il cookie | `204`, idempotente. Cancella il cookie |
-| POST | `/api/v1/auth/password-reset` | no | `202` **sempre**, senza corpo. Se quell'indirizzo ha un account, riceve un codice |
-| POST | `/api/v1/auth/password-reset/confirm` | no | `204`. **Revoca tutte le sessioni.** `401` se il codice non vale, `422` se la password è debole |
 | POST | `/api/v1/auth/accept-owner-invitation` | no | `201` con la sessione e il cookie, come il login. Crea proprietario e organizzazione personale dietro un token di piattaforma (ADR-053) |
 | POST | `/api/v1/auth/register-from-invitation` | no | `201` con la sessione e il cookie, come il login. Registra un inquilino **dentro l'organizzazione di chi lo ha invitato**, con zero organizzazioni proprie (ADR-053) |
+| POST | `/api/v1/auth/password-reset` | no | `202` **sempre**, senza corpo. Se quell'indirizzo ha un account, riceve un codice |
+| POST | `/api/v1/auth/password-reset/confirm` | no | `204`. **Revoca tutte le sessioni.** `401` se il codice non vale, `422` se la password è debole |
 
 Il **cambio password da autenticati** non è qui: è
 [`/api/v1/me/password`](#il-proprio-account), sotto, perché chi lo chiede **è** già
@@ -335,30 +334,32 @@ esiti che per lui sono lo stesso non lo aiuterebbe.
 
 #### Registrarsi è entrare su invito, non aprire una porta
 
-[ADR-053](08-decisioni.md#adr-053): `POST /auth/register` **resta com'è per ora**
-— sparisce in una fetta successiva — ma le due vie sotto sono quelle su cui il
-prodotto atterra. Entrambe rispondono `201` con la stessa `SessionResponse` e lo
-stesso cookie del login: chi le chiama è dentro, non deve rifare un secondo
-`POST /auth/login`.
+[ADR-053](08-decisioni.md#adr-053): **`POST /auth/register` non esiste più**
+(`F6`) — non «richiede un token»: sparisce, perché un corpo con un campo in
+più su una rotta che si chiama ancora `register` insegnerebbe il contrario di
+ciò che questa decisione stabilisce. Risponde `404 endpoint.not_found`, come
+qualunque altra rotta sconosciuta, per ogni verbo. Le due vie sotto sono le
+sole su cui il prodotto atterra. Entrambe rispondono `201` con la stessa
+`SessionResponse` e lo stesso cookie del login: chi le chiama è dentro, non
+deve rifare un secondo `POST /auth/login`.
 
 **`POST /auth/accept-owner-invitation`** (`token`, `full_name`, `password`,
-`organization_name?`): crea un proprietario e la sua organizzazione personale,
-esattamente come `register` fa oggi, ma dietro un token emesso da uno script in
-`ops/` e non su una rotta aperta a chiunque. Il token è quello che
+`organization_name?`): crea un proprietario e la sua organizzazione personale
+dietro un token emesso da uno script in `ops/` e non su una rotta aperta a
+chiunque. Il token è quello che
 [07 — Operazioni](07-operazioni.md#emettere-un-invito-da-proprietario) descrive
 come emetterlo e consegnarlo.
 
 **`POST /auth/register-from-invitation`** (`token`, `full_name`, `password`):
-registra un inquilino **a partire dall'invito** che oggi vive in
-`/auth/register` + `/auth/accept-invitation` in due passi — e li fa insieme, in
-una transazione: non esiste un istante in cui l'inquilino è registrato e senza
-organizzazione. Chi si registra così entra **nell'organizzazione di chi lo ha
-invitato**, con zero organizzazioni proprie: non passa da `RegisterOwner`, e
-quindi non erediterebbe mai un'organizzazione personale vuota. **Nessun campo
-`email`**: è quella dell'invito, e si riconosce e si rifiuta con `422` se il
-corpo la porta, con la stessa forma di `email` in `PATCH /me` — un campo
-sconosciuto si ignora ovunque nell'API, ma questo non lo è: è quello che
-chiunque proverà a mandare per primo.
+registra un inquilino **a partire dall'invito**, in una transazione: non esiste
+un istante in cui l'inquilino è registrato e senza organizzazione. Chi si
+registra così entra **nell'organizzazione di chi lo ha invitato**, con zero
+organizzazioni proprie: non passa dall'accettazione di un invito da
+proprietario, e quindi non erediterebbe mai un'organizzazione personale
+vuota. **Nessun campo `email`**: è quella dell'invito, e si riconosce e si
+rifiuta con `422` se il corpo la porta, con la stessa forma di `email` in
+`PATCH /me` — un campo sconosciuto si ignora ovunque nell'API, ma questo non
+lo è: è quello che chiunque proverà a mandare per primo.
 
 **Le quattro cause di rifiuto rispondono tutte `401 auth.invalid_credentials`**,
 identico in ogni caso, su entrambe le rotte: token inesistente, scaduto, usato
