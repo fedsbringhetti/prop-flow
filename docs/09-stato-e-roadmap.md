@@ -663,7 +663,14 @@ alternative scartate; qui sotto c'è solo ciò che discende.
 | `/registrazione` esiste due volte nel router: da fuori sessione è `RegisterPage`, da dentro rimanda a `returnTo` | `apps/web/src/app/App.tsx`, righe 138 e 217 |
 | `password_reset_codes` è il precedente di una tabella senza `org_id` letta dal pool privilegiato, con RLS attiva e una policy «la riga è tua» solo per l'invariante 2 | migration `0037` |
 
-### Come si lavora su questa sezione — un metodo nuovo, da provare qui
+### Come si lavora su questa sezione — un metodo nuovo, provato qui e **ritirato**
+
+> **Ritirato il 16 settembre 2026, da `F8` in poi.** Il metodo degli agenti è stato
+> provato su `F2`–`F7` e misurato; la misura sta nel diario più sotto e la ragione del
+> ritiro in fondo a questa sottosezione. `F8` e le sezioni successive tornano alla forma
+> delle sezioni 1–7: **una sola conversazione** pianifica, scrive il codice, verifica al
+> contrario e scrive l'esito. Il testo che segue resta com'era, perché è la storia di
+> che cosa si è provato e perché, e la si rilegge prima di riprovarci.
 
 Deciso il **13 settembre 2026**, prima di cominciare. Fino alla 7 una sola
 conversazione ha pianificato, scritto il codice, verificato e scritto l'esito. Da questa
@@ -751,6 +758,24 @@ limite delle 5 ore del piano. Quattro regole, da ora:
 
 Stima con queste regole: un passo come F7 costa ~250 turni × ~150 k ≈ 35–40 M invece
 di 188 M.
+
+**Il ritiro.** Deciso il **16 settembre 2026**, subito dopo la stima qui sopra, da chi
+paga i token. Anche con le quattro regole un passo delegato costa decine di milioni di
+token letti dalla cache — la fase `F6`+`F7` ne ha consumati **268 M** in tutto, contro i
+~7 M della conversazione principale nello stesso arco — e il limite delle 5 ore del piano
+è stato esaurito una volta. Il metodo aveva un pregio vero e misurato: il revisore a
+contesto pulito ha trovato `R46`, `R47` e due test vacui che né l'autore né il
+coordinatore avevano visto. Quel pregio si conserva senza agenti con la disciplina che
+lo produceva: **ogni test si prova al contrario prima di consegnarlo**, rimettendo il
+difetto e guardandolo cadere, e l'esito scrive quale assert è caduto; e chi ha chiesto il
+lavoro rilegge il diff con lo stesso sospetto del revisore. Ciò che si perde è il giudizio
+di un contesto che non aveva il piano in testa; è un costo, e lo si accetta.
+
+*Trappola, per chi volesse riprovarci:* il consumo di un agente **non si vede dal suo
+rapporto** — l'autore di `F6`+`F7` stimava 980 k token e ne aveva letti 235 M — e non
+si vede dalla conversazione principale, che riceve solo il rapporto. Si vede solo nei
+campi `usage` delle trascrizioni, sommando la cache letta turno per turno. Misurare
+**prima** di decidere se delegare, non dopo il primo limite di utilizzo.
 
 **Ciò che non cambia.** I commit si concordano come tabella e si fanno dalla
 conversazione principale, dopo il rapporto del revisore; il push è una conferma a
