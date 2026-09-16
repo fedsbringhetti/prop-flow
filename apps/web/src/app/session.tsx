@@ -23,6 +23,12 @@ interface SessionContextValue {
    * organizzazione e inquilino in quella di chi le affitta casa.
    */
   selectOrganization: (organizationId: string, role: OrgRole) => void
+  /**
+   * Nessuna organizzazione attiva, e **dimentica anche il ricordo di questo
+   * browser**: senza, un ricaricamento riproverebbe a selezionare
+   * un'organizzazione che non c'è più (ADR-053, guscio a zero organizzazioni).
+   */
+  clearOrganization: () => void
   /** Vero finché il tentativo di ripristino dal cookie è in corso. */
   restoring: boolean
 }
@@ -76,6 +82,14 @@ function writeStored(userId: string, preference: StoredPreference): void {
     localStorage.setItem(`${STORAGE_KEY}:${userId}`, JSON.stringify(preference))
   } catch {
     // Vedi sopra.
+  }
+}
+
+function clearStored(userId: string): void {
+  try {
+    localStorage.removeItem(`${STORAGE_KEY}:${userId}`)
+  } catch {
+    // Vedi sopra: un `localStorage` non disponibile non è un errore qui.
   }
 }
 
@@ -142,6 +156,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       selectOrganization: (organizationId, role) => {
         if (userId) writeStored(userId, { active: organizationId, role })
         store.selectOrganization(organizationId, role)
+      },
+      clearOrganization: () => {
+        if (userId) clearStored(userId)
+        store.clearOrganization()
       },
     }),
     [session, store, client, restoring, userId],

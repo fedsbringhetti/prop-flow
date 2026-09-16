@@ -210,6 +210,20 @@ export const it = {
     /** Il nome non è ancora arrivato: si mostra questo e non l'UUID, che è
      *  esattamente ciò da cui questo passo libera. */
     unknownName: 'Organizzazione',
+
+    /**
+     * Il terzo stato del guscio (`F7`, ADR-053): nessuna organizzazione, non un
+     * errore e non il vuoto di un elenco. Ci si arriva uscendo dall'unica che
+     * si aveva — da inquilino, da gestore, o da proprietario non ultimo — non
+     * dalla revoca di un invito: un invito non accettato non ha mai fatto
+     * entrare nessuno.
+     */
+    noneTitle: 'Nessuna organizzazione',
+    noneBody: (name: string) =>
+      `${name}, non fai parte di nessuna organizzazione: su PropFlow si entra da un invito.`,
+    /** Finché `/me` non è arrivata: dice la stessa cosa senza il nome. */
+    noneBodyFallback: 'Non fai parte di nessuna organizzazione: su PropFlow si entra da un invito.',
+    noneHint: 'Se hai un codice, incollalo qui: ti mette dentro l’organizzazione di chi te lo ha mandato.',
   },
 
   /**
