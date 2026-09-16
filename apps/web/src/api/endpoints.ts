@@ -578,10 +578,11 @@ export function triageTicket(
  *
  * Il corpo vuole un `assignee_id`, e il client passa **sempre chi chiama**:
  * l'azione è «prendi in carico». Non è una semplificazione — un'organizzazione ha
- * esattamente uno staff, perché l'unico modo di diventarlo è `RegisterOwner` e
- * `InviteTenant` scrive `role: tenant` fisso: `OrgRole::Manager` è nell'enum e
- * nessuno lo scrive mai. Un menù delle persone sarebbe vuoto. Il giorno in cui
- * esisterà un invito che crea un gestore, quell'azione diventa un menù.
+ * esattamente uno staff, perché l'unico modo di diventarlo è accettare un invito
+ * da proprietario (ADR-053) e `InviteTenant` scrive `role: tenant` fisso:
+ * `OrgRole::Manager` è nell'enum e nessuno lo scrive mai. Un menù delle persone
+ * sarebbe vuoto. Il giorno in cui esisterà un invito che crea un gestore,
+ * quell'azione diventa un menù.
  */
 export function assignTicket(client: ApiClient, id: Uuid, assigneeId: Uuid): Promise<Ticket> {
   return client.post<Ticket>(`/tickets/${id}/assign`, { assignee_id: assigneeId })

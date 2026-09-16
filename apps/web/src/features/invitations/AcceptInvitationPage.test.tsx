@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SessionProvider } from '@/app/session'
-import { AcceptInvitationPage } from './AcceptInvitationPage'
+import { AcceptInvitationPage, AcceptInvitationSignedOutPage } from './AcceptInvitationPage'
 
 /**
  * L'accettazione di un invito, dai due lati che questa fetta esiste per chiudere.
@@ -181,5 +181,172 @@ describe('accettare un invito', () => {
     await paste('codice-gia-usato')
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/già stato accettato/i)
+  })
+})
+
+/**
+ * `/invito`, fuori sessione (`F7`, ADR-053): il codice **prima**, la
+ * registrazione **dopo**, con il codice già dentro e senza un campo email.
+ *
+ * I due punti del criterio di fine che questa suite prova:
+ *
+ * 1. **si manda il token, non un'email** — la rotta nuova non ha un campo
+ *    `email` e l'unico modo di romperla sarebbe rimandarne una nel corpo;
+ * 2. **il campo dell'organizzazione compare solo dopo il `409
+ *    invitation.owner_token`**, mai prima — mostrarlo da subito
+ *    chiederebbe un nome anche a chi sta accettando un invito da inquilino.
+ */
+function renderEntry(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  vi.stubGlobal('fetch', handler)
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+
+  render(
+    <SessionProvider>
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/invito']}>
+          <Routes>
+            <Route path="/invito" element={<AcceptInvitationSignedOutPage />} />
+            <Route path="/addebiti" element={<p>scadenzario</p>} />
+            <Route path="/" element={<p>riepilogo</p>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </SessionProvider>,
+  )
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+/** Nessuna sessione da ripristinare: è la condizione reale di chi arriva senza account. */
+function refuseRefresh(url: string): Response | null {
+  if (!url.endsWith('/auth/refresh')) return null
+  return jsonResponse(401, { code: 'auth.token_missing', status: 401 })
+}
+
+/**
+ * Il campo, e non il bottone che lo scopre: `getByLabelText(/password/i)` da
+ * solo ne trova due, l'etichetta del campo e l'`aria-label` del bottone che
+ * mostra la password.
+ */
+function passwordField(): HTMLElement {
+  return screen.getByLabelText(/password/i, { selector: 'input' })
+}
+
+async function enterCode(code: string) {
+  const user = userEvent.setup()
+  const field = await screen.findByLabelText(/codice d’invito/i)
+  await user.type(field, code)
+  await user.click(screen.getByRole('button', { name: /continua/i }))
+  return user
+}
+
+describe('la registrazione dall’invito, fuori sessione', () => {
+  it('manda il token dell’invito, non un’email', async () => {
+    const sentBodies: Record<string, unknown>[] = []
+
+    renderEntry(async (input, init) => {
+      const url = String(input)
+      const refused = refuseRefresh(url)
+      if (refused) return refused
+      if (url.endsWith('/auth/register-from-invitation')) {
+        sentBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return jsonResponse(201, {
+          access_token: 'token',
+          token_type: 'Bearer',
+          expires_in: 900,
+          user_id: 'utente-1',
+          organization_id: OWN_ORG,
+          role: 'tenant',
+        })
+      }
+      return jsonResponse(200, { items: [] })
+    })
+
+    const user = await enterCode('codice-inquilino')
+    await user.type(screen.getByLabelText(/nome e cognome/i), 'Nuovo Inquilino')
+    await user.type(passwordField(), 'cavallo batteria graffetta')
+    await user.click(screen.getByRole('button', { name: /crea l’account ed entra/i }))
+
+    await waitFor(() => expect(sentBodies.length).toBe(1))
+    const sent = sentBodies[0]
+    expect(sent).toBeDefined()
+    // La riga per cui il test esiste: il token c'è, l'email no. `email` non è
+    // nemmeno un campo del form — se qualcuno lo aggiungesse per «uniformare»
+    // alla vecchia registrazione, questa riga cade.
+    expect(sent?.['token']).toBe('codice-inquilino')
+    expect(sent).not.toHaveProperty('email')
+    expect(sent?.['full_name']).toBe('Nuovo Inquilino')
+
+    // La sessione è installata come il login: si atterra sulla pagina del
+    // ruolo senza un secondo giro.
+    expect(await screen.findByText('scadenzario')).toBeInTheDocument()
+  })
+
+  it('mostra il campo dell’organizzazione solo dopo il 409 invitation.owner_token', async () => {
+    let registerAttempts = 0
+    const ownerBodies: Record<string, unknown>[] = []
+
+    renderEntry(async (input, init) => {
+      const url = String(input)
+      const refused = refuseRefresh(url)
+      if (refused) return refused
+      if (url.endsWith('/auth/register-from-invitation')) {
+        registerAttempts += 1
+        return jsonResponse(409, {
+          type: 'conflict',
+          title: 'owner token',
+          status: 409,
+          code: 'invitation.owner_token',
+        })
+      }
+      if (url.endsWith('/auth/accept-owner-invitation')) {
+        ownerBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return jsonResponse(201, {
+          access_token: 'token',
+          token_type: 'Bearer',
+          expires_in: 900,
+          user_id: 'utente-2',
+          organization_id: OWN_ORG,
+          role: 'owner',
+        })
+      }
+      return jsonResponse(200, { items: [] })
+    })
+
+    const user = await enterCode('codice-proprietario')
+    await user.type(screen.getByLabelText(/nome e cognome/i), 'Nuovo Proprietario')
+    await user.type(passwordField(), 'cavallo batteria graffetta')
+
+    // **La riga per cui questo test esiste, prima metà.** Non si sa ancora se
+    // il codice è da proprietario: il campo non deve comparire per indovinare.
+    expect(screen.queryByLabelText(/nome dell’organizzazione/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /crea l’account ed entra/i }))
+
+    // Il `409` non è un errore mostrato: è il segnale che manca un campo, e
+    // nome e password restano compilati — non si ridigita nulla.
+    const orgField = await screen.findByLabelText(/nome dell’organizzazione/i)
+    expect(screen.getByLabelText(/nome e cognome/i)).toHaveValue('Nuovo Proprietario')
+    expect(passwordField()).toHaveValue('cavallo batteria graffetta')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.type(orgField, 'La mia agenzia')
+    await user.click(screen.getByRole('button', { name: /crea l’account ed entra/i }))
+
+    await waitFor(() => expect(ownerBodies.length).toBe(1))
+    expect(registerAttempts).toBe(1)
+    const sent = ownerBodies[0]
+    expect(sent?.['token']).toBe('codice-proprietario')
+    expect(sent?.['organization_name']).toBe('La mia agenzia')
+
+    expect(await screen.findByText('riepilogo')).toBeInTheDocument()
   })
 })

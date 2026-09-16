@@ -92,8 +92,12 @@ export const it = {
   auth: {
     loginTitle: 'Entra in PropFlow',
     loginSubtitle: 'Amministra i tuoi immobili, i contratti e la contabilità.',
-    registerTitle: 'Crea il tuo account',
-    registerSubtitle: 'Bastano un’email e una password per cominciare.',
+    /** `/registrazione` da fuori sessione, da `F6`: non più un form, un rimando
+     *  che dice perché — non c'è una porta aperta, si entra da un invito. */
+    registrationMovedTitle: 'Ci si registra da un invito',
+    registrationMovedBody:
+      'PropFlow non ha una registrazione aperta: chi ti ospita, o chi amministra la piattaforma, ti manda un codice da incollare.',
+    registrationMovedAction: 'Ho un codice d’invito',
     email: 'Email',
     password: 'Password',
     passwordHint: 'Almeno 12 caratteri. Una frase lunga vale più di un simbolo.',
@@ -105,12 +109,10 @@ export const it = {
     organizationName: 'Nome dell’organizzazione',
     organizationNameHint: 'Se lo lasci vuoto usiamo il tuo nome.',
     submitLogin: 'Entra',
-    submitRegister: 'Crea l’account',
     toRegister: 'Non hai un account? Registrati',
     toLogin: 'Hai già un account? Entra',
     logout: 'Esci',
     sessionExpired: 'La sessione è scaduta. Entra di nuovo.',
-    registeredNowSignIn: 'Account creato. Entra con le tue credenziali.',
 
     /** Il recupero della password. Le stringhe dicono **la verità** su ciò che
      *  succede: la risposta è la stessa per un indirizzo noto e per uno
@@ -610,11 +612,6 @@ export const it = {
       'Incolla il codice che ti ha mandato chi affitta la casa: ti mette dentro la sua organizzazione, dove trovi il contratto e quello che devi.',
     acceptSubmit: 'Entra',
     acceptCodeHint: 'Vale sette giorni dall’emissione. Non è la password del tuo account.',
-    /** Accettare richiede una sessione: la rotta è autenticata. Chi arriva senza
-     *  account trova scritto che cosa fare, non un `401`. */
-    acceptNeedsAccountTitle: 'Prima serve il tuo account',
-    acceptNeedsAccountBody:
-      'Un invito si accetta da dentro PropFlow: crea il tuo account — o entra, se ce l’hai già — e torna qui con il codice.',
     /** `auth.invalid_credentials` è ciò che l'API risponde a un codice sbagliato,
      *  scaduto o intestato a un altro indirizzo: distinguerli direbbe a chi prova
      *  quali inviti esistono. Il messaggio del catalogo — «email o password non
@@ -622,6 +619,28 @@ export const it = {
     acceptCodeRejected:
       'Questo codice non è valido: può essere sbagliato, scaduto, o intestato a un’altra email. Chiedine uno nuovo a chi te lo ha mandato.',
     acceptAlreadyDone: 'Questo invito è già stato accettato: sei già dentro.',
+
+    /**
+     * `/invito` da fuori sessione (`F7`, ADR-053): il codice **prima**, il form
+     * di registrazione **dopo**, con il codice già dentro. Due passi e non uno
+     * solo perché il primo non fa nessuna chiamata — non esiste una rotta di
+     * sola lettura che dica di che genere è un invito, per non regalare un
+     * oracolo su quali codici esistono — e il secondo si adatta a quel che il
+     * server risponde davvero.
+     */
+    entryTitle: 'Entra con un invito',
+    entrySubtitle:
+      'Incolla il codice che hai ricevuto: da chi ti affitta casa, o da chi amministra la piattaforma se diventi proprietario.',
+    entryContinue: 'Continua',
+    /** Step due: nessun campo email, è quella dell'invito (ADR-053, decisione 6). */
+    registerTitle: 'Crea il tuo account',
+    registerSubtitle: 'Il codice è quello che hai appena incollato: non serve un’altra email.',
+    registerSubmit: 'Crea l’account ed entra',
+    /** Compare **solo** dopo `409 invitation.owner_token`: il codice incollato
+     *  era da proprietario, non da inquilino, e crea un'organizzazione. */
+    ownerTokenPrompt:
+      'Questo codice è da proprietario: crea anche un’organizzazione. Dalle un nome.',
+    backToCode: 'Ho sbagliato codice',
   },
 
   ticket: {
@@ -1441,6 +1460,11 @@ export const it = {
     'invitation.not_found': 'Invito non trovato.',
     'invitation.already_pending': 'C’è già un invito in attesa per questa email.',
     'invitation.already_accepted': 'Questo invito è già stato accettato.',
+    /** Non un errore da mostrare così com'è: il form di registrazione
+     *  dall'invito lo intercetta e mostra il campo dell'organizzazione invece
+     *  di questo messaggio. Il catalogo lo porta comunque, per non lasciare un
+     *  codice muto se compare in un punto che non lo gestisce. */
+    'invitation.owner_token': 'Questo codice è da proprietario: crea anche un’organizzazione.',
     'utility_bill.not_found': 'Bolletta non trovata.',
     'utility_bill.duplicate': 'Questa fattura di questo fornitore è già registrata.',
     'utility_bill.invalid_transition': 'Non si può fare da questo stato.',

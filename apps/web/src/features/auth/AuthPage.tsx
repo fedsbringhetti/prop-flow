@@ -2,10 +2,9 @@ import { Eye, EyeOff } from 'lucide-react'
 import type { ComponentProps } from 'react'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useNavigate } from 'react-router'
+import { Link } from 'react-router'
 
 import { confirmPasswordReset, requestPasswordReset } from '@/api/endpoints'
-import { ApiError, fieldErrorFor } from '@/api/problem'
 import { InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
@@ -33,22 +32,24 @@ import { useApi, useSession } from '@/app/session'
  */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-/** Dodici caratteri, come la policy del server. */
-const PASSWORD_MIN_LENGTH = 12
+/**
+ * Dodici caratteri, come la policy del server.
+ *
+ * Esportata da `F7`: il recupero della password, qui in basso, la condivide con
+ * il form di registrazione dall'invito
+ * (`features/invitations/AcceptInvitationPage.tsx`) — lo stesso campo per
+ * entrambi i generi di invito, da proprietario o da inquilino, perché è la
+ * stessa regola del server (`password_policy::validate`) ripetuta qui per non
+ * far fare un giro di rete a chi ha appena sbagliato a contare i caratteri.
+ */
+export const PASSWORD_MIN_LENGTH = 12
 
 interface LoginValues {
   email: string
   password: string
 }
 
-interface RegisterValues {
-  email: string
-  fullName: string
-  password: string
-  organizationName: string
-}
-
-function AuthFrame({
+export function AuthFrame({
   title,
   subtitle,
   children,
@@ -95,8 +96,13 @@ function AuthFrame({
  *    digitando continua a digitare dove stava.
  *
  * Il `type` non è mai `text` di default: si torna nascosti a ogni montaggio.
+ *
+ * **Esportato**: lo riusa il form di registrazione dall'invito
+ * (`features/invitations/AcceptInvitationPage.tsx`), che è un form di password
+ * quanto questi — riscriverlo lì vorrebbe dire tenere due copie allineate a
+ * mano.
  */
-function PasswordInput({ className, ...props }: ComponentProps<'input'>) {
+export function PasswordInput({ className, ...props }: ComponentProps<'input'>) {
   const [visible, setVisible] = useState(false)
 
   return (
@@ -142,7 +148,10 @@ export function LoginPage() {
       subtitle={t.auth.loginSubtitle}
       footer={
         <>
-          <Link to="/registrazione" className="text-accent underline-offset-4 hover:underline">
+          {/* `/invito`, non `/registrazione`: da `F6` non esiste una porta aperta
+              — si entra solo da un invito, da proprietario o da inquilino, e
+              questo link porta a dove quel codice si incolla (ADR-053). */}
+          <Link to="/invito" className="text-accent underline-offset-4 hover:underline">
             {t.auth.toRegister}
           </Link>
           {/* **La via d'uscita sta dove ci si accorge di non ricordarla**, cioè
@@ -192,108 +201,26 @@ export function LoginPage() {
   )
 }
 
-export function RegisterPage() {
-  const { store } = useSession()
-  const navigate = useNavigate()
-  const [error, setError] = useState<unknown>(null)
-  const form = useForm<RegisterValues>({
-    defaultValues: { email: '', fullName: '', password: '', organizationName: '' },
-  })
-
-  const submit = form.handleSubmit(async (values) => {
-    setError(null)
-    try {
-      await store.register({
-        email: values.email,
-        fullName: values.fullName,
-        password: values.password,
-        organizationName: values.organizationName || undefined,
-      })
-      // La registrazione **non** apre una sessione: risponde `201` con gli
-      // identificatori e basta. Si entra subito con le stesse credenziali, così
-      // chi si è appena registrato non deve digitarle una seconda volta.
-      await store.login(values.email, values.password)
-    } catch (failure) {
-      if (failure instanceof ApiError && failure.code === 'auth.email_taken') {
-        form.setError('email', { message: t.errors['auth.email_taken'] })
-        return
-      }
-      const passwordProblem = fieldErrorFor(failure, 'password')
-      if (passwordProblem) {
-        form.setError('password', { message: passwordProblem })
-        return
-      }
-      setError(failure)
-      void navigate('/registrazione', { replace: true })
-    }
-  })
-
+/**
+ * `/registrazione`, da fuori sessione: non più una pagina con un form (`F6` ha
+ * chiuso `POST /auth/register`), ma un rimando che dice **perché** — chi arriva
+ * da un segnalibro vecchio o da un motore di ricerca non deve leggere un `404`
+ * muto, deve leggere che si entra da un invito e dove andare (ADR-053).
+ */
+export function RegistrationMovedPage() {
   return (
     <AuthFrame
-      title={t.auth.registerTitle}
-      subtitle={t.auth.registerSubtitle}
+      title={t.auth.registrationMovedTitle}
+      subtitle={t.auth.registrationMovedBody}
       footer={
         <Link to="/accesso" className="text-accent underline-offset-4 hover:underline">
           {t.auth.toLogin}
         </Link>
       }
     >
-      <form onSubmit={submit} noValidate className="flex flex-col gap-4">
-        <InlineError error={error} />
-        <Field label={t.auth.fullName} error={form.formState.errors.fullName?.message} required>
-          {(props) => (
-            <Input
-              {...props}
-              {...form.register('fullName', { required: t.validation.required })}
-              autoComplete="name"
-              autoFocus
-            />
-          )}
-        </Field>
-        <Field label={t.auth.email} error={form.formState.errors.email?.message} required>
-          {(props) => (
-            <Input
-              {...props}
-              {...form.register('email', {
-                required: t.validation.required,
-                pattern: { value: EMAIL_PATTERN, message: t.validation.email },
-              })}
-              type="email"
-              autoComplete="email"
-            />
-          )}
-        </Field>
-        <Field
-          label={t.auth.password}
-          hint={t.auth.passwordHint}
-          error={form.formState.errors.password?.message}
-          required
-        >
-          {(props) => (
-            <PasswordInput
-              {...props}
-              {...form.register('password', {
-                required: t.validation.required,
-                // Verificarlo qui evita un giro di rete per dire una cosa che si
-                // sa già, e **non** sostituisce il controllo del server, che resta
-                // l'autorità.
-                minLength: { value: PASSWORD_MIN_LENGTH, message: t.validation.passwordTooShort },
-              })}
-              autoComplete="new-password"
-            />
-          )}
-        </Field>
-        <Field
-          label={t.auth.organizationName}
-          hint={t.auth.organizationNameHint}
-          error={form.formState.errors.organizationName?.message}
-        >
-          {(props) => <Input {...props} {...form.register('organizationName')} />}
-        </Field>
-        <Button type="submit" variant="primary" size="lg" disabled={form.formState.isSubmitting}>
-          {form.formState.isSubmitting ? t.common.saving : t.auth.submitRegister}
-        </Button>
-      </form>
+      <Button asChild variant="primary" size="lg">
+        <Link to="/invito">{t.auth.registrationMovedAction}</Link>
+      </Button>
     </AuthFrame>
   )
 }

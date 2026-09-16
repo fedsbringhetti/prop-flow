@@ -23,7 +23,12 @@ import { AppShell, TENANT_HOME } from './shell'
  */
 const AuthPage = () => import('@/features/auth/AuthPage')
 const LoginPage = lazy(async () => ({ default: (await AuthPage()).LoginPage }))
-const RegisterPage = lazy(async () => ({ default: (await AuthPage()).RegisterPage }))
+// `/registrazione` non è più un form (`F6`, ADR-053): è un rimando che dice
+// perché, così chi arriva da un segnalibro o da un motore di ricerca legge la
+// ragione invece di un `404` muto.
+const RegistrationMovedPage = lazy(async () => ({
+  default: (await AuthPage()).RegistrationMovedPage,
+}))
 const PasswordResetPage = lazy(async () => ({ default: (await AuthPage()).PasswordResetPage }))
 const PrivacyPage = lazy(async () => ({
   default: (await import('@/features/legal/PrivacyPage')).PrivacyPage,
@@ -135,7 +140,10 @@ export function App() {
       <Suspense fallback={<Loading className="min-h-screen justify-center" />}>
         <Routes>
         <Route path="/accesso" element={<LoginPage />} />
-        <Route path="/registrazione" element={<RegisterPage />} />
+        {/* Non un form: da `F6` non c'è una porta aperta, si entra solo da un
+            invito (ADR-053). Chi arriva qui — un segnalibro vecchio, un motore
+            di ricerca — legge perché e dove andare, invece di un `404` muto. */}
+        <Route path="/registrazione" element={<RegistrationMovedPage />} />
         {/* Il recupero vive fuori dalla sessione per definizione: chi lo apre non
             riesce a entrare. Una rotta sola per i due tempi — si chiede il codice,
             si incolla — perché fra i due non c'è niente da ricordare tranne
@@ -144,11 +152,10 @@ export function App() {
         {/* L'informativa si legge **prima** di dare i propri dati, quindi sta
             fra le rotte di chi non è entrato e non solo dentro il guscio. */}
         <Route path="/privacy" element={<PrivacyPage />} />
-        {/* Accettare un invito richiede una sessione — la rotta dell'API è
-            autenticata — quindi chi arriva qui con un codice in mano e senza
-            account non va al login in silenzio: gli si dice che cosa fare
-            prima. Mandarlo al login gli farebbe leggere «entra» senza sapere
-            che deve prima registrarsi, e il codice giusto darebbe `401`. */}
+        {/* Il codice **prima**, il form di registrazione **dopo**, con il codice
+            già dentro (ADR-053): non serve più mandare a `/registrazione`, che
+            non esiste più come form, e non serve una sessione per accettare —
+            questa pagina registra direttamente dall'invito. */}
         <Route path="/invito" element={<AcceptInvitationSignedOutPage />} />
         {/* Chi arriva su una pagina interna senza sessione va al login **e non
             perde dove stava andando**: il percorso resta nello stato, e un
@@ -207,12 +214,12 @@ export function App() {
           <Route path="/account" element={<AccountPage />} />
           <Route path="/invito" element={<AcceptInvitationPage />} />
         </Route>
-        {/* Chi è già entrato non deve poter tornare al login da un segnalibro:
+        {/* Chi è già entrato non deve poter tornare al login — o a una rotta di
+            registrazione che ormai non esiste come form — da un segnalibro:
             vedrebbe un form che non serve a niente. **Torna dove stava
-            andando**, che è la promessa che lo `state` qui sopra scrive e che
-            fino a questo passo nessuno manteneva: chi si registra per accettare
-            un invito ripassa da `/invito` invece di atterrare sul riepilogo
-            vuoto della propria organizzazione. */}
+            andando**, che è la promessa che lo `state` qui sopra scrive: chi
+            arriva su `/invito` senza sessione, registra e accetta insieme
+            (ADR-053), e non passa più da qui per farlo. */}
         <Route path="/accesso" element={<Navigate to={returnTo} replace />} />
         <Route path="/registrazione" element={<Navigate to={returnTo} replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
