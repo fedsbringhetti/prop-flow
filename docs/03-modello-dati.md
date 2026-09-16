@@ -379,7 +379,7 @@ già emesso. Vedi [ADR-027](08-decisioni.md#adr-027).
 
 **Nessun `org_id`**: a differenza di `org_invitations`, che appartiene
 all'organizzazione che invita, questo invito **precede** l'organizzazione — la crea
-l'accettazione, come `RegisterOwner` fa oggi per chiunque si registri. È una
+l'accettazione, che è l'unico posto in cui nasce un'organizzazione personale. È una
 tabella di piattaforma, non di business. **Nessun `deleted_at` né `updated_at`**,
 per la stessa ragione di `password_reset_codes` (migration `0037`): non è
 un'entità che si corregge nel tempo, è una credenziale a scadenza breve.

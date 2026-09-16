@@ -119,6 +119,32 @@ presentare un token che abbiamo firmato noi, quindi si dice solo a chi già lo s
 Il **refresh** invece resta indistinto: lì separare "scaduto" da "riusato" direbbe a
 chi ha rubato un token se è ancora vivo.
 
+### Ci si registra solo da un invito, e l'invito dice chi si diventa
+
+Non esiste una registrazione aperta ([ADR-053](08-decisioni.md#adr-053)): `POST
+/auth/register` risponde `404 endpoint.not_found` come ogni rotta inesistente. Un
+account nasce in due modi soltanto, ed entrambi partono da un token che qualcuno ha
+emesso per una persona precisa:
+
+| Chi | Con che cosa | Che cosa riceve |
+|---|---|---|
+| un **inquilino** | l'invito che lo staff di un'organizzazione ha emesso per un contratto (`org_invitations`) | utente **dentro** quell'organizzazione, come `tenant`, con la parte contrattuale collegata — in una transazione, e **nessuna organizzazione propria** |
+| un **proprietario** | un invito di piattaforma emesso da uno script con il ruolo del migratore (`owner_invitations`, [§ Inviti da proprietario](#inviti-da-proprietario)) | utente, organizzazione personale e membership `owner` |
+
+**L'email non è un campo**: è quella dell'invito, e un corpo che la porta è un
+`422`. Chi vuole un altro indirizzo chiede un altro invito. Il confine fra chi
+amministra e chi abita passa quindi da chi può emettere quale token, non da un
+ramo del client — è ciò che [ADR-042](08-decisioni.md#adr-042) diceva mancare.
+
+**Un solo caso in cui il server distingue il genere del token**, ed è un `409` e non
+un oracolo: `register-from-invitation` con un token da proprietario **valido**
+risponde `409 invitation.owner_token`, perché il client deve chiedere il nome
+dell'organizzazione e rimandare a `accept-owner-invitation`. Lo riceve solo chi
+possiede quel token; un token inesistente, usato, scaduto o revocato riceve lo stesso
+`401 auth.invalid_credentials` su entrambe le rotte. Non c'è, e non ci sarà, una rotta
+di sola lettura che dica di che genere è un codice: risponderebbe anche per codici
+che chi chiede non possiede.
+
 ### Il recupero della password non riapre nessuna di queste porte
 
 Le stesse tre proprietà, applicate a una rotta nuova. La risposta è `202` **sempre**,
@@ -203,16 +229,15 @@ rivelerebbe l'esistenza di organizzazioni altrui.
 `begin_privileged()` usa un ruolo con `BYPASSRLS`. Ammesso **solo** dove un
 contesto di sicurezza non può esistere:
 
-- registrazione — utente, organizzazione e membership non esistono ancora;
 - login — la policy su `users` mostra una riga solo a chi è già identificato;
 - rotazione del refresh token — il chiamante presenta un token, non un'identità;
 - **recupero della password** — chi l'ha dimenticata non è autenticato per
   definizione, quindi non c'è un `current_user_id` da installare e la Row Level
   Security non ha nulla su cui appoggiarsi ([ADR-052](08-decisioni.md#adr-052));
 - **accettazione di un invito da proprietario** e **registrazione di un
-  inquilino da invito** — le due rotte di [ADR-053](08-decisioni.md#adr-053):
-  come la registrazione, creano utente (e per la prima, organizzazione) quando
-  nessuno dei due esiste ancora. La prova di possesso del token è tutta
+  inquilino da invito** — le due rotte di [ADR-053](08-decisioni.md#adr-053), e
+  le sole due porte di registrazione che esistono: creano l'utente (e per la
+  prima, l'organizzazione) quando nessuno dei due esiste ancora. La prova di possesso del token è tutta
   dell'applicazione — hash e stato, con la stessa forma del recupero della
   password — perché qui non c'è nessuna Row Level Security a fare da seconda
   guardia, a differenza dell'accettazione di un invito da inquilino qui sotto.
@@ -277,8 +302,8 @@ esattamente come per un token mai emesso.
 
 **Il token non sblocca da solo il ruolo di piattaforma.** `platform_role = 'admin'`
 resta assegnato a mano — ADR-053 non lo tocca — e l'invito da proprietario dà
-soltanto ciò che `RegisterOwner` dà oggi a chiunque: un'organizzazione personale con
-sé stesso come `owner`. Le due cose restano indipendenti finché non nasce una rotta
+soltanto ciò che la registrazione aperta dava a chiunque prima di ADR-053:
+un'organizzazione personale con sé stesso come `owner`. Le due cose restano indipendenti finché non nasce una rotta
 che usi `is_platform_admin()`.
 
 ## Dati personali

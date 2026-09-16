@@ -2004,14 +2004,15 @@ un broker.
 l'operazione che la crea. Chi accetta non deve passare `X-Org-Id`, perché di quella
 organizzazione non è ancora membro.
 
-**Dopo l'accettazione `X-Org-Id` serve, e non basta rifare il login.** La
-registrazione crea sempre un'organizzazione personale di cui l'utente è owner, e
-l'organizzazione predefinita all'accesso è quella con il ruolo più alto — owner,
-poi manager, poi tenant (`pick_default_membership` in `application::use_cases::auth`).
-Un inquilino che si è registrato da sé ha quindi sempre la propria organizzazione in
-testa, e senza `X-Org-Id` un `GET /api/v1/leases` gli risponde `200` con zero
-elementi: nessun errore, nessun indizio. È registrato fra i debiti noti in
-[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+**Dopo l'accettazione `X-Org-Id` serve.** L'organizzazione predefinita all'accesso è
+quella con il ruolo più alto — owner, poi manager, poi tenant
+(`pick_default_membership` in `application::use_cases::auth`) — e per chi è owner
+altrove e accetta un invito da inquilino la nuova organizzazione non è quella in
+testa: senza `X-Org-Id` il contesto ricade sull'organizzazione del token, e un
+`GET /api/v1/leases` risponde `200` con i contratti di **quella** — nessun errore,
+nessun indizio. Il client la manda sempre (regola
+24 di `CLAUDE.md`). Il caso dell'inquilino che aveva un'organizzazione propria in
+testa non esiste più da [ADR-053](08-decisioni.md#adr-053).
 
 Un token sconosciuto e un token valido intestato a un'altra email danno lo stesso
 `401` con lo stesso corpo: distinguerli sarebbe un oracolo per capire quali inviti

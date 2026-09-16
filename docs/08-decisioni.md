@@ -3442,8 +3442,11 @@ in ogni policy di scrittura dello schema.
 
 **Conseguenza sul guscio.** Lo stato «nessuna organizzazione» diventa uno stato di
 prima classe, anche se la transazione sopra fa sì che nessun utente nuovo ci nasca:
-ci si arriva **uscendo** dall'unica organizzazione che si aveva (sezione 6, `R16`),
-o quando l'invito che ci aveva portati dentro viene revocato. Il guscio mostra una
+ci si arriva **uscendo** dall'unica organizzazione che si aveva (sezione 6, `R16`) —
+da inquilino, da gestore, o da proprietario che non era l'ultimo. *(Emendato il 16
+settembre 2026: la prima stesura diceva «o quando l'invito che ci aveva portati dentro
+viene revocato», ed è impreciso — un invito accettato non si revoca, e uno non accettato
+non ha mai fatto entrare nessuno.)* Il guscio mostra una
 schermata che dice che cosa si è e che cosa si aspetta — un invito — invece di una
 navigazione vuota che risponde `403`. `getOrganizations` e `/me` funzionano già senza
 `X-Org-Id` per la ragione del [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6).
@@ -3520,6 +3523,17 @@ proprietario, perché solo lui ne crea una.
 **L'email della registrazione è quella dell'invito**, e non un campo: un invito è per
 una persona, e la policy `has_pending_invitation` confronta l'email dell'utente con
 quella dell'invito. Chi vuole un altro indirizzo chiede un altro invito.
+
+**Il genere del token lo dice il server, e solo a chi lo possiede** *(aggiunto il 16
+settembre 2026, confermato dal passo `F7`)*. Il form non sa se il codice incollato è da
+inquilino o da proprietario, e **non esiste una rotta di sola lettura** che glielo
+dica: risponderebbe anche per codici che chi chiede non possiede, cioè un oracolo su
+quali token sono stati emessi. Il form chiede nome e password e manda a
+`register-from-invitation`; se il token è un invito da proprietario **valido** il
+server risponde `409 invitation.owner_token`, e solo allora il form chiede il nome
+dell'organizzazione e rimanda lo stesso corpo a `accept-owner-invitation`. Chi
+indovina un token riceve `401` come per un token inesistente: il `409` esce solo a chi
+ha in mano un token che darebbe comunque un account.
 
 **Le risposte a «token inesistente» e a «token valido, ma già usato o scaduto» sono la
 stessa** (`401 auth.invalid_credentials`, come già per l'invito e per il codice di

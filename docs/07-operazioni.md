@@ -288,8 +288,10 @@ banda — non per email non cifrata, che il perimetro di questa decisione lascia
 esplicitamente fuori — a chi accetterà l'invito su `POST
 /api/v1/auth/accept-owner-invitation`.
 
-**Consegna.** Chi lo riceve incolla il token nel form di registrazione da
-proprietario: nessun link, per la stessa ragione del codice di recupero della
+**Consegna.** Chi lo riceve incolla il token in `/invito` — la stessa porta
+dell'inquilino: il form chiede nome e password, e il nome dell'organizzazione lo
+chiede solo dopo che il server ha risposto `409 invitation.owner_token`, cioè solo a
+chi possiede un token da proprietario valido. Nessun link, per la stessa ragione del codice di recupero della
 password e dell'invito all'inquilino ([ADR-045](08-decisioni.md#adr-045),
 [ADR-052](08-decisioni.md#adr-052)) — un token in un URL finisce nella
 cronologia, nel `Referer` e nei log di ogni proxy davanti al client.
@@ -506,8 +508,11 @@ docker compose -f ops/deploy/docker-compose.prod.yml --env-file .env.prod logs -
 1. `curl https://<dominio>/api/v1/ready` risponde `200`. Se dice
    `posta non raggiungibile`, il relay è sbagliato o irraggiungibile — e va sistemato
    adesso, perché dopo il sintomo diventa muto;
-2. si apre il prodotto **dal telefono, in 4G** — non dalla stessa rete della macchina —
-   e si fa l'accesso. È il passo che trova i certificati a metà, i record DNS
+2. si emette il **primo invito da proprietario** ([§ sopra](#emettere-un-invito-da-proprietario)):
+   dopo ADR-053 non c'è una registrazione aperta, e un database appena migrato non
+   ha nessun account con cui entrare. Poi si apre il prodotto **dal telefono, in 4G**
+   — non dalla stessa rete della macchina —, si incolla il token in `/invito` e si
+   fa l'accesso. È il passo che trova i certificati a metà, i record DNS
    propagati solo in locale e i firewall aperti alla rete sbagliata;
 3. si chiede un **recupero della password** con un indirizzo vero e il codice arriva
    **fuori dalla cartella dello spam**. Il raccoglitore locale non lo prova: accetta
