@@ -3398,7 +3398,7 @@ peggiorato: il link almeno non era la password.
 ## ADR-053 — Si entra per invito: l'inquilino nel conto di chi lo ospita, il proprietario con un token di piattaforma
 
 **13 settembre 2026.** Scritta **prima** del codice, come il metodo impone: è il primo
-passo della [sezione 8](09-stato-e-roadmap.md#piano-sezione-8), e la sezione non scrive
+passo della [sezione 8](11-piani-conclusi.md#piano-sezione-8), e la sezione non scrive
 una riga finché queste sei domande non hanno una risposta. Chiude la parte di `R9` che è
 una decisione; il resto di `R9` è il codice che ne discende.
 

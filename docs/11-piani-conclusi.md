@@ -11118,7 +11118,7 @@ primitiva — sono nel piano e restano lì.
 | `E3` | Immobili con l'azione per riga che mancava; stanze con l'archiviazione **spostata dalla modale alla riga**; allegati, che sono un `<ul>` e non una tabella |
 | `E4` | Addebiti allineati alla primitiva — lo storno resta per riga e fuori dal blocco; bollette e segnalazioni con l'azione per riga che mancava |
 | `E5` | `Expense::cancel`, `ExpenseRepository::cancel`, `CancelExpense`, `POST /expenses/{id}/cancel`, `ExpenseCancelled`, `Denial::ExpenseNotYours`, `created_by` su `ExpenseResponse`. Un test di contratto che prova che **i saldi scendono** anche dopo un regolamento confermato, più i tre rifiuti |
-| `E6` | Le stringhe, [05](05-api.md), questo esito, e il [piano della sezione 8](09-stato-e-roadmap.md#piano-sezione-8) |
+| `E6` | Le stringhe, [05](05-api.md), questo esito, e il [piano della sezione 8](11-piani-conclusi.md#piano-sezione-8) |
 
 ### Il piano aveva tre premesse sbagliate, e una era nella tabella delle verifiche
 
@@ -11263,3 +11263,708 @@ stretta.
   la forma giusta è in `VerbButton`, e si applica quando si riapre quella modale;
 - **`R37`**, la cancellazione delle persone, dove era: questa sezione ha toccato le
   righe di lavoro e nessun dato personale.
+
+<a id="piano-sezione-8"></a>
+
+## Piano — Sezione 8: il perimetro dei ruoli
+
+Pianificata il **12 settembre 2026**, subito dopo l'esito della 7 e sotto la regola che
+una sezione conclusa pianifica la successiva. Chiude `R9`. È la voce più grande della
+lista e l'ultima fra quelle decise, e **il suo primo passo non è codice**: è un ADR.
+Tocca chi può registrarsi e come, cioè il confine fra chi amministra e chi abita, e ha
+una faccia di sicurezza; le sue domande hanno risposte che si escludono a vicenda, e
+sceglierne una nel codice prima che sia registrata significherebbe scoprirla nel diff.
+
+Come la 6 e la 7, nasce da una lettura del codice. A differenza loro, **questa sezione
+non ha un collaudo che l'abbia trovata**: `R9` è nota dal primo giorno del client
+([ADR-042](08-decisioni.md#adr-042) lo dice in chiaro) ed è stata tollerata perché il
+prodotto è «per un proprietario che conosci». Smette di esserlo il giorno in cui la
+registrazione è aperta a sconosciuti, e quel giorno è il deploy.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+Con la lezione della 7 applicata: per ogni riga è scritto **dove** è stato guardato.
+
+| Premessa | Verifica |
+|---|---|
+| Chiunque si registri diventa owner di un'organizzazione propria | vero: `RegisterOwner` (`crates/application/src/use_cases/auth/register_owner.rs`) chiama `Organization::personal(...)` e `OrgMember::active(..., OrgRole::Owner, ...)` **sempre**, senza un ramo. È l'unico caso d'uso di registrazione, e apre `begin_privileged()` perché nessun contesto esiste ancora |
+| Un invito conferisce solo `tenant` | vero, in due posti: `Invitation::issue` rifiuta `Owner` e `Manager` con una `Validation` (`crates/domain/src/identity/invitation.rs`), e la policy della `0018` ha `role = 'tenant'` nel ramo che abilita l'accettazione. Un invito che crei un proprietario **non esiste** |
+| Gli inviti li emette lo staff dell'organizzazione | vero: `org_invitations_staff` è `FOR ALL USING (is_org_staff(org_id))`. Non c'è un livello sopra l'organizzazione che possa emetterne |
+| Chi accetta un invito deve essere già registrato | vero: `AcceptInvitation` è `Authenticated`, non usa il pool privilegiato, e la `/invito` da fuori sessione (`AcceptInvitationSignedOutPage`) manda a `/registrazione` con `state.from`. Quindi **ogni inquilino è passato da `RegisterOwner`** e possiede un'organizzazione personale vuota |
+| Dopo il login si atterra nell'organizzazione «giusta» | **falso per l'inquilino**: `pick_default_membership` (`login.rs`) ordina `Owner < Manager < Tenant` e prende la prima, quindi un inquilino appena registrato e invitato entra **come owner della propria organizzazione vuota**, dove il client gli mostra «Registra un immobile» a ragione. Il `localStorage` ricorda la scelta solo dal secondo accesso |
+| Il client offre le azioni per ruolo, e non è un confine | vero e scritto: `useIsStaff()` in un posto solo, [ADR-042](08-decisioni.md#adr-042). Nella propria organizzazione il ramo dice `owner`, e la Row Level Security concorda |
+| Esiste un ruolo di piattaforma | vero: `app.platform_role` è `('user','support','admin')`, `app.is_platform_admin()` legge un'impostazione di sessione che il contesto installa dai claim, e `RequestContext::is_staff` lo considera. **Nessuna rotta lo usa** oggi; l'unico modo di averlo è un `UPDATE` a mano (vedi la svista corretta nell'[esito della 6](11-piani-conclusi.md#esito-sezione-6): il valore è `'admin'`) |
+| Ogni elenco esige `X-Org-Id` | vero: `ensure_member` risponde `403 org.not_selected` senza, e il client lo manda **sempre** (regola 24) tranne su tre rotte (`ApiRequestInit::withoutOrganization`). Un utente **senza nessuna organizzazione** oggi non è uno stato che il guscio sappia mostrare |
+| I test costruiscono ogni inquilino con `register_and_login_with_email` e poi l'accettazione | vero (`crates/api/tests/common/mod.rs`, `coliving_tenant` e simili). **Sono decine**: cambiare la registrazione cambia l'harness prima che il prodotto |
+| L'email di registrazione, se già presa, risponde `409 auth.email_taken` | vero: `RegisterOwner` lo controlla e il vincolo `users_email` lo conferma. È già un oracolo di esistenza degli indirizzi, e lo resterà |
+
+### Le domande, con ciò che si sa su ciascuna
+
+Sono le quattro di `R9`, più due che la verifica ha aggiunto. **L'ADR le chiude tutte
+e sei**, o dice perché una resta aperta.
+
+**1. Un utente nato inquilino ha un'organizzazione propria?** Oggi sì, ed è il
+difetto: la possiede come owner e lì può registrare immobili. Tre risposte possibili:
+
+- *nessuna organizzazione*: la membership arriva solo con l'invito. È la più onesta e la
+  più cara: un utente senza organizzazione è uno stato che il guscio non conosce —
+  ogni elenco risponderebbe `403 org.not_selected` — e va progettato come stato di
+  prima classe, con una schermata che dica «aspetta un invito» invece di una
+  navigazione vuota;
+- *un'organizzazione personale, ma non come owner*: contraddice `org_members_insert`,
+  il cui ramo di bootstrap ammette **solo** il primo membro come `owner`, e lascia
+  un'organizzazione che non amministra nessuno;
+- *un'organizzazione personale come owner, «spenta»*: una colonna in più e un ramo in
+  ogni policy dello staff. È la risposta che sembra economica e non lo è.
+
+**2. Come nasce un proprietario?** Oggi da `RegisterOwner`, aperto a chiunque. La via
+che `R9` descrive — *si fa verificare fuori dal prodotto e riceve un invito per
+registrarsi* — vuole **un invito di un genere che non esiste**: senza organizzazione
+(la crea l'accettazione), emesso da qualcuno sopra le organizzazioni. Il posto naturale
+è `platform_role = 'admin'`, che c'è e nessuno usa. Va deciso se sia una tabella nuova
+(`app.owner_invitations`) o `org_invitations` con `org_id` annullabile — e la seconda
+rompe `org_invitations_staff`, che è `FOR ALL` su `is_org_staff(org_id)`.
+
+**3. Come si verifica un proprietario, e dove vive quello stato?** Fuori dal prodotto,
+almeno all'inizio: un'email, una decisione di una persona, l'emissione del token. Dentro
+il prodotto vive **solo il fatto che il token esiste**. Un flusso interno di
+«richiesta di accesso come proprietario» è una seconda sezione, non questa.
+
+**4. Che ne è degli utenti già registrati?** Sono tutti owner di un'organizzazione
+personale, e sono di due specie: chi è davvero un proprietario, e chi si è registrato
+perché invitato. Non c'è una colonna che li distingua; li distingue il **fatto** che la
+loro organizzazione personale abbia o no un immobile. La risposta più stretta è non
+toccarli: un'organizzazione personale vuota è innocua finché nessuno ci entra, e
+nessuno può entrarci senza un invito dal suo owner.
+
+**5. Con quale organizzazione si entra?** — trovata verificando. `pick_default_membership`
+preferisce `Owner`, e con la risposta 1 = «nessuna» il problema sparisce da sé per gli
+utenti nuovi; per quelli vecchi resta, e la scelta è fra correggere l'ordine (preferire
+un'organizzazione **con immobili**?) e lasciare al `localStorage` il ricordo.
+
+**6. Che cosa vede un invitato prima di accettare?** — trovata verificando. Con la
+risposta 1 = «nessuna», la registrazione dell'inquilino **deve partire dall'invito** e
+concludersi con la membership, in una transazione: registrarsi e poi accettare in due
+passi lascerebbe fra i due un utente senza organizzazione, che è lo stato che la
+risposta 1 esiste per non produrre.
+
+### L'ADR è scritto, e il piano dei passi discende da lì
+
+[ADR-053](08-decisioni.md#adr-053), **13 settembre 2026**: l'inquilino non ha
+un'organizzazione propria e si registra dall'invito, dentro l'organizzazione di chi lo
+ospita, in una transazione; il proprietario nasce da un invito di piattaforma, in una
+tabella nuova `app.owner_invitations`, emesso da uno script in `ops/` e non da una rotta;
+la verifica è fuori dal prodotto; **il database si svuota**, quindi nessuna migration di
+dati; il login non cambia; `/invito` è l'ingresso per entrambi i generi, con l'email
+vincolata a quella dell'invito e la stessa risposta per «token inesistente» e «token
+usato o scaduto». Le sei domande della sezione precedente sono chiuse lì, con le
+alternative scartate; qui sotto c'è solo ciò che discende.
+
+**Che cosa il piano dà per verificato, oltre alla tabella sopra:**
+
+| Premessa | Verifica |
+|---|---|
+| `register_and_login` è la porta di ogni test | 108 occorrenze in `crates/api/tests/http_contract.rs`, zero in `persistence.rs`. `register_and_login_with_email` è quella che l'inquilino usa per registrarsi **con l'email dell'invito** prima di accettare |
+| La tabella dei privilegi di colonna è il controllo 12 di `ops/sql/checks/schema_invariants.sql`, e `org_invitations` c'è già con sei colonne | vero, righe 147–149 |
+| I token opachi sono 256 bit in `base64url` senza padding, hash SHA-256 del testo | `crates/infrastructure/src/security/refresh.rs`, `random_token` e `hash_token` |
+| `/registrazione` esiste due volte nel router: da fuori sessione è `RegisterPage`, da dentro rimanda a `returnTo` | `apps/web/src/app/App.tsx`, righe 138 e 217 |
+| `password_reset_codes` è il precedente di una tabella senza `org_id` letta dal pool privilegiato, con RLS attiva e una policy «la riga è tua» solo per l'invariante 2 | migration `0037` |
+
+### Come si lavora su questa sezione — un metodo nuovo, provato qui e **ritirato**
+
+> **Ritirato il 16 settembre 2026, da `F8` in poi.** Il metodo degli agenti è stato
+> provato su `F2`–`F7` e misurato; la misura sta nel diario più sotto e la ragione del
+> ritiro in fondo a questa sottosezione. `F8` e le sezioni successive tornano alla forma
+> delle sezioni 1–7: **una sola conversazione** pianifica, scrive il codice, verifica al
+> contrario e scrive l'esito. Il testo che segue resta com'era, perché è la storia di
+> che cosa si è provato e perché, e la si rilegge prima di riprovarci.
+
+Deciso il **13 settembre 2026**, prima di cominciare. Fino alla 7 una sola
+conversazione ha pianificato, scritto il codice, verificato e scritto l'esito. Da questa
+sezione i tre ruoli si separano, e il modello che li esegue non è lo stesso:
+
+| Ruolo | Chi | Che cosa |
+|---|---|---|
+| **Decidere e pianificare** | la conversazione principale, con il modello più capace | l'ADR, discusso con chi ha chiesto il lavoro; il piano dettagliato dei passi **dopo** l'ADR, con le premesse verificate contro il codice; le decisioni prese eseguendo |
+| **Scrivere il codice** | un agente con un modello meno oneroso, **uno per passo** | il passo così com'è scritto, con il suo criterio di fine, i test previsti e le verifiche al contrario da fare e da riportare |
+| **Verificare** | **un agente a sé con il modello più capace, a contesto pulito** — non la conversazione principale | ogni passo **prima** che cominci il successivo: rileggere il diff contro il piano e l'ADR, **rifare** le verifiche al contrario, `just ci`, e riferire alla conversazione principale ciò che non regge |
+| **Chiudere** | la conversazione principale | la tabella dei commit, il push con il suo via libera, l'esito in [11](11-piani-conclusi.md) e il piano della sezione 9 |
+
+**Perché separarli.** I passi *decisi e delimitati* — «monta la primitiva su questi tre
+elenchi, con questo verbo e queste stringhe» — sono la parte più lunga di una sezione e
+la meno bisognosa di giudizio; i piani di questo documento sono già scritti per chi non
+era nella conversazione, e un agente è esattamente quel lettore. La parte che ha bisogno
+di giudizio è breve e costa cara se sbagliata.
+
+**Che cosa non si delega, e per quale ragione.** Nella 7 le tre premesse sbagliate del
+piano sono venute fuori *scrivendo il codice*, e ognuna chiedeva di fermarsi e
+riemendare il piano invece di aggirarlo. **Un agente che esegue un piano tende a farlo
+funzionare, non a contestarlo**: quindi l'ADR, il dominio con le sue autorizzazioni, e
+l'esito restano alla conversazione principale, e ogni passo delegato porta scritto
+*«se una premessa del piano si rivela falsa, fermati e riferisci: non aggirarla»*.
+
+**La verifica è una verifica, non una lettura.** La 6 e la 7 hanno mostrato che un test
+verde può asserire il difetto. Chi verifica **rimette il difetto e guarda il test
+cadere**, per ogni test consegnato dall'agente; leggere il diff non basta, e con un
+autore meno forte basta ancora meno.
+
+**Chi verifica non è chi ha pianificato.** Deciso il 13 settembre, dopo che le prime
+tre revisioni (`F2`, `F3`, `F4`) le aveva fatte la conversazione principale: chi ha
+scritto il piano e l'ADR è condizionato dal proprio contesto — legge il diff cercando
+ciò che si aspettava di trovare, e ha già deciso che le premesse sono vere. Un agente
+di revisione **a contesto pulito**, con il modello più capace, parte da `CLAUDE.md`,
+dall'ADR, dal passo del piano, dal rapporto dell'autore e dal diff, e da niente altro:
+non sa che cosa la conversazione ha discusso e non ha interesse a confermarlo. Riceve
+gli stessi obblighi dell'autore — leggere prima di giudicare, rifare le verifiche al
+contrario, `just ci` — e riferisce alla conversazione principale, che decide se
+rimandare all'autore o proporre i commit. Il costo è un secondo contesto a freddo per
+passo; è il prezzo di un giudizio che non sia il proprio.
+
+**E la stessa regola vale per i documenti.** Questa sottosezione era stata scritta e
+committata, ed è **sparita nel commit successivo**: riscrivendo i passi del piano si è
+sostituito un intervallo di testo che la conteneva, e chi ha fatto la sostituzione non
+se n'è accorto perché sapeva che cosa aveva scritto e non ha riletto. Ripristinata dal
+commit che l'aveva introdotta. Un revisore a contesto pulito guarda anche il diff dei
+documenti, e un intervallo cancellato lo vede.
+
+**Il costo fisso di un agente è il contesto.** Parte a freddo e deve leggere
+`CLAUDE.md`, i documenti pertinenti e il piano prima della prima riga: su un passo
+piccolo quel costo supera il risparmio. Un agente **per passo** — `F2`, `F3`, … — e non
+uno per la sezione: la revisione resta incrementale, e un errore non si porta dietro il
+passo dopo.
+
+**La conversazione principale non legge i diff.** Deciso il 15 settembre, dopo le
+prime cinque revisioni. Il coordinatore è il contesto più caro del metodo — porta
+tutta la sezione precedente, i documenti letti e ciò che ha già rivisto, e lo ripaga a
+ogni turno — e su `F2`–`F4` ha letto i diff per intero trovando solo cosmetica: spesa
+doppia per un giudizio peggiore di quello del revisore pulito. Da qui legge i **rapporti**
+(dell'autore e del revisore), scrive i brief, decide, scrive i documenti. Il diff lo
+legge chi non ha il piano in testa.
+
+**Ogni turno ripaga l'intero contesto, e questo decide la forma dei brief.** Deciso il
+**16 settembre 2026**, dopo aver misurato F6+F7 dalle trascrizioni: il consumo di un
+agente non è ciò che legge o scrive, è *turni × contesto* — 640 turni su un contesto
+da 600 k sono 235 M di token letti dalla cache, l'88 % della fase, e hanno esaurito il
+limite delle 5 ore del piano. Quattro regole, da ora:
+
+1. **Il brief porta estratti, non rimandi a documenti interi.** Il passo del piano, il
+   paragrafo dell'ADR, le righe precise del codice: la lettura di partenza deve stare
+   sotto ~40 k token. «Leggi `docs/05`» sono 2 053 righe che si ripagano a ogni turno;
+2. **Un agente per passo, con un tetto**: se il contesto dell'autore supera ~200 k, il
+   passo era due passi e si spezza al brief successivo. F6+F7 in un agente solo è
+   costato il doppio di quel che valeva;
+3. **Le correzioni e la seconda revisione vanno a un agente nuovo e stretto**, non alla
+   ripresa di quello grasso: `SendMessage` conserva il contesto e lo fa ripagare a ogni
+   turno — 47 M per 48 tool use. Un agente fresco con il verdetto, il rapporto delle
+   correzioni e il diff dei soli file toccati parte da ~60 k. La ripresa resta giusta
+   per un agente caduto a metà lavoro per un limite di utilizzo, dove il contesto è il
+   lavoro;
+4. **Risultati di tool corti**: `just ci 2>&1 | tail`, `sed -n a,b p` o `Read` con
+   `offset/limit`, mai `cat` di un file intero. Il risultato di un tool entra nel
+   contesto e non ne esce più.
+
+Stima con queste regole: un passo come F7 costa ~250 turni × ~150 k ≈ 35–40 M invece
+di 188 M.
+
+**Il ritiro.** Deciso il **16 settembre 2026**, subito dopo la stima qui sopra, da chi
+paga i token. Anche con le quattro regole un passo delegato costa decine di milioni di
+token letti dalla cache — la fase `F6`+`F7` ne ha consumati **268 M** in tutto, contro i
+~7 M della conversazione principale nello stesso arco — e il limite delle 5 ore del piano
+è stato esaurito una volta. Il metodo aveva un pregio vero e misurato: il revisore a
+contesto pulito ha trovato `R46`, `R47` e due test vacui che né l'autore né il
+coordinatore avevano visto. Quel pregio si conserva senza agenti con la disciplina che
+lo produceva: **ogni test si prova al contrario prima di consegnarlo**, rimettendo il
+difetto e guardandolo cadere, e l'esito scrive quale assert è caduto; e chi ha chiesto il
+lavoro rilegge il diff con lo stesso sospetto del revisore. Ciò che si perde è il giudizio
+di un contesto che non aveva il piano in testa; è un costo, e lo si accetta.
+
+*Trappola, per chi volesse riprovarci:* il consumo di un agente **non si vede dal suo
+rapporto** — l'autore di `F6`+`F7` stimava 980 k token e ne aveva letti 235 M — e non
+si vede dalla conversazione principale, che riceve solo il rapporto. Si vede solo nei
+campi `usage` delle trascrizioni, sommando la cache letta turno per turno. Misurare
+**prima** di decidere se delegare, non dopo il primo limite di utilizzo.
+
+**Ciò che non cambia.** I commit si concordano come tabella e si fanno dalla
+conversazione principale, dopo il rapporto del revisore; il push è una conferma a
+parte; niente autoreferenza dell'assistente negli artefatti. **L'esito della 8 dice se il metodo ha retto**, con le
+misure che ha: quanti passi delegati, quanti rifiutati alla verifica e perché, e se
+qualche premessa falsa è passata inosservata all'agente.
+
+### Decomposizione
+
+L'ordine è quello del rischio: prima ciò che rompe la suite, poi ciò che la ripara,
+poi il prodotto. Ogni passo è delegabile a un agente per passo, come scritto sopra, con
+il suo criterio di fine; **`F1` è fatto e non si delega mai**.
+
+##### `F1` — L'ADR · **fatto**
+
+[ADR-053](08-decisioni.md#adr-053). Il resto di questa sezione lo cita e non lo ripete.
+
+##### `F2` — Lo schema: `app.owner_invitations`
+
+Una migration, `0040_owner_invitations.sql`, nella forma della `0037`: `id`, `email`
+(`app.email_address`), `token_hash BYTEA` con indice unico, `expires_at` con il `CHECK`
+sul `created_at`, `accepted_at`, `accepted_by` (FK a `users`, `ON DELETE SET NULL`, con il
+suo indice per l'invariante 4), `revoked_at`, `created_at`. **Nessun `org_id`**: la
+tabella è di piattaforma, e il controllo 1 delle invarianti va aggiornato perché la
+riconosca come lo fa per `users` e `password_reset_codes`. **Nessun `updated_at`**, per
+la ragione della `0037`. Un indice parziale unico su `email WHERE accepted_at IS NULL
+AND revoked_at IS NULL`: un solo invito pendente per indirizzo, come `org_invitations_pending_uk`.
+RLS attiva con una policy che nega tutto al ruolo applicativo (`USING (false)`): la
+scrive il migratore dallo script, la legge il pool privilegiato; il controllo 2 vuole
+una policy, e questa è la più stretta che soddisfi il controllo. `GRANT SELECT, UPDATE
+(accepted_at, accepted_by)` al ruolo applicativo — è ciò che l'accettazione scrive — e
+la coppia nel controllo 12. `docs/03` con la tabella e la ragione.
+
+**Criterio di fine:** `./ops/ci/check-schema.sh` verde sul container effimero; un test
+di persistenza che prova che `propflow_app` non può né inserire né leggere la tabella
+fuori dal pool privilegiato, e che l'`UPDATE` su `email` o `token_hash` è `permission
+denied`.
+
+##### `F3` — Lo script che emette il token, e il runbook
+
+`ops/dev/issue-owner-invitation.sh <email> [giorni]`: genera 32 byte casuali con
+`openssl rand`, li codifica `base64url` senza padding **esattamente come
+`random_token`** (il test di `F4` incolla un token prodotto dallo script, quindi le due
+codifiche devono coincidere), calcola lo hash SHA-256 con `openssl dgst -binary`,
+inserisce la riga con il ruolo del migratore (`psql` o il client dell'immagine, come gli
+altri script di `ops/`) e stampa il token in chiaro una volta sola. Scadenza di default:
+sette giorni, la stessa dell'invito all'inquilino. Il runbook in [07](07-operazioni.md):
+quando si emette, come si consegna, come si revoca (`UPDATE … SET revoked_at`), come si
+potano gli scaduti — tutto con il ruolo del migratore, come per `password_reset_codes`.
+
+**Criterio di fine:** lo script gira contro il database di sviluppo, `bash -n` in CI
+come per gli altri script, e la riga in `07` con il comando esatto.
+
+##### `F4` — Il dominio e i casi d'uso, **con la porta vecchia ancora aperta**
+
+Le rotte nuove si aggiungono; `POST /auth/register` resta com'è fino a `F6`, così la
+suite non va mai in rosso e l'harness si può spostare un pezzo alla volta.
+
+- `OwnerInvitation` nel dominio (`identity`), con `accept(now)` e le sue invarianti —
+  pendente, non scaduta, non revocata — e senza `issue`: la emette lo script. Un
+  `Invariant` con codice proprio, e la rotta che lo appiattisce su
+  `401 auth.invalid_credentials` come per l'invito (decisione 6 dell'ADR);
+- porta `OwnerInvitationRepository` con `find_pending_by_hash` e `mark_accepted`,
+  implementazione su `PgUnitOfWork`, letta **dal pool privilegiato**;
+- `AcceptOwnerInvitation`: il corpo di `RegisterOwner` di oggi più il token, stesso
+  `begin_privileged`, la verifica del token per hash e per stato, l'email dell'invito al
+  posto di quella del corpo. L'evento `UserRegistered` resta. Rotta:
+  `POST /auth/accept-owner-invitation` (`token`, `full_name`, `password`,
+  `organization_name?`), `201` con la sessione e il cookie come il login;
+- `RegisterTenantFromInvitation`: `begin_privileged`, verifica del token in
+  `org_invitations` per hash e per stato, `User::register` con l'email dell'invito, poi
+  **le tre scritture di `AcceptInvitation` nello stesso ordine** — membership, parte
+  contrattuale, invito marcato — e il suo evento. Non chiama `AcceptInvitation`: quello
+  legge sotto `has_pending_invitation`, che qui non c'è; ne **condivide** le tre
+  scritture attraverso una funzione del modulo, non una copia. Rotta:
+  `POST /auth/register-from-invitation` (`token`, `full_name`, `password`), `201` con
+  la sessione e il cookie;
+- `AcceptInvitation` resta per chi ha già un account (ADR-051);
+- rate limit come il login su entrambe; [05](05-api.md) e `openapi.rs`.
+
+**Criterio di fine:** i test di contratto — un token da proprietario apre un account e
+un'organizzazione; un token da inquilino apre un account **dentro** l'organizzazione di
+chi ha invitato, con zero organizzazioni proprie e la parte collegata; token
+inesistente, usato, scaduto e revocato rispondono **la stessa cosa**; un'email diversa
+da quella dell'invito non è nemmeno un campo. La suite vecchia è ancora verde: la porta
+vecchia è aperta.
+
+##### `F5` — L'harness dei test passa dalle porte nuove
+
+È la trappola più cara della sezione ed è il passo che la disinnesca, **prima** che la
+porta vecchia si chiuda. Oggi ogni inquilino di test nasce con
+`register_and_login_with_email` (owner della propria organizzazione) e poi accetta.
+L'harness guadagna:
+
+- `issue_owner_invitation(&app, email) -> token`, che scrive la riga **come farà lo
+  script** — un `INSERT` con il ruolo del migratore attraverso la connessione di
+  bootstrap che `common` già usa — così `register_and_login` diventa «emetti, accetta
+  con il token, entra» e i **108** chiamanti non cambiano;
+- `register_tenant_from_invitation(&app, token, name, password) -> (access_token, user_id)`,
+  e `coliving_tenant` e simili passano da lì invece che da «registrati come owner, poi
+  accetta».
+
+Se la suite verde con l'harness nuovo richiede un comportamento del prodotto che l'ADR
+non prevede, **ci si ferma**: è la premessa falsa da riferire, non da aggirare.
+
+**Criterio di fine:** nessun test costruisce più un inquilino come owner; i test che
+provavano proprio quel fatto — ad esempio quelli che contano le organizzazioni di un
+inquilino — sono riscritti con l'aspettativa nuova, e **il vecchio valore compare nel
+messaggio dell'assert** come cosa che non deve tornare. Suite verde.
+
+##### `F6` — La porta vecchia si chiude
+
+`POST /auth/register` **sparisce**: non «richiede un token», perché un corpo con un
+campo in più su una rotta che si chiama ancora `register` insegnerebbe il contrario di
+ciò che l'ADR decide. `RegisterOwner` viene rimosso; `openapi.rs`, [05](05-api.md) e il
+test che elenca le rotte aperte senza sessione si aggiornano. Un test di contratto prova
+che `POST /auth/register` risponde `404 endpoint.not_found`.
+
+##### `F7` — Il client
+
+- `/invito` chiede il codice; se non c'è una sessione, il passo dopo è il form di
+  registrazione **con il codice già dentro** e senza il campo email — il nome
+  dell'organizzazione compare solo se il server, alla verifica del codice, dice che è
+  un invito da proprietario. Serve quindi una rotta di **sola lettura** del genere
+  dell'invito? **No**: il form chiede nome e password e manda a
+  `register-from-invitation`; se il token è da proprietario il server risponde
+  `409 invitation.owner_token` e il client rimanda lo stesso corpo, più il nome
+  dell'organizzazione, a `accept-owner-invitation`. Il codice esce **solo a chi
+  possiede un token valido**, quindi non è un oracolo sui token emessi: chi indovina
+  riceve `401` come per un token inesistente. L'ADR va emendato con questa riga se il
+  passo la conferma;
+- `/registrazione` da fuori sessione **smette di esistere come pagina aperta**: rimanda
+  a `/invito` con una riga che dice che si entra su invito. Il link «Non hai un
+  account? Registrati» della pagina di accesso porta lì;
+- lo stato «nessuna organizzazione» nel guscio: quando `getOrganizations` risponde
+  con zero elementi, il guscio mostra una schermata dedicata — chi si è, che l'accesso
+  passa da un invito, l'uscita — e **nessuna navigazione**. Non è un errore e non è un
+  vuoto di un elenco: è il terzo stato del guscio, accanto a «fuori sessione» e
+  «dentro»;
+- `AuthPage` perde il form di registrazione libera; i test che lo coprivano
+  (`AuthPage.test.tsx`, i percorsi da tastiera) si spostano sul form nuovo.
+
+**Criterio di fine:** tre test del client — la registrazione dall'invito che manda il
+token e non un'email; il form che mostra il campo dell'organizzazione solo dopo il
+`422`; il guscio con zero organizzazioni che mostra la schermata dedicata e **nessuna
+richiesta con `X-Org-Id`** (è la proprietà del poscritto della 6, riapplicata).
+
+##### `F8` — I documenti, l'esito, il piano della 9
+
+[04](04-sicurezza.md) per i due flussi di registrazione e per il token di piattaforma;
+[05](05-api.md) per le rotte; [07](07-operazioni.md) per il runbook; `R9` esce da
+[12](12-da-fare.md); l'esito in [11](11-piani-conclusi.md) **con le misure del
+metodo** — passi delegati, rifiutati alla verifica, premesse false passate inosservate;
+e il piano della sezione 9 (`R8`, spiegare come si usa il sito) scritto subito dopo.
+
+### Diario dell'esecuzione — le misure per l'esito
+
+Si scrive a ogni passo, qui e non in un file di lavoro fuori dal repository: è ciò che
+`F8` deve leggere per dire se il metodo ha retto, e una conversazione nuova non
+avrebbe altro.
+
+| Passo | Autore | Token · tool use · durata | Revisione | Esito |
+|---|---|---|---|---|
+| `F2` | Sonnet, 1 lancio | ~233 k · 105 · 15 min | conversazione principale | accettato; una correzione cosmetica (grant esplicito) |
+| `F3`+`F4` | Sonnet, 1 lancio | ~502 k · 234 · 38 min | conversazione principale | accettato; una correzione minore (controllo numerico nello script) |
+| `F5` | Sonnet, 1 lancio + 2 riprese per limiti di utilizzo | ~356 k · ~70 · ~10 min effettivi | **Opus a contesto pulito**: ~181 k · 66 · 8 min | accettato con 4 correzioni minori; **`R46`** (difetto di prodotto) e **`R47`** (errore sistemico nei docs) trovati dal revisore |
+| `F6`+`F7` | Sonnet, 1 lancio + 1 ripresa per le correzioni (caduta per il limite delle 5 ore, ripresa il giorno dopo) | 1° giro: 556 turni · 326 · 35 min · **188 M** di cache letta; correzioni: 84 turni · 48 · 7 min · **47 M**; il test di `B1` rifatto da un agente fresco: 65 turni · 37 · 3 min · 4,4 M | 1ª: **Opus a contesto pulito**, 165 turni · 93 · 16 min · 27 M; 2ª: **Opus fresco a brief stretto** sulle sole correzioni, 81 turni · 38 · 15 min · 5,9 M (due giri) | rimandato alla 1ª revisione (2 bloccanti, 8 minori); accettato alla 2ª con 1 minore, chiuso e verificato al contrario |
+
+**Che cosa gli autori hanno trovato di vero che il piano non sapeva:** `ALTER DEFAULT
+PRIVILEGES` della `0015` concede a `propflow_app` ogni tabella nuova (il commento della
+`0037` è falso per quel ruolo); `psql -c` non interpola `:'var'`, solo `-f`; `bash -n`
+in CI non esiste; il login non ha rate limit; `TestEnv` di `persistence` non aveva
+`TokenIssuer` né `RefreshTokenFactory`; `RegisterOwner` era usato 71 volte in
+`persistence.rs` (il piano contava solo `register_and_login`). Nessuna aggirata: tutte
+riferite.
+
+**Decisioni prese dagli autori oltre il piano, accettate:** grant esplicito a
+`propflow_worker` (è il pool privilegiato, e ha già `INSERT` ovunque dalla `0015`); le
+rotte nuove in `auth.rs`; `email` nel corpo rifiutata con `422` come per `PATCH /me`;
+`Denial::InvitationExpired/Revoked` riusati; fixture scaduti/revocati via `INSERT`
+perché il worker non ha `UPDATE` su `revoked_at` — prova pratica del confine.
+
+**Dove l'autore ha sbagliato a classificare:** in `F5` il token vecchio che continua a
+dare accesso dopo l'uscita è stato letto come «assunzione del test» e coperto con un
+login di comodo; era un difetto di prodotto (`R46`), e l'ha detto il revisore pulito
+togliendo il login e guardando il `200` con il contratto nel corpo. È la ragione per cui
+la seconda fase non è opzionale.
+
+**Dove il coordinatore ha sbagliato:** ha creduto ai rapporti di `F2`–`F4` verificando
+ciò che l'autore diceva di aver verificato; ha cancellato la sottosezione sul metodo
+riscrivendo i passi (`d2944f8`) e non se n'è accorto rivedendo il proprio commit; ha
+scritto nel brief di `F2` due premesse false (`password_reset_codes` documentata in
+`03`, una «connessione di bootstrap» in `common`).
+
+**Quel che il revisore pulito ha misurato e che nessun altro avrebbe visto:**
+`coliving_tenant` rimesso sulla porta vecchia non è visto da **nessuno** degli undici
+test chiamanti — il criterio «nessun inquilino nasce owner» è garantito dal `grep`, non
+da un assert. Va saputo per `F6`.
+
+**Limiti di utilizzo:** hanno colpito due volte l'autore di `F5` (limite di sessione,
+poi settimanale). La ripresa con `SendMessage` allo stesso agente ha conservato il
+contesto e il lavoro nell'albero; il costo è stato piccolo — **ma vedi sotto: era
+piccolo perché il contesto era piccolo**.
+
+**Che cosa l'autore ha trovato di vero che il piano non sapeva (F6+F7):** il «test che
+elenca le rotte aperte senza sessione» non esiste; `AuthPage.test.tsx` non ha mai
+coperto il form di registrazione (solo `LoginPage`), quindi non c'era niente da
+spostare. Trovate dal coordinatore verificando prima del brief: `ops/dev/seed-walkthrough.py`
+registrava tutti da `POST /auth/register` e il piano non lo nominava; il criterio di
+fine di F7 diceva «dopo il `422`» dove il meccanismo è `409 invitation.owner_token`;
+`malformed_email_is_rejected` non si «sposta»: sulle rotte nuove l'email non è un campo.
+
+**Decisioni oltre il piano, accettate:** il form da invito vive in `features/invitations`
+e non in `auth`, con `InvitationCodeError` estratta in `errors.tsx` per un ciclo di import;
+le due chiamate di registrazione stanno in `SessionStore` (devono installare la sessione),
+non in `ApiClient`; `clearOrganization()` nel contesto di sessione, senza il quale il guscio
+avrebbe continuato a mandare l'`X-Org-Id` appena lasciato; il gate su `<Outlet/>` solo con
+`organizationId === null`, così il caso comune non aspetta l'elenco; il seed prova il login
+prima di emettere l'invito.
+
+**Dove l'autore ha sbagliato a classificare (F7):** il test «nessuna richiesta con
+`X-Org-Id`» partiva da una sessione già senza organizzazione, dove l'header non può
+partire per costruzione: l'assert era vacuo, e `clearOrganization()` — la riga che
+realizza la proprietà — non era vista da nessun test. L'ha detto il revisore togliendola
+e guardando 127 verdi. Stessa forma del caso di F5: un test verde accanto al difetto.
+
+**Dove il coordinatore ha sbagliato (F6+F7):** ha messo due passi in un agente (su
+richiesta, ma il piano diceva «uno per passo») e il contesto è arrivato a 600 k; ha
+chiesto letture intere (`docs/05`, cinque ADR, il poscritto) che sono costate 120 k di
+contesto prima della prima modifica e si sono ripagate a ogni turno; ha ripreso l'agente
+per le correzioni credendo che «tenere il contesto» fosse un risparmio — è stato il
+contrario (§ sotto).
+
+**Il costo vero, misurato dalle trascrizioni:** l'autore ha consumato l'88 % dei token
+della fase (235 M di cache letta su 268 M totali). La causa è *turni × contesto*:
+640 turni su un contesto cresciuto da 59 k a 600 k. La ripresa per le correzioni è
+costata 47 M per 48 tool use, un quarto del primo giro. Il revisore pulito, con 165
+turni su ~160 k medi, è costato 27 M. Il limite delle 5 ore del piano è stato toccato
+una volta (autore, durante le correzioni).
+
+**La misura è nei campi `usage` delle trascrizioni**, non nelle stime degli agenti: l'autore
+di `F6`+`F7` stimava ~980 k token e 176 tool use, il sistema ne contava 510 k di contesto
+finale e 287 tool use; le stime di `F2`–`F5` nella tabella sono di quella specie e vanno
+lette come ordini di grandezza. Da qui in poi la colonna riporta i turni API e la cache
+letta, che è ciò che il limite del piano conta.
+
+### Trappole
+
+**Scrivere il codice dell'ADR prima dell'ADR.** La tentazione è concreta: «basta un
+flag su `RegisterOwner`». Ogni risposta alla domanda 1 cambia il guscio, i test e le
+policy in modi diversi, e un flag messo prima è una scelta fatta senza dirlo.
+
+**Un utente senza organizzazione fa `403` ovunque.** Non è un caso limite: con la
+risposta 1 è **lo stato normale** di un invitato fra la registrazione e l'accettazione —
+o di chi ha rifiutato l'invito. Il guscio deve saperlo mostrare, e `getOrganizations`
+è già senza `X-Org-Id` per la ragione della 6.
+
+**`pick_default_membership` preferisce `Owner`.** Chi tocca la registrazione senza
+toccare il login lascia gli utenti vecchi ad atterrare in un'organizzazione vuota.
+
+**`begin_privileged()` non ha Row Level Security.** La registrazione dall'invito
+verifica un token *prima* di avere un contesto: la prova di possesso è dell'applicazione
+(hash confrontato), come già in `AcceptInvitation`, ma là le policy facevano da seconda
+guardia e qui non ci sono. Il token va cercato per hash e per **stato**, e l'email
+dell'invito va confrontata con quella che si registra.
+
+**L'harness dei test dà per scontato che ogni inquilino sia owner di qualcosa.**
+`register_and_login_with_email` seguita dall'accettazione è in 108 test; l'harness
+si sposta sulle porte nuove **mentre la vecchia è ancora aperta** (`F5` prima di
+`F6`), con la suite verde a ogni passo — altrimenti si corregge il prodotto guardando
+test che descrivono il mondo vecchio, o si chiude la porta con cento test rossi.
+
+**`platform_role = 'admin'` si assegna solo a mano**, e il valore è `'admin'`, non
+`'platform_admin'`. Un runbook in [07](07-operazioni.md) è il minimo; una rotta è un
+altro perimetro di sicurezza da difendere, e va deciso nell'ADR se ne valga la pena.
+
+**L'oracolo delle email esiste già** (`409 auth.email_taken`) e la registrazione
+dall'invito ne aggiunge un secondo se risponde diversamente a «token valido, email
+diversa» e a «token inesistente». Le due risposte devono essere **la stessa**.
+
+### Come si saprà che è finita
+
+- un indirizzo sconosciuto non può diventare proprietario di niente;
+- un inquilino invitato si registra **senza** creare un'organizzazione, e al primo accesso
+  è nell'organizzazione di chi lo ha invitato, come inquilino;
+- un proprietario nuovo entra con un token emesso da un amministratore di piattaforma, e
+  il runbook per emetterlo è scritto;
+- gli utenti esistenti entrano come prima, e ciò che accade alle loro organizzazioni
+  personali vuote è scritto nell'ADR;
+- l'ADR esiste, è citato dalle policy e dai casi d'uso che ne discendono, e la suite è
+  verde dopo aver cambiato l'harness;
+- `just ci` verde, e **il piano della sezione 9 scritto nello stesso commit dell'esito**.
+
+### Che cosa **non** entra
+
+- **una richiesta di accesso come proprietario dentro il prodotto**: la verifica è fuori,
+  e il prodotto registra solo il suo esito;
+- **ruoli oltre i tre** (`owner`, `manager`, `tenant`): l'ADR può nominarli, la sezione
+  non li costruisce;
+- **`R37`**, la cancellazione delle persone, e **`R41`**, il rientro: sono domande sulla
+  membership che questa sezione non cambia;
+- **`R44`**, l'immobile che nasce in bozza: è dell'immobile, non del ruolo.
+
+<a id="esito-sezione-8"></a>
+
+## Esito — Sezione 8: il perimetro dei ruoli
+
+Eseguita dal **13 al 16 settembre 2026**. Chiude `R9` e, per strada, `R47`.
+
+**Un ADR, una migration, uno script, una rotta in meno e due in più, un terzo stato
+del guscio.** I test Rust passano da **461 a 478**, quelli del client da 124 a **129**.
+`just ci` verde, zero `SALTATO`. È anche **la prima sezione eseguita con i ruoli
+separati — pianificazione, codice, revisione — e l'ultima**: il metodo è stato
+misurato e ritirato, e la misura è la parte di questo esito che vale di più.
+
+### Che cosa è entrato
+
+- [ADR-053](08-decisioni.md#adr-053), scritto **prima** del codice: l'inquilino non ha
+  un'organizzazione propria e si registra dall'invito, dentro l'organizzazione di chi lo
+  ospita, in una transazione; il proprietario nasce da un invito di piattaforma; la
+  verifica è fuori dal prodotto; il database si svuota; il login non cambia; `/invito` è
+  l'ingresso per entrambi. Emendato il 16 settembre con la riga sul
+  `409 invitation.owner_token`, che il passo `F7` ha confermato;
+- la migration `0040_owner_invitations.sql`: una tabella di piattaforma senza `org_id`,
+  RLS attiva con `USING (false)`, privilegi di colonna per l'accettazione, riconosciuta
+  dai controlli 1, 2 e 12 delle invarianti;
+- `ops/dev/issue-owner-invitation.sh` con il runbook in [07](07-operazioni.md#emettere-un-invito-da-proprietario):
+  emissione, consegna, revoca, potatura, tutto con il ruolo del migratore;
+- `OwnerInvitation` nel dominio, la porta e la sua implementazione sul pool
+  privilegiato, `AcceptOwnerInvitation` e `RegisterTenantFromInvitation`, e le due rotte
+  `POST /auth/accept-owner-invitation` e `POST /auth/register-from-invitation`;
+  `AcceptInvitation` resta per chi ha già un account;
+- **`POST /auth/register` non esiste più** e risponde `404 endpoint.not_found`;
+  `RegisterOwner` è rimosso;
+- l'harness dei test: `register_and_login` è diventato «emetti un invito da
+  proprietario, accettalo, entra» senza cambiare i suoi 108 chiamanti, e nessun test
+  costruisce più un inquilino come owner di qualcosa;
+- il client: `/invito` da fuori sessione chiede il codice e poi mostra il form di
+  registrazione con il codice già dentro e senza email; il nome dell'organizzazione
+  compare solo dopo il `409`; `/registrazione` rimanda a `/invito`; e il **terzo stato
+  del guscio** — nessuna organizzazione, nessuna navigazione, nessun `X-Org-Id` — con il
+  suo ramo d'errore;
+- `ops/dev/seed-walkthrough.py` passa dalle porte nuove: nessuno dei suoi personaggi
+  nasce più da una rotta aperta.
+
+### Come si saprà che è finita — riletta
+
+| Criterio | Esito |
+|---|---|
+| un indirizzo sconosciuto non può diventare proprietario di niente | vero: senza un token in `owner_invitations` non c'è rotta che crei un'organizzazione |
+| un inquilino invitato si registra senza creare un'organizzazione, e al primo accesso è in quella di chi lo ha invitato | vero, provato dal contratto: zero organizzazioni proprie, membership `tenant`, parte collegata, tutto in una transazione |
+| un proprietario nuovo entra con un token emesso da un amministratore, e il runbook è scritto | vero |
+| gli utenti esistenti entrano come prima, e le loro organizzazioni vuote sono nell'ADR | vero nella forma decisa: il database si svuota, nessuna migration di dati |
+| l'ADR esiste ed è citato da policy e casi d'uso | vero |
+| `just ci` verde e il piano della 9 nello stesso commit | vero |
+
+### Il piano aveva premesse sbagliate, e il metodo le ha trovate tutte — ma non da solo
+
+Otto, contro le tre della 7, e nessuna aggirata. Le ha trovate chi scriveva il codice:
+`ALTER DEFAULT PRIVILEGES` della `0015` concede a `propflow_app` ogni tabella nuova, quindi
+il commento della `0037` era falso per quel ruolo; `psql -c` non interpola `:'var'`;
+`bash -n` in CI non esiste; il login non ha un rate limit da copiare; `TestEnv` di
+`persistence` non aveva `TokenIssuer`; `RegisterOwner` era usato 71 volte in
+`persistence.rs` e il piano contava solo `register_and_login`; il «test che elenca le
+rotte aperte senza sessione» non esiste; `AuthPage.test.tsx` non ha mai coperto il form
+di registrazione. E tre le ha trovate il coordinatore verificando prima di scrivere il
+brief di `F6`: il seeder del collaudo sulla porta vecchia, che il piano non nominava; il
+criterio di fine di `F7` che diceva `422` dove il meccanismo è `409`; e un test che non
+si «sposta» perché sulle rotte nuove l'email non è un campo.
+
+### Che cosa il revisore ha visto e nessun altro avrebbe visto
+
+È la misura che decide se il metodo valeva, ed è netta. Il revisore a contesto pulito ha
+trovato, in due passi:
+
+- **`R46`**: chi è uscito da un'organizzazione continua a leggere e scrivere con il
+  token vecchio per quindici minuti, e dopo ADR-053 è il caso normale di ogni inquilino.
+  L'autore di `F5` l'aveva coperto con un login «di comodo» nel test, classificandolo
+  come assunzione dell'harness; il revisore ha tolto il login e ha guardato il `200`;
+- **`R47`**: ADR-013 citato per ADR-012 in dieci punti, ereditato copiando;
+- un test di `F7` **vacuo**: «nessuna richiesta con `X-Org-Id`» partiva da una sessione
+  già senza organizzazione, dove l'header non può partire per costruzione, e la riga
+  che realizza la proprietà (`clearOrganization()`) non era vista da nessun test —
+  tolta, 127 verdi. Stessa forma del caso di `F5`: un test verde accanto al difetto;
+- il terzo stato del guscio senza ramo d'errore, contro la regola 23;
+- `coliving_tenant` rimesso sulla porta vecchia non era visto da nessuno degli undici
+  test chiamanti: il criterio «nessun inquilino nasce owner» era garantito dal `grep`,
+  non da un assert.
+
+Nessuna premessa falsa è passata inosservata a **entrambi**, per quanto si sa. Ma il
+punto è un altro: **tre di questi cinque li ha trovati solo la revisione al contrario**,
+rimettendo il difetto e guardando il test — non leggendo il diff. È la disciplina che
+resta anche senza il revisore, ed è scritta come tale nel ritiro del metodo.
+
+### Il metodo, misurato, e perché è stato ritirato
+
+| Passo | Autore | Revisione | Esito alla revisione |
+|---|---|---|---|
+| `F2` | Sonnet | conversazione principale | accettato, 1 correzione cosmetica |
+| `F3`+`F4` | Sonnet | conversazione principale | accettato, 1 correzione minore |
+| `F5` | Sonnet (2 riprese per limiti) | Opus pulito | accettato con 4 minori; `R46`, `R47` |
+| `F6`+`F7` | Sonnet (1 ripresa) | Opus pulito, poi Opus stretto | **rimandato** (2 bloccanti, 8 minori); accettato con 1 minore, chiuso |
+
+Sei passi delegati in quattro lanci; uno rifiutato alla prima revisione; nessuno
+rifiutato due volte. Sul **merito** il metodo ha retto: ogni passo consegnato era
+eseguibile, le premesse false sono state riferite e non aggirate, e il revisore pulito
+ha trovato ciò che il coordinatore non trovava. Sul **costo** no, e la misura è arrivata
+tardi perché nessuno la stava guardando: il consumo di un agente **non si vede dal suo
+rapporto** — l'autore di `F6`+`F7` stimava 980 k token e ne aveva letti 235 M — e non si
+vede dalla conversazione principale, che riceve solo il rapporto. Sta nei campi `usage`
+delle trascrizioni, e sommandoli:
+
+| Contesto | Turni | Cache letta | Output |
+|---|---|---|---|
+| Autore Sonnet, `F6`+`F7` primo giro | 556 | 188 M | 190 k |
+| Autore Sonnet, ripresa per le correzioni | 84 | 47 M | 26 k |
+| Revisore Opus, prima passata | 165 | 27 M | 52 k |
+| Revisore Opus stretto, due giri | 81 | 6 M | 20 k |
+| Agente fresco per un test | 65 | 4 M | 16 k |
+| Coordinatore | ~70 | ~7 M | ~90 k |
+
+Il costo è **turni × contesto**: l'output di tutti gli agenti insieme è 394 k token, lo
+0,14 % del totale; il resto è lo stesso contesto riletto a ogni turno, da 59 k a 600 k.
+Tre cause, in ordine: letture obbligatorie intere (120 k prima della prima modifica,
+ripagati 556 volte); due passi in un agente; la ripresa per le correzioni, che «tiene il
+contesto» e lo fa pagare a ogni turno — 47 M per 48 tool use. Le quattro regole scritte
+il 16 settembre (estratti, un agente per passo con un tetto, correzioni a un agente
+fresco, output corti) hanno abbassato la revisione da 27 M a 6 M alla prima prova, su un perimetro più
+stretto; **non è bastato**, e da `F8` una sola conversazione fa tutto, come nelle sezioni 1–7. La
+ragione e la trappola stanno nel [piano](#piano-sezione-8), sotto «ritirato».
+
+### Decisioni prese eseguendo
+
+- **grant esplicito a `propflow_worker`** sulla tabella nuova, anche se `ALTER DEFAULT
+  PRIVILEGES` lo dava già: scritto perché si legga;
+- **`email` nel corpo delle rotte da invito rifiutata con `422`**, come per `PATCH /me`,
+  e non ignorata: un campo ignorato in silenzio insegna che esiste;
+- fixture scaduti e revocati scritti con `INSERT` e non con `UPDATE`, perché il ruolo
+  privilegiato dei test non ha `UPDATE` su `revoked_at`: prova pratica del confine;
+- il form da invito in `features/invitations`, non in `auth`: è l'altra metà del flusso
+  che vive lì; `InvitationCodeError` estratta per un ciclo di import;
+- le due chiamate di registrazione in `SessionStore` e non in `ApiClient`: installano
+  una sessione, e uno store che non manda mai `X-Org-Id` è il posto giusto per una
+  richiesta di chi non ha ancora un'organizzazione;
+- `clearOrganization()` nel contesto di sessione: senza, il guscio continua a mandare
+  l'`X-Org-Id` appena lasciato fino a un reload;
+- il gate su `<Outlet/>` solo quando l'organizzazione è nulla: il caso comune non
+  aspetta l'elenco;
+- il seeder prova il login prima di emettere l'invito: rilevare «già seminato» sul `409`
+  lasciava un invito pendente e faceva fallire il terzo giro sull'indice unico;
+- `register_owner.rs` non rinominato: contiene ancora le scritture condivise.
+
+### Verificato al contrario
+
+Ogni test nuovo di `F6` e `F7` è stato rimesso sul difetto e guardato cadere, dal
+revisore e non dall'autore: il `404` su `POST /auth/register` con l'assert su `405`
+(`left: 404`); la password debole su entrambe le rotte togliendo `password_policy::validate`
+(`left: 201, right: 422` due volte); l'email malformata rinominando il campo dell'errore;
+il doppio invito da proprietario scambiando il codice del conflitto **nel punto giusto**
+— il primo tentativo sul ramo `map_email_conflict` non cadeva, perché quel ramo non è sul
+percorso: il `409` viene dal controllo esplicito `find_by_email`; il token e non l'email
+nel corpo (`not to have property "email"`); il campo dell'organizzazione reso sempre
+(`found <input`); `clearOrganization()` tolta (`Sara Neri` non compare); il ramo d'errore
+tolto (`role="alert"` non compare); il `setQueryData` tolto (`expected 2 to be 1`); e la
+sonda su `/properties` con l'`<Outlet/>` reso accanto alla schermata
+(`expected true to be false`).
+
+### Che cosa **non** è stato provato a mano
+
+Niente di questa sezione. Il giro a mano di `F7` richiede il database di sviluppo
+svuotato (decisione 4 dell'ADR: `just down-hard`, `just setup`) e non è stato fatto:
+`/invito` da fuori sessione, il form a due passi con un token da proprietario vero
+emesso dallo script, l'ingresso di un inquilino da un invito, lo stato senza
+organizzazione dopo un'uscita. Sono coperti da test, e la 6 e la 7 hanno insegnato che
+non basta. **È il primo passo della sezione 9**, prima di scrivere una riga.
+
+### Che cosa resta aperto
+
+- **`R46`**, deciso di non fare qui: il token vecchio dopo l'uscita. Due vie nella voce;
+- **`R48`**, nuova: chi ha già un account e nessuna organizzazione non può diventare
+  proprietario — l'ADR non copre l'accettazione di un invito da proprietario da un
+  account esistente;
+- **`R49`**, nuova: un secondo browser con in `localStorage` un'organizzazione lasciata
+  altrove parte con un `X-Org-Id` morto — la finestra del poscritto della 6, riapplicata;
+- **`R41`**, il rientro: questa sezione non lo tocca, come l'ADR dice.

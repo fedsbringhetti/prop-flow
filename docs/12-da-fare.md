@@ -1,9 +1,9 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Quindici voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Diciassette voci aperte**, con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
-Venti sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
+Ventidue sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
 [sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
 la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
@@ -11,7 +11,8 @@ la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
 `R24` con la [sezione 5](11-piani-conclusi.md#esito-sezione-5); `R30`, `R31`, `R32`, `R33`
 e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter); `R7`, `R16` e
 `R38` con la [sezione 6](11-piani-conclusi.md#esito-sezione-6); `R15` con la
-[sezione 7](11-piani-conclusi.md#esito-sezione-7). Sono entrate
+[sezione 7](11-piani-conclusi.md#esito-sezione-7); `R9` e `R47` con la
+[sezione 8](11-piani-conclusi.md#esito-sezione-8). Sono entrate
 `R26`, `R27`, `R28` e `R29`, poi `R30`–`R35` dal collaudo, e infine `R36` **eseguendo** la
 5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
 le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
@@ -20,7 +21,10 @@ pianificazione come ciò che quella sezione decide di **non** fare — e `R41` *
 sessione** dopo averla conclusa, `R43` e `R44` **usando** il prodotto — nel giro a
 mano che l'esito della 6 chiedeva — `R45` **usando** il prodotto nel giro a mano della
 7, archiviando in blocco — e `R46` e `R47` dal **revisore a contesto pulito** del passo
-`F5` della 8, che è il primo passo rivisto da qualcuno che non aveva scritto il piano.
+`F5` della 8, che è il primo passo rivisto da qualcuno che non aveva scritto il piano,
+e `R48` e `R49` dal revisore dei passi `F6`+`F7`, che sono anche gli ultimi rivisti così:
+il metodo è stato [ritirato](11-piani-conclusi.md#piano-sezione-8)
+per il costo, e ciò che vedeva lo si cerca da sé.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -110,12 +114,12 @@ precedenti. Da qui due accorpamenti che per argomento non si farebbero:
 | ~~**5-quater**~~ | ~~Prima degli utenti veri~~ — **conclusa** il 10 settembre 2026, **due sezioni su quattro eseguite** | — | posta + dominio + migration | [Piano](11-piani-conclusi.md#piano-utenti-veri) · [esito](11-piani-conclusi.md#esito-utenti-veri). `Z1` e `Z2` sono codice e girano; `Z3`, `Z4` e `Z5` hanno prodotto **artefatti e un runbook** e non sono stati eseguiti — servono una VPS, un dominio e delle credenziali. **Non è deployato**, e il criterio è il punto 4 del [runbook](07-operazioni.md#il-primo-deploy--runbook): aprire il prodotto dal telefono, in 4G. Apre `R37`, la cancellazione come capacità del prodotto |
 | ~~**6**~~ | ~~Le persone~~ — **conclusa** l'11 settembre 2026 | `R7` `R16` `R38` | migration + backend + client | [Piano](11-piani-conclusi.md#piano-sezione-6) · [esito](11-piani-conclusi.md#esito-sezione-6). **Due migration e nessun ADR**, ed era una conclusione del piano: la revoca delle sessioni è stata resa uniforme ad [ADR-052](08-decisioni.md#adr-052) apposta per non doverne scrivere un secondo. È la prima sezione pianificata **leggendo il codice** in cui tutte e cinque le trappole previste si sono avverate; quello che il piano non aveva visto è altrove, e la voce più cara è che il divieto di uscire con un contratto in essere sarebbe valso **solo per chi non amministra** — le policy permissive si sommano in `OR`. Apre `R41` |
 | ~~**7**~~ | ~~Cancellare, in generale~~ — **conclusa** il 12 settembre 2026 | `R15` | client trasversale, **più una rotta** | [Piano](11-piani-conclusi.md#piano-sezione-7) · [esito](11-piani-conclusi.md#esito-sezione-7). **Una rotta, nessuna migration, nessun ADR**: la decisione l'aveva presa la `0028`. Il piano aveva **tre premesse sbagliate**, e una stava nella tabella «verificato e non dedotto»: un secondo archivio risponde `404`, non `409`, perché la famiglia del soft delete non si rilegge — e il `404` è entrato fra gli «era già così». La `USING` di `expenses_update` è più larga di «chi l'ha registrata o lo staff», e il confine è nel caso d'uso. Quattro test verificati **al contrario** prima di consegnarli. Ha trovato `R45` usando il prodotto |
-| **8** | Il perimetro dei ruoli — **pianificata**, vedi [09](09-stato-e-roadmap.md#piano-sezione-8) | `R9` | ADR, poi modello + migration + client | Da sola e per ultima fra quelle decise: tocca registrazione, inviti, ruoli e una migration, e ha una faccia di sicurezza. **ADR prima del codice**: è [ADR-053](08-decisioni.md#adr-053), scritto il 13 settembre 2026 — l'inquilino entra per invito senza un'organizzazione propria, il proprietario con un token di piattaforma emesso da un runbook, il database si svuota. I passi `F2`–`F8` discendono da lì, e sono i primi eseguiti con i ruoli separati |
-| **9** | Spiegare come si usa il sito | `R8` | da decidere | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
+| ~~**8**~~ | ~~Il perimetro dei ruoli~~ — **conclusa** il 16 settembre 2026 | `R9` | ADR, poi migration + backend + client + `ops/` | [Piano](11-piani-conclusi.md#piano-sezione-8) · [esito](11-piani-conclusi.md#esito-sezione-8). [ADR-053](08-decisioni.md#adr-053) prima del codice: l'inquilino entra per invito senza un'organizzazione propria, il proprietario con un token di piattaforma emesso da un runbook, `POST /auth/register` non esiste più. **La prima sezione eseguita con agenti separati, e l'ultima**: l'esito riporta le misure e la ragione del ritiro |
+| **9** | Spiegare come si usa il sito — **pianificata**, vedi [09](09-stato-e-roadmap.md#piano-sezione-9) | `R8` | client, forse un documento | Ultima **apposta**: scrivere spiegazioni su un'interfaccia che si sta ancora correggendo significa riscriverle. Quando le schermate hanno smesso di cambiare si decide *dove* sta la spiegazione — stati vuoti, pagina d'aiuto, primo accesso — che è la domanda prima di *cosa dice* |
 | **10** | **Il primo deploy** — [runbook](07-operazioni.md#il-primo-deploy--runbook) | — | a mano, su una macchina | **Rinviato per mancanza di mezzi e non di priorità**: servono una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC e delle credenziali. Gli artefatti sono scritti e validati per quello che si può validare senza — `docker compose config`, `bash -n` — e non sono mai stati eseguiti. Il criterio di fine è il punto 4 del runbook: **aprire il prodotto dal telefono, in 4G**. Prima del deploy va provato il **ripristino**, una volta, mentre dentro non ci sono ancora i dati di nessuno |
 
 **Concluse la 1, la 2, la 3, la 4, la 5, il collaudo (5-bis), la 5-ter, la 5-quater, la
-6 e la 7.** Si continua dalla **8**: il [runbook del primo deploy](07-operazioni.md#il-primo-deploy--runbook)
+6, la 7 e la 8.** Si continua dalla **9**: il [runbook del primo deploy](07-operazioni.md#il-primo-deploy--runbook)
 è **rinviato in fondo**, e la ragione sta qui sotto.
 
 **Le tre sezioni dopo la 5 avevano un obiettivo dichiarato che le legava**: *un
@@ -138,11 +142,12 @@ dice che il modo più economico di riprendere quella prova, **senza aspettare la
 un secondo giro in locale: `mailpit` mostra la posta su `localhost:8025`, e l'unica cosa
 che resta fuori è «arriva fuori dallo spam».
 
-**Che cosa «pronto» significa, e per chi.** La lettura scelta è *un proprietario che
-conosci*, non *chiunque si registri*: `R9` resta quindi in fondo, e con esso il fatto che
-oggi chiunque si registri è owner di una propria organizzazione. È tollerabile perché
-scritto, e smette di esserlo il giorno in cui la registrazione è aperta a degli
-sconosciuti.
+**Che cosa «pronto» significa, e per chi.** Fino alla sezione 8 la lettura era *un
+proprietario che conosci*, non *chiunque si registri*, perché chiunque si registrasse
+diventava owner di un'organizzazione propria. Dalla 8 la registrazione aperta non esiste:
+si entra per invito, e il perimetro è *chi ha ricevuto un token* — un inquilino da chi lo
+ospita, un proprietario da chi amministra la piattaforma. Il deploy non è più tenuto
+fermo da questo.
 
 L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
 riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
@@ -257,8 +262,7 @@ sezione è il primo client che legge un nome da `app.users`
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R42 | aperta | **La sessione non scade mai davvero, e non lo si è mai scelto.** Si vuole un «Ricordami per 30 giorni» | Trovata **controllando la sessione** dopo la sezione 6, non usando il prodotto: una scheda lasciata aperta un giorno con l'API spenta è rientrata da sé, ed è corretto — a tenerla dentro era il cookie del refresh. Controllando *perché*, è uscito che la finestra dei 30 giorni è **scorrevole**: `RefreshSession::issue` in `crates/application/src/use_cases/auth/refresh.rs` costruisce il successore con `expires_at = now + lifetime`, quindi i trenta giorni contano dall'**ultimo uso** e non dal login. Chi apre il prodotto una volta al mese resta dentro per sempre. Non è un difetto — è la forma comune — ma **non risulta scelto**, e [04](04-sicurezza.md) diceva «vita: 30 giorni», che si legge come un tetto: la descrizione è stata corretta, la decisione resta da prendere. **La decisione di prodotto c'è ed è questa: un «Ricordami per 30 giorni» al login, esplicito, e senza la spunta una sessione che finisce con il browser.** Quel che si sa già del lavoro: la durata è **già per riga** — `app.user_sessions.expires_at` — quindi **nessuna migration**; a essere globale è `RefreshTokenFactory::lifetime()`, che il caso d'uso del login dovrà ricevere come parametro invece di leggere dalla configurazione. Il cookie oggi porta **sempre** `Max-Age`, calcolato dalla vita residua del token (`session_reply` in `crates/api/src/routes/auth.rs`): senza la spunta va **omesso**, che è ciò che lo rende un cookie di sessione e lo fa morire con il browser. Servono un campo nel corpo del login, una casella nel form e una stringa nel catalogo. **La trappola è la rotazione**: se la finestra continua a scorrere, il bottone dice «30 giorni» e significa «per sempre» — cioè l'etichetta mente. Scegliere quella spunta implica quindi che il successore **non** superi la scadenza di chi lo precede, ed è la riga che si dimentica, perché oggi il codice fa il contrario e sembra giusto. Da decidere solo il resto: se il rinnovo silenzioso del `refresh` debba comportarsi allo stesso modo per entrambi i casi, e se serva anche un tetto assoluto per chi la spunta ce l'ha. **ADR prima del codice**: è una decisione sulla sicurezza, e cambia una proprietà che [04](04-sicurezza.md) descrive |
-| R46 | aperta | **Chi è uscito da un'organizzazione continua a leggere e scrivere per i quindici minuti del suo access token**, e dopo ADR-053 è il caso normale di ogni inquilino | Trovata dal **revisore a contesto pulito** del passo `F5` della [sezione 8](09-stato-e-roadmap.md#piano-sezione-8), che ha tolto un login «di comodo» aggiunto dall'autore a un test e ha guardato che cosa fallisse: `GET /leases` con il token vecchio risponde **`200` con il contratto disdetto nel corpo**, e con lo stesso token si apre una segnalazione nell'organizzazione lasciata. La catena: `middleware/context.rs` si fida del ruolo nel token quando `X-Org-Id` coincide con l'`org_id` dei claim (nessuna rilettura della membership); il baratto del JWT non revocabile è [ADR-012](08-decisioni.md#adr-012) e parla di *validità* del token, non di *membership*; e il ramo dell'inquilino in `app.can_access_lease` e `app.can_access_property` (`0014`) passa da `lease_parties.user_id = current_user_id()` **senza guardare `org_members`** — `LeaveOrganization` non tocca le parti. È diverso dal [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6): là le policy dello staff passano da `member_role` e restituiscono *vuoto*; qui restituiscono **dati**. Prima di ADR-053 il caso era raro — solo uno staff che uscisse dall'organizzazione del proprio token — perché il token di un inquilino portava la sua organizzazione personale; ora porta quella di chi lo ospita. Due vie, da decidere: `is_org_member(l.org_id)` nel ramo dell'inquilino delle due funzioni (una migration; chiude al livello della RLS e allinea l'inquilino a ciò che il poscritto già assume), oppure rileggere sempre la membership in `Authenticated` (una query per richiesta, e il baratto di ADR-012 cambia forma). Il test `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back` oggi **fa un login nuovo** dopo l'uscita per non vedere il difetto: è la forma «test verde accanto al difetto», ed è accettata solo perché questa voce esiste. Va tolto quel login quando la voce si chiude |
-| R47 | aperta | **Sei punti dei documenti e tre commenti citano ADR-013 per il baratto del JWT non revocabile, che è ADR-012** | ADR-013 è `Patch<T> = Option<Option<T>>`. Trovato dal revisore di `F5`: `docs/04-sicurezza.md:143`, `docs/05-api.md:250` e `:592`, `docs/08-decisioni.md:3319` e `:3323` (dentro ADR-052), `docs/11-piani-conclusi.md` (due punti nell'esito della 5-quater), e i commenti in `crates/api/tests/http_contract.rs` alle righe ~2014 e ~2503. Il commento nuovo di `F5` è stato corretto; il resto è un errore ereditato e ripetuto copiando, e si corregge in un passaggio solo — anche in `11`, che «non si riscrive» per le previsioni e non per un numero sbagliato di un rimando |
+| R46 | aperta | **Chi è uscito da un'organizzazione continua a leggere e scrivere per i quindici minuti del suo access token**, e dopo ADR-053 è il caso normale di ogni inquilino | Trovata dal **revisore a contesto pulito** del passo `F5` della [sezione 8](11-piani-conclusi.md#piano-sezione-8), che ha tolto un login «di comodo» aggiunto dall'autore a un test e ha guardato che cosa fallisse: `GET /leases` con il token vecchio risponde **`200` con il contratto disdetto nel corpo**, e con lo stesso token si apre una segnalazione nell'organizzazione lasciata. La catena: `middleware/context.rs` si fida del ruolo nel token quando `X-Org-Id` coincide con l'`org_id` dei claim (nessuna rilettura della membership); il baratto del JWT non revocabile è [ADR-012](08-decisioni.md#adr-012) e parla di *validità* del token, non di *membership*; e il ramo dell'inquilino in `app.can_access_lease` e `app.can_access_property` (`0014`) passa da `lease_parties.user_id = current_user_id()` **senza guardare `org_members`** — `LeaveOrganization` non tocca le parti. È diverso dal [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6): là le policy dello staff passano da `member_role` e restituiscono *vuoto*; qui restituiscono **dati**. Prima di ADR-053 il caso era raro — solo uno staff che uscisse dall'organizzazione del proprio token — perché il token di un inquilino portava la sua organizzazione personale; ora porta quella di chi lo ospita. Due vie, da decidere: `is_org_member(l.org_id)` nel ramo dell'inquilino delle due funzioni (una migration; chiude al livello della RLS e allinea l'inquilino a ciò che il poscritto già assume), oppure rileggere sempre la membership in `Authenticated` (una query per richiesta, e il baratto di ADR-012 cambia forma). Il test `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back` oggi **fa un login nuovo** dopo l'uscita per non vedere il difetto: è la forma «test verde accanto al difetto», ed è accettata solo perché questa voce esiste. Va tolto quel login quando la voce si chiude |
 
 ### Contratti: quel che la sezione 3 ha lasciato aperto
 
@@ -267,43 +271,13 @@ sezione è il primo client che legge un nome da `app.users`
 | R28 | aperta | **Il subentro: cambiare la composizione di un contratto attivo** | Nato dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3), che ha chiuso la porta da cui si entrava per sbaglio: aggiungere una parte a un contratto attivo era ammesso e faceva smettere le quote di sommare a 100, quindi ora si rifiuta con `lease.parties_locked` ([ADR-046](08-decisioni.md#adr-046)). Il caso legittimo dietro resta: **un coinquilino che subentra a metà contratto**. Non è un'aggiunta — è un cambio di composizione che deve tenere la somma a 100, cioè **due righe che cambiano insieme**, e nessuna richiesta lo permette: `PATCH /lease-parties/{id}` ne tocca una sola, e in mezzo si passa da uno stato che l'attivazione rifiuterebbe. Da decidere la forma: una richiesta che porta **tutte** le parti insieme e le sostituisce, oppure una transizione dedicata («esce X, entra Y, con queste quote»). La seconda dice anche *quando*, che è ciò che serve agli addebiti. Legata a `left_at`, che il modello ha e nessuno scrive |
 | R45 | aperta | **Un immobile con un contratto in essere si archivia senza che nulla protesti** | Trovata **usando il prodotto**, archiviando due immobili in blocco nella [sezione 7](11-piani-conclusi.md#esito-sezione-7): uno aveva un contratto attivo, ed è uscito dagli elenchi come l'altro. `ArchiveProperty` (`crates/application/src/use_cases/property/archive.rs`) rilegge l'immobile e non guarda i contratti; lo schema non ha un vincolo che lo impedisca, e non deve averlo — un trigger cross-row sarebbe workflow nel database, come per «almeno un owner». Il contratto resta, con `property_id` che punta a una riga che le risposte chiamano «Immobile archiviato» ([ADR-043](08-decisioni.md#adr-043)), gli addebiti continuano a maturare, e l'inquilino non vede nulla di strano. È la stessa domanda di `R16` — *si può uscire con un contratto in essere?* — posta sull'immobile invece che sulla persona, e la risposta là è stata **no**, con `app.has_lease_in_force` che esiste già e si applica per persona: qui servirebbe la stessa domanda per immobile (`app.lease_in_force` c'è dalla `0017`). Da decidere se rifiutare, o se archiviare debba disdire, e in entrambi i casi la conferma della sezione 7 deve dirlo. **Non toccare l'archiviazione in blocco**: il `409` che ne uscirebbe è già un esito per riga |
 
-### Il perimetro dei ruoli — **la voce più grande della lista**
+### Il perimetro dei ruoli
+
+`R9` è uscita con la [sezione 8](11-piani-conclusi.md#esito-sezione-8) e
+[ADR-053](08-decisioni.md#adr-053). Quel che resta è ciò che l'ADR ha lasciato
+deliberatamente fuori e che l'esecuzione ha reso visibile.
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R9 | aperta | **Separare inquilini e proprietari**: accesso unico, **registrazione libera solo per gli inquilini**; un proprietario si fa verificare fuori dal prodotto e riceve un invito per registrarsi. Un inquilino non deve poter creare immobili | Vedi sotto: non è una fetta di client |
-
-**R9 non si chiude nascondendo un bottone**, e va detto prima che qualcuno ci provi.
-
-L'unico caso d'uso di registrazione che esiste si chiama `RegisterOwner`
-(`crates/application/src/use_cases/auth/register_owner.rs`) e crea **sempre**
-un'organizzazione personale con `OrgRole::Owner`: `Organization::personal(...)` e
-`OrgMember::active(..., OrgRole::Owner, ...)`. Ne segue che **ogni utente registrato
-è owner di una propria organizzazione**, quindi un inquilino che si iscrive da sé, in
-casa propria, è staff — e lì può creare immobili legittimamente, perché la Row Level
-Security e `ensure_staff` glielo concedono.
-
-Il client oggi fa la cosa giusta e non basta: `useIsStaff()` toglie *Immobili* dalla
-navigazione e nasconde «Registra un immobile» ([ADR-042](08-decisioni.md#adr-042)),
-ma è una scelta di **cosa offrire** e non un confine — ed è scritto proprio così
-nell'ADR. Nella propria organizzazione quel ramo dice `owner`, e il bottone ricompare
-a ragione.
-
-Quindi R9 tocca il **modello**, non la presentazione, e le domande da sciogliere sono
-almeno queste:
-
-- un utente che nasce inquilino **ha** un'organizzazione propria? Se no, che cosa
-  vede prima di accettare un invito, dato che oggi ogni elenco ha bisogno di
-  `X-Org-Id`? Se sì, in che ruolo?
-- l'invito che oggi esiste (`org_invitations`) porta l'appartenenza a
-  un'organizzazione **esistente** e conferisce solo `tenant` — vincolo nel dominio e
-  ripetuto nella policy. Un invito che *crea* un proprietario con la sua
-  organizzazione è un'altra cosa e non esiste;
-- come si verifica un proprietario, e dove vive quello stato: fuori dal prodotto —
-  una email, una decisione manuale — oppure dentro, con una colonna e una
-  transizione;
-- che cosa succede agli utenti già registrati, che sono tutti owner della propria
-  organizzazione.
-
-Tocca registrazione, inviti, ruoli e probabilmente una migration, e ha una faccia di
-sicurezza: è la voce che merita un ADR **prima** del codice, non dopo.
+| R48 | aperta | **Chi ha già un account e nessuna organizzazione non può diventare proprietario** | Trovata dal revisore dei passi `F6`+`F7`. `accept-owner-invitation` crea un utente nuovo e risponde `409 auth.email_taken` se l'email esiste; non c'è un'accettazione di un invito da proprietario *da un account esistente*. Nella schermata «nessuna organizzazione» il codice incollato va solo a `accept-invitation` (inquilino): un token da proprietario lì riceve `401` «codice non valido». Il caso è reale — un inquilino che compra casa, o un proprietario che è uscito dalla propria organizzazione — e ADR-053 non lo copre. La via naturale è una terza rotta, `Authenticated`, che accetti un invito da proprietario e crei l'organizzazione per l'utente corrente, con l'email dell'invito vincolata a quella dell'account; e il form di `/invito` da dentro sessione che, sul `401`, riprovi lì. Da decidere se prima del deploy |
+| R49 | aperta | **Un secondo browser con in `localStorage` un'organizzazione lasciata altrove parte con un `X-Org-Id` morto** | Trovata dal revisore dei passi `F6`+`F7`, ed è la finestra preesistente del [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6), riapplicata: `session.tsx` riseleziona la preferenza ricordata **prima** che l'elenco delle organizzazioni risponda, e la prima schermata può partire con l'`X-Org-Id` di un'organizzazione da cui si è usciti da un altro browser; l'elenco poi corregge. Non è di F7, ma con lo stato «zero organizzazioni» è più visibile: la prima richiesta risponde `403`/vuoto, poi la schermata dedicata. La via: non fidarsi della preferenza finché l'elenco non l'ha confermata, cioè ritardare la prima query dipendente dall'organizzazione — è la stessa attesa che il gate su `<Outlet/>` fa già quando l'organizzazione è nulla, estesa al caso in cui è ricordata |
