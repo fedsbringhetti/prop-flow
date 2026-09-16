@@ -46,7 +46,7 @@ pub struct ChangeMyPasswordCommand {
 /// password che ha appena scelto.
 ///
 /// **E «tutte le sessioni» sono i refresh token, non gli access token.** L'access
-/// token è un JWT firmato e non è revocabile ([ADR-013](../../../../../docs/08-decisioni.md)):
+/// token è un JWT firmato e non è revocabile ([ADR-012](../../../../../docs/08-decisioni.md)):
 /// chi ne ha uno in mano resta dentro fino alla scadenza, quindici minuti. Ciò che
 /// muore all'istante è il **rinnovo**. È la nota di ADR-052 che si dimentica, ed è
 /// la stessa su cui un test della 5-quater aveva asserito la cosa sbagliata.

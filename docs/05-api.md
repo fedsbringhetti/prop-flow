@@ -246,7 +246,7 @@ Vale **trenta minuti** e una volta sola; sconosciuto, scaduto e già usato danno
 `401`.
 
 **Confermare revoca tutte le sessioni** — ma sono i **refresh token**, non gli access
-token, che sono JWT firmati e non revocabili ([ADR-013](08-decisioni.md#adr-013)): chi ne
+token, che sono JWT firmati e non revocabili ([ADR-012](08-decisioni.md#adr-012)): chi ne
 ha uno in mano resta dentro fino alla scadenza, quindici minuti. La catena si chiude
 comunque, e da lì in poi non si rinnova più.
 
@@ -590,7 +590,7 @@ seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile
 chi cambia rientra subito con la password che ha appena scelto.
 
 **E «tutte le sessioni» sono i refresh token, non gli access token.** L'access token
-è un JWT firmato e non è revocabile ([ADR-013](08-decisioni.md#adr-013)): chi ne ha
+è un JWT firmato e non è revocabile ([ADR-012](08-decisioni.md#adr-012)): chi ne ha
 uno in mano resta dentro fino alla scadenza, quindici minuti. Ciò che muore
 all'istante è il **rinnovo**. È la nota di ADR-052 che si dimentica di continuo, ed
 è la stessa su cui un test della 5-quater aveva asserito la cosa sbagliata.

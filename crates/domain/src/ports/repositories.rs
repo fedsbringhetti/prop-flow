@@ -232,7 +232,7 @@ pub trait SessionRepository: Send {
     /// diceva il falso.
     ///
     /// **Non tocca gli access token**, che sono JWT firmati e non sono revocabili
-    /// ([ADR-013](../../../../docs/08-decisioni.md)): chi ne ha uno in mano resta
+    /// ([ADR-012](../../../../docs/08-decisioni.md)): chi ne ha uno in mano resta
     /// dentro fino alla scadenza. Ciò che muore è il **rinnovo**.
     async fn revoke_all_for_user(
         &mut self,

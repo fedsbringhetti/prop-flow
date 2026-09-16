@@ -140,7 +140,7 @@ il valore in chiaro esiste solo nell'email.
 
 **Confermare revoca tutte le sessioni**, e la frase va letta con precisione: revoca i
 **refresh token**. L'access token è un JWT firmato e non è revocabile
-([ADR-013](08-decisioni.md#adr-013)), quindi chi ne ha uno in mano resta dentro fino
+([ADR-012](08-decisioni.md#adr-012)), quindi chi ne ha uno in mano resta dentro fino
 alla scadenza — quindici minuti. La catena si chiude, e da lì in poi non si rinnova più.
 
 ### Cambiare la password da dentro chiude tutto, come il recupero

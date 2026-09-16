@@ -3316,11 +3316,11 @@ fossero sue.
 
 **Ma «tutte le sessioni» sono i refresh token, non gli access token**, e la differenza va
 detta perché la frase si legge come «lo butta fuori adesso». L'access token è un JWT
-firmato e **non è revocabile** ([ADR-013](#adr-013)): chi ne ha uno in mano resta dentro
+firmato e **non è revocabile** ([ADR-012](#adr-012)): chi ne ha uno in mano resta dentro
 fino alla scadenza, quindici minuti. La revoca chiude la catena — nessun rinnovo, e da lì
 in poi è fuori — ma la finestra esiste.
 
-È il baratto che ADR-013 ha già scelto, e recuperare la password non lo cambia: chiuderla
+È il baratto che ADR-012 ha già scelto, e recuperare la password non lo cambia: chiuderla
 vorrebbe dire una lista di revoca consultata a ogni richiesta, cioè uno stato condiviso
 per ogni chiamata di ogni utente per coprire quindici minuti. **Scoperto scrivendo il
 test**, che asseriva la cosa sbagliata — che la vecchia sessione smettesse subito di

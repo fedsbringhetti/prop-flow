@@ -10097,11 +10097,11 @@ verificava nel modo ovvio: la vecchia sessione non deve più leggere niente. **F
 e non per un difetto del codice.
 
 `revoke_all_for_user` revoca i **refresh token**. L'access token è un JWT firmato e **non
-è revocabile** ([ADR-013](08-decisioni.md#adr-013)): chi ne ha uno in mano resta dentro
+è revocabile** ([ADR-012](08-decisioni.md#adr-012)): chi ne ha uno in mano resta dentro
 fino alla scadenza, quindici minuti. La catena si chiude — nessun rinnovo, e da lì in poi
 è fuori — ma la finestra esiste.
 
-È il baratto che ADR-013 aveva già scelto, e il recupero della password non lo cambia;
+È il baratto che ADR-012 aveva già scelto, e il recupero della password non lo cambia;
 quello che cambia è che adesso è **scritto**, perché «revoca tutte le sessioni» si legge
 come «lo butta fuori adesso» e non è vero. La voce di ADR-052 lo dice, e il test asserisce
 la cosa giusta: il refresh non rinnova più. **Un test scritto per confermare una decisione

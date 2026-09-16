@@ -2071,7 +2071,7 @@ async fn a_forgotten_password_can_be_recovered_and_the_old_sessions_die() {
     //
     //    Quello che **non** muore è l'access token già emesso, che è un JWT e non è
     //    revocabile: chi ce l'ha resta dentro fino alla scadenza, quindici minuti.
-    //    È il baratto di ADR-013 e va saputo, perché «revoca tutte le sessioni» si
+    //    È il baratto di ADR-012 e va saputo, perché «revoca tutte le sessioni» si
     //    legge come «lo butta fuori adesso» e non è vero.
     let (status, body, _) = app
         .post_with_cookie("/api/v1/auth/refresh", Some(&cookie), None)
@@ -2564,7 +2564,7 @@ async fn changing_the_password_needs_the_old_one_and_no_session_renews_anymore()
     }
 
     // L'access token già emesso invece **legge ancora**: è un JWT, non è
-    // revocabile, e vive i suoi quindici minuti. È il baratto di ADR-013, e
+    // revocabile, e vive i suoi quindici minuti. È il baratto di ADR-012, e
     // asserire il contrario è l'errore che questo test esiste per non rifare.
     let (status, _) = app.send("GET", "/api/v1/me", Some(&desk), None).await;
     assert_eq!(status, StatusCode::OK);
