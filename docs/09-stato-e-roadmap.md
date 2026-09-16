@@ -727,6 +727,31 @@ doppia per un giudizio peggiore di quello del revisore pulito. Da qui legge i **
 (dell'autore e del revisore), scrive i brief, decide, scrive i documenti. Il diff lo
 legge chi non ha il piano in testa.
 
+**Ogni turno ripaga l'intero contesto, e questo decide la forma dei brief.** Deciso il
+**16 settembre 2026**, dopo aver misurato F6+F7 dalle trascrizioni: il consumo di un
+agente non è ciò che legge o scrive, è *turni × contesto* — 640 turni su un contesto
+da 600 k sono 235 M di token letti dalla cache, l'88 % della fase, e hanno esaurito il
+limite delle 5 ore del piano. Quattro regole, da ora:
+
+1. **Il brief porta estratti, non rimandi a documenti interi.** Il passo del piano, il
+   paragrafo dell'ADR, le righe precise del codice: la lettura di partenza deve stare
+   sotto ~40 k token. «Leggi `docs/05`» sono 2 053 righe che si ripagano a ogni turno;
+2. **Un agente per passo, con un tetto**: se il contesto dell'autore supera ~200 k, il
+   passo era due passi e si spezza al brief successivo. F6+F7 in un agente solo è
+   costato il doppio di quel che valeva;
+3. **Le correzioni e la seconda revisione vanno a un agente nuovo e stretto**, non alla
+   ripresa di quello grasso: `SendMessage` conserva il contesto e lo fa ripagare a ogni
+   turno — 47 M per 48 tool use. Un agente fresco con il verdetto, il rapporto delle
+   correzioni e il diff dei soli file toccati parte da ~60 k. La ripresa resta giusta
+   per un agente caduto a metà lavoro per un limite di utilizzo, dove il contesto è il
+   lavoro;
+4. **Risultati di tool corti**: `just ci 2>&1 | tail`, `sed -n a,b p` o `Read` con
+   `offset/limit`, mai `cat` di un file intero. Il risultato di un tool entra nel
+   contesto e non ne esce più.
+
+Stima con queste regole: un passo come F7 costa ~250 turni × ~150 k ≈ 35–40 M invece
+di 188 M.
+
 **Ciò che non cambia.** I commit si concordano come tabella e si fanno dalla
 conversazione principale, dopo il rapporto del revisore; il push è una conferma a
 parte; niente autoreferenza dell'assistente negli artefatti. **L'esito della 8 dice se il metodo ha retto**, con le
@@ -892,6 +917,7 @@ avrebbe altro.
 | `F2` | Sonnet, 1 lancio | ~233 k · 105 · 15 min | conversazione principale | accettato; una correzione cosmetica (grant esplicito) |
 | `F3`+`F4` | Sonnet, 1 lancio | ~502 k · 234 · 38 min | conversazione principale | accettato; una correzione minore (controllo numerico nello script) |
 | `F5` | Sonnet, 1 lancio + 2 riprese per limiti di utilizzo | ~356 k · ~70 · ~10 min effettivi | **Opus a contesto pulito**: ~181 k · 66 · 8 min | accettato con 4 correzioni minori; **`R46`** (difetto di prodotto) e **`R47`** (errore sistemico nei docs) trovati dal revisore |
+| `F6`+`F7` | Sonnet, 1 lancio + 1 ripresa per le correzioni (caduta per il limite delle 5 ore, ripresa il giorno dopo) | 1° giro: 556 turni · 326 · 35 min · **188 M** di cache letta; correzioni: 84 turni · 48 · 7 min · **47 M**; il test di `B1` rifatto da un agente fresco: 65 turni · 37 · 3 min · 4,4 M | 1ª: **Opus a contesto pulito**, 165 turni · 93 · 16 min · 27 M; 2ª: **Opus fresco a brief stretto** sulle sole correzioni, 81 turni · 38 · 15 min · 5,9 M (due giri) | rimandato alla 1ª revisione (2 bloccanti, 8 minori); accettato alla 2ª con 1 minore, chiuso e verificato al contrario |
 
 **Che cosa gli autori hanno trovato di vero che il piano non sapeva:** `ALTER DEFAULT
 PRIVILEGES` della `0015` concede a `propflow_app` ogni tabella nuova (il commento della
@@ -926,7 +952,50 @@ da un assert. Va saputo per `F6`.
 
 **Limiti di utilizzo:** hanno colpito due volte l'autore di `F5` (limite di sessione,
 poi settimanale). La ripresa con `SendMessage` allo stesso agente ha conservato il
-contesto e il lavoro nell'albero; il costo è stato piccolo.
+contesto e il lavoro nell'albero; il costo è stato piccolo — **ma vedi sotto: era
+piccolo perché il contesto era piccolo**.
+
+**Che cosa l'autore ha trovato di vero che il piano non sapeva (F6+F7):** il «test che
+elenca le rotte aperte senza sessione» non esiste; `AuthPage.test.tsx` non ha mai
+coperto il form di registrazione (solo `LoginPage`), quindi non c'era niente da
+spostare. Trovate dal coordinatore verificando prima del brief: `ops/dev/seed-walkthrough.py`
+registrava tutti da `POST /auth/register` e il piano non lo nominava; il criterio di
+fine di F7 diceva «dopo il `422`» dove il meccanismo è `409 invitation.owner_token`;
+`malformed_email_is_rejected` non si «sposta»: sulle rotte nuove l'email non è un campo.
+
+**Decisioni oltre il piano, accettate:** il form da invito vive in `features/invitations`
+e non in `auth`, con `InvitationCodeError` estratta in `errors.tsx` per un ciclo di import;
+le due chiamate di registrazione stanno in `SessionStore` (devono installare la sessione),
+non in `ApiClient`; `clearOrganization()` nel contesto di sessione, senza il quale il guscio
+avrebbe continuato a mandare l'`X-Org-Id` appena lasciato; il gate su `<Outlet/>` solo con
+`organizationId === null`, così il caso comune non aspetta l'elenco; il seed prova il login
+prima di emettere l'invito.
+
+**Dove l'autore ha sbagliato a classificare (F7):** il test «nessuna richiesta con
+`X-Org-Id`» partiva da una sessione già senza organizzazione, dove l'header non può
+partire per costruzione: l'assert era vacuo, e `clearOrganization()` — la riga che
+realizza la proprietà — non era vista da nessun test. L'ha detto il revisore togliendola
+e guardando 127 verdi. Stessa forma del caso di F5: un test verde accanto al difetto.
+
+**Dove il coordinatore ha sbagliato (F6+F7):** ha messo due passi in un agente (su
+richiesta, ma il piano diceva «uno per passo») e il contesto è arrivato a 600 k; ha
+chiesto letture intere (`docs/05`, cinque ADR, il poscritto) che sono costate 120 k di
+contesto prima della prima modifica e si sono ripagate a ogni turno; ha ripreso l'agente
+per le correzioni credendo che «tenere il contesto» fosse un risparmio — è stato il
+contrario (§ sotto).
+
+**Il costo vero, misurato dalle trascrizioni:** l'autore ha consumato l'88 % dei token
+della fase (235 M di cache letta su 268 M totali). La causa è *turni × contesto*:
+640 turni su un contesto cresciuto da 59 k a 600 k. La ripresa per le correzioni è
+costata 47 M per 48 tool use, un quarto del primo giro. Il revisore pulito, con 165
+turni su ~160 k medi, è costato 27 M. Il limite delle 5 ore del piano è stato toccato
+una volta (autore, durante le correzioni).
+
+**La misura è nei campi `usage` delle trascrizioni**, non nelle stime degli agenti: l'autore
+di `F6`+`F7` stimava ~980 k token e 176 tool use, il sistema ne contava 510 k di contesto
+finale e 287 tool use; le stime di `F2`–`F5` nella tabella sono di quella specie e vanno
+lette come ordini di grandezza. Da qui in poi la colonna riporta i turni API e la cache
+letta, che è ciò che il limite del piano conta.
 
 ### Trappole
 
