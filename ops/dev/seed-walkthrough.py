@@ -12,34 +12,53 @@ trovato un difetto vero.
 un immobile con le stanze, due contratti attivi, due inquilini già dentro
 l'organizzazione giusta, gli stati delle segnalazioni che servono a vedere la
 sezione 5, e i numeri che servono a vedere che il residuo scende. **Non** semina
-i punti 1-5 del giro, che sono precisamente ciò che quei punti provano:
-registrarsi e atterrare sul riepilogo vuoto, correggere una stanza, revocare un
-invito e rifarlo, accettarlo e ritrovarsi nell'organizzazione dell'invito.
+i punti 1-5 del giro, che sono precisamente ciò che quei punti provano: entrare
+da un invito da proprietario e atterrare sul riepilogo vuoto, correggere una
+stanza, revocare un invito e rifarlo, e — da ADR-053 e F7, in un solo passo
+invece di due — registrarsi da un invito da inquilino ritrovandosi già dentro
+l'organizzazione di chi ha invitato.
 
 Uso:
 
     ./ops/dev/seed-walkthrough.py                 # http://localhost:8080
     PROPFLOW_API_URL=http://localhost:8081 ./ops/dev/seed-walkthrough.py
 
-Vuole un database **appena migrato**: gira due volte e la seconda fallisce sulle
-email già registrate, che è il modo giusto di dire «questo mondo esiste già».
+Vuole un database **appena migrato**: gira due volte, e la seconda si ferma
+subito — prima di emettere niente — perché `OWNER` sa già entrare con
+`PASSWORD`. È il modo giusto di dire «questo mondo esiste già»: un `POST
+/auth/login`, non un invito emesso e mai marcato accettato, che al terzo giro
+farebbe fallire lo script con un errore psql invece di un messaggio chiaro
+(`owner_invitations_pending_uk`, migration `0040` — un solo invito pendente
+per indirizzo).
+
+**Vuole anche `PROPFLOW__DATABASE__MIGRATOR_URL` nell'ambiente**: da ADR-053 il
+proprietario non si registra più da una rotta aperta, ma da un invito che
+`ops/dev/issue-owner-invitation.sh` emette con il ruolo del migratore — la
+stessa variabile che legge `propflow-migrator`. Non esiste una ricetta `just`
+per questo script: prima di lanciarlo a mano serve caricare `.env` nella
+shell, `set -a; source .env; set +a` (CLAUDE.md §4).
 """
 
 import base64
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
 import uuid
 from datetime import date, timedelta
+from pathlib import Path
 
 BASE = os.environ.get("PROPFLOW_API_URL", "http://localhost:8080").rstrip("/")
 API = f"{BASE}/api/v1"
+ROOT = Path(__file__).resolve().parent.parent.parent
+ISSUE_OWNER_INVITATION = ROOT / "ops" / "dev" / "issue-owner-invitation.sh"
 
 # Una sola password per tutti: il collaudo non prova la robustezza delle
 # credenziali, e ricordarne tre non aiuta nessuno. Dodici caratteri sono il
-# minimo che `RegisterRequest` accetta.
+# minimo che `password_policy::validate` accetta, sulle due rotte da invito
+# come ovunque nel prodotto.
 PASSWORD = "collaudo-propflow-2026"
 
 OWNER = "proprietario@collaudo.test"
@@ -133,25 +152,108 @@ def carica(path, token, org, filename, content_type, contenuto, kind):
         raise ApiError(f"POST {path} → {errore.code}: {errore.read()}") from errore
 
 
-def registra(email, nome):
+def gia_seminato(email, corpo=None):
+    corpo_riga = f"\ncorpo: {corpo}" if corpo is not None else ""
+    raise ApiError(
+        f"{email} esiste già: questo mondo è stato seminato una volta.\n"
+        "Per rifarlo da zero serve un database pulito — `just down-hard`, "
+        f"che porta via anche i volumi, MinIO compreso.{corpo_riga}"
+    )
+
+
+def mondo_esiste_gia():
+    """Vero se `OWNER` sa già entrare con `PASSWORD`.
+
+    **Va provato prima di emettere qualunque cosa**, non dopo. Il vecchio
+    rilevamento accettava l'invito e leggeva il `409 auth.email_taken` che ne
+    seguiva — ma per arrivarci doveva prima emetterlo, e su un mondo già
+    seminato quell'invito resta pendente (l'accettazione fallisce prima di
+    marcarlo). Al giro successivo — il terzo, sull'intero seeder —
+    `owner_invitations_pending_uk` (migration `0040`) rifiuta un secondo
+    invito pendente per lo stesso indirizzo: lo script fallisce con un errore
+    psql invece del messaggio chiaro qui sotto. Il login non scrive niente,
+    quindi non lascia questa traccia: o sa entrare, ed è la stessa prova che
+    l'indirizzo esiste già, o non ci riesce, ed è la stessa prova del
+    contrario.
+    """
+    status, _ = chiama(
+        "POST",
+        "/auth/login",
+        body={"email": OWNER, "password": PASSWORD},
+        atteso=(401,),
+    )
+    return status == 200
+
+
+def emetti_invito_proprietario(email):
+    """Chiama `ops/dev/issue-owner-invitation.sh`, come farebbe chi amministra
+    la piattaforma (ADR-053): il seeder non scrive l'invito con un `INSERT`
+    proprio perché il punto della decisione è che quella scrittura passa da
+    uno script con il ruolo del migratore, non dal seeder stesso — replicarla
+    qui a mano proverebbe un percorso diverso da quello vero."""
+    if not os.environ.get("PROPFLOW__DATABASE__MIGRATOR_URL"):
+        raise ApiError(
+            "PROPFLOW__DATABASE__MIGRATOR_URL non impostata: serve a "
+            "ops/dev/issue-owner-invitation.sh per scrivere l'invito con il "
+            "ruolo del migratore (docs/07-operazioni.md).\n"
+            "Non esiste una ricetta `just` per questo script: caricare "
+            "`.env` nella shell prima di lanciarlo, `set -a; source .env; "
+            "set +a` (CLAUDE.md §4)."
+        )
+    try:
+        esito = subprocess.run(
+            [str(ISSUE_OWNER_INVITATION), email],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as errore:
+        raise ApiError(
+            f"issue-owner-invitation.sh fallito per {email}:\n{errore.stderr.strip()}"
+        ) from errore
+    # Il token in chiaro è la sola riga su stdout: lo script manda ogni log a
+    # stderr apposta, perché chi lo consegna possa incollare stdout senza
+    # ripulirlo (vedi il commento dello script).
+    return esito.stdout.strip()
+
+
+def registra_proprietario(email, nome, nome_organizzazione):
+    """Accetta un invito da proprietario (ADR-053): un solo passo, che crea
+    utente e organizzazione e restituisce già una sessione come il login —
+    non serve un `entra()` separato dopo, a differenza della vecchia
+    `POST /auth/register`."""
+    token = emetti_invito_proprietario(email)
     _, corpo = chiama(
         "POST",
-        "/auth/register",
-        body={"email": email, "full_name": nome, "password": PASSWORD},
+        "/auth/accept-owner-invitation",
+        body={
+            "token": token,
+            "full_name": nome,
+            "password": PASSWORD,
+            "organization_name": nome_organizzazione,
+        },
         atteso=(409,),
     )
     if corpo and corpo.get("code") == "auth.email_taken":
-        raise ApiError(
-            f"{email} esiste già: questo mondo è stato seminato una volta.\n"
-            "Per rifarlo da zero serve un database pulito — `just down-hard`, "
-            "che porta via anche i volumi, MinIO compreso."
-        )
-    return corpo
+        gia_seminato(email, corpo)
+    return corpo["access_token"], corpo["organization_id"], corpo["user_id"]
 
 
-def entra(email):
-    _, sessione = chiama("POST", "/auth/login", body={"email": email, "password": PASSWORD})
-    return sessione["access_token"], sessione["organization_id"], sessione["user_id"]
+def registra_inquilino_da_invito(token, nome, email):
+    """Accetta un invito da inquilino (ADR-053): un solo passo — non più
+    `POST /auth/register` seguito da `POST /auth/accept-invitation` — che
+    registra e collega alla parte contrattuale nella stessa transazione,
+    restituendo già una sessione **dentro l'organizzazione di chi ha
+    invitato**."""
+    _, corpo = chiama(
+        "POST",
+        "/auth/register-from-invitation",
+        body={"token": token, "full_name": nome, "password": PASSWORD},
+        atteso=(409,),
+    )
+    if corpo and corpo.get("code") == "auth.email_taken":
+        gia_seminato(email, corpo)
+    return corpo["access_token"], corpo["user_id"]
 
 
 def passo(testo):
@@ -171,10 +273,17 @@ def main():
             "Serve `just api` in un terminale (e `just worker` per l'OCR)."
         ) from errore
 
+    # Prima di emettere qualunque cosa: se il mondo esiste già, il messaggio
+    # chiaro va dato **prima** di scrivere un invito che poi resterebbe
+    # pendente (vedi `mondo_esiste_gia`).
+    if mondo_esiste_gia():
+        gia_seminato(OWNER)
+
     # ---------------------------------------------------------------- proprietario
     print("Proprietario e casa")
-    registra(OWNER, "Giulia Ferrari")
-    owner, org, owner_id = entra(OWNER)
+    owner, org, owner_id = registra_proprietario(
+        OWNER, "Giulia Ferrari", "Immobili di Giulia Ferrari"
+    )
     passo(f"{OWNER} — organizzazione {org}")
 
     _, casa = chiama(
@@ -241,9 +350,11 @@ def main():
         contratti[nome_stanza] = contratto_id
         passo(f"{nome_stanza}: contratto attivo per {inquilino}")
 
-    # L'invito, accettato: è il passo che porta l'inquilino **nell'organizzazione
-    # del proprietario** e non nella propria, vuota (ADR-045). Nel giro a mano è
-    # il punto 5 e va percorso lì; qui serve solo ad avere due inquilini veri.
+    # La registrazione dall'invito è il passo che porta l'inquilino direttamente
+    # **nell'organizzazione del proprietario** (ADR-053): un solo passo, non più
+    # «registrati, poi accetta» — `register-from-invitation` fa le due cose in
+    # una transazione. Nel giro a mano è il punto 5 e va percorso lì; qui serve
+    # solo ad avere due inquilini veri.
     sessioni = {}
     for nome, email, nome_stanza in [("Anna Bianchi", ANNA, "Camera Nord"), ("Bruno Conti", BRUNO, "Camera Sud")]:
         _, invito = chiama(
@@ -253,22 +364,14 @@ def main():
             org,
             {"email": email, "full_name": nome},
         )
-        registra(email, nome)
-        token, personale, utente = entra(email)
-        # **Senza `X-Org-Id`**, ed è l'unica eccezione alla regola: è l'operazione
-        # che *crea* l'appartenenza, e dichiarare un'organizzazione di cui non si
-        # è ancora membri farebbe rispondere `403` a una richiesta legittima.
-        _, accettato = chiama(
-            "POST", "/auth/accept-invitation", token, None, {"token": invito["accept_token"]}
-        )
+        token, utente = registra_inquilino_da_invito(invito["accept_token"], nome, email)
         sessioni[email] = (token, utente)
-        passo(f"{email} dentro come {accettato['role']} in {accettato['organization_id']}")
-        # **Un login successivo riparte dalla sua organizzazione personale**, e non
-        # è un difetto: `pick_default_membership` preferisce il ruolo più alto, e
-        # ogni registrazione ne crea una di cui si è owner. A scegliere è il
-        # client, con l'`organization_id` che questa risposta porta (ADR-045).
-        # Da qui in poi il seeder passa esplicitamente l'organizzazione del
-        # proprietario, che è ciò che il client fa dopo `selectOrganization`.
+        passo(f"{email} dentro come tenant in {org}")
+        # Nessuna organizzazione personale da cui ripartire al login successivo:
+        # chi si registra da un invito da inquilino non ne ha mai avuta una
+        # (ADR-053, decisione 1). Da qui in poi il seeder passa esplicitamente
+        # l'organizzazione del proprietario, che è ciò che il client fa dopo
+        # `selectOrganization`.
 
     anna, _anna_id = sessioni[ANNA]
     bruno, bruno_id = sessioni[BRUNO]
