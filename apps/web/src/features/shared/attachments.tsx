@@ -193,7 +193,16 @@ export function AttachmentsCard({
         <Async
           query={documents}
           isEmpty={(page) => page.items.length === 0}
-          empty={<Empty title={emptyTitle ?? t.document.empty} />}
+          empty={
+            <Empty
+              title={emptyTitle ?? t.document.empty}
+              {...(canUpload
+                ? { hint: t.document.emptyHint }
+                : isStaff
+                  ? {}
+                  : { hint: t.document.emptyForTenant })}
+            />
+          }
         >
           {(page) => (
             <ul className="divide-y divide-border-subtle">

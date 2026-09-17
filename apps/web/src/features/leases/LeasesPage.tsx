@@ -111,9 +111,15 @@ export function LeasesPage() {
           isEmpty={(items) => items.length === 0}
           empty={
             <Empty
-              title={t.lease.empty}
-              hint={isStaff ? t.lease.emptyHint : t.lease.emptyForTenant}
-              {...(isStaff
+              title={status || inForce ? t.state.filteredTitle : t.lease.empty}
+              hint={
+                status || inForce
+                  ? t.state.filteredHint
+                  : isStaff
+                    ? t.lease.emptyHint
+                    : t.lease.emptyForTenant
+              }
+              {...(isStaff && !status && !inForce
                 ? {
                     action: (
                       <Button asChild variant="primary">

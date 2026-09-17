@@ -100,8 +100,21 @@ export function PaymentsPage() {
           isEmpty={(items) => items.length === 0}
           empty={
             <Empty
-              title={!isStaff || showAll ? t.payment.empty : t.payment.queueEmpty}
-              {...(isStaff && !showAll ? { hint: t.payment.queueEmptyHint } : {})}
+              title={!isStaff || showAll ? t.payment.listEmpty : t.payment.queueEmpty}
+              hint={
+                isStaff && !showAll
+                  ? t.payment.queueEmptyHint
+                  : isStaff
+                    ? t.payment.listEmptyHintStaff
+                    : t.payment.listEmptyHintTenant
+              }
+              // Il gesto sta sulla scheda di un addebito, per entrambi i ruoli:
+              // chi amministra registra, chi abita dichiara.
+              action={
+                <Button asChild variant="primary">
+                  <Link to="/addebiti">{t.payment.goToCharges}</Link>
+                </Button>
+              }
             />
           }
         >

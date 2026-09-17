@@ -150,7 +150,16 @@ export function TicketsPage() {
           empty={
             <Empty
               title={showAll ? t.ticket.empty : t.ticket.emptyOpen}
-              hint={isStaff ? t.ticket.emptyHintStaff : t.ticket.emptyHintTenant}
+              // Con «Solo quelle aperte» spuntato il vuoto è del filtro, e il
+              // testo lo dice; la sezione la spiega il vuoto di «tutte».
+              hint={
+                !showAll
+                  ? t.ticket.emptyOpenHint
+                  : isStaff
+                    ? t.ticket.emptyHintStaff
+                    : t.ticket.emptyHintTenant
+              }
+              action={<NewTicketDialog />}
             />
           }
         >

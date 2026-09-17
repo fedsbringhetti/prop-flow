@@ -180,9 +180,15 @@ export function BillsPage() {
           isEmpty={(items) => items.length === 0}
           empty={
             <Empty
-              title={t.bill.empty}
-              hint={isStaff ? t.bill.emptyHint : t.bill.emptyForTenant}
-              {...(isStaff
+              title={status || utilityType ? t.state.filteredTitle : t.bill.empty}
+              hint={
+                status || utilityType
+                  ? t.state.filteredHint
+                  : isStaff
+                    ? t.bill.emptyHint
+                    : t.bill.emptyForTenant
+              }
+              {...(isStaff && !status && !utilityType
                 ? {
                     action: (
                       <Button asChild variant="primary">

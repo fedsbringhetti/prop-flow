@@ -62,6 +62,11 @@ export const it = {
     errorTitle: 'Qualcosa non ha funzionato',
     errorRequestId: 'Riferimento della richiesta',
     emptyTitle: 'Non c’è ancora niente',
+    /** Il vuoto di un elenco **con un filtro attivo** non è il vuoto della
+     *  sezione: dice che è del filtro, e non spiega la sezione a chi la conosce
+     *  già. Vale per ogni elenco filtrabile, quindi sta qui e non per modulo. */
+    filteredTitle: 'Niente che corrisponda ai filtri.',
+    filteredHint: 'I filtri sono attivi: toglili per vedere tutto.',
   },
 
   /**
@@ -352,9 +357,16 @@ export const it = {
     created: 'Immobile registrato.',
     updated: 'Immobile aggiornato.',
     empty: 'Nessun immobile registrato.',
-    emptyHint: 'Un immobile è il punto di partenza: da lì nascono stanze e contratti.',
+    emptyHint:
+      'Un immobile è il punto di partenza: da lì nascono le stanze, i contratti e gli addebiti.',
+    /** Chi abita non registra immobili, e l'elenco gli mostra solo quelli dei
+     *  suoi contratti: il vuoto dice chi lo riempie e quando. */
+    emptyForTenant:
+      'Gli immobili li registra chi amministra: il tuo compare qui quando un contratto a tuo nome lo riguarda.',
     residents: 'Chi ci abita',
     residentsEmpty: 'Nessuno ci abita in questo momento.',
+    residentsEmptyHint:
+      'Chi abita compare qui quando un contratto su questo immobile è attivo e la persona ha accettato l’invito.',
     residentPending: 'Invitato, non ha ancora accettato',
     notFound: 'Questo immobile non esiste, o non è tuo.',
     types: {
@@ -420,6 +432,8 @@ export const it = {
     updated: 'Stanza aggiornata.',
     archived: 'Stanza archiviata.',
     empty: 'Nessuna stanza: il contratto riguarderà l’immobile intero.',
+    emptyHint:
+      'Le stanze servono solo se affitti per stanza: ogni contratto potrà poi riguardarne una.',
     nameTaken: 'Questo nome è già usato da un’altra stanza dell’immobile.',
     statuses: {
       available: 'Disponibile',
@@ -505,11 +519,19 @@ export const it = {
     terminated: 'Contratto disdetto.',
     created: 'Contratto redatto.',
     empty: 'Nessun contratto.',
-    emptyHint: 'Un contratto nasce in bozza: si aggiungono le parti e poi si attiva.',
+    emptyHint:
+      'Un contratto lega un immobile a chi ci abita. Nasce in bozza: si aggiungono le parti, si attiva, e da lì partono gli addebiti.',
     /** Il vuoto di chi abita non è lo stesso di chi amministra: lui non ha un
      *  gesto per riempirlo, e dirgli «creane uno» sarebbe indicargli una porta
-     *  che l'API gli chiude. */
-    emptyForTenant: 'Non risulta nessun contratto a tuo nome in questa organizzazione.',
+     *  che l'API gli chiude. Gli si dice chi lo riempie. */
+    emptyForTenant:
+      'Non risulta nessun contratto a tuo nome in questa organizzazione. I contratti li redige chi amministra: se te ne aspetti uno, chiedi a chi ti ha invitato.',
+    /** Il vuoto degli addebiti dentro la scheda: il gesto per chi lo ha, chi lo
+     *  farà per chi non lo ha. */
+    chargesEmptyHint:
+      'Il primo addebito si emette da qui: il canone, una spesa, una bolletta riaddebitata.',
+    chargesEmptyForTenant:
+      'Gli addebiti di questo contratto li emette chi amministra: quando ne arriva uno lo vedi qui e negli addebiti.',
     noTenantParty: 'Il contratto non ha inquilini fra le parti.',
     sharesNotHundred: 'Le quote degli inquilini non sommano a 100.',
     periodOverlap: 'Il periodo si sovrappone a una locazione già attiva.',
@@ -562,6 +584,10 @@ export const it = {
     uploadHint: 'PDF o immagine, fino a 25 MB.',
     download: 'Scarica',
     empty: 'Nessun allegato.',
+    emptyHint: 'Carica un PDF o un’immagine: resta qui, con la data e chi lo ha caricato.',
+    /** Chi abita e non può caricare — le scansioni di una bolletta — legge chi
+     *  lo farà, non un titolo e basta. */
+    emptyForTenant: 'Gli allegati qui li carica chi amministra: quando ci sono, li apri da questa scheda.',
     archive: 'Archivia',
     archiveConfirm: 'Archiviare questo allegato?',
     archiveConfirmMany: 'Archiviare {count} allegati?',
@@ -715,6 +741,11 @@ export const it = {
     resolutionNotes: 'Com’è andata a finire',
     resolutionNotesHint: 'Facoltativo. Una riapertura la cancella, perché fa parte della chiusura.',
     history: 'Storico degli stati',
+    /** Irraggiungibile in pratica — la prima riga la scrive il trigger — ma
+     *  «Non c'è ancora niente» non direbbe che cosa ci finirà. */
+    historyEmpty: 'Nessun passaggio di stato.',
+    historyEmptyHint:
+      'Ogni passaggio — presa in carico, lavorazione, chiusura — resta scritto qui, con la data e chi lo ha fatto.',
     /** La prima riga la scrive il trigger all'inserimento, fuori da un contesto
      *  di richiesta: `changed_by` può quindi mancare, e non è un difetto. */
     historyOpened: 'Aperta',
@@ -811,8 +842,15 @@ export const it = {
     onlyOpenHint: 'Le sei fasi di lavorazione, chiuse e annullate escluse.',
     empty: 'Nessuna segnalazione.',
     emptyOpen: 'Nessuna segnalazione aperta.',
-    emptyHintTenant: 'Se qualcosa non funziona in casa, segnalalo: resta scritto, con la sua data.',
-    emptyHintStaff: 'Quando un inquilino segnala un guasto, lo trovi qui.',
+    /** Il vuoto con «Solo quelle aperte» spuntato è il vuoto di un **filtro**,
+     *  non della sezione: dice dove stanno le altre, e non spiega la sezione a
+     *  chi la conosce già. Il gesto resta, perché è anche la prima schermata. */
+    emptyOpenHint:
+      'Niente in lavorazione. Le segnalazioni chiuse e annullate compaiono togliendo «Solo quelle aperte».',
+    emptyHintTenant:
+      'Se qualcosa non funziona in casa, segnalalo qui: resta scritto, con la sua data, e chi amministra lo vede subito.',
+    emptyHintStaff:
+      'Quando un inquilino segnala un guasto, lo trovi qui e lo prendi in carico. Puoi aprirne una anche tu.',
     /** Nessun immobile su cui aprire: senza un contratto in essere non c'è una
      *  casa di cui segnalare i guasti. */
     noProperty: 'Non risulta nessun immobile a te collegato: non c’è nulla su cui aprire una segnalazione.',
@@ -926,7 +964,11 @@ export const it = {
     updated: 'Bolletta aggiornata.',
     duplicate: 'Questa fattura di questo fornitore è già registrata.',
     empty: 'Nessuna bolletta registrata.',
-    emptyHint: 'Registra una bolletta e allega la scansione: la lettura automatica parte da lì.',
+    emptyHint:
+      'Una bolletta è una spesa dell’immobile da riaddebitare a chi abita. Registrala e allega la scansione: la lettura automatica parte da lì.',
+    /** Chi abita non carica scansioni: `ocr.none` gli direbbe «quando ne carichi
+     *  una». */
+    scanEmpty: 'Nessuna scansione.',
     emptyForTenant:
       'Nessuna bolletta imputata al tuo contratto. Le registra chi amministra, e le vedi qui quando ti riguardano.',
     scan: 'Scansione',
@@ -1047,6 +1089,12 @@ export const it = {
     writtenOff: 'Rinuncia registrata.',
     created: 'Addebito emesso.',
     empty: 'Nessun addebito.',
+    /** È la prima schermata di ogni inquilino: il vuoto dice perché è qui e
+     *  che cosa arriverà, e a chi amministra dice da dove si emette. */
+    emptyHintStaff:
+      'Un addebito è una somma chiesta a chi abita: il canone, una spesa, una bolletta riaddebitata. Si emette dalla scheda di un contratto.',
+    emptyHintTenant:
+      'Gli addebiti li emette chi amministra: il canone, le spese, le bollette riaddebitate. Quando ne arriva uno lo vedi qui, con la scadenza e quanto resta da pagare.',
     emptyOutstanding: 'Nessun insoluto: sono tutti pagati.',
     noPatch: 'Un addebito emesso non si modifica: si annulla e si riemette.',
     /** `?status=overdue` risponde 422: lo stato è derivato dalla scadenza. */
@@ -1152,9 +1200,25 @@ export const it = {
     rejectExplain:
       'La dichiarazione passa ad annullata. Il saldo resta dov’è: una dichiarazione in attesa non lo aveva mosso.',
     rejected: 'Dichiarazione rifiutata.',
+    /** Il vuoto della scheda di un addebito, e quello dell'elenco intero: la
+     *  stessa stringa su `/pagamenti` diceva «su questo addebito» a chi ne
+     *  guardava tutti. */
     empty: 'Nessun movimento su questo addebito.',
+    emptyHintStaff: 'Quando incassi, registralo con «Registra un incasso»: il residuo si aggiorna da solo.',
+    emptyHintTenant:
+      'Se hai pagato, dichiaralo con «Ho pagato»: resta in attesa finché chi amministra lo conferma.',
+    emptySettled: 'Questo addebito è chiuso e non accetta più movimenti.',
+    listEmpty: 'Nessun movimento.',
+    listEmptyHintStaff:
+      'Un movimento è un incasso che registri tu, o un pagamento che un inquilino dichiara e tu confermi. Si registra dalla scheda di un addebito.',
+    listEmptyHintTenant:
+      'Quando paghi, dichiaralo dalla scheda dell’addebito: il movimento compare qui, in attesa finché chi amministra lo conferma.',
+    goToCharges: 'Vai agli addebiti',
     queueEmpty: 'Nessuna dichiarazione in attesa.',
-    queueEmptyHint: 'Quando un inquilino dichiara di aver pagato, lo trovi qui.',
+    /** È il vuoto di un filtro — la coda — e lo dice: gli altri movimenti stanno
+     *  sotto «Tutti». */
+    queueEmptyHint:
+      'Quando un inquilino dichiara di aver pagato, lo trovi qui. Gli incassi e le dichiarazioni già decise stanno sotto «Tutti».',
     pendingDoesNotMove: 'In attesa: non muove il saldo finché non la confermi.',
     onlyStaffDecides:
       'A confermare o rifiutare è chi amministra: chi ha dichiarato non può ritirare.',
@@ -1277,6 +1341,8 @@ export const it = {
      *  l'UUID: un identificatore in faccia a chi legge non è informazione. */
     memberUnknown: 'Membro del gruppo',
     you: 'tu',
+    membersEmpty: 'Nessuno nel gruppo.',
+    membersEmptyHint: 'Chi crea il gruppo ne fa parte; gli altri residenti si aggiungono con «Aggiungi qualcuno».',
     addMember: 'Aggiungi qualcuno',
     addMemberTitle: 'Aggiungi al gruppo',
     addMemberExplain:
@@ -1288,8 +1354,9 @@ export const it = {
     /** Un residente senza `user_id` si mostra **non selezionabile con la
      *  ragione**, non si nasconde: nasconderlo farebbe cercare una persona che
      *  sullo schermo c'è. */
-    addMemberNoCandidates:
-      'Non c’è nessun altro da aggiungere: gli altri residenti sono già nel gruppo o non hanno ancora accettato l’invito.',
+    addMemberNoCandidates: 'Nessuno da aggiungere.',
+    addMemberNoCandidatesHint:
+      'Gli altri residenti sono già nel gruppo, o non hanno ancora accettato l’invito.',
     addMemberOutsider:
       'Si può aggiungere anche chi non abita più qui: chi se n’è andato lasciando un conto aperto va tenuto nel gruppo, non tolto.',
 
@@ -1330,7 +1397,8 @@ export const it = {
 
     expenses: 'Spese',
     expensesEmpty: 'Nessuna spesa in questo gruppo.',
-    expensesEmptyHint: 'La prima spesa fa comparire i saldi.',
+    expensesEmptyHint:
+      'Chi anticipa qualcosa per la casa la registra qui, con chi la divide: la prima spesa fa comparire i saldi.',
     record: 'Registra una spesa',
     recordTitle: 'Nuova spesa',
     recordExplain: 'Quello che qualcuno ha anticipato per la casa. Si divide subito fra i membri attivi.',

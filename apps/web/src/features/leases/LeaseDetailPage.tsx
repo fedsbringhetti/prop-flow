@@ -801,7 +801,12 @@ function LeaseChargesCard({
       <Async
         query={charges}
         isEmpty={(page) => page.items.length === 0}
-        empty={<Empty title={t.charge.empty} />}
+        empty={
+          <Empty
+            title={t.charge.empty}
+            hint={canIssue ? t.lease.chargesEmptyHint : t.lease.chargesEmptyForTenant}
+          />
+        }
       >
         {(page) => (
           <TableFrame>

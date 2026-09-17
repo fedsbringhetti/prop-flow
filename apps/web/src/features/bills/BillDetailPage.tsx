@@ -246,7 +246,7 @@ function ScansCard({
       {...(draft ? { hint: t.bill.uploadHint } : {})}
       kind="utility_bill"
       canUpload={canUpload}
-      emptyTitle={t.ocr.none}
+      emptyTitle={canUpload ? t.ocr.none : t.bill.scanEmpty}
       onUploaded={async () => {
         // Su una bolletta in bozza il caricamento **accoda la lettura
         // automatica**: il job non compare nella risposta del caricamento,

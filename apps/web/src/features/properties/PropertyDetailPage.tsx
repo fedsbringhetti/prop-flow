@@ -411,7 +411,9 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
       <Async
         query={rooms}
         isEmpty={(data) => data.items.length === 0}
-        empty={<Empty title={t.room.empty} />}
+        empty={
+          <Empty title={t.room.empty} {...(canManage ? { hint: t.room.emptyHint } : {})} />
+        }
       >
         {(data) => (
           <TableFrame>
@@ -890,7 +892,7 @@ function ResidentsCard({ propertyId }: { propertyId: string }) {
       <Async
         query={residents}
         isEmpty={(data) => data.items.length === 0}
-        empty={<Empty title={t.property.residentsEmpty} />}
+        empty={<Empty title={t.property.residentsEmpty} hint={t.property.residentsEmptyHint} />}
       >
         {(data) => (
           <ul className="divide-y divide-border-subtle">

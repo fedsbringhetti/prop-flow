@@ -200,7 +200,7 @@ function HistoryCard({ ticket }: { ticket: TicketDetail }) {
         <CardTitle>{t.ticket.history}</CardTitle>
       </CardHeader>
       {ticket.history.length === 0 ? (
-        <Empty title={t.state.emptyTitle} />
+        <Empty title={t.ticket.historyEmpty} hint={t.ticket.historyEmptyHint} />
       ) : (
         <CardBody>
           <ol className="flex flex-col gap-3">

@@ -170,9 +170,15 @@ export function PropertiesPage() {
           isEmpty={(items) => items.length === 0}
           empty={
             <Empty
-              title={t.property.empty}
-              hint={t.property.emptyHint}
-              {...(isStaff
+              title={status || occupancy ? t.state.filteredTitle : t.property.empty}
+              hint={
+                status || occupancy
+                  ? t.state.filteredHint
+                  : isStaff
+                    ? t.property.emptyHint
+                    : t.property.emptyForTenant
+              }
+              {...(isStaff && !status && !occupancy
                 ? {
                     action: (
                       <Button asChild variant="primary">

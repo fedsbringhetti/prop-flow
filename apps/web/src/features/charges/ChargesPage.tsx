@@ -176,7 +176,34 @@ export function ChargesPage() {
           query={query}
           isEmpty={(items) => items.length === 0}
           empty={
-            <Empty title={outstanding ? t.charge.emptyOutstanding : t.charge.empty} />
+            <Empty
+              title={
+                outstanding
+                  ? t.charge.emptyOutstanding
+                  : status
+                    ? t.state.filteredTitle
+                    : t.charge.empty
+              }
+              // Con un filtro attivo il vuoto è del filtro: dice come toglierlo,
+              // non che cosa sia un addebito a chi ne ha già. Senza filtri è la
+              // prima schermata di ogni inquilino, e spiega.
+              hint={
+                outstanding || status
+                  ? t.state.filteredHint
+                  : isStaff
+                    ? t.charge.emptyHintStaff
+                    : t.charge.emptyHintTenant
+              }
+              {...(isStaff && !outstanding && !status
+                ? {
+                    action: (
+                      <Button asChild variant="primary">
+                        <Link to="/contratti">{t.dashboard.goToLeases}</Link>
+                      </Button>
+                    ),
+                  }
+                : {})}
+            />
           }
         >
           {(items) => (

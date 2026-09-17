@@ -192,7 +192,7 @@ export function ChargeDetailPage() {
             </PageSection>
 
             <PageSection>
-              <ChargePayments charge={data} />
+              <ChargePayments charge={data} settled={settled} />
             </PageSection>
 
             <PageSection>
@@ -213,8 +213,16 @@ export function ChargeDetailPage() {
 }
 
 /** I movimenti dell'addebito: quello che è entrato, e quello che aspetta. */
-function ChargePayments({ charge }: { charge: Charge }) {
+function ChargePayments({
+  charge,
+  settled,
+}: {
+  charge: Charge
+  /** Annullato o stornato: non c'è più un gesto da suggerire, e il vuoto lo dice. */
+  settled: boolean
+}) {
   const client = useApi()
+  const isStaff = useIsStaff()
 
   const query = usePagedQuery({
     queryKey: keys.chargePayments(charge.id),
@@ -230,7 +238,18 @@ function ChargePayments({ charge }: { charge: Charge }) {
       <Async
         query={query}
         isEmpty={(items) => items.length === 0}
-        empty={<Empty title={t.payment.empty} />}
+        empty={
+          <Empty
+            title={t.payment.empty}
+            hint={
+              settled
+                ? t.payment.emptySettled
+                : isStaff
+                  ? t.payment.emptyHintStaff
+                  : t.payment.emptyHintTenant
+            }
+          />
+        }
       >
         {(items) => (
           <>

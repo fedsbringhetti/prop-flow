@@ -692,7 +692,7 @@ function MembersCard({
       </CardHeader>
 
       {members.length === 0 ? (
-        <Empty />
+        <Empty title={t.expense.membersEmpty} hint={t.expense.membersEmptyHint} />
       ) : (
         <ul className="divide-y divide-border-subtle">
           {members.map((member) => (

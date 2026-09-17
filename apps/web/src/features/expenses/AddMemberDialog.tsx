@@ -136,7 +136,7 @@ export function AddMemberDialog({ group }: { group: ExpenseGroup }) {
       ) : residents.error ? (
         <InlineError error={residents.error} />
       ) : selectable.length === 0 ? (
-        <Empty title={t.expense.addMemberNoCandidates} />
+        <Empty title={t.expense.addMemberNoCandidates} hint={t.expense.addMemberNoCandidatesHint} />
       ) : (
         <form
           noValidate

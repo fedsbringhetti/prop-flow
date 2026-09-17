@@ -203,3 +203,80 @@ describe('annullare tre addebiti in blocco', () => {
     )
   })
 })
+
+/**
+ * Il vuoto degli addebiti è la **prima schermata di ogni inquilino** appena entrato
+ * da un invito, e la prova più economica che uno stato vuoto «spiega»: dice chi lo
+ * riempie, e il gesto compare solo per chi può farlo — a chi abita non si offre una
+ * porta che l'API gli chiude (ADR-042). Con un filtro attivo il vuoto è del filtro,
+ * e lo dice invece di spiegare la sezione a chi la conosce già.
+ */
+function renderEmpty(role: 'owner' | 'tenant', path = '/addebiti') {
+  let refreshes = 0
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/auth/refresh')) {
+      refreshes += 1
+      return json({
+        access_token: 'token',
+        token_type: 'Bearer',
+        expires_in: 900,
+        user_id: ME,
+        organization_id: 'org-1',
+        role,
+      })
+    }
+    if (url.includes('/charges')) return json({ items: [] })
+    return json({})
+  })
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <SessionProvider>
+        <QueryClientProvider client={queryClient}>
+          <ChargesPage />
+        </QueryClientProvider>
+      </SessionProvider>
+    </MemoryRouter>,
+  )
+
+  // Il ruolo arriva con il rinnovo, e il vuoto può comparire un istante
+  // **prima**: un'asserzione negativa letta in quell'istante passerebbe anche
+  // se il gesto fosse offerto a tutti. Si aspetta che il ruolo sia arrivato.
+  return { settled: () => waitFor(() => expect(refreshes).toBe(1)) }
+}
+
+describe('il vuoto degli addebiti spiega', () => {
+  it('a chi abita dice chi emette gli addebiti, senza offrirgli il gesto', async () => {
+    const page = renderEmpty('tenant')
+
+    expect(await screen.findByText('Nessun addebito.')).toBeInTheDocument()
+    await page.settled()
+    expect(await screen.findByText(/gli addebiti li emette chi amministra/i)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Vedi i contratti' })).not.toBeInTheDocument()
+  })
+
+  it('a chi amministra dice da dove si emette, con il collegamento ai contratti', async () => {
+    renderEmpty('owner')
+
+    expect(await screen.findByText('Nessun addebito.')).toBeInTheDocument()
+    expect(await screen.findByText(/si emette dalla scheda di un contratto/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Vedi i contratti' })).toHaveAttribute(
+      'href',
+      '/contratti',
+    )
+  })
+
+  it('con un filtro attivo è il vuoto del filtro, e non spiega la sezione', async () => {
+    renderEmpty('owner', '/addebiti?insoluti=1')
+
+    expect(await screen.findByText('Nessun insoluto: sono tutti pagati.')).toBeInTheDocument()
+    expect(screen.getByText(/i filtri sono attivi/i)).toBeInTheDocument()
+    expect(screen.queryByText(/si emette dalla scheda/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Vedi i contratti' })).not.toBeInTheDocument()
+  })
+})
