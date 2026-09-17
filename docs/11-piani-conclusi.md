@@ -12020,3 +12020,336 @@ riuscire dal dominio pubblico (`R50`); un refresh fallito per rete al caricament
 trattato come «nessuna sessione» e manda alla pagina di accesso senza dirlo (`R51`);
 e la conferma, con gli occhi, di `R48`: dalla schermata senza organizzazione un token da
 proprietario riceve «codice non valido».
+<a id="piano-sezione-9"></a>
+
+## Piano — Sezione 9: spiegare come si usa il sito
+
+Pianificata il **16 settembre 2026**, subito dopo l'esito della 8 e sotto la regola che
+una sezione conclusa pianifica la successiva. Chiude `R8`. È l'ultima delle sezioni
+decise dopo il collaudo, ed era ultima **apposta**: scrivere spiegazioni su schermate
+che cambiano significa riscriverle, e fino alla 8 cambiavano. Ora l'ingresso, il
+guscio e i moduli hanno la forma che avranno al primo deploy.
+
+**Si esegue in una sola conversazione**, come le sezioni 1–7: il metodo degli agenti è
+stato [ritirato](#piano-sezione-8) con la 8. Resta la disciplina che
+quel metodo aveva reso visibile: ogni test provato al contrario prima di consegnarlo,
+con l'assert caduto scritto nell'esito.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| Non esiste nessuna spiegazione del prodotto nel client | vero: `grep -n "help\|aiuto\|guida" apps/web/src/i18n/it.ts` non trova niente; la navigazione (`nav` in `it.ts`, righe 284–297) porta solo i nomi delle sezioni |
+| Gli stati vuoti esistono e sono progettati | vero: `Empty` in `apps/web/src/components/state/index.tsx` (riga 56) accetta `title`, `hint`, `action`; è usato **22 volte** in `features/` |
+| …ma quasi tutti sono un titolo e basta | **falso, ed era falso già il 16 settembre**: la riga diceva «5 usi su 22 con un `hint`, uno solo con un `action`», e contando davvero (17 settembre, rilettura prima di `G1`) i `hint` sono **13** — tre condizionali: la coda dei pagamenti solo per lo staff, spese e rimborsi solo se il gruppo non è archiviato — e gli `action` sono **4** (riepilogo, immobili, contratti, bollette; gli ultimi tre solo per lo staff), aggiunti fra il 4 e il 7 settembre e mai contati. **Senza `hint` restano 9**, e sono quasi tutti vuoti di *sotto-elenco* dentro una scheda (stanze e residenti di un immobile, movimenti di un addebito, storia di una segnalazione, allegati, membri e candidati di un gruppo di spesa) più due di elenco: **gli addebiti**, che è la prima schermata di ogni inquilino, e i pagamenti visti da chi abita. `G1` quindi non «riempie 22 vuoti»: ne riempie 9 e **rilegge** gli altri 13 contro il criterio delle tre cose. Due cose viste contando, che entrano in `G1`: `PaymentsPage` usa come vuoto dell'elenco `t.payment.empty`, «Nessun movimento su *questo addebito*», che è la stringa della scheda dell'addebito ed è falsa su `/pagamenti`; e `ChargesPage` ha **due** filtri (`insoluti` e `stato`) ma il titolo del vuoto guarda solo il primo, quindi con `?stato=` il vuoto dice «Nessun addebito» a chi ne ha |
+| Esiste un precedente di pagina lunga nel client | vero: `features/legal/PrivacyPage.tsx`, con il testo in `it.ts` come `privacy.sections: [{title, body}]` (riga 159) — è la forma da riusare, non una nuova |
+| Il primo accesso di un proprietario atterra sul riepilogo vuoto | vero: `DashboardPage.tsx:36` mostra `Empty` con `t.dashboard.empty` e `t.property.emptyHint` quando `properties_count === 0 && active_leases === 0` |
+| Il primo accesso di un inquilino atterra sugli addebiti | vero: `TENANT_HOME = '/addebiti'` (`shell.tsx:104`), e un inquilino appena entrato con un contratto senza addebiti vede «Nessun addebito» — una schermata che non dice **perché è lì** né che cosa arriverà |
+| Chi non ha un'organizzazione vede una schermata che spiega | vero dalla 8: `NoOrganizationScreen` dice che cosa si è e che si entra da un invito |
+| Il giro a mano della 8 non è stato fatto | vero al momento del piano; **fatto** il 16 settembre come `G0`, [poscritto](#poscritto-sezione-8) |
+
+### La decisione: dove sta la spiegazione
+
+`R8` lascia aperto *dove*: primo accesso guidato, pagina d'aiuto, testi contestuali, o
+una combinazione. Si decide qui, e non con un ADR — non è una decisione di modello né
+di sicurezza — ma con le alternative scritte.
+
+**Scelto: gli stati vuoti spiegano, e una pagina sola raccoglie.** Due livelli, nell'ordine:
+
+1. **Ogni stato vuoto dice tre cose**: che cos'è questa sezione (una riga), che cosa
+   la riempie (il gesto, con il bottone se chi guarda può farlo), e — per chi abita —
+   chi la riempirà al posto suo. È il posto più economico perché è già progettato
+   (regola 23), è dove la domanda «e adesso?» nasce, e non richiede navigazione. Il
+   `hint` esiste, l'`action` esiste: si riempiono;
+2. **una pagina `/guida`**, nella forma di `PrivacyPage`: un titolo per sezione della
+   navigazione, tre-cinque righe ciascuna, **due versioni** — per chi amministra e per
+   chi abita — scelte dal ruolo, non due pagine. Raggiungibile dal menu dell'account
+   (dove stanno le cose che si fanno su di sé) e dalla schermata senza organizzazione.
+   Il testo vive in `it.ts` come `guide.staff.sections` e `guide.tenant.sections`, con
+   la stessa forma di `privacy.sections`.
+
+*Alternativa scartata: il primo accesso guidato* (un tour a passi sopra l'interfaccia).
+È la più cara — stato «già visto» da persistere per utente, un componente di overlay,
+test per ogni passo — e la meno utile: il proprietario nuovo vede una schermata vuota,
+e una schermata vuota che spiega sé stessa è già un primo accesso guidato senza
+overlay. Si riapre se un giro a mano con una persona esterna dice che non basta.
+
+*Alternativa scartata: i tooltip sui bottoni.* Spiegano un gesto, non una sezione, e
+non si vedono dal telefono.
+
+*Alternativa scartata: il manuale in `docs/`.* Chi usa il prodotto non apre il
+repository; e la regola 18 dice che il testo visibile sta in `it.ts`, non in un
+Markdown servito a parte.
+
+**Ciò che la pagina non è:** non è un elenco di funzioni. Racconta un ciclo — si
+registra un immobile, si fa un contratto, si invita chi abita, arrivano gli addebiti,
+si registrano gli incassi — e per chi abita l'altro lato dello stesso ciclo. Il
+glossario di [01](01-prodotto.md#glossario) è la fonte dei nomi.
+
+### Decomposizione
+
+##### `G0` — Il giro a mano della sezione 8 · **fatto** il 16 settembre 2026
+
+Esito nel [poscritto della 8](#poscritto-sezione-8): un difetto
+bloccante che nessun test vedeva (`/invito` da fuori sessione era una pagina bianca —
+`useQueryClient()` fuori da `QueryProvider`, e il test la avvolgeva in un provider che il
+prodotto non ha), una stringa falsa, `R50` e `R51` in [12](12-da-fare.md). Entrambi i
+difetti corretti e provati al contrario prima di `G1`. L'Invio nel campo del codice non
+è verificabile con il browser pilotato: **va provato con una tastiera vera** in `G1`.
+Il testo del passo, com'era:
+
+Con il database svuotato (`just down-hard`, `just setup`) e `ops/dev/seed-walkthrough.py`
+per il mondo di sfondo:
+
+1. `./ops/dev/issue-owner-invitation.sh` per un indirizzo nuovo; `/invito` da fuori
+   sessione; il codice; il form senza email; il `409` che fa comparire il nome
+   dell'organizzazione; l'ingresso sul riepilogo vuoto;
+2. dallo stesso account, un immobile, un contratto, un invito; in un altro browser
+   `/invito` con quel codice, il form, l'ingresso **da inquilino** sugli addebiti,
+   nessuna organizzazione propria nel menu;
+3. l'inquilino esce dall'organizzazione (`/account`); la schermata «nessuna
+   organizzazione», nessuna navigazione, la riprova con `/organizations` staccando la
+   rete, l'uscita;
+4. `/registrazione` da fuori sessione: il rimando, non un form;
+5. un token inesistente, e lo stesso token usato due volte: `401` identici.
+
+Ciò che non torna entra in [12](12-da-fare.md) **prima** di cominciare `G1`: è la
+regola che la 6 e la 7 hanno pagato.
+
+##### `G1` — Gli stati vuoti spiegano
+
+Per ognuno dei 22 usi di `Empty`: un `hint` che dica che cos'è la sezione e che cosa la
+riempie, e l'`action` con il gesto dove chi guarda può farlo (`useIsStaff()`, ADR-042:
+è una scelta di che cosa offrire). L'inquilino legge chi lo farà per lui («Il
+proprietario registra qui le bollette; quando ne arriva una la vedi in questa lista»).
+Le stringhe in `it.ts`, una per stato, accanto al titolo che già esiste. **Niente
+componenti nuovi**: `Empty` ha già i tre slot.
+
+Trappola: gli stati vuoti *filtrati* — «nessuna segnalazione aperta» con `showAll`
+falso, «nessun addebito da saldare» con `outstanding` — non sono vuoti della sezione,
+sono vuoti del filtro, e il testo deve dirlo («non c'è niente da fare qui: le chiuse
+sono sotto *tutte*») invece di spiegare la sezione a chi la conosce già.
+
+**Criterio di fine:** nessun `Empty` senza `hint`; un test per schermata nuova non
+serve — sono stringhe — ma i test esistenti che cercano il titolo del vuoto restano
+verdi, e uno prova che l'`action` **non** compare per chi non è staff.
+
+##### `G2` — La pagina `/guida`
+
+`features/guide/GuidePage.tsx` nella forma di `PrivacyPage`; `guide.staff` e
+`guide.tenant` in `it.ts`, con `sections: [{title, body}]`; la versione scelta da
+`useIsStaff()`; la rotta dentro il guscio; il collegamento dal menu dell'account
+(`shell.tsx`, accanto a «Il mio account») e da `NoOrganizationScreen` (dove la versione
+è quella di chi abita: chi non ha un'organizzazione aspetta un invito). Una sezione per
+voce della navigazione, più «Come si entra» (l'invito, i due generi, l'email che è
+quella dell'invito) e «Il tuo account» (password, uscita da un'organizzazione, privacy).
+
+**Criterio di fine:** un test che la pagina mostra le sezioni dello staff a uno staff e
+quelle dell'inquilino a un inquilino, provato al contrario scambiando il ruolo;
+`typecheck` e `lint` verdi, e nessuna stringa nel JSX — non c'è un lint che lo
+verifichi, lo verifica chi rilegge il diff, ed è una trappola elencata sotto.
+
+##### `G3` — Il riepilogo vuoto è il primo accesso
+
+Il `Empty` del riepilogo (`DashboardPage.tsx:36`) è il primo schermo di ogni
+proprietario nuovo: diventa il posto dove il ciclo è raccontato in tre passi con i tre
+bottoni — registra un immobile, poi un contratto, poi invita — e il collegamento alla
+guida. Non un componente di overlay: è lo stesso `Empty`, con un `action` che è un
+gruppo di tre invece di uno. Per l'inquilino l'equivalente è il vuoto degli addebiti,
+che dice perché è lì.
+
+**Criterio di fine:** il riepilogo **non ha un test** oggi (`features/dashboard/` contiene
+solo `DashboardPage.tsx`): se ne scrive uno per il vuoto con i tre gesti, provato al
+contrario con il ruolo scambiato — il gesto assente per chi non è staff.
+
+##### `G4` — L'esito, `R8` fuori da [12](12-da-fare.md), la decisione sul deploy
+
+L'esito in [11](11-piani-conclusi.md); `R8` esce; e con la 9 finisce la lista delle
+sezioni decise dopo il collaudo. Il passo dopo non è una sezione: è la decisione se
+fare il [primo deploy](07-operazioni.md#il-primo-deploy--runbook) con i mezzi che ci
+sono, e quali fra `R46`, `R48`, `R49` e `R42` debbano precederlo. Si scrive qui, come
+«prossimo passo suggerito», e non come piano.
+
+### Trappole
+
+**Scrivere la guida prima del giro a mano.** `G0` viene prima perché una spiegazione
+scritta su una schermata che non funziona come si crede insegna la cosa sbagliata; la 8
+non ha avuto un giro a mano, e la 6 e la 7 hanno mostrato che i test non bastano.
+
+**Spiegare il prodotto invece della sezione.** Il `hint` di uno stato vuoto ha una riga,
+due al massimo; se serve di più, il posto è la guida, e il vuoto rimanda lì.
+
+**Due pagine invece di una con due versioni.** Sembra più pulito ed è il doppio dei
+collegamenti, dei test e dei posti dove il testo diverge senza che nessuno se ne
+accorga. Una pagina, il ruolo sceglie.
+
+**Il testo nel JSX.** È la regola 18 e qui è dove si viola più facilmente, perché sono
+paragrafi e non etichette. `privacy.sections` mostra che i paragrafi stanno in `it.ts`
+come tutto il resto.
+
+**La formattazione a mano dei nomi.** Le sezioni della guida si chiamano come le voci
+della navigazione: `t.nav.*`, non una copia.
+
+### Che cosa **non** entra
+
+- **un primo accesso guidato con overlay**: scartato sopra, riaperto solo da un giro con
+  una persona esterna;
+- **la traduzione in inglese**: decisa e rimandata da ADR-039; la guida nasce in `it.ts`
+  con le chiavi, e tradurre sarà aggiungere, non riscrivere;
+- **`R46`, `R48`, `R49`**: sono del perimetro dei ruoli, e vanno decisi nella scelta sul
+  deploy, non qui;
+- **le email di notifica** (piano in [09](09-stato-e-roadmap.md#prima-degli-utenti-veri), «Le notifiche»):
+  spiegano un evento, non il sito.
+
+<a id="esito-sezione-9"></a>
+
+## Esito — Sezione 9: spiegare come si usa il sito
+
+Eseguita il **17 settembre 2026**, in una conversazione sola e senza agenti, com'era
+scritto. Chiude `R8`. I test Rust restano **478**, quelli del client passano da 129 a
+**138**. `just ci` verde, zero `SALTATO`. È l'ultima delle sezioni decise dopo il
+collaudo, e con lei finisce la lista: il passo dopo non è una sezione ma la decisione sul
+[primo deploy](09-stato-e-roadmap.md#prossimo-passo-suggerito).
+
+### Che cosa è entrato
+
+- **ventidue stati vuoti che spiegano**, per ruolo: i nove che avevano solo un titolo
+  hanno un `hint` — le stanze e chi abita di un immobile, i movimenti di un addebito, la
+  storia di una segnalazione, gli allegati, i membri e i candidati di un gruppo di spesa,
+  gli addebiti e i pagamenti — e i tredici che lo avevano già sono stati riletti contro il
+  criterio delle tre cose: che cos'è la sezione, che cosa la riempie, chi la riempie per
+  chi abita. Il gesto compare come `action` solo per chi può farlo (`useIsStaff()`,
+  ADR-042) e solo negli elenchi di sezione: nelle schede, dove il bottone sta
+  nell'intestazione a due righe di distanza, ripeterlo sarebbe rumore;
+- **i vuoti filtrati dicono di esserlo.** Non solo gli addebiti e le segnalazioni, che il
+  piano nominava: contando è uscito che anche bollette, contratti e immobili hanno filtri
+  che il vuoto ignorava, e con `?stato=` dicevano «nessuna bolletta registrata» a chi ne
+  ha. Ora la coppia `state.filteredTitle`/`state.filteredHint` vale per ogni elenco
+  filtrabile, e il gesto sparisce insieme alla spiegazione: chi filtra conosce la sezione;
+- **la pagina `/guida`**, `features/guide/GuidePage.tsx`, nella forma di `PrivacyPage`:
+  una pagina, due versioni scelte da `useIsStaff()`, il testo in `it.ts` come
+  `guide.staff.sections` e `guide.tenant.sections`. Racconta il ciclo — un immobile, un
+  contratto, un invito, gli addebiti, gli incassi — e l'altro lato per chi abita. Le
+  sezioni si chiamano con `nav.*` e non con una copia: `nav` è diventato una costante
+  fuori dal catalogo, e un test lo verifica. Si apre dal menù dell'account («Come si
+  usa», `nav.guide`) e dalla schermata senza organizzazione;
+- **il riepilogo vuoto è il primo accesso**: tre gesti nell'ordine in cui si fanno —
+  registra un immobile, redigi un contratto, invita chi abita — e il rimando alla guida.
+  Lo stesso `Empty`, con un `action` che è un `<ol>` di tre. Per chi abita l'equivalente
+  è il vuoto degli addebiti, che dice chi li emette e che cosa arriverà, con lo stesso
+  rimando;
+- **il primo test del riepilogo**, `features/dashboard/DashboardPage.test.tsx`;
+- **due stringhe false trovate contando**: `/pagamenti` usava come vuoto dell'elenco
+  «Nessun movimento su *questo addebito*», che è della scheda dell'addebito; e la
+  scansione di una bolletta diceva a chi abita «la lettura parte quando ne carichi una»,
+  cosa che lui non può fare.
+
+### Il piano aveva una premessa sbagliata, ed era nella tabella delle verifiche
+
+«5 usi su 22 con un `hint`, uno solo con un `action`» era falso il giorno in cui è stato
+scritto: i `hint` erano **13** e gli `action` **4**, aggiunti fra il 4 e il 7 settembre e
+mai contati. La riga si è emendata nella tabella prima di cominciare, com'è la regola. Non
+ha cambiato una decisione — i due livelli, gli stati vuoti e la pagina, restano — ma ha
+cambiato la natura di `G1`: da «riempire 22 vuoti» a «riempirne 9 e rileggere gli altri
+13», ed è nella rilettura che sono uscite le due stringhe false e i tre elenchi filtrati
+che il piano non nominava. È la stessa lezione della 7: *«verificato e non dedotto»* vale
+solo se si è contato, e un numero nella tabella senza il comando che lo ha prodotto è
+un'affermazione.
+
+### Il piano aveva una seconda premessa sbagliata, e questa ha cambiato una riga di progetto
+
+«La rotta dentro il guscio» per `/guida` non poteva funzionare con l'altro requisito
+dello stesso passo, il collegamento dalla schermata senza organizzazione: `AppShell` rende
+`NoOrganizationScreen` **al posto** dell'`Outlet` per ogni rotta quando le organizzazioni
+sono zero, quindi una guida dentro il guscio da lì non si sarebbe mai aperta. La rotta sta
+**fuori**, fra le rotte autenticate accanto al guscio, con il proprio confine di
+`Suspense` e un rimando a `/` in fondo — che è del ruolo e porta ciascuno dove atterra. La
+forma è esattamente quella di `PrivacyPage`, che il piano indicava: una pagina lunga
+senza navigazione. L'alternativa — un'eccezione per `/guida` dentro il guscio — avrebbe
+reso la barra laterale con zero organizzazioni, che è lo stato che il guscio
+deliberatamente non ha.
+
+### Decisioni prese eseguendo
+
+- **Il vuoto di un filtro non offre il gesto.** «Registra una bolletta» sotto «Niente che
+  corrisponda ai filtri» direbbe che la via è registrarne una, mentre la via è togliere il
+  filtro. Il gesto resta nell'intestazione della pagina, che non cambia;
+- **le segnalazioni partono filtrate**, con «Solo quelle aperte» spuntato, quindi il primo
+  schermo di chi non ne ha mai aperta una è il vuoto del filtro e non quello della sezione.
+  Si è seguita la trappola del piano — il testo dice dove stanno le altre — e il gesto
+  «Segnala un guasto» resta come `action` per entrambi i ruoli, perché è anche il primo
+  schermo; la sezione la spiega il sottotitolo, che c'è già;
+- **`nav` fuori dal catalogo.** `it` è un oggetto letterale e non può riferirsi a sé:
+  perché `guide.*.sections[].title` sia `nav.dashboard` e non `'Riepilogo'`, le voci
+  stanno in una costante sopra, e `it.nav` la include. Il test «ogni sezione si chiama
+  come una voce della navigazione» confronta i valori e non i riferimenti — una copia
+  identica passa, una copia divergente no — ed è quello che serve: il difetto è la
+  divergenza, non la copia;
+- **«in alto a destra» non esisteva.** La prima stesura della guida diceva che il menù
+  dell'account sta in alto a destra; sullo schermo largo sta in fondo alla barra laterale,
+  in alto solo dal telefono. Visto con gli occhi nel giro, non dai test: una stringa che
+  descrive l'interfaccia è verificabile solo guardandola;
+- **l'invito lo si nomina come lo chiama la pagina di accesso**: «Registrati», che porta a
+  `/invito`; dentro sessione la voce del menù è «Ho un codice d'invito». La guida usa le
+  due parole nei due posti, e non un nome di comodo;
+- **il riepilogo non ha un ramo sul ruolo**, e il criterio di fine del piano — «il gesto
+  assente per chi non è staff» — lo presupponeva. È la **rotta** a essere dello staff
+  (`App.tsx`: per chi abita `/` rimanda agli addebiti), e quel confine lo prova già il test
+  del guscio. Il test nuovo prova ciò che il riepilogo mostra a chi ci arriva: i tre gesti
+  nell'ordine, i tre indirizzi, il rimando. Il gesto assente per chi abita è provato sugli
+  addebiti, che sono il suo primo schermo.
+
+### Verificato al contrario
+
+Ogni test nuovo è stato rimesso sul difetto e guardato cadere:
+
+- il gesto offerto a tutti sugli addebiti (`isStaff &&` tolto dall'`action`): il test
+  dell'inquilino cade con `expected document not to contain element, found <a`;
+- il vuoto filtrato che spiega la sezione (ramo del filtro tolto dal `hint`):
+  `Unable to find an element with the text: /i filtri sono attivi/i`;
+- il ruolo scambiato nella guida (`isStaff ? t.guide.tenant : t.guide.staff`): tre test
+  su quattro cadono, `Unable to find role="heading" and name "Immobili"` per lo staff e
+  `… name "Spese"` per chi abita e per chi non ha ruolo;
+- un titolo copiato che diverge (`title: 'Spese di casa'` al posto di `nav.expenses`):
+  `expected [ 'Riepilogo', 'Immobili', …(11) ] to include 'Spese di casa'`;
+- i passi del riepilogo in ordine sbagliato (secondo e terzo scambiati):
+  `expected [ 'Registra un immobile', …(2) ] to deeply equal […]`; e il rimando alla
+  guida tolto: `Unable to find an accessible element with the role "link" and name
+  "Leggi come si usa"`.
+
+Un'asserzione negativa ha avuto bisogno di un'attesa esplicita: il ruolo arriva con il
+rinnovo, e il vuoto può rendere un istante **prima** — letto in quell'istante, «il gesto
+non c'è per chi abita» passerebbe anche se il gesto fosse offerto a tutti. I test
+aspettano il rinnovo prima di negare, e il test dello staff è stato il primo a cadere per
+questa ragione, con la versione di chi abita sotto gli occhi.
+
+### Che cosa è stato provato a mano
+
+Su porte a parte — Postgres su `55432`, API su `8090`, client su `5174` — con un invito
+da proprietario emesso dallo script: `/invito` da fuori sessione, il codice, il form
+senza email, il `409` che fa comparire il nome dell'organizzazione, l'ingresso **sul
+riepilogo vuoto con i tre gesti** e il rimando; la guida nella versione di chi
+amministra, aperta dal rimando e dal menù dell'account, con «Come si usa» accanto a «Il
+mio account»; i vuoti di addebiti, pagamenti, segnalazioni e bollette per lo staff; una
+bolletta con `?stato=` che dice «Niente che corrisponda ai filtri». Poi, da un immobile,
+un contratto e un invito costruiti dall'API, l'ingresso di un'inquilina **sugli addebiti
+vuoti** che dicono chi li emette, la guida nella versione di chi abita, i vuoti di spese,
+bollette e pagamenti, la scheda del contratto con gli addebiti e gli allegati vuoti, e il
+rimando «Torna all'applicazione» che porta agli addebiti. Nessun errore in console oltre
+ai `401` attesi. Non visto con gli occhi: il collegamento alla guida dalla schermata senza
+organizzazione, perché nessun account di prova poteva uscire dalla propria — è un `Link`
+identico a quelli sopra, e il test del guscio rende quella schermata.
+
+**L'Invio nel campo del codice su `/invito` resta da provare con una tastiera vera**: il
+browser pilotato manda eventi non fidati, e il poscritto della 8 lo aveva già detto.
+
+### Che cosa resta aperto
+
+- il riepilogo con un immobile e nessun contratto mostra i nove numeri a zero, e i «tre
+  passi» non ci sono più: la condizione di vuoto è `properties_count === 0 &&
+  active_leases === 0`. La guida e i vuoti di immobili e contratti coprono il passo
+  successivo, ma il primo schermo dopo il primo gesto è meno parlante del primo schermo
+  assoluto. Si riapre se un giro con una persona esterna lo trova;
+- «Bozza» a chi abita (`R35`, dissolta in `R31`) non è stata toccata: la guida dice «è in
+  bozza, e lo vedi lo stesso», che è la lettura «va bene così» resa esplicita invece che
+  decisa. Una parola diversa è un'altra stringa, quando qualcuno la chiederà.

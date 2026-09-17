@@ -165,7 +165,8 @@ dell'API dietro un reverse proxy.
 | **L'informativa sulla privacy**, raggiungibile **senza sessione**: la si legge prima di consegnare i propri dati | completo per la 5-quater |
 | **Il proprio account** (`/account`): nome, telefono e lingua si correggono; l'**email si mostra e non si modifica, con una riga che dice perché**, perché un campo disabilitato senza spiegazione si legge come un difetto; la password si cambia con l'avviso della revoca **prima** del bottone; l'uscita da un'organizzazione dice che cosa resta dopo, e non si offre per la propria | completo per la sezione 6 |
 | **La selezione in tabella e il verbo in blocco**, una volta nella primitiva: un `Set` di identificatori potato per intersezione a ogni render, «seleziona tutto» che è *le righe caricate*, e un giro di N chiamate **in sequenza** con tre esiti per riga — fatta, era già così (i `409` di transizione **e i `404`**), non fatta con il motivo accanto e la riga ancora selezionata. Sette elenchi, un verbo ciascuno, **nessun «Elimina»**; la riga singola è un giro di lunghezza uno con la stessa conferma | completo per la sezione 7 |
-| I tre stati — caricamento, vuoto, errore — come componenti di prima classe | completo |
+| I tre stati — caricamento, vuoto, errore — come componenti di prima classe; **ogni vuoto spiega**: che cos'è la sezione, che cosa la riempie, chi la riempie per chi abita, con il gesto solo per chi può farlo; i vuoti **filtrati** dicono di esserlo | completo per la sezione 9 |
+| **La guida** (`/guida`): una pagina, due versioni scelte dal ruolo, le sezioni con i nomi della navigazione; dal menù dell'account e dalla schermata senza organizzazione. **Il riepilogo vuoto è il primo accesso**: tre gesti nell'ordine e il rimando alla guida | completo per la sezione 9 |
 | Dashboard: **nove** numeri, ognuno collegato al posto dove si agisce | completo |
 | Immobili: elenco a cursore, dettaglio, creazione, `PATCH` parziale, archiviazione | completo per la fetta 1 |
 | Stanze e residenti | completo per la fetta 1 |
@@ -362,8 +363,70 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**`G1` della [9](#piano-sezione-9): gli stati vuoti spiegano.** `G0`, il giro a mano
-della 8, è fatto e ha reso: un difetto bloccante sul percorso principale che 478 + 129
+**La [sezione 10](#piano-sezione-10): tre chiusure, poi il primo deploy.** Con la
+[9](11-piani-conclusi.md#esito-sezione-9), conclusa il 17 settembre 2026, finisce la lista
+delle sezioni decise dopo il collaudo. Il passo dopo non è una sezione di prodotto: è la
+decisione se fare il [primo deploy](07-operazioni.md#il-primo-deploy--runbook) con i
+mezzi che ci sono, e che cosa debba precederlo. **La decisione è sì**, ed è presa qui con
+le sue ragioni.
+
+*Perché sì, adesso.* Dalla 5-quater il deploy era «rinviato per mancanza di mezzi e non di
+priorità», e i mezzi — una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC — vanno
+procurati da chi possiede il progetto, non costruiti: nessuna sezione li fa arrivare. Nel
+frattempo ogni sezione ha reso meno della precedente, e le ultime tre sono state rifinitura
+su schermate che nessun estraneo ha ancora visto. Il criterio di fine del runbook — *aprire
+il prodotto dal telefono, in 4G* — è l'unica prova che il progetto non può darsi da solo,
+ed è la prova che vale di più: la 6, la 7 e la 8 hanno mostrato che i test non bastano e che
+un giro a mano rende in un'ora quanto una sezione, e un giro dal telefono di una persona
+esterna è il giro che nessuna sezione sostituisce.
+
+*Che cosa precede il deploy, e che cosa no.* Sei voci di [12](12-da-fare.md) erano
+candidate; se ne prendono tre, per un criterio solo — **ciò che il primo deploy incontra da
+sé, con un proprietario e i suoi inquilini, nel primo mese** — e le altre tre si lasciano
+con la ragione scritta:
+
+- **`R50` prima, senza discussione**: `/ready` sta alla radice del router e il proxy
+  inoltra solo `/api/v1/*`, quindi il passo 4.1 del runbook — `curl …/api/v1/ready` — non
+  può riuscire, ed è il criterio con cui il deploy si dichiara riuscito. Due righe in
+  `routes/health.rs`;
+- **`R51` prima**: un `refresh` fallito per rete al caricamento manda alla pagina di
+  accesso senza dirlo. Sul telefono in 4G — che è il criterio di fine — è il caso normale,
+  non quello raro, e la prima persona esterna lo incontrerebbe al primo tunnel. `ApiError.isOffline`
+  esiste già; manca il ramo nel ripristino;
+- **`R46` prima**: chi esce da un'organizzazione continua a leggerne i dati per i quindici
+  minuti del suo access token, e dopo ADR-053 è il caso di **ogni** inquilino che esce. Nel
+  primo mese uscire è raro — il contratto in vigore lo vieta — ma è un'esposizione di dati
+  nota prima che dentro ci siano i dati di qualcuno, e la via scelta è una migration che
+  chiude al livello della RLS: la cosa più economica da fare *prima* e la più cara da
+  spiegare *dopo*;
+- **`R48` dopo**: chi ha già un account e nessuna organizzazione non può diventare
+  proprietario. Nel primo mese c'è un proprietario, che è chi possiede il progetto, e i
+  suoi inquilini: il caso non si presenta. È una terza rotta e un ramo nel form, e va
+  pianificato quando qualcuno lo chiede;
+- **`R49` dopo**: il secondo browser con un'organizzazione lasciata altrove parte con un
+  `X-Org-Id` morto, e l'elenco lo corregge da sé. È un lampo, non un vicolo cieco;
+- **`R42` dopo**: la finestra scorrevole dei trenta giorni è la forma comune, è documentata,
+  e il «Ricordami» è un ADR prima del codice — una decisione sulla sicurezza che non si
+  prende di fretta per fare un deploy.
+
+Il piano della 10 è [sotto](#piano-sezione-10), con le premesse verificate contro il
+codice. Quando è verde, il runbook si esegue com'è scritto, e **l'esito del deploy si
+scrive in [11](11-piani-conclusi.md)** come quello di una sezione: che cosa ha retto, che
+cosa no, e il giro dal telefono con le sue osservazioni, riga per riga, mentre lo si fa.
+
+*Che cosa la 9 lascia da portarsi dietro.* Due premesse della sua tabella erano sbagliate —
+un conteggio mai fatto e una rotta che non poteva stare dove il piano la metteva — e
+nessuna ha cambiato una decisione; una stringa che descriveva l'interfaccia («in alto a
+destra») era falsa e solo il giro l'ha vista. **L'Invio nel campo del codice su `/invito`
+resta da provare con una tastiera vera**, dal poscritto della 8.
+
+---
+
+Quanto segue è la storia del «prossimo passo» com'era prima, sezione per sezione, e resta
+perché le sue lezioni sono citate da altri documenti.
+
+`G0`, il giro a mano
+della 8, è stato fatto e ha reso: un difetto bloccante sul percorso principale che 478 + 129
 test verdi non vedevano, in un'ora. Il rendimento di un giro resta la misura più alta di
 questo progetto — sei voci in mezza giornata contro le quattro di cinque sezioni di
 lettura, e ora una pagina bianca dietro tre revisioni — e `mailpit` su `localhost:8025`
@@ -394,8 +457,8 @@ decisione; entrambe hanno cambiato una riga di codice. La lezione è sul metodo:
 non solo che cosa il dominio fa quando ce l'ha.
 
 **La sezione 8 è [conclusa](11-piani-conclusi.md#esito-sezione-8)** il 16 settembre 2026, e la
-**9 è [pianificata](#piano-sezione-9)**: il suo primo passo è il giro a mano della 8, che
-non è stato fatto. La 8 è stata la prima il cui primo passo non era codice: un ADR. `R9` tocca chi può registrarsi e come, ha una
+**9 è [conclusa](11-piani-conclusi.md#esito-sezione-9)** il 17: il suo primo passo è stato
+il giro a mano della 8. La 8 è stata la prima il cui primo passo non era codice: un ADR. `R9` tocca chi può registrarsi e come, ha una
 faccia di sicurezza, e le sue quattro domande hanno risposte che si escludono a vicenda —
 scriverne una nel codice prima che sia registrata significherebbe scoprire nel diff che
 si era scelto.
@@ -404,13 +467,12 @@ si era scelto.
 gli occhi e cinque no, e la rete che cade a metà del giro è coperta da un test e non da un
 dito. È mezz'ora, non una sezione.
 
-Il deploy resta **rinviato in fondo**, ed è
-un rinvio per mancanza di mezzi e non di priorità: il
+Il deploy era **rinviato in fondo**, per mancanza di mezzi e non di priorità: il
 [runbook](07-operazioni.md#il-primo-deploy--runbook) è scritto, gli artefatti sono validi
 per quello che si può validare senza una macchina, e servono una VPS, un dominio, un relay
-SMTP con SPF, DKIM e DMARC e delle credenziali che oggi non ci sono. Resta l'ultima voce
-dell'ordine, con il suo criterio di fine intatto: *aprire il prodotto dal telefono, in
-4G*.
+SMTP con SPF, DKIM e DMARC e delle credenziali. **Dalla 9 è il prossimo passo**, con le
+tre chiusure della [10](#piano-sezione-10) davanti, e il suo criterio di fine intatto:
+*aprire il prodotto dal telefono, in 4G*.
 
 **Che cosa cambia nel criterio d'ordine, e va detto.** Le sezioni 6-9 dovevano venire dopo
 il mese con un proprietario vero, e *quale per prima lo avrebbe detto quel mese*. Quel mese
@@ -557,186 +619,127 @@ Resta la decisione che continua a bloccare più valore di ogni riga di codice, e
 quella qui sotto: **il fornitore di OCR**.
 
 
-<a id="piano-sezione-9"></a>
+<a id="piano-sezione-10"></a>
 
-## Piano — Sezione 9: spiegare come si usa il sito
+## Piano — Sezione 10: tre chiusure prima del primo deploy
 
-Pianificata il **16 settembre 2026**, subito dopo l'esito della 8 e sotto la regola che
-una sezione conclusa pianifica la successiva. Chiude `R8`. È l'ultima delle sezioni
-decise dopo il collaudo, ed era ultima **apposta**: scrivere spiegazioni su schermate
-che cambiano significa riscriverle, e fino alla 8 cambiavano. Ora l'ingresso, il
-guscio e i moduli hanno la forma che avranno al primo deploy.
+Pianificata il **17 settembre 2026**, subito dopo l'esito della 9 e sotto la regola che
+una sezione conclusa pianifica la successiva. Chiude `R50`, `R51` e `R46`; **non** chiude
+`R48`, `R49` e `R42`, e il perché di ogni scelta è nel [prossimo passo](#prossimo-passo-suggerito),
+che è dove la decisione sul deploy è scritta. Questa sezione è ciò che deve essere verde
+**prima** di eseguire il [runbook](07-operazioni.md#il-primo-deploy--runbook); il runbook
+stesso non è un passo di questa sezione, perché non è codice e non ha un test — ha un
+criterio di fine, e il suo esito si scrive in [11](11-piani-conclusi.md) quando è fatto.
 
-**Si esegue in una sola conversazione**, come le sezioni 1–7: il metodo degli agenti è
-stato [ritirato](11-piani-conclusi.md#piano-sezione-8) con la 8. Resta la disciplina che
-quel metodo aveva reso visibile: ogni test provato al contrario prima di consegnarlo,
-con l'assert caduto scritto nell'esito.
+**Si esegue in una sola conversazione**, come la 9. Ogni test nuovo provato al contrario
+prima di consegnarlo, con l'assert caduto scritto nell'esito.
 
 ### Che cosa esiste davvero, verificato e non dedotto
 
 | Premessa | Verifica |
 |---|---|
-| Non esiste nessuna spiegazione del prodotto nel client | vero: `grep -n "help\|aiuto\|guida" apps/web/src/i18n/it.ts` non trova niente; la navigazione (`nav` in `it.ts`, righe 284–297) porta solo i nomi delle sezioni |
-| Gli stati vuoti esistono e sono progettati | vero: `Empty` in `apps/web/src/components/state/index.tsx` (riga 56) accetta `title`, `hint`, `action`; è usato **22 volte** in `features/` |
-| …ma quasi tutti sono un titolo e basta | vero: 5 usi su 22 portano un `hint` (`property.emptyHint` due volte, `ticket.threadEmptyHint`, `ocr.none`, `lease.activateExplain`), **uno solo** porta un `action`. «Nessun immobile» senza dire che cosa sia un immobile qui e che cosa succeda registrandolo |
-| Esiste un precedente di pagina lunga nel client | vero: `features/legal/PrivacyPage.tsx`, con il testo in `it.ts` come `privacy.sections: [{title, body}]` (riga 159) — è la forma da riusare, non una nuova |
-| Il primo accesso di un proprietario atterra sul riepilogo vuoto | vero: `DashboardPage.tsx:36` mostra `Empty` con `t.dashboard.empty` e `t.property.emptyHint` quando `properties_count === 0 && active_leases === 0` |
-| Il primo accesso di un inquilino atterra sugli addebiti | vero: `TENANT_HOME = '/addebiti'` (`shell.tsx:104`), e un inquilino appena entrato con un contratto senza addebiti vede «Nessun addebito» — una schermata che non dice **perché è lì** né che cosa arriverà |
-| Chi non ha un'organizzazione vede una schermata che spiega | vero dalla 8: `NoOrganizationScreen` dice che cosa si è e che si entra da un invito |
-| Il giro a mano della 8 non è stato fatto | vero al momento del piano; **fatto** il 16 settembre come `G0`, [poscritto](11-piani-conclusi.md#poscritto-sezione-8) |
-
-### La decisione: dove sta la spiegazione
-
-`R8` lascia aperto *dove*: primo accesso guidato, pagina d'aiuto, testi contestuali, o
-una combinazione. Si decide qui, e non con un ADR — non è una decisione di modello né
-di sicurezza — ma con le alternative scritte.
-
-**Scelto: gli stati vuoti spiegano, e una pagina sola raccoglie.** Due livelli, nell'ordine:
-
-1. **Ogni stato vuoto dice tre cose**: che cos'è questa sezione (una riga), che cosa
-   la riempie (il gesto, con il bottone se chi guarda può farlo), e — per chi abita —
-   chi la riempirà al posto suo. È il posto più economico perché è già progettato
-   (regola 23), è dove la domanda «e adesso?» nasce, e non richiede navigazione. Il
-   `hint` esiste, l'`action` esiste: si riempiono;
-2. **una pagina `/guida`**, nella forma di `PrivacyPage`: un titolo per sezione della
-   navigazione, tre-cinque righe ciascuna, **due versioni** — per chi amministra e per
-   chi abita — scelte dal ruolo, non due pagine. Raggiungibile dal menu dell'account
-   (dove stanno le cose che si fanno su di sé) e dalla schermata senza organizzazione.
-   Il testo vive in `it.ts` come `guide.staff.sections` e `guide.tenant.sections`, con
-   la stessa forma di `privacy.sections`.
-
-*Alternativa scartata: il primo accesso guidato* (un tour a passi sopra l'interfaccia).
-È la più cara — stato «già visto» da persistere per utente, un componente di overlay,
-test per ogni passo — e la meno utile: il proprietario nuovo vede una schermata vuota,
-e una schermata vuota che spiega sé stessa è già un primo accesso guidato senza
-overlay. Si riapre se un giro a mano con una persona esterna dice che non basta.
-
-*Alternativa scartata: i tooltip sui bottoni.* Spiegano un gesto, non una sezione, e
-non si vedono dal telefono.
-
-*Alternativa scartata: il manuale in `docs/`.* Chi usa il prodotto non apre il
-repository; e la regola 18 dice che il testo visibile sta in `it.ts`, non in un
-Markdown servito a parte.
-
-**Ciò che la pagina non è:** non è un elenco di funzioni. Racconta un ciclo — si
-registra un immobile, si fa un contratto, si invita chi abita, arrivano gli addebiti,
-si registrano gli incassi — e per chi abita l'altro lato dello stesso ciclo. Il
-glossario di [01](01-prodotto.md#glossario) è la fonte dei nomi.
+| Le sonde stanno alla radice del router, e ogni altra rotta porta il prefisso per intero | vero: `crates/api/src/routes/health.rs` monta `/health` e `/ready`; le altre rotte scrivono `"/api/v1/…"` per esteso (`routes/me.rs:31`), non c'è un `nest("/api/v1")` in `crates/api/src/lib.rs` — quindi aggiungere le due rotte con il prefisso è **due `.route()` in più nello stesso `router()`**, non uno spostamento |
+| Il proxy inoltra solo `/api/v1/*` | vero: `ops/web/Caddyfile:18`, `handle /api/v1/*`; tutto il resto va al file server, che risponde `index.html` con `200` a qualunque percorso |
+| Il runbook prova `…/api/v1/ready` | vero: [07](07-operazioni.md#il-primo-deploy--runbook), passo 4.1, riga 508 |
+| Il ripristino della sessione tratta la rete caduta come «nessuna sessione» | vero: `apps/web/src/app/session.tsx:117`, `.catch(() => undefined)` sul `store.refresh()` dell'effetto di ripristino; `App.tsx:131` mostra `Loading` finché `restoring`, poi le rotte da fuori sessione se `session` è nullo |
+| Il fallimento per rete è già distinguibile da un `401` | vero: `store.refresh()` in `apps/web/src/api/session.ts:369` lancia `offlineError()` **senza** cancellare la sessione, e solo su `!response.ok` fa `this.clear()`; `ApiError.isOffline` è in `api/problem.ts:67`, e il guscio lo usa già per il terzo stato (`shell.tsx:164`, `ErrorState` con `onRetry`) |
+| Il ramo dell'inquilino delle due funzioni di accesso non guarda la membership | vero: `migrations/0014_rls.sql:53` (`can_access_lease`) e `:72` (`can_access_property`) passano da `lease_parties.user_id = app.current_user_id()` senza `is_org_member`; **nessuna migration successiva le ridefinisce** (`grep -c 'FUNCTION app.can_access_lease' migrations/*.sql` dà 1, in `0014`) — quindi la migration nuova le riscrive per intero con `CREATE OR REPLACE` |
+| `is_org_member` esige una membership attiva | vero: `0014_rls.sql:28`, passa da `member_role`, che filtra `status = 'active'` e `deleted_at IS NULL` (`:17`); `LeaveOrganization` (sezione 6) tocca `org_members` e non `lease_parties` |
+| Un test fa un login «di comodo» per non vedere il difetto | vero: `crates/api/tests/http_contract.rs:2719`, dentro `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back`, con il commento che lo dichiara; la voce `R46` dice di toglierlo quando si chiude |
+| I test Rust sono 478, quelli del client 138 | vero, esito della 9 |
 
 ### Decomposizione
 
-##### `G0` — Il giro a mano della sezione 8 · **fatto** il 16 settembre 2026
+##### `D1` — `R50`: le sonde anche sotto `/api/v1`
 
-Esito nel [poscritto della 8](11-piani-conclusi.md#poscritto-sezione-8): un difetto
-bloccante che nessun test vedeva (`/invito` da fuori sessione era una pagina bianca —
-`useQueryClient()` fuori da `QueryProvider`, e il test la avvolgeva in un provider che il
-prodotto non ha), una stringa falsa, `R50` e `R51` in [12](12-da-fare.md). Entrambi i
-difetti corretti e provati al contrario prima di `G1`. L'Invio nel campo del codice non
-è verificabile con il browser pilotato: **va provato con una tastiera vera** in `G1`.
-Il testo del passo, com'era:
+In `routes/health.rs`, le stesse due funzioni montate anche su `/api/v1/health` e
+`/api/v1/ready`; le rotte alla radice **restano**, perché l'`healthcheck` del container
+parla all'API direttamente e non passa dal proxy. La riga della tabella delle sonde in
+[07](07-operazioni.md) dice che le due forme sono equivalenti e perché esistono entrambe.
 
-Con il database svuotato (`just down-hard`, `just setup`) e `ops/dev/seed-walkthrough.py`
-per il mondo di sfondo:
+Alternativa scartata: un `handle /ready` nel Caddyfile. Sposta la conoscenza delle sonde
+nel proxy, che oggi conosce solo il prefisso, e lascia `…/api/v1/ready` — la forma che il
+runbook usa — a rispondere `404`.
 
-1. `./ops/dev/issue-owner-invitation.sh` per un indirizzo nuovo; `/invito` da fuori
-   sessione; il codice; il form senza email; il `409` che fa comparire il nome
-   dell'organizzazione; l'ingresso sul riepilogo vuoto;
-2. dallo stesso account, un immobile, un contratto, un invito; in un altro browser
-   `/invito` con quel codice, il form, l'ingresso **da inquilino** sugli addebiti,
-   nessuna organizzazione propria nel menu;
-3. l'inquilino esce dall'organizzazione (`/account`); la schermata «nessuna
-   organizzazione», nessuna navigazione, la riprova con `/organizations` staccando la
-   rete, l'uscita;
-4. `/registrazione` da fuori sessione: il rimando, non un form;
-5. un token inesistente, e lo stesso token usato due volte: `401` identici.
+**Criterio di fine:** un test in `crates/api/tests/` che `GET /api/v1/ready` risponde come
+`GET /ready` (stesso stato, stesso corpo), provato al contrario togliendo la rotta nuova
+(`404 endpoint.not_found`).
 
-Ciò che non torna entra in [12](12-da-fare.md) **prima** di cominciare `G1`: è la
-regola che la 6 e la 7 hanno pagato.
+##### `D2` — `R51`: un `refresh` fallito per rete non è «nessuna sessione»
 
-##### `G1` — Gli stati vuoti spiegano
+In `session.tsx`, l'effetto di ripristino distingue: `ApiError` con `isOffline` diventa
+uno stato `restoreError` esposto dal contesto, tutto il resto resta «nessuna sessione»
+com'è. In `App.tsx`, prima del ramo `!session`: se `restoreError`, un `ErrorState` a
+schermo intero con `onRetry` che rilancia il ripristino — la stessa forma del terzo stato
+del guscio. Niente «Esci»: senza rete un logout non arriva al server, e un bottone che
+fallisce è peggio di uno che manca.
 
-Per ognuno dei 22 usi di `Empty`: un `hint` che dica che cos'è la sezione e che cosa la
-riempie, e l'`action` con il gesto dove chi guarda può farlo (`useIsStaff()`, ADR-042:
-è una scelta di che cosa offrire). L'inquilino legge chi lo farà per lui («Il
-proprietario registra qui le bollette; quando ne arriva una la vedi in questa lista»).
-Le stringhe in `it.ts`, una per stato, accanto al titolo che già esiste. **Niente
-componenti nuovi**: `Empty` ha già i tre slot.
+Trappola: il `finally` che mette `restoring` a `false` **deve restare** anche sul ramo
+dell'errore, altrimenti la riprova non ha un caricamento da mostrare e lo schermo salta
+dall'errore al contenuto. E la riprova rimette `restoring` a `true` prima di rilanciare.
 
-Trappola: gli stati vuoti *filtrati* — «nessuna segnalazione aperta» con `showAll`
-falso, «nessun addebito da saldare» con `outstanding` — non sono vuoti della sezione,
-sono vuoti del filtro, e il testo deve dirlo («non c'è niente da fare qui: le chiuse
-sono sotto *tutte*») invece di spiegare la sezione a chi la conosce già.
+**Criterio di fine:** un test che rende `App` (o `SessionProvider` con una sonda, se `App`
+costa troppo) con la `fetch` di `/auth/refresh` che lancia `TypeError('Failed to fetch')`:
+il form di accesso **non** compare, compare l'errore con «Riprova»; poi la rete torna, un
+clic su «Riprova», e la sessione c'è. Al contrario, rimettendo `.catch(() => undefined)`:
+il form di accesso compare.
 
-**Criterio di fine:** nessun `Empty` senza `hint`; un test per schermata nuova non
-serve — sono stringhe — ma i test esistenti che cercano il titolo del vuoto restano
-verdi, e uno prova che l'`action` **non** compare per chi non è staff.
+##### `D3` — `R46`: la membership nel ramo dell'inquilino, al livello della RLS
 
-##### `G2` — La pagina `/guida`
+Migration `0041_tenant_access_requires_membership.sql`: `CREATE OR REPLACE` di
+`app.can_access_lease` e `app.can_access_property`, identiche a `0014` salvo
+`AND app.is_org_member(l.org_id)` nel ramo `EXISTS` dell'inquilino (in
+`can_access_property` l'organizzazione è `p.org_id`, e conviene usarla). Le funzioni sono
+`SECURITY DEFINER` e `is_org_member` anche: il costo è una lettura in più di
+`org_members` per riga, sull'indice che `member_role` usa già.
 
-`features/guide/GuidePage.tsx` nella forma di `PrivacyPage`; `guide.staff` e
-`guide.tenant` in `it.ts`, con `sections: [{title, body}]`; la versione scelta da
-`useIsStaff()`; la rotta dentro il guscio; il collegamento dal menu dell'account
-(`shell.tsx`, accanto a «Il mio account») e da `NoOrganizationScreen` (dove la versione
-è quella di chi abita: chi non ha un'organizzazione aspetta un invito). Una sezione per
-voce della navigazione, più «Come si entra» (l'invito, i due generi, l'email che è
-quella dell'invito) e «Il tuo account» (password, uscita da un'organizzazione, privacy).
+Alternativa scartata: rileggere la membership in `Authenticated` a ogni richiesta. Cambia
+la forma del baratto di [ADR-012](08-decisioni.md#adr-012) — il JWT non revocabile — per
+tutte le rotte, staff compreso, dove il [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6)
+mostra che le policy passano già da `member_role` e restituiscono vuoto. Il difetto è
+solo nel ramo dell'inquilino, e si chiude lì.
 
-**Criterio di fine:** un test che la pagina mostra le sezioni dello staff a uno staff e
-quelle dell'inquilino a un inquilino, provato al contrario scambiando il ruolo;
-`typecheck` e `lint` verdi, e nessuna stringa nel JSX — non c'è un lint che lo
-verifichi, lo verifica chi rilegge il diff, ed è una trappola elencata sotto.
+Le invarianti dello schema (`ops/sql/checks/schema_invariants.sql`) non guardano il corpo
+delle funzioni: nessun controllo da aggiornare, ma `./ops/ci/check-schema.sh` va comunque
+eseguito perché è la CI a dirlo.
 
-##### `G3` — Il riepilogo vuoto è il primo accesso
+**Criterio di fine:** il login «di comodo» esce dal test, e il test afferma con il **token
+vecchio** che `GET /leases` non porta più il contratto disdetto e che aprire una
+segnalazione nell'organizzazione lasciata è rifiutato — con quale codice lo dice
+l'esecuzione (la policy di inserimento nega, e il bordo HTTP lo traduce come già traduce
+un immobile non accessibile), e l'esito lo scrive. Al contrario, senza la migration: il
+contratto torna nel corpo, che è la riga di `R46`.
 
-Il `Empty` del riepilogo (`DashboardPage.tsx:36`) è il primo schermo di ogni
-proprietario nuovo: diventa il posto dove il ciclo è raccontato in tre passi con i tre
-bottoni — registra un immobile, poi un contratto, poi invita — e il collegamento alla
-guida. Non un componente di overlay: è lo stesso `Empty`, con un `action` che è un
-gruppo di tre invece di uno. Per l'inquilino l'equivalente è il vuoto degli addebiti,
-che dice perché è lì.
+##### `D4` — L'esito, le tre voci fuori da [12](12-da-fare.md), e il runbook
 
-**Criterio di fine:** il riepilogo **non ha un test** oggi (`features/dashboard/` contiene
-solo `DashboardPage.tsx`): se ne scrive uno per il vuoto con i tre gesti, provato al
-contrario con il ruolo scambiato — il gesto assente per chi non è staff.
-
-##### `G4` — L'esito, `R8` fuori da [12](12-da-fare.md), la decisione sul deploy
-
-L'esito in [11](11-piani-conclusi.md); `R8` esce; e con la 9 finisce la lista delle
-sezioni decise dopo il collaudo. Il passo dopo non è una sezione: è la decisione se
-fare il [primo deploy](07-operazioni.md#il-primo-deploy--runbook) con i mezzi che ci
-sono, e quali fra `R46`, `R48`, `R49` e `R42` debbano precederlo. Si scrive qui, come
-«prossimo passo suggerito», e non come piano.
+L'esito in [11](11-piani-conclusi.md); `R50`, `R51` e `R46` escono; la riga di `R42` in
+[04](04-sicurezza.md), se la 6 l'ha lasciata, resta com'è perché `R42` non si tocca. Poi il
+runbook, com'è scritto, e il suo esito come quello di una sezione: **le osservazioni si
+scrivono mentre lo si percorre**, non alla fine — è la mancanza che la 5-bis dichiara di sé.
 
 ### Trappole
 
-**Scrivere la guida prima del giro a mano.** `G0` viene prima perché una spiegazione
-scritta su una schermata che non funziona come si crede insegna la cosa sbagliata; la 8
-non ha avuto un giro a mano, e la 6 e la 7 hanno mostrato che i test non bastano.
+**Cercare un posto «sotto `/api/v1`» dove montarle.** Non esiste: l'autenticazione è un
+estrattore per handler (`Authenticated`), non uno strato sul prefisso, e il prefisso è
+scritto per esteso in ogni rotta. Le due rotte nuove stanno nello stesso `router()` di
+`health.rs`, senza estrattore, come le due che ci sono; una sonda che chieda un token non è
+una sonda.
 
-**Spiegare il prodotto invece della sezione.** Il `hint` di uno stato vuoto ha una riga,
-due al massimo; se serve di più, il posto è la guida, e il vuoto rimanda lì.
+**Un `ErrorState` senza `restoring`.** Vedi `D2`: lo stato di caricamento della riprova
+è la parte che si dimentica, e senza quella la riprova sembra non fare niente.
 
-**Due pagine invece di una con due versioni.** Sembra più pulito ed è il doppio dei
-collegamenti, dei test e dei posti dove il testo diverge senza che nessuno se ne
-accorga. Una pagina, il ruolo sceglie.
+**Toccare `member_role` invece delle due funzioni.** È usata da tutte le policy dello
+staff, e un cambiamento lì cambia tutto; il difetto sta nel ramo che **non** la usa.
 
-**Il testo nel JSX.** È la regola 18 e qui è dove si viola più facilmente, perché sono
-paragrafi e non etichette. `privacy.sections` mostra che i paragrafi stanno in `it.ts`
-come tutto il resto.
-
-**La formattazione a mano dei nomi.** Le sezioni della guida si chiamano come le voci
-della navigazione: `t.nav.*`, non una copia.
+**Dichiarare il codice HTTP del rifiuto prima di vederlo.** Il bordo traduce un `EXISTS`
+falso in modi diversi a seconda della rotta (`404` per una risorsa che «non è tua», `403`
+per un'azione negata): il test afferma ciò che l'esecuzione mostra, e l'esito lo scrive.
 
 ### Che cosa **non** entra
 
-- **un primo accesso guidato con overlay**: scartato sopra, riaperto solo da un giro con
-  una persona esterna;
-- **la traduzione in inglese**: decisa e rimandata da ADR-039; la guida nasce in `it.ts`
-  con le chiavi, e tradurre sarà aggiungere, non riscrivere;
-- **`R46`, `R48`, `R49`**: sono del perimetro dei ruoli, e vanno decisi nella scelta sul
-  deploy, non qui;
-- **le email di notifica** (piano in [09](#prima-degli-utenti-veri), «Le notifiche»):
-  spiegano un evento, non il sito.
+- **`R48`, `R49`, `R42`**: lasciate con la ragione nel [prossimo passo](#prossimo-passo-suggerito);
+- **il deploy stesso**: non è codice e non ha test; si esegue dopo, dal runbook;
+- **il «Ricordami»**: è `R42`, ADR prima del codice.
 
 <a id="raccolta-da-ordinare"></a>
 
