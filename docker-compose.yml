@@ -35,7 +35,7 @@ services:
   # Storage oggetti per i documenti. In produzione al suo posto c'è S3: stesso
   # protocollo, stesso adattatore, cambia l'endpoint.
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: propflow-minio
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -57,7 +57,7 @@ services:
   # un'operazione di provisioning, e darle il privilegio significherebbe darglielo
   # anche in produzione.
   minio-setup:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
