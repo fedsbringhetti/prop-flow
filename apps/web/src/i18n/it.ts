@@ -11,6 +11,29 @@
  * plurali e genere quando le lingue saranno due. Serve che i componenti non
  * conoscano il testo.
  */
+/**
+ * Le voci della navigazione, fuori dal catalogo perché la guida le **usa** come
+ * titoli delle proprie sezioni: una sezione della guida si chiama come la voce
+ * che spiega, e con una copia le due divergerebbero senza che nessuno se ne accorga.
+ */
+const nav = {
+  dashboard: 'Riepilogo',
+  properties: 'Immobili',
+  leases: 'Contratti',
+  /** Al singolare, e solo per l'inquilino: per chi abita il contratto è uno. */
+  lease: 'Contratto',
+  tickets: 'Segnalazioni',
+  bills: 'Bollette',
+  charges: 'Addebiti',
+  payments: 'Pagamenti',
+  /** Solo per chi abita: il denaro fra coinquilini non riguarda chi amministra. */
+  expenses: 'Spese',
+  main: 'Navigazione principale',
+  account: 'Il mio account',
+  /** Nel menù dell'account, con le cose che si fanno su di sé. */
+  guide: 'Come si usa',
+} as const
+
 export const it = {
   app: {
     name: 'PropFlow',
@@ -286,20 +309,98 @@ export const it = {
     leaveLastOwnerShort: 'La tua organizzazione',
   },
 
-  nav: {
-    dashboard: 'Riepilogo',
-    properties: 'Immobili',
-    leases: 'Contratti',
-    /** Al singolare, e solo per l'inquilino: per chi abita il contratto è uno. */
-    lease: 'Contratto',
-    tickets: 'Segnalazioni',
-    bills: 'Bollette',
-    charges: 'Addebiti',
-    payments: 'Pagamenti',
-    /** Solo per chi abita: il denaro fra coinquilini non riguarda chi amministra. */
-    expenses: 'Spese',
-    main: 'Navigazione principale',
-    account: 'Il mio account',
+  nav,
+
+  /**
+   * La guida: una pagina, due versioni scelte dal ruolo. Racconta un ciclo — un
+   * immobile, un contratto, un invito, gli addebiti, gli incassi — e per chi abita
+   * l'altro lato dello stesso ciclo; non è un elenco di funzioni. Le sezioni si
+   * chiamano come le voci di `nav`, e i paragrafi stanno qui e non nel JSX, come
+   * `privacy.sections`.
+   */
+  guide: {
+    title: 'Come si usa PropFlow',
+    entry: 'Come si entra',
+    back: 'Torna all’applicazione',
+    /** Dalla schermata senza organizzazione: chi aspetta un invito legge la
+     *  versione di chi abita. */
+    fromNoOrganization: 'Come funziona PropFlow',
+    staff: {
+      subtitle:
+        'Il giro completo di chi amministra: un immobile, un contratto, un invito, gli addebiti, gli incassi.',
+      sections: [
+        {
+          title: 'Come si entra',
+          body: 'Si entra da un invito: chi gestisce questa installazione ti ha mandato un codice. Dalla pagina di accesso, «Registrati» lo chiede: lo incolli, scegli nome e password, e la tua organizzazione nasce con te. L’email è quella a cui l’invito è arrivato, e non si cambia. Da lì in poi si entra con email e password; se la password non la ricordi, «Recupera la password» ti manda un codice.',
+        },
+        {
+          title: nav.dashboard,
+          body: 'È la prima schermata, e dice che cosa richiede attenzione adesso: quanti immobili e contratti attivi, i canoni attesi al mese, l’insoluto, gli addebiti scaduti, le segnalazioni aperte, i contratti che finiscono entro novanta giorni, le bollette da rivedere. Resta vuota finché non c’è un immobile: ogni numero parte da lì.',
+        },
+        {
+          title: nav.properties,
+          body: 'Un immobile è il punto di partenza: si registra con un’etichetta, l’indirizzo e il tipo. Le stanze servono solo se affitti per stanza — ogni contratto potrà poi riguardarne una — e se non ne aggiungi il contratto riguarderà l’immobile intero. Nella scheda stanno gli allegati (planimetrie, certificazioni, verbali) e chi ci abita. Un immobile non si cancella: si archivia, e la traccia resta.',
+        },
+        {
+          title: nav.leases,
+          body: 'Un contratto lega un immobile, o una stanza, a chi ci abita per un periodo e un canone. Nasce in bozza: aggiungi le parti — le persone che abiteranno lì, con le quote se il canone si divide — e per ciascuna generi un invito, che è un codice da consegnare; quando lo usa, la persona entra nella tua organizzazione come inquilino e vede il proprio contratto. Poi lo attivi, e da quel momento il periodo è occupato. Si disdice ciò che è in corso e si annulla ciò che non è mai entrato in vigore: sono due cose diverse, e i due bottoni lo dicono.',
+        },
+        {
+          title: nav.charges,
+          body: 'Un addebito è una somma chiesta a chi abita: il canone, una spesa, una bolletta riaddebitata. Si emette dalla scheda del contratto, con una scadenza; da quella lo stato si deriva da sé — scaduto quando la data passa, pagato quando entra tutto. Un addebito emesso non si modifica: si annulla e si riemette. Se non incasserai mai, la rinuncia lo chiude e la cifra finisce fra le perdite del riepilogo.',
+        },
+        {
+          title: nav.payments,
+          body: 'Quando un inquilino dichiara di aver pagato, la dichiarazione arriva qui, in attesa: finché non la confermi non muove il saldo, e puoi rifiutarla. Gli incassi che ricevi direttamente li registri dalla scheda dell’addebito, e il residuo si aggiorna da solo. Sotto «Tutti» c’è ogni movimento, decisi compresi.',
+        },
+        {
+          title: nav.bills,
+          body: 'Una bolletta è una spesa dell’immobile — luce, gas, acqua, condominio — da riaddebitare a chi abita. La registri con fornitore, periodo e importo e alleghi la scansione: la lettura automatica propone i valori che ha letto accanto a quelli che hai scritto, e li rivedi tu. Con «Riaddebita» nasce un addebito sul contratto che scegli, per la quota che indichi.',
+        },
+        {
+          title: nav.tickets,
+          body: 'Una segnalazione è un guasto o un problema in casa, aperto da chi ci abita — o da te. La prendi in carico, la lavori, la chiudi, e ogni passaggio resta scritto con la data. Dentro ci sono una conversazione, gli allegati (una foto dice più di una descrizione) e i costi sostenuti. Con «Solo quelle aperte» spuntato vedi ciò che è in lavorazione; le chiuse restano sotto «Tutte».',
+        },
+        {
+          title: nav.account,
+          body: 'Dal menù dell’organizzazione — in fondo alla barra laterale, o in alto dal telefono: i tuoi dati, la password, le organizzazioni a cui appartieni e l’uscita da ciascuna, l’informativa sulla privacy. Se hai ricevuto un altro codice d’invito, «Ho un codice d’invito» sta nello stesso menù.',
+        },
+      ],
+    },
+    tenant: {
+      subtitle:
+        'L’altro lato dello stesso giro: chi amministra registra il contratto e gli addebiti, tu vedi quanto devi e dichiari quando paghi.',
+      sections: [
+        {
+          title: 'Come si entra',
+          body: 'Chi amministra la casa in cui abiti ti ha invitato con un codice. Dalla pagina di accesso, «Registrati» lo chiede: lo incolli, scegli nome e password, e sei dentro la sua organizzazione come inquilino: non ne hai una tua, e vedi solo ciò che riguarda te. L’email è quella a cui l’invito è arrivato. Da lì in poi si entra con email e password; se la password non la ricordi, «Recupera la password» ti manda un codice.',
+        },
+        {
+          title: nav.charges,
+          body: 'È la prima schermata: quanto devi, con la scadenza e quanto resta da pagare di ciascun addebito. Gli addebiti li emette chi amministra — il canone, le spese, le bollette riaddebitate — e quando ne arriva uno lo vedi qui. Quando paghi, apri l’addebito e dichiaralo con «Ho pagato»: resta in attesa finché chi amministra lo conferma, e da quel momento il residuo scende. Non si può ritirare una dichiarazione: se hai sbagliato, dillo a chi amministra.',
+        },
+        {
+          title: nav.lease,
+          body: 'Il tuo contratto: l’immobile o la stanza, il periodo, il canone e la tua quota se lo dividi con altri. Finché chi amministra non lo attiva è in bozza, e lo vedi lo stesso. Nella scheda stanno gli allegati — il contratto firmato, le ricevute — e gli addebiti che ne derivano.',
+        },
+        {
+          title: nav.bills,
+          body: 'Le bollette dell’immobile che chi amministra ti ha riaddebitato, con la scansione da aprire. Non le modifichi: sono qui perché un addebito che nasce da una bolletta si possa risalire al documento, invece di accettare una cifra sulla fiducia.',
+        },
+        {
+          title: nav.tickets,
+          body: 'Se qualcosa non funziona in casa, segnalalo qui: una riga per dire che cosa succede, una foto se aiuta. Resta scritto con la data, chi amministra lo vede subito e lo prende in carico, e ogni passaggio fino alla chiusura lo vedi nella scheda, dove c’è anche una conversazione. Puoi annullare una segnalazione finché è ancora aperta.',
+        },
+        {
+          title: nav.expenses,
+          body: 'Il conto fra coinquilini: un gruppo è la cassa di una casa. Chi anticipa una spesa la registra, dicendo con chi la divide; i saldi dicono chi deve a chi, e quando qualcuno rimborsa lo dichiara. Chi amministra non lo vede: è denaro fra chi abita, non fra voi e la proprietà.',
+        },
+        {
+          title: nav.account,
+          body: 'Dal menù dell’organizzazione — in fondo alla barra laterale, o in alto dal telefono: i tuoi dati, la password, l’informativa sulla privacy, e l’uscita dall’organizzazione — che non è possibile finché il tuo contratto è in vigore. Se ricevi un altro codice d’invito, «Ho un codice d’invito» sta nello stesso menù.',
+        },
+      ],
+    },
   },
 
   dashboard: {

@@ -2,6 +2,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Building2,
+  BookOpen,
   ChevronDown,
   FileText,
   LayoutDashboard,
@@ -432,6 +433,13 @@ function NoOrganizationScreen() {
         >
           {t.auth.logout}
         </Button>
+        {/* Chi aspetta un invito legge, intanto, che cosa lo aspetta: la guida
+            senza ruolo è la versione di chi abita. */}
+        <p className="mt-6 text-center text-sm">
+          <Link to="/guida" className="text-accent underline-offset-4 hover:underline">
+            {t.guide.fromNoOrganization}
+          </Link>
+        </p>
       </div>
     </main>
   )
@@ -586,6 +594,18 @@ function OrganizationMenu() {
             >
               <UserCog className="size-4" aria-hidden />
               {t.nav.account}
+            </Link>
+          </DropdownMenu.Item>
+          {/* La guida, accanto all'account: è dove si cercano le cose che si
+              fanno su di sé, e vale per entrambi i ruoli — la pagina sceglie la
+              versione. */}
+          <DropdownMenu.Item asChild>
+            <Link
+              to="/guida"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-surface-muted"
+            >
+              <BookOpen className="size-4" aria-hidden />
+              {t.nav.guide}
             </Link>
           </DropdownMenu.Item>
           {/* **Dove si usa un codice d'invito**, e sta qui per una ragione

@@ -48,6 +48,9 @@ const DashboardPage = lazy(async () => ({
 const AccountPage = lazy(async () => ({
   default: (await import('@/features/account/AccountPage')).AccountPage,
 }))
+const GuidePage = lazy(async () => ({
+  default: (await import('@/features/guide/GuidePage')).GuidePage,
+}))
 const PropertiesPage = lazy(async () => ({
   default: (await import('@/features/properties/PropertiesPage')).PropertiesPage,
 }))
@@ -214,6 +217,18 @@ export function App() {
           <Route path="/account" element={<AccountPage />} />
           <Route path="/invito" element={<AcceptInvitationPage />} />
         </Route>
+        {/* La guida sta **fuori** dal guscio, come l'informativa: senza
+            un'organizzazione il guscio rende la schermata dedicata al posto di
+            ogni rotta, e la guida deve aprirsi anche da lì. Il ruolo sceglie la
+            versione; senza ruolo si legge quella di chi abita. */}
+        <Route
+          path="/guida"
+          element={
+            <Suspense fallback={<Loading className="min-h-screen justify-center" />}>
+              <GuidePage />
+            </Suspense>
+          }
+        />
         {/* Chi è già entrato non deve poter tornare al login — o a una rotta di
             registrazione che ormai non esiste come form — da un segnalibro:
             vedrebbe un form che non serve a niente. **Torna dove stava
