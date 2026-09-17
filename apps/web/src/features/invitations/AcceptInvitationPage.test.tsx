@@ -199,21 +199,20 @@ describe('accettare un invito', () => {
 function renderEntry(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
   vi.stubGlobal('fetch', handler)
 
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  })
-
+  // **Senza `QueryClientProvider`, di proposito.** È così che `App` monta le
+  // rotte da fuori sessione: il provider avvolge solo il ramo autenticato. La
+  // prima stesura di questo harness ne metteva uno, e la pagina — che chiamava
+  // `useQueryClient()` — era verde qui e bianca nel browser, con un errore non
+  // catturato. Il test deve rendere la pagina come la rende il prodotto.
   render(
     <SessionProvider>
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/invito']}>
-          <Routes>
-            <Route path="/invito" element={<AcceptInvitationSignedOutPage />} />
-            <Route path="/addebiti" element={<p>scadenzario</p>} />
-            <Route path="/" element={<p>riepilogo</p>} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>
+      <MemoryRouter initialEntries={['/invito']}>
+        <Routes>
+          <Route path="/invito" element={<AcceptInvitationSignedOutPage />} />
+          <Route path="/addebiti" element={<p>scadenzario</p>} />
+          <Route path="/" element={<p>riepilogo</p>} />
+        </Routes>
+      </MemoryRouter>
     </SessionProvider>,
   )
 }

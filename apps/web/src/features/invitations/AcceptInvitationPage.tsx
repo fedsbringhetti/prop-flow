@@ -151,7 +151,6 @@ interface InviteRegisterValues {
  */
 export function AcceptInvitationSignedOutPage() {
   const { store } = useSession()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
 
   const [stage, setStage] = useState<'code' | 'register'>('code')
@@ -181,7 +180,11 @@ export function AcceptInvitationSignedOutPage() {
             fullName: values.fullName,
             password: values.password,
           })
-      await queryClient.invalidateQueries({ queryKey: keys.organizations })
+      // Niente da invalidare qui, e non per dimenticanza: questa pagina vive
+      // **fuori** da `QueryProvider` — le rotte da fuori sessione non hanno un
+      // client, e `useQueryClient()` qui è una pagina bianca, non un errore
+      // gestito. Quando la sessione nasce, `App` monta il ramo autenticato con
+      // un `QueryClient` nuovo: l'elenco delle organizzazioni parte da zero.
       // La pagina iniziale è quella del **ruolo**, non la radice: per chi abita
       // la radice rimanda comunque allo scadenzario, e passarci in mezzo
       // farebbe lampeggiare una schermata che non è la sua.
