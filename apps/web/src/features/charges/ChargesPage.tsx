@@ -194,12 +194,24 @@ export function ChargesPage() {
                     ? t.charge.emptyHintStaff
                     : t.charge.emptyHintTenant
               }
-              {...(isStaff && !outstanding && !status
+              // Senza filtri è anche il primo schermo di chi abita: il rimando
+              // alla guida sta accanto al gesto, che è solo di chi amministra.
+              {...(!outstanding && !status
                 ? {
                     action: (
-                      <Button asChild variant="primary">
-                        <Link to="/contratti">{t.dashboard.goToLeases}</Link>
-                      </Button>
+                      <div className="flex flex-wrap items-center justify-center gap-3">
+                        {isStaff ? (
+                          <Button asChild variant="primary">
+                            <Link to="/contratti">{t.dashboard.goToLeases}</Link>
+                          </Button>
+                        ) : null}
+                        <Link
+                          to="/guida"
+                          className="text-sm text-accent underline-offset-4 hover:underline"
+                        >
+                          {t.guide.read}
+                        </Link>
+                      </div>
                     ),
                   }
                 : {})}

@@ -322,6 +322,8 @@ export const it = {
     title: 'Come si usa PropFlow',
     entry: 'Come si entra',
     back: 'Torna all’applicazione',
+    /** Il rimando dagli stati vuoti che sono un primo schermo. */
+    read: 'Leggi come si usa',
     /** Dalla schermata senza organizzazione: chi aspetta un invito legge la
      *  versione di chi abita. */
     fromNoOrganization: 'Come funziona PropFlow',
@@ -426,7 +428,16 @@ export const it = {
     goToLeases: 'Vedi i contratti',
     goToTickets: 'Vedi le segnalazioni',
     goToProperties: 'Vedi gli immobili',
-    empty: 'Comincia registrando il tuo primo immobile.',
+    /** Il vuoto del riepilogo è il **primo schermo** di ogni proprietario nuovo:
+     *  racconta il giro in tre passi con i tre gesti, e rimanda alla guida. Non è
+     *  un primo accesso guidato con un overlay: è lo stesso `Empty`, con un
+     *  `action` che è un gruppo di tre. */
+    empty: 'Si comincia da un immobile.',
+    emptyHint:
+      'Il giro è in tre passi: registri un immobile, redigi un contratto su di esso, inviti chi ci abita. Da lì arrivano gli addebiti e gli incassi, e questa pagina si riempie.',
+    /** L'invito si genera dalla scheda del contratto: il terzo passo porta ai
+     *  contratti, che è dove sta. */
+    inviteStep: 'Invita chi abita',
   },
 
   property: {

@@ -37,11 +37,34 @@ export function DashboardPage() {
         empty={
           <Empty
             title={t.dashboard.empty}
-            hint={t.property.emptyHint}
+            hint={t.dashboard.emptyHint}
+            // I tre passi del giro, nell'ordine in cui si fanno: il primo è
+            // quello da fare adesso ed è l'unico in evidenza; gli altri due
+            // portano dove quel passo si farà. Poi la guida, per chi vuole
+            // leggere prima di cominciare.
             action={
-              <Button asChild variant="primary">
-                <Link to="/immobili/nuovo">{t.property.create}</Link>
-              </Button>
+              <div className="flex flex-col items-center gap-3">
+                <ol className="flex flex-wrap justify-center gap-2">
+                  <li>
+                    <Button asChild variant="primary">
+                      <Link to="/immobili/nuovo">{t.property.create}</Link>
+                    </Button>
+                  </li>
+                  <li>
+                    <Button asChild>
+                      <Link to="/contratti/nuovo">{t.lease.create}</Link>
+                    </Button>
+                  </li>
+                  <li>
+                    <Button asChild>
+                      <Link to="/contratti">{t.dashboard.inviteStep}</Link>
+                    </Button>
+                  </li>
+                </ol>
+                <Link to="/guida" className="text-sm text-accent underline-offset-4 hover:underline">
+                  {t.guide.read}
+                </Link>
+              </div>
             }
           />
         }
