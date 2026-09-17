@@ -632,7 +632,12 @@ export const it = {
      *  corrette» — qui sarebbe fuori posto, quindi la schermata lo riscrive. */
     acceptCodeRejected:
       'Questo codice non è valido: può essere sbagliato, scaduto, o intestato a un’altra email. Chiedine uno nuovo a chi te lo ha mandato.',
-    acceptAlreadyDone: 'Questo invito è già stato accettato: sei già dentro.',
+    /** «Già accettato» non vuol dire «ancora dentro»: dalla sezione 6 si può
+ *  uscire, e chi ripresenta il codice dopo l'uscita è esattamente chi legge
+ *  questa riga. Un invito si spende una volta; la via per rientrare è un
+ *  altro invito (`R41`). */
+    acceptAlreadyDone:
+      'Questo invito è già stato usato e non vale una seconda volta. Se sei uscito dall’organizzazione, chiedi un invito nuovo a chi te lo aveva mandato.',
 
     /**
      * `/invito` da fuori sessione (`F7`, ADR-053): il codice **prima**, il form

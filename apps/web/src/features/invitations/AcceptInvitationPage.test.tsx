@@ -180,7 +180,7 @@ describe('accettare un invito', () => {
 
     await paste('codice-gia-usato')
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/già stato accettato/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/già stato usato/i)
   })
 })
 
