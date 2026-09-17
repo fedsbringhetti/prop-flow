@@ -362,13 +362,12 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**Il giro a mano della sezione 8, che è `G0` della [9](#piano-sezione-9).** La 8 ha
-cambiato l'ingresso, il guscio e il seeder ed è stata provata solo dai test; con il
-database svuotato (`just down-hard`, `just setup`) si percorre `/invito` con un token da
-proprietario vero, l'ingresso di un inquilino, l'uscita verso lo stato senza
-organizzazione. Il rendimento di un giro è misurato — sei voci in mezza giornata contro
-le quattro di cinque sezioni di lettura — e `mailpit` su `localhost:8025` copre tutto
-tranne «arriva fuori dallo spam».
+**`G1` della [9](#piano-sezione-9): gli stati vuoti spiegano.** `G0`, il giro a mano
+della 8, è fatto e ha reso: un difetto bloccante sul percorso principale che 478 + 129
+test verdi non vedevano, in un'ora. Il rendimento di un giro resta la misura più alta di
+questo progetto — sei voci in mezza giornata contro le quattro di cinque sezioni di
+lettura, e ora una pagina bianca dietro tre revisioni — e `mailpit` su `localhost:8025`
+copre tutto tranne «arriva fuori dallo spam».
 
 Il punto da percorrere per primo è il **rientro**, che è il cammino più lungo della
 sezione 6: uscire da un'organizzazione, farsi reinvitare, accettare. Attraversa due
@@ -584,7 +583,7 @@ con l'assert caduto scritto nell'esito.
 | Il primo accesso di un proprietario atterra sul riepilogo vuoto | vero: `DashboardPage.tsx:36` mostra `Empty` con `t.dashboard.empty` e `t.property.emptyHint` quando `properties_count === 0 && active_leases === 0` |
 | Il primo accesso di un inquilino atterra sugli addebiti | vero: `TENANT_HOME = '/addebiti'` (`shell.tsx:104`), e un inquilino appena entrato con un contratto senza addebiti vede «Nessun addebito» — una schermata che non dice **perché è lì** né che cosa arriverà |
 | Chi non ha un'organizzazione vede una schermata che spiega | vero dalla 8: `NoOrganizationScreen` dice che cosa si è e che si entra da un invito |
-| Il giro a mano della 8 non è stato fatto | vero, dichiarato nel suo [esito](11-piani-conclusi.md#esito-sezione-8) |
+| Il giro a mano della 8 non è stato fatto | vero al momento del piano; **fatto** il 16 settembre come `G0`, [poscritto](11-piani-conclusi.md#poscritto-sezione-8) |
 
 ### La decisione: dove sta la spiegazione
 
@@ -626,7 +625,15 @@ glossario di [01](01-prodotto.md#glossario) è la fonte dei nomi.
 
 ### Decomposizione
 
-##### `G0` — Il giro a mano della sezione 8 · **prima di ogni riga**
+##### `G0` — Il giro a mano della sezione 8 · **fatto** il 16 settembre 2026
+
+Esito nel [poscritto della 8](11-piani-conclusi.md#poscritto-sezione-8): un difetto
+bloccante che nessun test vedeva (`/invito` da fuori sessione era una pagina bianca —
+`useQueryClient()` fuori da `QueryProvider`, e il test la avvolgeva in un provider che il
+prodotto non ha), una stringa falsa, `R50` e `R51` in [12](12-da-fare.md). Entrambi i
+difetti corretti e provati al contrario prima di `G1`. L'Invio nel campo del codice non
+è verificabile con il browser pilotato: **va provato con una tastiera vera** in `G1`.
+Il testo del passo, com'era:
 
 Con il database svuotato (`just down-hard`, `just setup`) e `ops/dev/seed-walkthrough.py`
 per il mondo di sfondo:

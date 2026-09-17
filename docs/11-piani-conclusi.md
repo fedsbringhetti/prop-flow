@@ -11968,3 +11968,55 @@ non basta. **È il primo passo della sezione 9**, prima di scrivere una riga.
 - **`R49`**, nuova: un secondo browser con in `localStorage` un'organizzazione lasciata
   altrove parte con un `X-Org-Id` morto — la finestra del poscritto della 6, riapplicata;
 - **`R41`**, il rientro: questa sezione non lo tocca, come l'ADR dice.
+
+<a id="poscritto-sezione-8"></a>
+
+### Poscritto — il giro a mano della 8, fatto come `G0` della 9
+
+**16 settembre 2026**, il giorno dopo l'esito, con il database svuotato (decisione 4
+dell'ADR) e su porte a parte, perché `5432`, `8080` e `8081` erano di un altro progetto
+sulla stessa macchina. Percorsi tutti e cinque i punti di `G0` più il seeder. Esito: un
+difetto bloccante sul percorso principale della sezione, una stringa falsa, tre
+scoperte da mettere in [12](12-da-fare.md), e tutto il resto come previsto.
+
+**Il difetto che nessun test poteva vedere.** `/invito` da fuori sessione era una pagina
+bianca, con `No QueryClient set` nella console: `AcceptInvitationSignedOutPage` chiamava
+`useQueryClient()`, ma le rotte da fuori sessione stanno **fuori** da `QueryProvider`
+(`App.tsx`: il provider avvolge solo il ramo autenticato). Il test della pagina la
+avvolgeva in un provider suo, ed era verde; l'autore, due revisori e il coordinatore
+l'hanno letto senza vederlo, perché nessuno ha confrontato l'albero del test con quello
+di `App`. Il rimedio è togliere l'hook — l'invalidazione era comunque inutile: quando la
+sessione nasce, `App` monta un `QueryClient` nuovo — e **rendere la pagina nel test come
+la rende il prodotto**, senza provider. Al contrario: con `useQueryClient()` rimesso, due
+test cadono con lo stesso errore della console. È la terza volta che un test verde sta
+accanto al difetto in questa sezione, e la forma è sempre la stessa: l'harness dà al
+codice qualcosa che il prodotto non gli dà.
+
+**La stringa falsa.** Chi ripresenta da dentro sessione un invito già accettato leggeva
+«sei già dentro»; dalla 6 si può uscire, e chi rilegge quel codice dopo l'uscita è
+esattamente chi non è dentro. Ora dice che l'invito è speso e che la via è un invito
+nuovo (`R41`).
+
+**Che cosa ha retto, visto con gli occhi:** l'invito da proprietario dallo script; il form
+senza email; il `409` che fa comparire il nome dell'organizzazione con nome e password
+conservati; l'ingresso sul riepilogo vuoto come «Giro Immobili — Proprietario»; l'ingresso
+dell'inquilina da un invito su `/addebiti`, con **una sola** organizzazione nel menu e
+nessuna propria; l'uscita rifiutata con il contratto attivo (`409`, con il request id) e
+riuscita dopo la disdetta; la schermata «Nessuna organizzazione» senza navigazione, con
+dopo l'uscita **solo** `GET /organizations` e `GET /me` in rete; il ramo d'errore con
+«Riprova» e «Esci» staccando `/organizations`, e la schermata dedicata dopo la riprova;
+`/registrazione` come rimando; un token inesistente e uno già usato con lo **stesso**
+messaggio, due `401` sulla stessa rotta; il seeder a buon fine sulle porte nuove e, alla
+seconda esecuzione, il rifiuto con il messaggio previsto e zero inviti pendenti lasciati.
+
+**Non verificabile con lo strumento, non un difetto:** l'Invio nel campo del codice. Il
+browser pilotato manda eventi non fidati, che non fanno scattare l'invio implicito del
+form; `form.requestSubmit()` avanza al passo due, quindi il form è corretto. Va provato
+con una tastiera vera nel giro della 9.
+
+**Tre scoperte per [12](12-da-fare.md):** la sonda `/ready` sta alla radice e il proxy
+inoltra solo `/api/v1/*`, quindi il passo 4.1 del runbook del primo deploy non può
+riuscire dal dominio pubblico (`R50`); un refresh fallito per rete al caricamento è
+trattato come «nessuna sessione» e manda alla pagina di accesso senza dirlo (`R51`);
+e la conferma, con gli occhi, di `R48`: dalla schermata senza organizzazione un token da
+proprietario riceve «codice non valido».
