@@ -322,8 +322,16 @@ DELETE FROM app.owner_invitations
 
 | Endpoint | Uso | Comportamento |
 |---|---|---|
-| `/health` | liveness | Risponde sempre, non tocca il database. Se lo facesse, un'indisponibilità di PostgreSQL riavvierebbe in loop tutti i pod |
-| `/ready` | readiness | Verifica il database **e la posta**. `503` se una delle due non risponde: il pod non riceve traffico ma non viene riavviato |
+| `/health`, `/api/v1/health` | liveness | Risponde sempre, non tocca il database. Se lo facesse, un'indisponibilità di PostgreSQL riavvierebbe in loop tutti i pod |
+| `/ready`, `/api/v1/ready` | readiness | Verifica il database **e la posta**. `503` se una delle due non risponde: il pod non riceve traffico ma non viene riavviato |
+
+Le due forme sono **equivalenti** — stesso handler, stesso corpo — ed esistono entrambe
+perché hanno due chiamanti diversi. La radice è per l'`healthcheck` del container, che
+parla all'API direttamente. Il prefisso è per chiunque passi dal reverse proxy, cioè dal
+dominio: il proxy inoltra all'API solo `/api/v1/*`, e `https://<dominio>/ready` non
+arriverebbe mai all'API — risponderebbe il file server, con `index.html` e `200`, una
+sonda che «riesce» senza aver provato niente. Il [runbook](#il-primo-deploy--runbook) usa
+la forma con il prefisso per questo.
 
 All'avvio l'API verifica il database e **esce** se non risponde: meglio non entrare
 mai in servizio che accettare traffico e restituire `500`.

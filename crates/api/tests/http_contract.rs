@@ -46,6 +46,31 @@ async fn an_invalid_token_is_refused() {
     assert_eq!(body["code"], "auth.token_invalid", "corpo: {body}");
 }
 
+/// Le sonde rispondono uguali alla radice e sotto `/api/v1` (`R50`).
+///
+/// La radice è per l'`healthcheck` del container, che parla all'API senza proxy;
+/// il prefisso è l'unica forma che attraversa il reverse proxy, e quella che il
+/// runbook del primo deploy usa per dichiararsi riuscito. Senza la seconda,
+/// `…/api/v1/ready` cadrebbe nel `fallback` con `404 endpoint.not_found` — e il
+/// confronto sul corpo lo vedrebbe. Il `200` si afferma a parte: due `404`
+/// uguali sarebbero «uguali» anche loro.
+#[tokio::test]
+async fn the_probes_answer_the_same_at_the_root_and_under_the_prefix() {
+    let app = require_app!();
+    for probe in ["health", "ready"] {
+        let (root_status, root_body) = app.send("GET", &format!("/{probe}"), None, None).await;
+        let (prefixed_status, prefixed_body) = app
+            .send("GET", &format!("/api/v1/{probe}"), None, None)
+            .await;
+        assert_eq!(root_status, StatusCode::OK, "`/{probe}`: {root_body}");
+        assert_eq!(
+            prefixed_status, root_status,
+            "`/api/v1/{probe}` non risponde come `/{probe}`: {prefixed_body}"
+        );
+        assert_eq!(prefixed_body, root_body, "su `{probe}`");
+    }
+}
+
 /// `F6` ha chiuso `POST /auth/register`: la validazione della password alla
 /// registrazione si prova adesso sulle due rotte da invito (ADR-053), che sono
 /// le sole rimaste. `password_policy::validate` è condivisa da entrambe —

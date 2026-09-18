@@ -5,10 +5,24 @@ use axum::{Json, Router};
 
 use crate::state::AppState;
 
+/// Le sonde, in due forme che rispondono allo stesso modo.
+///
+/// Alla **radice** perché l'`healthcheck` del container parla all'API direttamente,
+/// senza proxy. **Sotto `/api/v1`** perché dal dominio pubblico il reverse proxy
+/// inoltra all'API solo quel prefisso (`ops/web/Caddyfile`): `…/ready` alla radice
+/// non arriva mai qui — risponde il file server, con `index.html` e `200`, una
+/// sonda che «riesce» senza aver provato niente — e il runbook del primo deploy si
+/// dichiara riuscito su `…/api/v1/ready`. Un `handle /ready` nel proxy avrebbe
+/// spostato là la conoscenza delle sonde, che oggi conosce solo il prefisso.
+///
+/// Nessun estrattore `Authenticated` su nessuna delle quattro: una sonda che
+/// chieda un token non è una sonda.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(liveness))
         .route("/ready", get(readiness))
+        .route("/api/v1/health", get(liveness))
+        .route("/api/v1/ready", get(readiness))
 }
 
 #[derive(serde::Serialize, utoipa::ToSchema)]

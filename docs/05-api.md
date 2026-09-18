@@ -207,8 +207,8 @@ scrittura, evento o riga di audit.
 
 | Metodo | Percorso | Auth | Note |
 |---|---|---|---|
-| GET | `/health` | no | Liveness. **Non tocca il database**: se lo facesse, un'indisponibilità di PostgreSQL farebbe riavviare in loop tutti i pod, che è il contrario di quel che serve mentre il database torna su |
-| GET | `/ready` | no | Readiness: verifica il database. `503` se non raggiungibile |
+| GET | `/health`, `/api/v1/health` | no | Liveness. **Non tocca il database**: se lo facesse, un'indisponibilità di PostgreSQL farebbe riavviare in loop tutti i pod, che è il contrario di quel che serve mentre il database torna su |
+| GET | `/ready`, `/api/v1/ready` | no | Readiness: verifica il database e la posta. `503` se una delle due non risponde. Le due forme sono lo stesso handler: la radice per l'`healthcheck` del container, il prefisso per chi passa dal reverse proxy, che inoltra solo `/api/v1/*` ([07](07-operazioni.md#sonde)) |
 | GET | `/docs` | no | Swagger UI |
 | GET | `/openapi.json` | no | Specifica |
 
