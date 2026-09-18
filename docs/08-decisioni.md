@@ -3556,3 +3556,64 @@ quali token sono stati emessi.
   nella forma della `0019`), uno script in `ops/`, un runbook in [07](07-operazioni.md);
 - `R9` esce da [12](12-da-fare.md) con l'esito della sezione 8; `R41` — chiedere di
   rientrare — resta dov'è: questa decisione non la tocca.
+
+<a id="adr-054"></a>
+
+## ADR-054 — Chi è uscito non legge più: la membership nel ramo dell'inquilino, al livello della RLS
+
+**18 settembre 2026**, sezione 10. Chiude `R46`.
+
+### Il fatto
+
+Chi esce da un'organizzazione continua a leggerne i dati — e a scriverci — per i
+quindici minuti del suo access token. `middleware::context` si fida del ruolo nel token
+quando `X-Org-Id` coincide con l'`org_id` dei claim, senza rileggere la membership: è il
+baratto del JWT non revocabile di [ADR-012](#adr-012), che parla di *validità* del token
+e non di *membership*. Per lo staff quei minuti sono già vuoti: ogni policy passa da
+`member_role`, che filtra `status = 'active'`
+([poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6)). Per l'inquilino no: il
+ramo suo in `app.can_access_lease` e `app.can_access_property` (`0014`) passava da
+`lease_parties.user_id = current_user_id()` **senza guardare `org_members`**, e uscire
+(`0039`) tocca `org_members` e non le parti. `GET /leases` rispondeva `200` **con il
+contratto disdetto nel corpo**, e con lo stesso token si apriva una segnalazione
+nell'organizzazione lasciata.
+
+Prima di [ADR-053](#adr-053) il caso era raro — il token di un inquilino portava la sua
+organizzazione personale, mai quella di chi lo ospitava, quindi la rilettura scattava
+sempre. Dopo, porta quella di chi lo ospita: è il caso di **ogni** inquilino che esce.
+
+### Decisione
+
+**`AND app.is_org_member(<org>)` nel ramo dell'inquilino delle due funzioni**, con una
+migration che le riscrive per intero (`0041`, `CREATE OR REPLACE` con la stessa firma:
+le policy referenziano per oid e non si toccano). Il difetto sta nel solo ramo che non
+guardava la membership, e si chiude lì, al livello che una lettura non può aggirare.
+
+Il costo: una lettura in più di `org_members` per riga valutata, sull'indice che
+`member_role` usa già. Le funzioni sono `SECURITY DEFINER`, e `is_org_member` anche.
+
+`member_role` **non si tocca**: è la funzione di tutte le policy dello staff, e un
+cambiamento lì cambia tutto.
+
+### Alternativa scartata
+
+**Rileggere la membership in `Authenticated` a ogni richiesta.** Chiuderebbe il caso
+per tutte le rotte, ma cambia la forma del baratto di ADR-012 per tutti — staff
+compreso, dove non c'è nulla da chiudere — e sposta il confine dalla riga alla
+richiesta: una query in più per ogni chiamata, per un difetto che sta in un ramo di due
+funzioni. Resta la via da riconsiderare se un giorno un altro ramo si rivelasse cieco
+alla membership; oggi non ce n'è.
+
+### Conseguenze
+
+- il token vecchio, dopo l'uscita, vede un elenco **vuoto** dove prima vedeva il
+  contratto: `200` con zero elementi, come per lo staff, non `403`. È coerente con il
+  cambio di organizzazione, che non distingue «non esiste» da «non ne fai parte»;
+- aprire una segnalazione nell'organizzazione lasciata risponde `404
+  property.not_found`: l'immobile non si legge, e il bordo lo traduce come traduce ogni
+  risorsa che «non è tua» — non `403`, che direbbe che la risorsa c'è;
+- il test `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back`
+  smette di fare un login nuovo dopo l'uscita e afferma con il **token vecchio**;
+- il rientro ([ADR-051](#adr-051)) non cambia: riattivata la membership, la parte del
+  contratto torna a valere.
+

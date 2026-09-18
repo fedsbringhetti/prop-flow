@@ -2620,6 +2620,10 @@ async fn changing_the_password_needs_the_old_one_and_no_session_renews_anymore()
 ///
 /// Il terzo è la porta di servizio di ADR-051, ora percorribile: senza il ramo di
 /// riattivazione l'accettazione morirebbe con `409 membership.already_exists`.
+///
+/// Fra il secondo e il terzo, **da fuori si guarda con il token di prima**: è il
+/// token che chi esce ha davvero in mano per un quarto d'ora, e fino alla `0041`
+/// gli mostrava ancora il contratto (`R46`).
 #[tokio::test]
 async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back() {
     let app = require_app!();
@@ -2732,30 +2736,18 @@ async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come
         "un inquilino senza organizzazioni non ne ha più nessuna: prima di ADR-053 gli restava la propria organizzazione personale, qui rappresentata da un id che non esiste più. corpo: {orgs}"
     );
 
-    // Un token nuovo. Quello vecchio porta ancora `org_id: owner_org` nei suoi
-    // claim, e `middleware::context` si fida del ruolo del token **quando
-    // l'organizzazione richiesta coincide con quella del token**
-    // (`crates/api/src/middleware/context.rs`) — un access token già emesso
-    // non si revoca a metà vita, lo stesso baratto di ADR-012. Prima di ADR-053
-    // questo passo funzionava per una ragione incidentale: il token
-    // dell'inquilino portava la **propria** organizzazione personale, mai
-    // quella di chi lo ospitava, quindi l'organizzazione richiesta era sempre
-    // diversa da quella del token e la lettura della membership era sempre
-    // dal vivo. Un login nuovo, dopo l'uscita, riflette lo stato vero — nessuna
-    // organizzazione — e forza di nuovo quella lettura dal vivo.
-    let (status, login_body, _) = app
-        .post_returning_cookie(
-            "/api/v1/auth/login",
-            serde_json::json!({ "email": tenant_email, "password": "cavallo batteria graffetta" }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {login_body}");
-    let tenant = login_body["access_token"]
-        .as_str()
-        .expect("access token")
-        .to_owned();
-
-    let (status, _) = app
+    // **Con il token vecchio**, e questo è il punto (`R46`). I suoi claim
+    // portano ancora `org_id: owner_org`, e `middleware::context` si fida del
+    // ruolo del token quando l'organizzazione richiesta coincide con quella dei
+    // claim — un access token già emesso non si revoca a metà vita, il baratto
+    // di ADR-012. Fino alla `0041` il ramo dell'inquilino di `can_access_lease`
+    // e `can_access_property` guardava solo `lease_parties`, che l'uscita non
+    // tocca: `GET /leases` rispondeva `200` **con il contratto disdetto nel
+    // corpo**, e una segnalazione si apriva nell'organizzazione lasciata. Il
+    // test faceva un login nuovo per non vederlo. Ora le due funzioni chiedono
+    // anche la membership, e il confine tiene dalla Row Level Security, non dal
+    // token: la risposta è `200` con un elenco che non porta più il contratto.
+    let (status, page) = app
         .send_in_org(
             "GET",
             "/api/v1/leases",
@@ -2764,7 +2756,34 @@ async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come
             None,
         )
         .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let still_visible = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .any(|item| item["id"] == serde_json::Value::String(lease.clone()));
+    assert!(
+        !still_visible,
+        "chi è uscito legge ancora il contratto disdetto con il token vecchio: {page}"
+    );
+
+    // E non scrive: aprire una segnalazione nell'organizzazione lasciata passa da
+    // `tickets_insert`, che consulta `can_access_property`. Il codice è quello che
+    // l'esecuzione mostra, non uno deciso prima.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/properties/{property}/tickets"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "title": "Da fuori",
+                "description": "Aperta con un token emesso prima dell'uscita",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.not_found", "corpo: {problem}");
 
     // Due volte no: la riga resta, ed è osservabile.
     let (status, problem) = app

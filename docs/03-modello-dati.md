@@ -127,6 +127,15 @@ un'organizzazione di cui l'utente non è membro e si aspetta zero righe.
 migration `0030` l'ha sostituita in `users_select`. Resta perché rimuoverla è un
 cambiamento a sé.
 
+`app.can_access_lease` e `app.can_access_property` chiedono, dalla migration `0041`,
+che l'inquilino sia **ancora membro** dell'organizzazione (`app.is_org_member`) oltre che
+parte del contratto. Uscire da un'organizzazione (`0039`) tocca `org_members` e non
+`lease_parties`, quindi senza quel termine chi è uscito continuava a leggere il
+contratto e l'immobile — e ad aprirvi segnalazioni, perché `tickets_insert` passa da
+`can_access_property` — per i quindici minuti del suo access token, che `middleware::context`
+non rilegge quando `X-Org-Id` coincide con l'organizzazione dei claim (ADR-012). Lo
+staff passava già da `member_role`; il ramo dell'inquilino era l'unico a non guardarla.
+
 `app.can_access_ticket` ha **cinque** rami dalla migration `0035`: al quarto — chi è
 parte del contratto indicato — se ne aggiunge uno per le segnalazioni dichiarate di
 interesse comune, che risponde a chi risulta residente dell'immobile secondo

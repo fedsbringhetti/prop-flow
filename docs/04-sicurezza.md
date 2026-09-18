@@ -224,6 +224,15 @@ database**: la policy su `org_members` mostra a ciascuno le proprie appartenenze
 Non si distingue "organizzazione inesistente" da "non ne fai parte": la differenza
 rivelerebbe l'esistenza di organizzazioni altrui.
 
+**Chi è uscito dall'organizzazione del proprio token** ne ha ancora il ruolo nei claim
+per i quindici minuti dell'access token, e il middleware non lo rilegge: è il baratto di
+[ADR-012](08-decisioni.md#adr-012). Il confine che regge in quei minuti è la Row Level
+Security, e dalla migration `0041` regge anche per l'inquilino: `app.can_access_lease` e
+`app.can_access_property` chiedono la membership attiva oltre alla parte del contratto,
+come le policy dello staff passano già da `member_role`. Senza, chi usciva leggeva il
+proprio contratto disdetto e apriva segnalazioni nell'organizzazione lasciata finché il
+token non scadeva ([ADR-054](08-decisioni.md#adr-054)).
+
 ### Il pool privilegiato
 
 `begin_privileged()` usa un ruolo con `BYPASSRLS`. Ammesso **solo** dove un
