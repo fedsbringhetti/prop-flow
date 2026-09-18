@@ -12353,3 +12353,254 @@ browser pilotato manda eventi non fidati, e il poscritto della 8 lo aveva già d
 - «Bozza» a chi abita (`R35`, dissolta in `R31`) non è stata toccata: la guida dice «è in
   bozza, e lo vedi lo stesso», che è la lettura «va bene così» resa esplicita invece che
   decisa. Una parola diversa è un'altra stringa, quando qualcuno la chiederà.
+
+<a id="piano-sezione-10"></a>
+
+## Piano — Sezione 10: tre chiusure prima del primo deploy
+
+Pianificata il **17 settembre 2026**, subito dopo l'esito della 9 e sotto la regola che
+una sezione conclusa pianifica la successiva. Chiude `R50`, `R51` e `R46`; **non** chiude
+`R48`, `R49` e `R42`, e il perché di ogni scelta è nel [prossimo passo](09-stato-e-roadmap.md#prossimo-passo-suggerito),
+che è dove la decisione sul deploy è scritta. Questa sezione è ciò che deve essere verde
+**prima** di eseguire il [runbook](07-operazioni.md#il-primo-deploy--runbook); il runbook
+stesso non è un passo di questa sezione, perché non è codice e non ha un test — ha un
+criterio di fine, e il suo esito si scrive in [11](11-piani-conclusi.md) quando è fatto.
+
+**Si esegue in una sola conversazione**, come la 9. Ogni test nuovo provato al contrario
+prima di consegnarlo, con l'assert caduto scritto nell'esito.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| Le sonde stanno alla radice del router, e ogni altra rotta porta il prefisso per intero | vero: `crates/api/src/routes/health.rs` monta `/health` e `/ready`; le altre rotte scrivono `"/api/v1/…"` per esteso (`routes/me.rs:31`), non c'è un `nest("/api/v1")` in `crates/api/src/lib.rs` — quindi aggiungere le due rotte con il prefisso è **due `.route()` in più nello stesso `router()`**, non uno spostamento |
+| Il proxy inoltra solo `/api/v1/*` | vero: `ops/web/Caddyfile:18`, `handle /api/v1/*`; tutto il resto va al file server, che risponde `index.html` con `200` a qualunque percorso |
+| Il runbook prova `…/api/v1/ready` | vero: [07](07-operazioni.md#il-primo-deploy--runbook), passo 4.1, riga 508 |
+| Il ripristino della sessione tratta la rete caduta come «nessuna sessione» | vero: `apps/web/src/app/session.tsx:117`, `.catch(() => undefined)` sul `store.refresh()` dell'effetto di ripristino; `App.tsx:131` mostra `Loading` finché `restoring`, poi le rotte da fuori sessione se `session` è nullo |
+| Il fallimento per rete è già distinguibile da un `401` | vero: `store.refresh()` in `apps/web/src/api/session.ts:369` lancia `offlineError()` **senza** cancellare la sessione, e solo su `!response.ok` fa `this.clear()`; `ApiError.isOffline` è in `api/problem.ts:67`, e il guscio lo usa già per il terzo stato (`shell.tsx:164`, `ErrorState` con `onRetry`) |
+| Il ramo dell'inquilino delle due funzioni di accesso non guarda la membership | vero: `migrations/0014_rls.sql:53` (`can_access_lease`) e `:72` (`can_access_property`) passano da `lease_parties.user_id = app.current_user_id()` senza `is_org_member`; **nessuna migration successiva le ridefinisce** (`grep -c 'FUNCTION app.can_access_lease' migrations/*.sql` dà 1, in `0014`) — quindi la migration nuova le riscrive per intero con `CREATE OR REPLACE` |
+| `is_org_member` esige una membership attiva | vero: `0014_rls.sql:28`, passa da `member_role`, che filtra `status = 'active'` e `deleted_at IS NULL` (`:17`); `LeaveOrganization` (sezione 6) tocca `org_members` e non `lease_parties` |
+| Un test fa un login «di comodo» per non vedere il difetto | vero: `crates/api/tests/http_contract.rs:2719`, dentro `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back`, con il commento che lo dichiara; la voce `R46` dice di toglierlo quando si chiude |
+| I test Rust sono 478, quelli del client 138 | vero, esito della 9 |
+
+### Decomposizione
+
+##### `D1` — `R50`: le sonde anche sotto `/api/v1`
+
+In `routes/health.rs`, le stesse due funzioni montate anche su `/api/v1/health` e
+`/api/v1/ready`; le rotte alla radice **restano**, perché l'`healthcheck` del container
+parla all'API direttamente e non passa dal proxy. La riga della tabella delle sonde in
+[07](07-operazioni.md) dice che le due forme sono equivalenti e perché esistono entrambe.
+
+Alternativa scartata: un `handle /ready` nel Caddyfile. Sposta la conoscenza delle sonde
+nel proxy, che oggi conosce solo il prefisso, e lascia `…/api/v1/ready` — la forma che il
+runbook usa — a rispondere `404`.
+
+**Criterio di fine:** un test in `crates/api/tests/` che `GET /api/v1/ready` risponde come
+`GET /ready` (stesso stato, stesso corpo), provato al contrario togliendo la rotta nuova
+(`404 endpoint.not_found`).
+
+##### `D2` — `R51`: un `refresh` fallito per rete non è «nessuna sessione»
+
+In `session.tsx`, l'effetto di ripristino distingue: `ApiError` con `isOffline` diventa
+uno stato `restoreError` esposto dal contesto, tutto il resto resta «nessuna sessione»
+com'è. In `App.tsx`, prima del ramo `!session`: se `restoreError`, un `ErrorState` a
+schermo intero con `onRetry` che rilancia il ripristino — la stessa forma del terzo stato
+del guscio. Niente «Esci»: senza rete un logout non arriva al server, e un bottone che
+fallisce è peggio di uno che manca.
+
+Trappola: il `finally` che mette `restoring` a `false` **deve restare** anche sul ramo
+dell'errore, altrimenti la riprova non ha un caricamento da mostrare e lo schermo salta
+dall'errore al contenuto. E la riprova rimette `restoring` a `true` prima di rilanciare.
+
+**Criterio di fine:** un test che rende `App` (o `SessionProvider` con una sonda, se `App`
+costa troppo) con la `fetch` di `/auth/refresh` che lancia `TypeError('Failed to fetch')`:
+il form di accesso **non** compare, compare l'errore con «Riprova»; poi la rete torna, un
+clic su «Riprova», e la sessione c'è. Al contrario, rimettendo `.catch(() => undefined)`:
+il form di accesso compare.
+
+##### `D3` — `R46`: la membership nel ramo dell'inquilino, al livello della RLS
+
+Migration `0041_tenant_access_requires_membership.sql`: `CREATE OR REPLACE` di
+`app.can_access_lease` e `app.can_access_property`, identiche a `0014` salvo
+`AND app.is_org_member(l.org_id)` nel ramo `EXISTS` dell'inquilino (in
+`can_access_property` l'organizzazione è `p.org_id`, e conviene usarla). Le funzioni sono
+`SECURITY DEFINER` e `is_org_member` anche: il costo è una lettura in più di
+`org_members` per riga, sull'indice che `member_role` usa già.
+
+Alternativa scartata: rileggere la membership in `Authenticated` a ogni richiesta. Cambia
+la forma del baratto di [ADR-012](08-decisioni.md#adr-012) — il JWT non revocabile — per
+tutte le rotte, staff compreso, dove il [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6)
+mostra che le policy passano già da `member_role` e restituiscono vuoto. Il difetto è
+solo nel ramo dell'inquilino, e si chiude lì.
+
+Le invarianti dello schema (`ops/sql/checks/schema_invariants.sql`) non guardano il corpo
+delle funzioni: nessun controllo da aggiornare, ma `./ops/ci/check-schema.sh` va comunque
+eseguito perché è la CI a dirlo.
+
+**Criterio di fine:** il login «di comodo» esce dal test, e il test afferma con il **token
+vecchio** che `GET /leases` non porta più il contratto disdetto e che aprire una
+segnalazione nell'organizzazione lasciata è rifiutato — con quale codice lo dice
+l'esecuzione (la policy di inserimento nega, e il bordo HTTP lo traduce come già traduce
+un immobile non accessibile), e l'esito lo scrive. Al contrario, senza la migration: il
+contratto torna nel corpo, che è la riga di `R46`.
+
+##### `D4` — L'esito, le tre voci fuori da [12](12-da-fare.md), e il runbook
+
+L'esito in [11](11-piani-conclusi.md); `R50`, `R51` e `R46` escono; la riga di `R42` in
+[04](04-sicurezza.md), se la 6 l'ha lasciata, resta com'è perché `R42` non si tocca. Poi il
+runbook, com'è scritto, e il suo esito come quello di una sezione: **le osservazioni si
+scrivono mentre lo si percorre**, non alla fine — è la mancanza che la 5-bis dichiara di sé.
+
+### Trappole
+
+**Cercare un posto «sotto `/api/v1`» dove montarle.** Non esiste: l'autenticazione è un
+estrattore per handler (`Authenticated`), non uno strato sul prefisso, e il prefisso è
+scritto per esteso in ogni rotta. Le due rotte nuove stanno nello stesso `router()` di
+`health.rs`, senza estrattore, come le due che ci sono; una sonda che chieda un token non è
+una sonda.
+
+**Un `ErrorState` senza `restoring`.** Vedi `D2`: lo stato di caricamento della riprova
+è la parte che si dimentica, e senza quella la riprova sembra non fare niente.
+
+**Toccare `member_role` invece delle due funzioni.** È usata da tutte le policy dello
+staff, e un cambiamento lì cambia tutto; il difetto sta nel ramo che **non** la usa.
+
+**Dichiarare il codice HTTP del rifiuto prima di vederlo.** Il bordo traduce un `EXISTS`
+falso in modi diversi a seconda della rotta (`404` per una risorsa che «non è tua», `403`
+per un'azione negata): il test afferma ciò che l'esecuzione mostra, e l'esito lo scrive.
+
+### Che cosa **non** entra
+
+- **`R48`, `R49`, `R42`**: lasciate con la ragione nel [prossimo passo](09-stato-e-roadmap.md#prossimo-passo-suggerito);
+- **il deploy stesso**: non è codice e non ha test; si esegue dopo, dal runbook;
+- **il «Ricordami»**: è `R42`, ADR prima del codice.
+
+<a id="esito-sezione-10"></a>
+
+## Esito — Sezione 10: tre chiusure prima del primo deploy
+
+Eseguita il **18 settembre 2026**, in una conversazione sola e senza agenti, com'era
+scritto. Chiude `R50`, `R51` e `R46`. I test Rust passano da 478 a **479**, quelli del
+client da 138 a **141**. `just ci` verde, zero `SALTATO`. Con lei è verde ciò che doveva
+precedere il [runbook](07-operazioni.md#il-primo-deploy--runbook): il passo dopo è il
+merge della PR che porta le sezioni 1-10 in `dev`, e poi il deploy.
+
+### Che cosa è entrato
+
+- **`D1` — le sonde anche sotto `/api/v1`** (`R50`): due `.route()` in più nello stesso
+  `router()` di `routes/health.rs`, stessi handler, nessun estrattore. Le rotte alla
+  radice restano per l'`healthcheck` del container. La tabella delle sonde in
+  [07](07-operazioni.md#sonde) e quella degli endpoint in [05](05-api.md) dicono che le
+  due forme sono equivalenti e perché esistono entrambe. Un test,
+  `the_probes_answer_the_same_at_the_root_and_under_the_prefix`, confronta stato e corpo
+  per tutte e due le sonde, e afferma il `200` a parte — due `404` sarebbero «uguali»
+  anche loro;
+- **`D2` — un `refresh` fallito per rete al caricamento non è «nessuna sessione»**
+  (`R51`): `SessionProvider` espone `restoreError` e `retryRestore`; `App` rende un
+  `ErrorState` a schermo intero con «Riprova» **prima** del ramo `!session`, senza
+  «Esci». La riprova rimette `restoring` a `true` prima di rilanciare, com'era la
+  trappola del piano. **Il ramo copre anche i `5xx`**, e non era nel piano: vedi sotto.
+  Tre stringhe nuove in `it.ts` — `http.502`, `http.503`, `http.504` — perché un corpo
+  che non è JSON prende `http.<stato>` come codice e «non è stato possibile completare
+  l'operazione» non direbbe che è passeggero. Tre test in `app/App.test.tsx`, che
+  rendono `App` intera: la rete che lancia `TypeError`, il proxy che risponde `502`, e
+  il `401` che resta «nessuna sessione»;
+- **`D3` — la membership nel ramo dell'inquilino** (`R46`): migration
+  `0041_tenant_access_requires_membership.sql`, `CREATE OR REPLACE` di
+  `app.can_access_lease` e `app.can_access_property` identiche alla `0014` salvo
+  `app.is_org_member(l.org_id)` e `app.is_org_member(p.org_id)` nel ramo dell'inquilino.
+  `member_role` non è toccata. Il login «di comodo» è uscito dal test, che afferma con il
+  **token vecchio**: `GET /leases` risponde `200` con un elenco che non porta più il
+  contratto disdetto, e aprire una segnalazione nell'organizzazione lasciata risponde
+  **`404 property.not_found`** — l'immobile non si legge, e il bordo lo traduce come ogni
+  risorsa che «non è tua». La decisione e l'alternativa scartata sono
+  [ADR-054](08-decisioni.md#adr-054); [03](03-modello-dati.md) e [04](04-sicurezza.md)
+  descrivono lo stato nuovo.
+
+### Il piano aveva una premessa incompleta, e il giro a mano l'ha trovata
+
+«Il ripristino della sessione tratta la rete caduta come "nessuna sessione"» era vero,
+ma `R51` era stata **vista** «con l'API spenta» nel giro della 8 — e con l'API spenta e
+il proxy acceso `fetch` **non lancia**: risponde il proxy, `502 Bad Gateway`, `response.ok`
+falso, `sendRefresh` fa `clear()` e lancia un `ApiError` con `status: 502`. Il ramo del
+piano guardava solo `isOffline` (`status: 0`), cioè il telefono in galleria che non
+raggiunge nemmeno Caddy, e lasciava il `502` a «nessuna sessione»: form di accesso, con
+il cookie ancora buono — il sintomo esatto della voce. In produzione il `502` è il caso di
+**ogni deploy**: mentre l'API si riavvia, chi ricarica finiva al login, e il login
+avrebbe risposto `502` a sua volta.
+
+Visto con gli occhi su porte a parte, prima del codice di D2 e dopo: con il ramo del
+piano, il form; con l'emenda, l'errore. **Emendato, con la decisione presa in
+conversazione e non da soli**: al ripristino `isOffline || status >= 500` diventa
+`restoreError`; un `4xx` — il `401` in testa — resta «nessuna sessione». Il `TypeError`
+resta coperto: era giusto, era solo la metà.
+
+### Decisioni prese eseguendo
+
+- **il lancio e la riprova sono due funzioni.** Il lint (`react/set-state-in-effect`)
+  rifiuta un `setState` sincrono dentro l'effetto, e ha ragione: al montaggio `restoring`
+  è già `true`. `launchRestore` non tocca lo stato e lo chiama l'effetto; `retryRestore`
+  rimette davanti il caricamento e poi lancia. Un contatore su `useRef` fa ignorare a un
+  tentativo superato — lo smontaggio dello `StrictMode`, una riprova mentre l'altra è in
+  volo — la scrittura dello stato;
+- **`ErrorState` com'è, senza una stringa dedicata al ripristino.** Il titolo e il
+  messaggio sono quelli del terzo stato del guscio; la novità sono le tre stringhe dei
+  gateway, che valgono per ogni `ErrorState` e non solo per questo;
+- **il documento OpenAPI elenca solo le forme alla radice.** `utoipa::path` lega un
+  percorso a un handler, e i due handler sono gli stessi; le due forme sono equivalenti
+  per contratto scritto in [05](05-api.md), non per una voce doppia nella specifica;
+- **`is_org_member(p.org_id)` in `can_access_property`**, non `l.org_id`: è
+  l'organizzazione dell'immobile, che è quella che si sta guardando, ed è la stessa;
+- **il rifiuto della segnalazione è `404`, non `403`**, e lo dice l'esecuzione: `OpenTicket`
+  legge l'immobile prima di scrivere, la `SELECT` non lo trova, e il bordo risponde
+  `property.not_found`. È coerente con il cambio di organizzazione, che non distingue
+  «non esiste» da «non ne fai parte». Scritto in ADR-054 come conseguenza.
+
+### Verificato al contrario
+
+Ogni test nuovo è stato rimesso sul difetto e guardato cadere:
+
+- le sonde con il prefisso tolte dal router: `assertion left == right failed:
+  /api/v1/health non risponde come /health: {"code":"endpoint.not_found",…,"status":404}`;
+- il ramo offline del ripristino tolto (l'errore torna «nessuna sessione»): `Unable to
+  find role="alert"` — e il form di accesso sotto;
+- la trappola del piano, `setRestoring(true)` tolto dalla riprova: `Unable to find
+  role="status"` — dall'errore al contenuto senza un caricamento in mezzo. Il test tiene
+  in volo il rinnovo della riprova finché non lo rilascia, ed è l'unico modo di guardare
+  lo schermo *durante*; il rilascio aspetta che la `fetch` sia partita, perché fra il
+  clic e la richiesta ci sono il lock fra le schede e il singolo volo;
+- il `5xx` tolto dal ramo (`isOffline` da solo, com'era il piano): `Unable to find
+  role="alert"` sul test del `502`;
+- la migration `0041` tolta: `chi è uscito legge ancora il contratto disdetto con il
+  token vecchio: {"items":[{…,"effective_status":"terminated",…}]}` — che è la riga di
+  `R46`;
+- la migration tolta **e** la prima asserzione silenziata, per vedere cadere anche la
+  seconda: `assertion left == right failed: corpo: {…,"reference":"TK-000001",…,
+  "status":"open",…}` — `201`, la segnalazione aperta nell'organizzazione lasciata.
+
+### Che cosa è stato provato a mano
+
+Su porte a parte — Postgres su `55432` con la `0041` applicata dal migratore e
+`check-schema.sh` pulito, API su `8090`, client su `5174`. Le quattro sonde con `curl`,
+tutte `200` con lo stesso corpo; `/api/v1/ready` attraverso il proxy del client, `200
+ready`. Poi il client con l'API **spenta**: l'errore a schermo intero con «Riprova», il
+messaggio del `502`, nessun form e nessun «Esci»; l'API riaccesa, un clic su «Riprova»,
+`401` dal rinnovo e il form di accesso — non c'era un cookie. **Non visto con gli
+occhi**: «Riprova» con un cookie buono, che porta dentro, perché il giro è stato fatto
+senza entrare con un account; lo prova il test, che rende `App` intera. `R46` a mano
+non è stato provato: nel mondo del seeder nessun inquilino può uscire, tutti hanno un
+contratto in essere, e la prova è il test con le sue due asserzioni cadute.
+
+**L'Invio nel campo del codice su `/invito` resta da provare con una tastiera vera**,
+dal poscritto della 8.
+
+### Che cosa resta aperto
+
+- **il rinnovo dentro la sessione, su un `5xx`**: `sendRefresh` fa `clear()` su ogni
+  `!response.ok`, quindi un `401` arrivato durante un riavvio dell'API, seguito da un
+  rinnovo che risponde `502`, chiude la sessione in memoria — con il cookie ancora buono.
+  È lo stesso difetto di `R51` sull'altro lato, e non era nel perimetro: `R52` in
+  [12](12-da-fare.md);
+- le stringhe `http.5xx` coprono un corpo che **non è JSON**: un `503` dell'API stessa
+  (timeout della richiesta) porta un Problem Details con il suo codice, e passa da lì.

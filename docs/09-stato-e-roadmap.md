@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **12 settembre 2026**.
+Stato al **18 settembre 2026**.
 
 ## Come si usa questo documento
 
@@ -104,8 +104,10 @@ più denso è quello dei privilegi: otto `UPDATE` scritte a mano come ruolo appl
 su `app.users`, una per colonna negata, e quattro sulle concesse — perché è **l'elenco**
 a essere il contratto, e `platform_role` da sola non basterebbe. Gli altri provano che
 non si esce con un contratto in essere, che chi è uscito rientra accettando un invito
-nuovo, e che dopo un cambio password ciò che muore è il **rinnovo** e non la lettura:
-l'access token è un JWT e vive i suoi quindici minuti.
+nuovo — e che **con il token di prima**, nei suoi quindici minuti, non legge più il
+contratto disdetto né apre segnalazioni nell'organizzazione lasciata (`0041`,
+[ADR-054](08-decisioni.md#adr-054)) — e che dopo un cambio password ciò che muore è il
+**rinnovo** e non la lettura: l'access token è un JWT e vive i suoi quindici minuti.
 
 I sette della sezione 5 provano soprattutto **confini**: la segnalazione condivisa che
 arriva al coinquilino *con il thread e lo storico*, quella non condivisa che non gli
@@ -137,6 +139,7 @@ dell'API dietro un reverse proxy.
 | Aritmetica decimale su interi: `parseFloat` non compare | completo |
 | Client dell'API con il **refresh a singolo volo** e la traduzione di `ProblemDetails` | completo |
 | Guscio: ingresso da invito (i due generi, il codice prima del form), accesso, uscita, organizzazione attiva, **stato senza organizzazione**, navigazione | completo |
+| **Il ripristino della sessione distingue la rete dal rifiuto**: un `refresh` che non arriva al server, o che riceve un `5xx` dal proxy, è uno stato d'errore con «Riprova» e non «nessuna sessione» — chi ricarica in galleria o durante un deploy non finisce al login con il cookie ancora buono | completo per la sezione 10 |
 | **Il selettore delle organizzazioni letto dall'API**, con i nomi al posto degli UUID; il `localStorage` ridotto a ricordare *quale* era attiva | completo per la fetta B |
 | **La navigazione e la rotta iniziale sono funzioni del ruolo**: `useIsStaff()` in un posto solo, e le azioni di scrittura non si offrono a chi riceverebbe `403` | completo per la fetta B |
 | Segnalazioni: apertura sull'immobile, elenco con `?open=true`, dettaglio con lo storico, thread paginato a parte, le **sette** transizioni e il `PATCH` dei soli costi | completo per la fetta B |
@@ -363,7 +366,55 @@ cambia il contesto.
 
 ## Prossimo passo suggerito
 
-**La [sezione 10](#piano-sezione-10): tre chiusure, poi il primo deploy.** Con la
+**Il merge in `dev`, poi il primo deploy dal runbook.** La
+[sezione 10](11-piani-conclusi.md#esito-sezione-10) è conclusa il 18 settembre 2026, ed
+era l'ultima cosa che doveva essere verde prima del
+[runbook del primo deploy](07-operazioni.md#il-primo-deploy--runbook). Il passo dopo non è
+una sezione di prodotto e non ha un piano da scrivere qui: **il runbook è il piano**, è
+scritto da tempo, e la regola «a esito scritto si pianifica la successiva» si onora
+dicendo questo invece di riscriverlo. Nell'ordine:
+
+1. **il merge della PR che porta le sezioni 1-10 in `dev`.** È una PR sola, tenuta aperta
+   apposta finché la 10 non fosse verde, perché le tre chiusure erano ciò che il deploy
+   incontra da sé nel primo mese e mergiare prima avrebbe pubblicato un `dev` che il
+   runbook non poteva dichiarare riuscito (la sonda `…/api/v1/ready` rispondeva `404`).
+   Non è *squash*: è la base di una storia lunga, e riscriverla toglie la ragione dei
+   commit a chi la rileggerà;
+2. **il primo deploy, com'è scritto in [07](07-operazioni.md#il-primo-deploy--runbook)**,
+   con i mezzi da procurare prima — una VPS, un dominio, un relay SMTP con SPF, DKIM e
+   DMARC, le credenziali — e **il ripristino provato una volta** prima di metterci i dati
+   di qualcuno, come dice la riga della sezione 11 in [12](12-da-fare.md). Il criterio di
+   fine è il punto 4 del runbook: *aprire il prodotto dal telefono, in 4G*;
+3. **l'esito del deploy si scrive in [11](11-piani-conclusi.md) come quello di una
+   sezione, mentre lo si percorre** — che cosa ha retto, che cosa no, e il giro dal
+   telefono con le sue osservazioni riga per riga. È la mancanza che la 5-bis dichiara di
+   sé, e non si ripete: le osservazioni scritte alla fine sono quelle che si ricordano,
+   non quelle che si sono viste.
+
+*Che cosa la 10 lascia da portarsi dietro.* Una premessa era incompleta e il giro a mano
+l'ha trovata prima del codice: `R51` era stata vista «con l'API spenta», e con l'API
+spenta risponde il proxy con un `502`, non la rete con un `TypeError`; il ramo copre
+entrambi, con la decisione presa in conversazione. Ne è uscita `R52` — lo stesso difetto
+sull'altro lato, il rinnovo *dentro* la sessione su un `5xx` — che è in
+[12](12-da-fare.md) e **non precede il deploy**: si manifesta solo se un `401` cade
+esattamente durante un riavvio, e la via d'uscita è un ricaricamento, che da oggi non
+manda più al login. **L'Invio nel campo del codice su `/invito` resta da provare con una
+tastiera vera**, dal poscritto della 8.
+
+*Dopo il deploy.* Il mese con un proprietario vero, che le sezioni 6-9 aspettavano e
+che è slittato: è la misura che decide l'ordine di ciò che resta in [12](12-da-fare.md)
+— `R48`, `R49`, `R42` e le altre — e nessuna di quelle voci va presa in mano prima di
+averla, perché il criterio d'ordine finora è stato un ragionamento e non una prova.
+
+---
+
+Quanto segue è la storia del «prossimo passo» com'era prima, sezione per sezione, e resta
+perché le sue lezioni sono citate da altri documenti.
+
+**Com'era dopo la 9, prima della 10** — la decisione sul deploy e il criterio con cui
+sono state scelte le tre voci:
+
+**La [sezione 10](11-piani-conclusi.md#piano-sezione-10): tre chiusure, poi il primo deploy.** Con la
 [9](11-piani-conclusi.md#esito-sezione-9), conclusa il 17 settembre 2026, finisce la lista
 delle sezioni decise dopo il collaudo. Il passo dopo non è una sezione di prodotto: è la
 decisione se fare il [primo deploy](07-operazioni.md#il-primo-deploy--runbook) con i
@@ -409,7 +460,7 @@ con la ragione scritta:
   e il «Ricordami» è un ADR prima del codice — una decisione sulla sicurezza che non si
   prende di fretta per fare un deploy.
 
-Il piano della 10 è [sotto](#piano-sezione-10), con le premesse verificate contro il
+Il piano della 10 è [in 11](11-piani-conclusi.md#piano-sezione-10), con le premesse verificate contro il
 codice. Quando è verde, il runbook si esegue com'è scritto, e **l'esito del deploy si
 scrive in [11](11-piani-conclusi.md)** come quello di una sezione: che cosa ha retto, che
 cosa no, e il giro dal telefono con le sue osservazioni, riga per riga, mentre lo si fa.
@@ -419,11 +470,6 @@ un conteggio mai fatto e una rotta che non poteva stare dove il piano la metteva
 nessuna ha cambiato una decisione; una stringa che descriveva l'interfaccia («in alto a
 destra») era falsa e solo il giro l'ha vista. **L'Invio nel campo del codice su `/invito`
 resta da provare con una tastiera vera**, dal poscritto della 8.
-
----
-
-Quanto segue è la storia del «prossimo passo» com'era prima, sezione per sezione, e resta
-perché le sue lezioni sono citate da altri documenti.
 
 `G0`, il giro a mano
 della 8, è stato fatto e ha reso: un difetto bloccante sul percorso principale che 478 + 129
@@ -471,7 +517,7 @@ Il deploy era **rinviato in fondo**, per mancanza di mezzi e non di priorità: i
 [runbook](07-operazioni.md#il-primo-deploy--runbook) è scritto, gli artefatti sono validi
 per quello che si può validare senza una macchina, e servono una VPS, un dominio, un relay
 SMTP con SPF, DKIM e DMARC e delle credenziali. **Dalla 9 è il prossimo passo**, con le
-tre chiusure della [10](#piano-sezione-10) davanti, e il suo criterio di fine intatto:
+tre chiusure della [10](11-piani-conclusi.md#piano-sezione-10) davanti, e il suo criterio di fine intatto:
 *aprire il prodotto dal telefono, in 4G*.
 
 **Che cosa cambia nel criterio d'ordine, e va detto.** Le sezioni 6-9 dovevano venire dopo
@@ -618,128 +664,6 @@ esattamente uno staff.
 Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
 quella qui sotto: **il fornitore di OCR**.
 
-
-<a id="piano-sezione-10"></a>
-
-## Piano — Sezione 10: tre chiusure prima del primo deploy
-
-Pianificata il **17 settembre 2026**, subito dopo l'esito della 9 e sotto la regola che
-una sezione conclusa pianifica la successiva. Chiude `R50`, `R51` e `R46`; **non** chiude
-`R48`, `R49` e `R42`, e il perché di ogni scelta è nel [prossimo passo](#prossimo-passo-suggerito),
-che è dove la decisione sul deploy è scritta. Questa sezione è ciò che deve essere verde
-**prima** di eseguire il [runbook](07-operazioni.md#il-primo-deploy--runbook); il runbook
-stesso non è un passo di questa sezione, perché non è codice e non ha un test — ha un
-criterio di fine, e il suo esito si scrive in [11](11-piani-conclusi.md) quando è fatto.
-
-**Si esegue in una sola conversazione**, come la 9. Ogni test nuovo provato al contrario
-prima di consegnarlo, con l'assert caduto scritto nell'esito.
-
-### Che cosa esiste davvero, verificato e non dedotto
-
-| Premessa | Verifica |
-|---|---|
-| Le sonde stanno alla radice del router, e ogni altra rotta porta il prefisso per intero | vero: `crates/api/src/routes/health.rs` monta `/health` e `/ready`; le altre rotte scrivono `"/api/v1/…"` per esteso (`routes/me.rs:31`), non c'è un `nest("/api/v1")` in `crates/api/src/lib.rs` — quindi aggiungere le due rotte con il prefisso è **due `.route()` in più nello stesso `router()`**, non uno spostamento |
-| Il proxy inoltra solo `/api/v1/*` | vero: `ops/web/Caddyfile:18`, `handle /api/v1/*`; tutto il resto va al file server, che risponde `index.html` con `200` a qualunque percorso |
-| Il runbook prova `…/api/v1/ready` | vero: [07](07-operazioni.md#il-primo-deploy--runbook), passo 4.1, riga 508 |
-| Il ripristino della sessione tratta la rete caduta come «nessuna sessione» | vero: `apps/web/src/app/session.tsx:117`, `.catch(() => undefined)` sul `store.refresh()` dell'effetto di ripristino; `App.tsx:131` mostra `Loading` finché `restoring`, poi le rotte da fuori sessione se `session` è nullo |
-| Il fallimento per rete è già distinguibile da un `401` | vero: `store.refresh()` in `apps/web/src/api/session.ts:369` lancia `offlineError()` **senza** cancellare la sessione, e solo su `!response.ok` fa `this.clear()`; `ApiError.isOffline` è in `api/problem.ts:67`, e il guscio lo usa già per il terzo stato (`shell.tsx:164`, `ErrorState` con `onRetry`) |
-| Il ramo dell'inquilino delle due funzioni di accesso non guarda la membership | vero: `migrations/0014_rls.sql:53` (`can_access_lease`) e `:72` (`can_access_property`) passano da `lease_parties.user_id = app.current_user_id()` senza `is_org_member`; **nessuna migration successiva le ridefinisce** (`grep -c 'FUNCTION app.can_access_lease' migrations/*.sql` dà 1, in `0014`) — quindi la migration nuova le riscrive per intero con `CREATE OR REPLACE` |
-| `is_org_member` esige una membership attiva | vero: `0014_rls.sql:28`, passa da `member_role`, che filtra `status = 'active'` e `deleted_at IS NULL` (`:17`); `LeaveOrganization` (sezione 6) tocca `org_members` e non `lease_parties` |
-| Un test fa un login «di comodo» per non vedere il difetto | vero: `crates/api/tests/http_contract.rs:2719`, dentro `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back`, con il commento che lo dichiara; la voce `R46` dice di toglierlo quando si chiude |
-| I test Rust sono 478, quelli del client 138 | vero, esito della 9 |
-
-### Decomposizione
-
-##### `D1` — `R50`: le sonde anche sotto `/api/v1`
-
-In `routes/health.rs`, le stesse due funzioni montate anche su `/api/v1/health` e
-`/api/v1/ready`; le rotte alla radice **restano**, perché l'`healthcheck` del container
-parla all'API direttamente e non passa dal proxy. La riga della tabella delle sonde in
-[07](07-operazioni.md) dice che le due forme sono equivalenti e perché esistono entrambe.
-
-Alternativa scartata: un `handle /ready` nel Caddyfile. Sposta la conoscenza delle sonde
-nel proxy, che oggi conosce solo il prefisso, e lascia `…/api/v1/ready` — la forma che il
-runbook usa — a rispondere `404`.
-
-**Criterio di fine:** un test in `crates/api/tests/` che `GET /api/v1/ready` risponde come
-`GET /ready` (stesso stato, stesso corpo), provato al contrario togliendo la rotta nuova
-(`404 endpoint.not_found`).
-
-##### `D2` — `R51`: un `refresh` fallito per rete non è «nessuna sessione»
-
-In `session.tsx`, l'effetto di ripristino distingue: `ApiError` con `isOffline` diventa
-uno stato `restoreError` esposto dal contesto, tutto il resto resta «nessuna sessione»
-com'è. In `App.tsx`, prima del ramo `!session`: se `restoreError`, un `ErrorState` a
-schermo intero con `onRetry` che rilancia il ripristino — la stessa forma del terzo stato
-del guscio. Niente «Esci»: senza rete un logout non arriva al server, e un bottone che
-fallisce è peggio di uno che manca.
-
-Trappola: il `finally` che mette `restoring` a `false` **deve restare** anche sul ramo
-dell'errore, altrimenti la riprova non ha un caricamento da mostrare e lo schermo salta
-dall'errore al contenuto. E la riprova rimette `restoring` a `true` prima di rilanciare.
-
-**Criterio di fine:** un test che rende `App` (o `SessionProvider` con una sonda, se `App`
-costa troppo) con la `fetch` di `/auth/refresh` che lancia `TypeError('Failed to fetch')`:
-il form di accesso **non** compare, compare l'errore con «Riprova»; poi la rete torna, un
-clic su «Riprova», e la sessione c'è. Al contrario, rimettendo `.catch(() => undefined)`:
-il form di accesso compare.
-
-##### `D3` — `R46`: la membership nel ramo dell'inquilino, al livello della RLS
-
-Migration `0041_tenant_access_requires_membership.sql`: `CREATE OR REPLACE` di
-`app.can_access_lease` e `app.can_access_property`, identiche a `0014` salvo
-`AND app.is_org_member(l.org_id)` nel ramo `EXISTS` dell'inquilino (in
-`can_access_property` l'organizzazione è `p.org_id`, e conviene usarla). Le funzioni sono
-`SECURITY DEFINER` e `is_org_member` anche: il costo è una lettura in più di
-`org_members` per riga, sull'indice che `member_role` usa già.
-
-Alternativa scartata: rileggere la membership in `Authenticated` a ogni richiesta. Cambia
-la forma del baratto di [ADR-012](08-decisioni.md#adr-012) — il JWT non revocabile — per
-tutte le rotte, staff compreso, dove il [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6)
-mostra che le policy passano già da `member_role` e restituiscono vuoto. Il difetto è
-solo nel ramo dell'inquilino, e si chiude lì.
-
-Le invarianti dello schema (`ops/sql/checks/schema_invariants.sql`) non guardano il corpo
-delle funzioni: nessun controllo da aggiornare, ma `./ops/ci/check-schema.sh` va comunque
-eseguito perché è la CI a dirlo.
-
-**Criterio di fine:** il login «di comodo» esce dal test, e il test afferma con il **token
-vecchio** che `GET /leases` non porta più il contratto disdetto e che aprire una
-segnalazione nell'organizzazione lasciata è rifiutato — con quale codice lo dice
-l'esecuzione (la policy di inserimento nega, e il bordo HTTP lo traduce come già traduce
-un immobile non accessibile), e l'esito lo scrive. Al contrario, senza la migration: il
-contratto torna nel corpo, che è la riga di `R46`.
-
-##### `D4` — L'esito, le tre voci fuori da [12](12-da-fare.md), e il runbook
-
-L'esito in [11](11-piani-conclusi.md); `R50`, `R51` e `R46` escono; la riga di `R42` in
-[04](04-sicurezza.md), se la 6 l'ha lasciata, resta com'è perché `R42` non si tocca. Poi il
-runbook, com'è scritto, e il suo esito come quello di una sezione: **le osservazioni si
-scrivono mentre lo si percorre**, non alla fine — è la mancanza che la 5-bis dichiara di sé.
-
-### Trappole
-
-**Cercare un posto «sotto `/api/v1`» dove montarle.** Non esiste: l'autenticazione è un
-estrattore per handler (`Authenticated`), non uno strato sul prefisso, e il prefisso è
-scritto per esteso in ogni rotta. Le due rotte nuove stanno nello stesso `router()` di
-`health.rs`, senza estrattore, come le due che ci sono; una sonda che chieda un token non è
-una sonda.
-
-**Un `ErrorState` senza `restoring`.** Vedi `D2`: lo stato di caricamento della riprova
-è la parte che si dimentica, e senza quella la riprova sembra non fare niente.
-
-**Toccare `member_role` invece delle due funzioni.** È usata da tutte le policy dello
-staff, e un cambiamento lì cambia tutto; il difetto sta nel ramo che **non** la usa.
-
-**Dichiarare il codice HTTP del rifiuto prima di vederlo.** Il bordo traduce un `EXISTS`
-falso in modi diversi a seconda della rotta (`404` per una risorsa che «non è tua», `403`
-per un'azione negata): il test afferma ciò che l'esecuzione mostra, e l'esito lo scrive.
-
-### Che cosa **non** entra
-
-- **`R48`, `R49`, `R42`**: lasciate con la ragione nel [prossimo passo](#prossimo-passo-suggerito);
-- **il deploy stesso**: non è codice e non ha test; si esegue dopo, dal runbook;
-- **il «Ricordami»**: è `R42`, ADR prima del codice.
 
 <a id="raccolta-da-ordinare"></a>
 
