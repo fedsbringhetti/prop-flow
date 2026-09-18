@@ -2294,7 +2294,7 @@ E la **dashboard**, che questa fetta ha reso *possibile* e non *prossima*. Fino 
 due dei suoi numeri mentivano e adesso nessuno dei due mente più, ma la finestra su
 quei numeri la chiude il primo client e non l'endpoint: sbloccata non è prioritaria, e
 due delle sue semantiche restano da decidere. La distinzione è scritta in
-[Prossimo passo suggerito](09-stato-e-roadmap.md#prossimo-passo-suggerito), perché è la conclusione sbagliata
+[Perché la dashboard doveva restare ultima](#perche-la-dashboard-doveva-restare-ultima), perché è la conclusione sbagliata
 che questa fetta invitava a trarre.
 
 ---
@@ -12198,7 +12198,7 @@ della navigazione: `t.nav.*`, non una copia.
   con le chiavi, e tradurre sarà aggiungere, non riscrivere;
 - **`R46`, `R48`, `R49`**: sono del perimetro dei ruoli, e vanno decisi nella scelta sul
   deploy, non qui;
-- **le email di notifica** (piano in [09](09-stato-e-roadmap.md#prima-degli-utenti-veri), «Le notifiche»):
+- **le email di notifica** (piano in [09 com'era](#prima-degli-utenti-veri), «Le notifiche»):
   spiegano un evento, non il sito.
 
 <a id="esito-sezione-9"></a>
@@ -12604,3 +12604,883 @@ dal poscritto della 8.
   [12](12-da-fare.md);
 - le stringhe `http.5xx` coprono un corpo che **non è JSON**: un `503` dell'API stessa
   (timeout della richiesta) porta un Problem Details con il suo codice, e passa da lì.
+
+
+<a id="archivio-09-al-18-settembre-2026"></a>
+
+## Archivio — «09 — Stato e roadmap» com'era prima della riscrittura del 18 settembre 2026
+
+Il 18 settembre 2026 `09` è stato riscritto per intero: teneva tre piani uno sopra
+l'altro — il prossimo passo corrente, la storia dei prossimi passi precedenti, e un
+«Piano — Completare il prodotto» dell'8 settembre che chiedeva un collaudo fatto il 9 e
+pianificava notifiche fatte il 10 — e la roadmap vera stava in `12`, che dichiara di non
+essere un piano. Quello che segue è ciò che è stato tolto, **com'era**, perché altri
+documenti lo citano e perché le sue lezioni restano vere anche dove la sua forma non lo
+è più. Ogni blocco porta l'ancora con cui era citato.
+
+<a id="storia-del-prossimo-passo"></a>
+
+### La storia del «prossimo passo», sezione per sezione
+
+Quanto segue è la storia del «prossimo passo» com'era prima, sezione per sezione, e resta
+perché le sue lezioni sono citate da altri documenti.
+
+**Com'era dopo la 9, prima della 10** — la decisione sul deploy e il criterio con cui
+sono state scelte le tre voci:
+
+**La [sezione 10](#piano-sezione-10): tre chiusure, poi il primo deploy.** Con la
+[9](#esito-sezione-9), conclusa il 17 settembre 2026, finisce la lista
+delle sezioni decise dopo il collaudo. Il passo dopo non è una sezione di prodotto: è la
+decisione se fare il [primo deploy](07-operazioni.md#il-primo-deploy--runbook) con i
+mezzi che ci sono, e che cosa debba precederlo. **La decisione è sì**, ed è presa qui con
+le sue ragioni.
+
+*Perché sì, adesso.* Dalla 5-quater il deploy era «rinviato per mancanza di mezzi e non di
+priorità», e i mezzi — una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC — vanno
+procurati da chi possiede il progetto, non costruiti: nessuna sezione li fa arrivare. Nel
+frattempo ogni sezione ha reso meno della precedente, e le ultime tre sono state rifinitura
+su schermate che nessun estraneo ha ancora visto. Il criterio di fine del runbook — *aprire
+il prodotto dal telefono, in 4G* — è l'unica prova che il progetto non può darsi da solo,
+ed è la prova che vale di più: la 6, la 7 e la 8 hanno mostrato che i test non bastano e che
+un giro a mano rende in un'ora quanto una sezione, e un giro dal telefono di una persona
+esterna è il giro che nessuna sezione sostituisce.
+
+*Che cosa precede il deploy, e che cosa no.* Sei voci di [12](12-da-fare.md) erano
+candidate; se ne prendono tre, per un criterio solo — **ciò che il primo deploy incontra da
+sé, con un proprietario e i suoi inquilini, nel primo mese** — e le altre tre si lasciano
+con la ragione scritta:
+
+- **`R50` prima, senza discussione**: `/ready` sta alla radice del router e il proxy
+  inoltra solo `/api/v1/*`, quindi il passo 4.1 del runbook — `curl …/api/v1/ready` — non
+  può riuscire, ed è il criterio con cui il deploy si dichiara riuscito. Due righe in
+  `routes/health.rs`;
+- **`R51` prima**: un `refresh` fallito per rete al caricamento manda alla pagina di
+  accesso senza dirlo. Sul telefono in 4G — che è il criterio di fine — è il caso normale,
+  non quello raro, e la prima persona esterna lo incontrerebbe al primo tunnel. `ApiError.isOffline`
+  esiste già; manca il ramo nel ripristino;
+- **`R46` prima**: chi esce da un'organizzazione continua a leggerne i dati per i quindici
+  minuti del suo access token, e dopo ADR-053 è il caso di **ogni** inquilino che esce. Nel
+  primo mese uscire è raro — il contratto in vigore lo vieta — ma è un'esposizione di dati
+  nota prima che dentro ci siano i dati di qualcuno, e la via scelta è una migration che
+  chiude al livello della RLS: la cosa più economica da fare *prima* e la più cara da
+  spiegare *dopo*;
+- **`R48` dopo**: chi ha già un account e nessuna organizzazione non può diventare
+  proprietario. Nel primo mese c'è un proprietario, che è chi possiede il progetto, e i
+  suoi inquilini: il caso non si presenta. È una terza rotta e un ramo nel form, e va
+  pianificato quando qualcuno lo chiede;
+- **`R49` dopo**: il secondo browser con un'organizzazione lasciata altrove parte con un
+  `X-Org-Id` morto, e l'elenco lo corregge da sé. È un lampo, non un vicolo cieco;
+- **`R42` dopo**: la finestra scorrevole dei trenta giorni è la forma comune, è documentata,
+  e il «Ricordami» è un ADR prima del codice — una decisione sulla sicurezza che non si
+  prende di fretta per fare un deploy.
+
+Il piano della 10 è [in 11](#piano-sezione-10), con le premesse verificate contro il
+codice. Quando è verde, il runbook si esegue com'è scritto, e **l'esito del deploy si
+scrive in [11](11-piani-conclusi.md)** come quello di una sezione: che cosa ha retto, che
+cosa no, e il giro dal telefono con le sue osservazioni, riga per riga, mentre lo si fa.
+
+*Che cosa la 9 lascia da portarsi dietro.* Due premesse della sua tabella erano sbagliate —
+un conteggio mai fatto e una rotta che non poteva stare dove il piano la metteva — e
+nessuna ha cambiato una decisione; una stringa che descriveva l'interfaccia («in alto a
+destra») era falsa e solo il giro l'ha vista. **L'Invio nel campo del codice su `/invito`
+resta da provare con una tastiera vera**, dal poscritto della 8.
+
+`G0`, il giro a mano
+della 8, è stato fatto e ha reso: un difetto bloccante sul percorso principale che 478 + 129
+test verdi non vedevano, in un'ora. Il rendimento di un giro resta la misura più alta di
+questo progetto — sei voci in mezza giornata contro le quattro di cinque sezioni di
+lettura, e ora una pagina bianca dietro tre revisioni — e `mailpit` su `localhost:8025`
+copre tutto tranne «arriva fuori dallo spam».
+
+Il punto da percorrere per primo è il **rientro**, che è il cammino più lungo della
+sezione 6: uscire da un'organizzazione, farsi reinvitare, accettare. Attraversa due
+account e la posta, e i suoi test lo provano a pezzi.
+
+**Quel giro è stato fatto, il 12 settembre, e nei primi dieci minuti ha trovato un
+vicolo cieco che una suite da 459 test non vedeva**: chi usciva dall'organizzazione **attiva** restava con
+il suo identificatore in `localStorage`, e l'unica richiesta che avrebbe potuto
+correggerlo — l'elenco delle organizzazioni — lo dichiarava, quindi veniva rifiutata.
+Corretto, con un test che riproduce lo stallo. Il resoconto è nel
+[poscritto dell'esito](#poscritto-sezione-6), e la lezione da
+portarsi dietro è più generale del difetto: **una richiesta che ripara uno stato non
+deve dipendere da quello stato**. Il resto del giro — rientro compreso — non ha
+trovato altro nella sezione, e due cose fuori: `R43` e `R44`.
+
+**La sezione 7 è conclusa**, il 12 settembre, e il suo
+[esito](#esito-sezione-7) è la seconda prova che pianificare
+leggendo il codice regge — con un'avvertenza in più rispetto alla 6: **due premesse
+scritte come «verificate» erano dedotte**, e l'esecuzione le ha smentite entrambe
+(un secondo archivio risponde `404`, non `409`; la `USING` di `expenses_update` è più
+larga di «chi l'ha registrata o lo staff»). Nessuna delle due ha cambiato una
+decisione; entrambe hanno cambiato una riga di codice. La lezione è sul metodo:
+*«verificato e non dedotto»* vale solo se si è guardato **da dove arriva** la riga, e
+non solo che cosa il dominio fa quando ce l'ha.
+
+**La sezione 8 è [conclusa](#esito-sezione-8)** il 16 settembre 2026, e la
+**9 è [conclusa](#esito-sezione-9)** il 17: il suo primo passo è stato
+il giro a mano della 8. La 8 è stata la prima il cui primo passo non era codice: un ADR. `R9` tocca chi può registrarsi e come, ha una
+faccia di sicurezza, e le sue quattro domande hanno risposte che si escludono a vicenda —
+scriverne una nel codice prima che sia registrata significherebbe scoprire nel diff che
+si era scelto.
+
+**Prima della 8, il giro a mano della 7**: due delle sette schermate sono state viste con
+gli occhi e cinque no, e la rete che cade a metà del giro è coperta da un test e non da un
+dito. È mezz'ora, non una sezione.
+
+Il deploy era **rinviato in fondo**, per mancanza di mezzi e non di priorità: il
+[runbook](07-operazioni.md#il-primo-deploy--runbook) è scritto, gli artefatti sono validi
+per quello che si può validare senza una macchina, e servono una VPS, un dominio, un relay
+SMTP con SPF, DKIM e DMARC e delle credenziali. **Dalla 9 è il prossimo passo**, con le
+tre chiusure della [10](#piano-sezione-10) davanti, e il suo criterio di fine intatto:
+*aprire il prodotto dal telefono, in 4G*.
+
+**Che cosa cambia nel criterio d'ordine, e va detto.** Le sezioni 6-9 dovevano venire dopo
+il mese con un proprietario vero, e *quale per prima lo avrebbe detto quel mese*. Quel mese
+slitta, quindi l'ordine 7 → 8 → 9 resta ma è **scelto senza quella prova**: chi lo esegue
+ha un ragionamento e non una misura.
+
+La **sezione 6 è la prova che quel ragionamento può bastare**, e va detto con la stessa
+precisione con cui il suo piano aveva dichiarato il contrario: pianificata leggendo il
+codice e non usando il prodotto, si era premessa di essere *«un ragionamento, non una
+misura»* — e tutte e cinque le trappole che aveva previsto si sono avverate eseguendo.
+Quello che non aveva visto non stava nelle trappole ma altrove, ed è nel suo
+[esito](#esito-sezione-6). Non rende inutile il giro a mano: rende
+credibile pianificare a freddo **ciò che un test può vedere**.
+
+**«Pronto» era per un proprietario che conosci; dalla 8 è per chi ha ricevuto un invito.**
+`R9` è chiusa: la registrazione aperta non esiste più, e il perimetro è dato da chi può
+emettere quale token — un inquilino da chi lo ospita, un proprietario da chi amministra
+la piattaforma. Il deploy non è più tenuto fermo da questo; lo tengono fermo i mezzi.
+
+**Il [collaudo in undici punti](#esito-sezione-5-bis), che è la
+5-bis, è concluso** — percorso per intero il 9 e il 10 settembre 2026 da chi non aveva
+scritto il codice — e con esso l'[esito della fetta
+C](#esito-fetta-c) smette di essere aperto dopo due giorni e cinque
+sezioni di attesa. **Nessuno degli undici punti si è fermato**: le sei voci uscite dal
+giro sono difetti dentro percorsi che funzionano, il che dice che ciò che manca è
+rifinitura e non fondamenta.
+
+Quel giro ha anche fatto vedere per la prima volta **con gli occhi** le sezioni 3, 4 e 5,
+che erano state verificate solo con i test. La 5-ter le ha ora rifinite, e resta vera la
+cosa che l'esito della 5-bis segnala come propria mancanza: le undici righe sono state
+riempite alla fine del giro invece che mentre lo si percorreva, e per quattro punti resta
+l'affermazione che sono stati attraversati, senza l'osservazione. **Chi rifarà un
+collaudo tenga il documento aperto accanto al browser.**
+
+**La [sezione 6](#esito-sezione-6) è conclusa**: i propri dati si
+guardano e si correggono, la password si cambia da dentro dando la vecchia — e chiude
+tutte le sessioni, come il recupero, che è la decisione meno ovvia della fetta — e da
+un'organizzazione si esce, con il divieto sul contratto in essere garantito da una policy
+e non da un `if`. Chi esce **rientra** accettando un invito nuovo, che è il ramo che
+[ADR-051](08-decisioni.md#adr-051) aveva previsto per iscritto lasciandolo non scritto.
+[Piano](#piano-sezione-6) ·
+[esito](#esito-sezione-6). **Nessun ADR**, ed era una conclusione del
+piano e non una svista. Due cose da portarsi dietro: le policy permissive si combinano in
+**OR**, quindi un divieto scritto solo nella policy nuova sarebbe valso per l'inquilino e
+non per chi amministra; e un evento va scritto **prima** della scrittura che gli toglie il
+permesso di esistere — `is_org_member` passa da `member_role`, che esige
+`status = 'active'`.
+
+**La [sezione 5-ter](#esito-sezione-5-ter) è conclusa**: un inquilino
+che torna rientra dalla stessa porta, il badge dice il fatto e non più la coppia su ogni
+riga, i collegamenti dicono il nome di dove portano, il riaddebito dice a chi e quanto
+resta, e la data di un pagamento si mostra senza perdere l'ora vera.
+[Piano](#piano-sezione-5-ter) ·
+[esito](#esito-sezione-5-ter). Due cose da portarsi dietro: il piano
+aveva una **premessa sbagliata** — l'intestatario non era in `LeaseResponse` — e si è
+emendata la premessa invece di rinunciare alla decisione; e `Y3` è costato più del
+previsto perché la lezione della sezione 5 — *i nomi su ogni risposta, transizioni
+comprese* — vale identica su addebiti e bollette, e ha cambiato il tipo di ritorno di nove
+casi d'uso di scrittura.
+
+**La [sezione 5](#esito-sezione-5) è conclusa**: la visibilità di una
+segnalazione è una scelta di chi la apre, il testo si corregge finché nessuno l'ha presa in
+carico, le risposte dicono **chi** e non solo quando, su una segnalazione chiusa il thread
+si legge e non si scrive, e riaprire pretende un motivo che finisce nella conversazione.
+[Piano](#piano-sezione-5) ·
+[esito](#esito-sezione-5). È la prima sezione che **revoca** una
+decisione documentata — [ADR-048](08-decisioni.md#adr-048) emenda
+[ADR-026](08-decisioni.md#adr-026) su due colonne — e il modo in cui lo fa, emendando
+l'invariante di schema e il test dei privilegi nello stesso passo della migration, è la
+parte da ricordare. Ha anche reso **portante** `users_select`: la `0030` aveva scritto che
+la finestra per restringerla l'avrebbe chiusa il primo client che leggesse un nome da lì,
+ed è questo.
+
+**La [sezione 2](#esito-sezione-2) è conclusa quanto alle due
+correzioni**: il punto 10 del collaudo adesso prova ciò che dichiara — vuole due schede
+dello stesso account — e con lui il punto 4, che aveva lo stesso difetto e che nessuno
+sapeva. Il messaggio della configurazione dice che `.env` lo carica `just`, in tutti e otto
+i posti in cui quella frase viveva.
+
+**La [sezione 3](#esito-sezione-3) è conclusa**: il vicolo cieco dei
+contratti non esiste più. Una bozza si annulla, una quota sbagliata si corregge — anche a
+contratto attivo, che è il caso dei contratti già rotti — una parte inserita per sbaglio si
+toglie, e l'attivazione rifiuta una quota a zero ([ADR-046](08-decisioni.md#adr-046)).
+Eseguirla ha chiuso anche un buco che nessuno aveva in elenco: si poteva aggiungere una
+parte a un contratto **attivo**, e da lì le quote non sommavano più a 100 senza che niente
+protestasse.
+
+**La sezione 1 è conclusa** — sei ritocchi di sola interfaccia, nessuna decisione da
+prendere: [piano](#piano-sezione-1) ·
+[esito](#esito-sezione-1). Il backend non è stato toccato, e
+`/accesso` è stata rimisurata: **−76,4 kB (−20,6 gz)** sulla prima schermata che vede un
+utente nuovo. Ciò che quel lavoro ha trovato e che il piano non prevedeva — la
+navigazione richiedeva **tre** modifiche e non due — sta nell'esito.
+
+Il punto **10** — due finestre aperte insieme che non buttano fuori nessuno — è la prova
+di `C2`, e prima di questa fetta era **certo** che fallisse. Il punto **2** e il punto
+**4** provano `C4` e la revoca di `C1`, che prima non si potevano fare affatto.
+
+Quello che il giro trova va scritto nell'esito **anche se non si corregge**. Una fetta che
+chiude con «tutto bene» dopo un giro come quello è una fetta che il giro non l'ha fatto.
+
+**Poi**, e non prima, la fase [Prima degli utenti veri](#prima-degli-utenti-veri): le
+notifiche per prime. Aprire a chi non ha scritto il codice è ciò che cambia il criterio
+d'ordine più sotto, ed è il collaudo a dire se si può.
+
+**Le fette A, B, B-bis e C sono concluse quanto al codice.** Il giro del denaro dal lato del proprietario è
+chiuso e l'insoluto scende; l'altra metà del prodotto esiste, e l'inquilino entra,
+vede che cosa deve, **dichiara di aver pagato**, segnala un guasto e ne segue il
+corso — e con la B-bis vede anche l'altra tasca, quella verso i coinquilini, che non
+passa affatto dal proprietario. I resoconti sono in fondo all'archivio:
+[fetta A](#piano-completare-il-prodotto)
+· [esito](#esito-completare-il-prodotto-fetta-a) ·
+[fetta B](#piano-inquilino-fetta-b)
+· [esito](#esito-inquilino-fetta-b) ·
+[fetta B-bis](#piano-spese-co-living-fetta-b-bis) ·
+[fetta C](#piano-fetta-c)
+· [esito](#esito-fetta-c), **chiuso dal collaudo il 10 settembre 2026**.
+
+**Le notifiche vanno in fondo, e non sono più una fetta A-bis.** Erano i passi 9 e
+10 del piano archiviato, e la scelta era «prima o dopo la B». È stata sciolta: *dopo*,
+insieme a tutto il resto che serve solo a utenti veri. La ragione è nel criterio qui
+sotto.
+
+**Il co-living era provabile con dati veri solo dalla fetta B, ed è stato provato nella
+B-bis**: due account che entrano da un browser e vedono cose diverse è la condizione per
+accorgersi che un saldo è sbagliato, e con `curl` da entrambi i lati non lo sarebbe
+stato. La verifica che ha chiuso la fetta — un coinquilino che esce senza saldare e
+continua a comparire, **con il suo nome**, nei saldi che legge l'altro — non si sarebbe
+potuta fare prima.
+
+Le **due semantiche della dashboard** che erano rimaste aperte **sono state decise**:
+`written_off_total` è il nono numero, ed è il residuo e non l'importo; il credito da
+sovrapagamento resta fuori dal riepilogo e si evidenzia per addebito. Vedi
+[ADR-040](08-decisioni.md#adr-040).
+
+Il debito «nessun endpoint elenca le organizzazioni di un utente» — quello che la
+sezione [Cosa un client incontrerà per prime](#cosa-un-client-incontrerà-per-prime)
+dava come primo — **è chiuso**: vedi [ADR-041](08-decisioni.md#adr-041). Resta aperto
+il suo gemello sulle **persone** di un'organizzazione, e resta aperto apposta: la
+fetta B ha verificato che quel menù sarebbe **vuoto**, perché un'organizzazione ha
+esattamente uno staff.
+
+Resta la decisione che continua a bloccare più valore di ogni riga di codice, ed è
+quella qui sotto: **il fornitore di OCR**.
+
+
+<a id="raccolta-da-ordinare"></a>
+
+
+<a id="criterio-d-ordine-com-era"></a>
+
+### Il criterio d'ordine, finché a provare è chi costruisce
+
+**Tutto ciò che serve soltanto a utenti veri va in fondo.** Vale finché il collaudo lo
+fa chi sviluppa, ed è la ragione per cui le notifiche hanno smesso di essere una fetta
+a sé e sono confluite in [Prima degli utenti veri](#prima-degli-utenti-veri).
+
+Il criterio si applica a ciò che **compra soltanto** quel valore, non a ciò che è
+scomodo: la fetta A è stata fatta per prima proprio perché il giro del denaro era
+rotto per l'utente che già esiste, e quello non era rinviabile.
+
+Alle notifiche il criterio si applica per intero: oggi il token d'invito **torna nella
+risposta HTTP e il client lo mostra** con il suo bottone per copiarlo, presentato per
+quello che è. Chi prova il prodotto da solo è il proprietario *e* l'inquilino, quindi
+consegnarsi un codice da una scheda all'altra costa un `Ctrl+V`. Una dichiarazione di
+pagamento in attesa non avvisa nessuno, ma dalla fetta A si trova in `/pagamenti`
+senza sapere quale addebito guardare. In entrambi i casi il rimedio esiste e si vede.
+
+**Verificato prima di decidere, perché è la cosa che renderebbe l'ordine impossibile:
+la fetta B non dipende da `Notifier`.** Nessuno la inietta, nessuno la chiama —
+l'unica riga che la nomina fuori dalla sua porta è la riesportazione in
+`application::ports`. Il percorso dell'inquilino si prova quindi per intero senza che
+un'email parta mai.
+
+**Che cosa costa rinviarle, e va saputo**: fino ad allora l'onboarding **non è pronto
+per utenti reali**, perché chiedere a un inquilino di farsi consegnare un codice a
+mano non è un prodotto. Non è un debito nascosto — è questa riga.
+
+Il criterio decade nel momento in cui qualcuno che non sia chi sviluppa apre il
+prodotto. È lì che [Prima degli utenti veri](#prima-degli-utenti-veri) diventa la
+prossima fetta, e non prima.
+
+«Far sì che i coinquilini si vedano» è stato fatto: vedi
+[l'esito](#esito-coinquilini-visibili-fetta-1). L'**OCR delle bollette** è stato fatto:
+vedi [l'esito](#esito-ocr-bollette-fetta-1) — con l'avvertenza che quella fetta ha
+comprato il **percorso** e non il valore, perché [ADR-037](08-decisioni.md#adr-037)
+rimanda deliberatamente la scelta del fornitore.
+
+**Il perimetro funzionale dell'MVP è chiuso.** Non resta alcun modulo che abbia lo
+schema e non il codice. Ne segue un cambiamento nel modo di scegliere che cosa fare, e
+vale la pena dirlo perché finora l'ordine se lo dettava lo schema: da qui in poi
+**l'ordine non è più derivabile**. Le prossime decisioni sono di prodotto — se
+l'onboarding debba funzionare senza che il proprietario consegni un codice a mano, se
+l'accuratezza dell'OCR valga il costo di misurarla, dove il prodotto verrà esercito —
+e non hanno una risposta che si possa leggere in `migrations/`.
+
+La misura con cui la fetta A era stata pianificata, rifatta: delle **88 rotte
+documentate** — 86 di prodotto più le due di salute — **29 non le chiama nessuno**, ed
+erano 37 su 87. Le rimanenti sono quasi tutte in due blocchi, che sono i passi da B2 a
+B6: **le segnalazioni** (13 rotte) e le **spese co-living con i regolamenti** (15).
+Più l'archiviazione di un documento, che è il passo B8.
+
+Il conteggio va letto con la sua avvertenza: «chiamata dal client» significa che una
+funzione in `apps/web/src/api/endpoints.ts` la nomina, non che ogni suo parametro sia
+raggiungibile dall'interfaccia.
+
+
+<a id="cosa-un-client-incontrera-per-prime"></a>
+
+### Cosa un client incontrerà per prime
+
+Tre cose, tutte registrate fra i debiti: **non esiste un endpoint che elenchi le persone
+di un'organizzazione**, `app.expense_group_members` non ha privilegi di colonna, e **un
+job abbandonato resta `running` per sempre**. La prima si vede appena si costruisce
+l'interfaccia di un gruppo di spesa; le altre due no, ed è la ragione per cui stanno
+scritte.
+
+**La prima si è già presentata due volte, e nessuna delle due chiedeva un endpoint.**
+La fetta A l'ha incontrata su `payer_user_id` e l'ha risolta nel form, senza toccare la
+colonna ([ADR-040](08-decisioni.md#adr-040)). La fetta B l'ha incontrata
+sull'assegnazione di una segnalazione, e verificando ha scoperto che **quel menù
+sarebbe vuoto**: `InviteTenant` scrive `role: OrgRole::Tenant` fisso e `OrgRole::Manager`
+non lo scrive nessuno, quindi un'organizzazione ha esattamente uno staff. L'azione è
+diventata «prendi in carico» ([ADR-042](08-decisioni.md#adr-042)).
+
+Ne segue una cosa che vale la pena scrivere, perché è la lezione e non l'aneddoto: **il
+debito è reale ma il suo rimedio non è quello che sembra**. Le prime due occorrenze
+chiedevano un elenco di persone e nessuna delle due lo voleva davvero — una voleva un
+form che non ammettesse un vuoto, l'altra voleva sapere che non c'è nessuno da
+elencare. La terza occorrenza, la composizione di un gruppo di spesa in `B6`, ha già la
+sua risposta e non è `GET /members`: è
+`GET /properties/{id}/residents`, che esiste dalla migration `0030`. Chi partirà a
+scrivere `GET /members` costruirà la cosa sbagliata prima di accorgersi che non serviva.
+
+
+<a id="perche-la-dashboard-doveva-restare-ultima"></a>
+
+### Perché la dashboard doveva restare ultima
+
+**Scritta quando la dashboard non c'era, e tenuta perché la sua conclusione è
+generale**: vale per la prossima cosa a buon mercato che sembrerà ovvia. Diceva perché
+era la conclusione **sbagliata** che la fetta contabile invitava a trarre, e il piano
+dei pagamenti l'aveva quasi presa.
+
+Il seguito ha dato ragione a entrambe le parti dell'argomento: la dashboard è stata
+fatta come **passo 1 del client**, cioè per l'eccezione che questa sezione ammetteva
+(«vale se serve qualcosa da mostrare presto»), e le sue due semantiche aperte sono
+state decise **una fetta dopo, con il client davanti** — che è precisamente quando
+questa sezione diceva che si sarebbero potute decidere.
+
+Fino a questa fetta due dei suoi numeri mentivano: `total_outstanding` contava come
+credito anche gli addebiti annullati e stornati — corretto dalla `0024`,
+[ADR-032](08-decisioni.md#adr-032) — e `paid_amount` era zero ovunque perché
+`app.payments` era vuota. Entrambe le cause sono chiuse, quindi la dashboard **è
+sbloccata**, e costa uno use case di lettura, un DTO e una rotta.
+
+**Sbloccata non è prioritaria.** La finestra in cui cambiare il significato di quei
+numeri è additivo la chiude il **primo client**, non l'esistenza dell'endpoint:
+costruirla adesso non la consuma, non la restringe, e non compra tempo su niente.
+Confondere «adesso si può» con «adesso conviene» è precisamente l'errore, ed è tanto più
+facile quanto più il modulo è a buon mercato.
+
+Contro l'anticiparla c'è invece una ragione di merito: **due delle sue semantiche non
+sono decise**, ed è ciò che questo progetto tiene fuori per principio — la stessa
+ragione per cui `bill_status.disputed` è rimasto fuori dalla fetta contabile. Aggiungere
+un campo dopo è additivo; cambiare cosa significa un campo già pubblicato è una rottura.
+
+Le due domande erano queste, **e hanno una risposta dalla fetta A**. Restano scritte
+nella forma in cui erano aperte perché è quella che mostra che cosa il primo client
+serviva a decidere:
+
+- **`written_off` va riportato a parte come perdita?** *Sì*, ed è il nono numero
+  `written_off_total`. Usciva dall'insoluto insieme a `void`, e i due erano distinti
+  nello stato e indistinguibili in dashboard; la distinzione conta nei report, e la
+  dashboard è il primo report. La risposta ha portato con sé una seconda decisione che
+  la domanda non conteneva — **lo storno esteso a `partially_paid`** — senza la quale
+  il numero avrebbe contato metà delle perdite;
+- **il credito da sovrapagamento va mostrato?** *Sì, ma non qui.* `outstanding_amount`
+  negativo esiste ed è escluso dal totale dal `WHERE outstanding_amount > 0` della
+  vista. Non compensa gli altri insoluti — ed è giusto, un credito non è un insoluto
+  negativo — e non sparisce più del tutto: si evidenzia **per addebito**, nell'elenco
+  e nella scheda, con la parola accanto al numero.
+
+Entrambe in [ADR-040](08-decisioni.md#adr-040). Ed erano additive quando sono state
+prese, che è esattamente ciò che questa sezione sosteneva: la finestra l'ha chiusa il
+primo client, non l'esistenza dell'endpoint.
+
+L'unico argomento per anticiparla, e va riconosciuto perché è vero: è la prima
+superficie di lettura che attraversa **tutti** i moduli insieme, quindi il primo posto
+dove si vedrebbe un errore di integrazione fra le fette. È un argomento di
+dimostrabilità, non di costruzione: vale se serve qualcosa da mostrare presto, e in quel
+caso l'ordine si inverte deliberatamente e non per distrazione.
+
+**La fonte di verità resta la vista.** `outstanding_amount` continua a venire da
+`app.v_charge_balances` e non da `status`: lo stato memorizzato è una comodità
+interrogabile — l'indice `charges_outstanding_ix` è parziale su quei tre valori — che il
+modulo dei pagamenti tiene allineata come effetto secondario, non un secondo calcolo. Le
+due definizioni non devono diventare due, ed è la ragione per cui
+`PaymentRepository::sum_succeeded_for_charge` ripete `amount - refunded_amount` sugli
+stessi due stati della vista invece di sommare gli importi e basta.
+
+Manca ancora l'**invio delle notifiche**: la porta `Notifier` è dichiarata e senza
+adattatore, quindi il token di invito torna nella risposta HTTP e lo consegna il
+proprietario. Va implementata prima di considerare l'onboarding pronto per utenti
+reali, ed è oggi l'ultima porta senza implementazione.
+
+**Dalla fetta A ha un secondo consumatore in attesa, e la coda ne attenua il
+sintomo**: una dichiarazione di pagamento in `pending` non avvisa nessuno, ma da
+`/pagamenti` si trova senza sapere quale addebito guardare. Prima non si trovava
+affatto. La notifica resta la cosa che toglie il «guardare», ed è in
+[Prima degli utenti veri](#prima-degli-utenti-veri): finché a provare il prodotto è
+chi lo costruisce, guardare la coda è esattamente ciò che si fa comunque.
+
+---
+
+<a id="piano-completare-il-prodotto-cosa-resta"></a>
+
+
+<a id="piano-completare-il-prodotto-com-era"></a>
+
+## Piano — Completare il prodotto: che cosa resta
+
+Le fette A, B e B-bis sono concluse. I piani che le hanno prodotte sono archiviati per
+intero in [11 — Piani conclusi](11-piani-conclusi.md), ognuno con il suo esito
+([fetta A](#piano-completare-il-prodotto),
+[fetta B](#piano-inquilino-fetta-b),
+[fetta B-bis](#piano-spese-co-living-fetta-b-bis)), e **le loro
+decisioni valgono ancora**: quel documento resta la fonte del *perché*, e questo del
+*cosa*.
+
+Le due liste si sovrappongono di proposito. L'archivio non si riscrive mai, quindi
+contiene le fette **come erano state pensate** — comprese le notifiche nella posizione
+che avevano allora, e i dodici passi della fetta B di cui se ne sono eseguiti sei;
+questo file si riscrive a ogni fetta, e contiene ciò che resta con il dettaglio per
+eseguirlo. Chi legge solo questo può eseguire; chi vuole sapere perché va di là.
+
+**L'ordine qui è cambiato rispetto ai piani archiviati, ed è la sola differenza di
+sostanza.** Là le notifiche erano una «fetta A-bis» da fare prima o dopo la B a
+scelta, e la fetta C si chiamava così. Qui sono confluite in un'unica fase finale —
+[Prima degli utenti veri](#prima-degli-utenti-veri) — per il
+[criterio d'ordine](#criterio-d-ordine-com-era) più sopra.
+La scomposizione dei due passi delle notifiche non è cambiata di una riga: è cambiato
+soltanto **quando**.
+
+**Le fette B e B-bis si sono fermate ai loro punti di taglio dichiarati**, `B5` e `B8`,
+e non per stanchezza: erano scritti nei piani prima di cominciare. Ciò che resta — gli
+ultimi due passi del client — riprende qui **con la numerazione originale**, perché è
+quella con cui è stato pensato e perché l'archivio vi rimanda.
+
+Restano quindi **due fette**, e della prima manca il collaudo:
+
+| | Fetta | Stato |
+|---|---|---|
+| 1 | [C](#fetta-c) — `C1`–`C6`, i buchi che un collaudo completo incontrerebbe, `B9` e `B10` compresi | **codice eseguito, collaudo da percorrere** |
+| 2 | [Prima degli utenti veri](#prima-degli-utenti-veri) — notifiche, poi il resto | dopo il collaudo, e non prima |
+
+**Con B-bis l'MVP non ha più moduli con lo schema e senza interfaccia**, e con la C non ha
+più operazioni dell'API irraggiungibili da una schermata — salvo `getPayment`, che resta
+tale apposta. Quello che resta non è una capacità, ed è la prima volta da sei fette. La C
+finisce con il collaudo completo, che è la condizione per aprire a chi non ha scritto il
+codice, e **quel collaudo non è ancora stato fatto**.
+
+### Fetta B-bis — le spese co-living · **conclusa**
+
+Eseguita il **7 settembre 2026**, per intero e fino al suo punto di taglio: `B6`–`B8`.
+Il piano e il suo esito sono in
+[11 — Piani conclusi](#piano-spese-co-living-fetta-b-bis).
+
+Il modulo che aveva lo schema e l'API e nessuna interfaccia adesso ce l'ha: gruppi con
+la composizione, spese ripartite, saldi, e i rimborsi a due tempi con il ritiro. Il
+backend non è stato toccato — **424 test Rust prima e dopo** — e la decisione che la
+fetta esisteva per prendere è diventata [ADR-043](08-decisioni.md#adr-043): il nome di un
+membro si scrive all'ingresso, perché dopo non esiste più da nessuna parte.
+
+`B9` e `B10` non sono entrati, ed è la decisione 7 di quel piano applicata: sono `C3` e
+`C5` della fetta qui sotto, che li ha assorbiti insieme alle altre cose minime.
+
+<a id="fetta-c"></a>
+
+### Fetta C — chiudere i buchi che un collaudo completo incontrerebbe · **eseguita, collaudo aperto**
+
+Eseguita l'**8 settembre 2026**, per intero e fino al suo punto di taglio: `C1`–`C6`, con
+`B9` e `B10` assorbiti. Il piano e il suo esito sono in
+[11 — Piani conclusi](#piano-fetta-c).
+
+Le cinque funzioni del livello dati che nessuna schermata chiamava adesso hanno la loro,
+e la più importante chiudeva il giro del prodotto: **un invitato entra dall'interfaccia**,
+senza `curl`. Il backend è stato toccato **una volta sola** — il messaggio della
+configurazione di `C6` — e i 424 test Rust sono gli stessi prima e dopo; il client passa
+da 61 a 69.
+
+**La fetta non è chiusa**, e la parte che manca è quella che conta: il
+[collaudo in undici punti](#esito-fetta-c) non è ancora stato
+percorso. È il criterio della fetta, e finché non lo si è fatto «funziona» resta
+un'affermazione su cui nessuno può essere smentito. Ciò che il giro trova va scritto
+nell'esito **anche se non si corregge**.
+
+Due decisioni sono diventate ADR: [044](08-decisioni.md#adr-044) sul rinnovo fra schede,
+che si **serializza** invece di trasmettere la sessione, e
+[045](08-decisioni.md#adr-045) sull'accettazione che sceglie l'organizzazione.
+<a id="prima-degli-utenti-veri"></a>
+
+<a id="prima-degli-utenti-veri"></a>
+
+### Prima degli utenti veri
+
+Tutto ciò che compra **soltanto** il valore che un utente vero richiede, e niente che
+serva a chi costruisce. Per il criterio d'ordine più sopra questa fase viene ultima, e
+**diventa la prossima fetta nel momento in cui qualcuno che non sia chi sviluppa apre
+il prodotto** — non prima.
+
+La fase ha due metà con statuti diversi, e confonderle costerebbe: la prima è
+**pianificata**, la seconda è **nominata e non pianificata**.
+
+#### Le notifiche — l'unica parte già pianificata
+
+I passi **9 e 10** del piano archiviato, dichiarati come punto di taglio fin dalla
+pianificazione: dopo A8 il proprietario ha un modulo contabile completo con ciò che
+l'API già sa fare, e le notifiche sono un fronte diverso — tocca una **porta**, non
+una schermata.
+
+**Stanno qui e non prima della fetta B**, per il criterio d'ordine più sopra: comprano
+soltanto ciò che serve a utenti veri. Oggi il token d'invito torna nella risposta HTTP
+e il client lo mostra con il suo bottone per copiarlo, e chi prova il prodotto da solo
+è il proprietario *e* l'inquilino. **Nessuna dipendenza tecnica in nessuna direzione**:
+`Notifier` non è iniettata da nessuna parte, quindi la fetta B non la incontra mai.
+
+Sono però **l'unica cosa di questa fase che è già pianificata**, ed è la ragione per
+cui i due passi restano scritti per esteso qui sotto invece di essere solo nominati:
+non dipendono da dove il prodotto verrà esercito, a differenza di tutto il resto.
+
+1. **`Notifier`: la porta e l'adattatore.** La variante `PaymentDeclared` in
+   `NotificationContent` — oggi ce n'è **una sola**, `TenantInvitation` —
+   l'adattatore SMTP in `propflow-infrastructure`, il raccoglitore SMTP locale nel
+   `docker-compose.yml`, la configurazione in `AppConfig` e nelle tabelle di
+   [07 — Operazioni](07-operazioni.md).
+2. **Gli invii.** Iniezione della porta in `InviteTenant` e in `DeclarePayment`:
+   firma degli use case, `AppState`, `Dependencies`, `main.rs` e l'harness dei test.
+   Invio **dopo il commit e best-effort**. Il client mostra «inviato» e tiene il
+   codice sotto un dettaglio richiudibile.
+
+**Le decisioni 5 e 8 del piano archiviato governano questi due passi e vanno lette
+prima di toccarli.** In breve, e senza sostituire l'originale:
+
+- **SMTP e non un fornitore con la sua API**, per la stessa ragione per cui
+  `ObjectStorage` ha un adattatore solo che parla anche con MinIO: il fornitore
+  diventa un **dato di configurazione** invece di un ramo del codice;
+- **l'invito non può passare dall'outbox**, ed è la trappola più cara della fetta. Il
+  token in chiaro esiste **solo** nella risposta HTTP — in database ne resta lo hash,
+  e gli eventi di dominio non trasportano valori né credenziali — quindi un worker che
+  leggesse `TenantInvited` non avrebbe niente da spedire. Metterci il token dentro
+  significherebbe scrivere una credenziale in una tabella che esiste per essere
+  pubblicata su un broker. L'invio è **dopo il commit, best-effort**: se la posta non
+  risponde, l'invito resta valido, il token resta nella risposta, e il fallimento va
+  nei log **senza il destinatario e senza il token**;
+- **la dichiarazione di pagamento non ha quel vincolo** — non c'è una credenziale da
+  recapitare — ma segue la stessa via, per non avere **due** meccanismi di invio
+  appena nato il primo.
+
+**Le altre due trappole di questi passi**, dal piano archiviato:
+
+- **`Notifier` non è iniettata da nessuna parte.** `InviteTenant::new` prende tre
+  argomenti e nessuno è un `Notifier`. Non è «scrivere un adattatore»;
+- **l'adattatore SMTP è il posto più facile in cui far uscire dati personali.**
+  `docs/04` vieta email, token e corpi nei log, e un client SMTP che registri la
+  richiesta li registra tutti e tre insieme. La porta ha già un `Debug` redatto, e
+  l'adattatore non deve annullarlo;
+- **un raccoglitore SMTP locale non è un fornitore vero.** Accetta tutto: non verifica
+  SPF, DKIM né i rimbalzi. Verifica che il messaggio parta e che cosa contiene, **non**
+  che sarebbe recapitato. È lo stesso limite di MinIO rispetto a S3.
+
+**Come si saprà che è finita:** un'email di invito che arriva davvero nel raccoglitore
+locale, con il token nel corpo e in **nessuna** riga di log.
+
+#### Il resto — nominato e non pianificato
+
+Rate limiting per IP, verifica dell'email bloccante, manifest Kubernetes, backup e
+restore, metriche, alerting, cron per le partizioni di `audit_log`.
+
+Non è dimenticanza, ed è la ragione per cui ha un nome: dipendono da **dove** il
+prodotto viene esercito, che non è deciso, e pianificarle adesso significherebbe
+scrivere un piano su un'ipotesi. È anche la differenza con le notifiche qui sopra, che
+non dipendono da quella scelta e sono infatti scritte per esteso.
+
+**La verifica dell'email bloccante ha una conseguenza sull'ordine che vale la pena
+dire**: renderla obbligatoria cambia il percorso di registrazione, cioè la prima cosa
+che ogni collaudo attraversa. Farla mentre si prova da soli significherebbe pagarne il
+costo a ogni giro senza comprarne il valore, ed è il caso più netto del criterio.
+
+
+<a id="non-implementato-com-era"></a>
+
+### «Non implementato» com'era, con la voce della dashboard tenuta per la sua lezione
+
+## Non implementato
+
+### Moduli MVP che hanno lo schema ma non il codice
+
+In ordine di dipendenza suggerito. Ognuno segue il pattern già stabilito: dominio →
+porta → use case → repository → endpoint → test.
+
+1. **AI: triage delle segnalazioni** (`tickets.ai_job_id`, `ticket_messages.ai_job_id`)
+   — l'**OCR delle bollette è fatto**, vedi [l'esito](#esito-ocr-bollette-fetta-1): la
+   coda, il worker, il job e la revisione esistono, e `ocr_extracted`, `ocr_confidence`
+   e `pending_review` sono scritti da una macchina.
+
+   Quello che resta è il triage, e **non è una seconda chiamata allo stesso
+   adattatore**: è decidere se una macchina possa scrivere categoria e priorità di una
+   segnalazione, e con quale soglia di confidenza, che è una domanda di prodotto sua.
+   La capacità `vision` e il task `ticket_triage` esistono nell'enum e nessuno li
+   scrive.
+
+   **Prima del triage viene però la scelta del fornitore**, che blocca anche l'OCR dal
+   produrre valore: vedi [ADR-037](08-decisioni.md#adr-037) e la sezione
+   [La decisione che ora blocca più valore di ogni riga di codice](09-stato-e-roadmap.md#la-decisione-che-ora-blocca-più-valore-di-ogni-riga-di-codice).
+2. ~~**Dashboard**~~ — **fatta**, come passo 1 della fetta del client: `GET
+   /api/v1/dashboard`, otto numeri letti da `v_owner_dashboard`, staff soltanto.
+   Nessuna migration: la vista esiste dalla `0015`.
+
+   **Le due semantiche che erano rimaste aperte sono state decise**, nella fetta A e
+   con il client davanti, che era la condizione: `written_off_total` è il nono
+   numero, ed è il **residuo** e non l'importo; il credito da sovrapagamento resta
+   fuori dal riepilogo e si evidenzia per addebito. Vedi
+   [ADR-040](08-decisioni.md#adr-040) e
+   [l'esito](#esito-completare-il-prodotto-fetta-a).
+
+   La voce si tiene perché la sua conclusione — «sbloccata non vuol dire
+   prioritaria», e la finestra sulle semantiche la chiude il **primo client** e non
+   l'esistenza dell'endpoint — resta vera e generale, e vale per la prossima cosa a
+   buon mercato che sembrerà ovvia. La finestra si è chiusa nel modo previsto:
+   costruendo il client, non scrivendo l'endpoint.
+
+   L'eccezione che quella conclusione ammetteva — «vale se serve qualcosa da
+   mostrare presto» — è esattamente il caso che si è verificato: la dashboard
+   serviva al client, ed è stata fatta per quello e non prima.
+
+   **L'argomento che l'ha portata avanti** è quello che era già scritto qui: è la
+   prima superficie di lettura che attraversa immobili, contratti, segnalazioni,
+   bollette, addebiti e pagamenti insieme, quindi il primo posto dove si vedrebbe un
+   errore di integrazione fra le fette. Eseguendola non se n'è visto nessuno, il che
+   è il migliore esito possibile e anche il meno raccontabile.
+
+**Documenti** è implementato nella fetta 1: caricamento, elenco, download e
+archiviazione su immobili, stanze, contratti, segnalazioni e — dal modulo contabile —
+bollette e addebiti. Restano fuori, e non per dimenticanza, il versionamento (V2) e
+l'OCR (punto 1); allargare gli owner ad avatar, spese e pagamenti è additivo e si fa
+quando quei moduli esistono. Il resoconto è in fondo:
+[Piano — Documenti, fetta 1](#piano-documenti-fetta-1).
+
+**Pagamenti** è implementato nella fetta 1 e **completato dal lato del proprietario
+nella fetta A**: incasso registrato dallo staff, dichiarazione dell'inquilino in
+`pending`, conferma e rifiuto, dettaglio, elenco di un addebito e — dalla fetta A —
+la **collezione dell'organizzazione** con i filtri `status` e `lease_id`, che è la
+coda delle dichiarazioni. Idempotenza fornita dal client, e stato dell'addebito
+ricalcolato dai pagamenti. Restano fuori, e non per dimenticanza, i rimborsi, i
+provider veri con i loro webhook, i pagamenti di quote e regolamenti — che restano
+fuori **per sempre**, non in attesa: vedi sotto — e il
+pagamento della bolletta al fornitore, che non è modellato affatto. I resoconti sono
+in fondo: [Piano — Pagamenti, fetta 1](#piano-pagamenti-fetta-1)
+e [Piano — Completare il prodotto, fetta A](#piano-completare-il-prodotto).
+
+**Spese co-living** è implementato nella fetta 1: gruppi con chi li crea già dentro,
+composizione con uscita e rientro, spese ripartite `equal` e `weighted` con la somma
+delle quote garantita dal database, saldi letti dalla vista, e regolamenti a due tempi
+confermati da **chi riceve**. Ha richiesto **quattro migration** — la `0026` per la
+policy che lascia iscriversi chi crea il gruppo, la `0027` per la vista che perdeva chi
+usciva con un conto aperto, la `0028` per i privilegi di colonna che chiudono un buco
+vero del trigger contabile, la `0029` per l'identità di una membership e per rendere
+l'uscita un confine vero — e due ADR, [034](08-decisioni.md#adr-034) e
+[035](08-decisioni.md#adr-035), il secondo con il corollario sulla direzione che la
+`0029` ha aggiunto. Restano fuori, e non per dimenticanza, la
+semplificazione dei debiti, i tre metodi di ripartizione oltre `equal` e `weighted`,
+`is_settled`, il legame fra regolamento e pagamento, la ripartizione automatica di una
+bolletta e gli allegati alle spese. Il resoconto è in fondo:
+[Piano — Spese co-living, fetta 1](#piano-spese-co-living-fetta-1).
+
+**E dalla fetta B-bis ha anche l'interfaccia**, senza che il backend sia stato toccato:
+gruppi, saldi, spese con le loro quote, e i rimborsi a due tempi con il ritiro. La
+decisione che è servita a costruirla è [ADR-043](08-decisioni.md#adr-043) — nessuna
+risposta di quel modulo porta un nome, quindi il client lo scrive all'ingresso — e
+l'esito è
+[Piano — Le spese co-living, fetta B-bis](#piano-spese-co-living-fetta-b-bis).
+
+**`payable_type` resta a un valore su tre, e non è un lavoro rinviato.**
+`expense_share` e `settlement` non si scriveranno: un regolamento fra coinquilini non è
+denaro che l'organizzazione incassa, e farne una riga in `app.payments` metterebbe nel
+registro degli incassi del proprietario un movimento che non lo riguarda. Il piano dei
+pagamenti prevedeva il contrario; la previsione era sbagliata, ed è registrata qui
+perché è il genere di conclusione che si eredita senza riverificarla.
+
+**Segnalazioni** è implementato nella fetta 1: apertura, elenco filtrato, dettaglio
+con lo storico degli stati, thread con note interne, le sette transizioni del ciclo di
+vita, costi e allegati. Restano fuori, e non per dimenticanza, il triage AI (punto 1),
+la ricerca full-text (V2), gli SLA, la programmazione, gli allegati sui singoli
+messaggi e le note di risoluzione. Il resoconto è in fondo:
+[Piano — Segnalazioni, fetta 1](#piano-segnalazioni-fetta-1).
+
+
+<a id="storia-dei-conteggi-dei-test"></a>
+
+### La storia dei conteggi dei test, com'era
+
+459 test: 214 unitari di dominio, 16 applicativi, 27 di infrastruttura, 11 unitari
+del bordo HTTP, 82 di integrazione sulla persistenza, 3 sull'adattatore S3 contro
+MinIO, 103 di contratto HTTP, 3 di guardia sulla documentazione della configurazione.
+
+**I dieci della sezione 6 provano soprattutto che i confini sono nel database.** Il
+più denso è quello dei privilegi: otto `UPDATE` scritte a mano come ruolo applicativo
+su `app.users`, una per colonna negata, e quattro sulle concesse — perché è **l'elenco**
+a essere il contratto, e `platform_role` da sola non basterebbe. Gli altri provano che
+non si esce con un contratto in essere, che chi è uscito rientra accettando un invito
+nuovo — e che **con il token di prima**, nei suoi quindici minuti, non legge più il
+contratto disdetto né apre segnalazioni nell'organizzazione lasciata (`0041`,
+[ADR-054](08-decisioni.md#adr-054)) — e che dopo un cambio password ciò che muore è il
+**rinnovo** e non la lettura: l'access token è un JWT e vive i suoi quindici minuti.
+
+I sette della sezione 5 provano soprattutto **confini**: la segnalazione condivisa che
+arriva al coinquilino *con il thread e lo storico*, quella non condivisa che non gli
+arriva affatto, il coinquilino che la vede e non la scrive, la correzione che si chiude ad
+`assigned`, il thread chiuso che si legge e non si scrive, e il motivo della riapertura
+che si va a rileggere nella conversazione.
+
+**I sei della 5-quater provano la posta e il recupero**, e uno di essi ha trovato il
+confine della decisione che doveva confermare: «revoca tutte le sessioni» revoca i
+**refresh token**, non gli access token, che sono JWT e non sono revocabili. Il test
+asseriva la cosa sbagliata, ed è finita in [ADR-052](08-decisioni.md#adr-052).
+
+**I cinque della sezione 5-ter provano una cosa diversa: la seconda volta.** Due
+percorrono la riproduzione di `R31` — un inquilino invitato due volte, che prima riceveva
+`409` sul secondo invito — e uno di essi verifica che accettare come inquilino non
+retroceda chi è già proprietario. Gli altri tre guardano i nomi su ogni risposta,
+transizioni comprese, l'immobile archiviato che lascia il campo assente **senza far
+sparire la riga**, e il residuo da riaddebitare con la regola che si perde: un addebito
+annullato non conta.
+
+
+104 test: 16 sulla sessione e sul client dell'API — fra cui il refresh a singolo
+volo **e quello fra schede, entrambi riprodotti anche al contrario** — 11 sui
+decimali e sulla formattazione, 5
+sulla chiave di idempotenza, 4 sull'accettazione di un invito — l'header che **non**
+si manda, l'organizzazione che si sceglie, e il messaggio che non parla di password —
+10 sui percorsi da sola tastiera e sui form che non
+perdono ciò che è stato digitato — fra cui il bottone che mostra la password, che è nel
+giro di tabulazione e **non invia il form** — 3 su «Prendi in carico», che sparisce a chi
+ce l'ha e resta su ciò che è di qualcun altro, 6 sulla dichiarazione di pagamento, 5 sul guscio —
+la navigazione per ruolo, il selettore che mostra i nomi, e l'organizzazione
+ricordata che l'elenco vero corregge — 13 sui contratti, che sono le due aritmetiche
+replicate dal server: la quota che resta da assegnare e la sovrapposizione dei periodi come
+la contano i vincoli di esclusione — e 13 sulle spese co-living: la risoluzione dei
+nomi **compreso chi non è più residente**, la somma dei netti verificata sugli interi, e
+la scheda del gruppo con un membro uscito che ha ancora un conto aperto. Gli ultimi
+**sedici** sono della sezione 5-ter: 8 sui badge — e quelli che contano sono i tre
+sull'**anomalia che resta doppia**, che è l'assert che qualcuno toglie semplificando — 2
+sull'aritmetica della sottrazione, che è il posto in cui `parseFloat` rientrerebbe dalla
+finestra, e 3 sulla data che si mostra e non si manda, il cui difetto è **invisibile a
+schermo**: le due schermate sono identiche, e solo il corpo della richiesta le distingue.
+
+La sezione 7 porta il conteggio a **124**, e i diciassette nuovi sono tutti
+verificati **al contrario** prima di essere consegnati — è la regola che il poscritto
+della 6 ha reso obbligatoria: 9 sul giro in sequenza, fra cui la scadenza del token a
+metà con il singolo volo spento e **la stessa scena in parallelo che fa cadere la
+catena**; 5 sulla selezione, con la potatura dopo una rilettura; 2 su una pagina vera,
+con un `409` «era già così» che non è rosso e una rete caduta che resta selezionata.
+
+I test sulla chiave di idempotenza sono stati **verificati contro il difetto**, e non
+una volta sola: sostituendo `intent.current()` con un `randomUUID()` dentro
+`mutationFn` falliscono, sia sulla registrazione di un incasso (fetta A) sia sulla
+dichiarazione di pagamento (fetta B). Un test che non fallisce quando il codice è
+sbagliato è un verde che non prova nulla.
+
+
+<a id="ordine-di-esecuzione-com-era-in-12"></a>
+
+### «L'ordine di esecuzione», com'era in 12 prima di passare in 09
+
+## L'ordine di esecuzione
+
+Deciso l'**8 settembre 2026**. Le voci si eseguono **per sezione, una per
+conversazione**: è il vincolo che ha deciso i raggruppamenti, e non l'argomento.
+
+Una sezione deve essere **autosufficiente** — chiudersi senza lasciare mezze cose a
+quella dopo — perché chi la esegue apre una sessione nuova che non ha visto le
+precedenti. Da qui due accorpamenti che per argomento non si farebbero:
+
+- ~~**`R13`, `R17` e `R18` stanno insieme**~~ — **erano un nodo, e la sezione 3 l'ha
+  sciolto.** Una quota sbagliata non si correggeva (`R17`), quindi il contratto non si
+  attivava, quindi non si eliminava (`R13`), perché l'unica uscita sarebbe stata
+  attivarlo. Prenderne una senza le altre avrebbe lasciato aperto il vicolo cieco, ed è la
+  ragione per cui sono state fatte insieme;
+- ~~**`R7`, `R21` e `R22` hanno la stessa radice**~~ — **la sezione 5 ha risolto la sua
+  metà.** I DTO portavano identificatori e nessuna rotta risolveva le persone; `R21` e
+  `R22` sono state fatte con le segnalazioni, dove si vedono, e la forma scelta —
+  allargare la risposta con un modello di lettura, mai una rotta che risolva le persone —
+  è [ADR-049](08-decisioni.md#adr-049). `R7` la eredita invece di riderivarla, ed è la
+  ragione per cui la 5 andava **prima** della 6.
+
+| | Sezione | Voci | Natura | Perché è lì |
+|---|---|---|---|---|
+| ~~**1**~~ | ~~Ritocchi visibili~~ — **conclusa** l'8 settembre 2026 | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Le sei voci sono uscite da questo file: [piano](#piano-sezione-1) · [esito](#esito-sezione-1). La riga resta perché l'ordine si legge per intero, e perché l'esito dice una cosa che serve alle sezioni dopo: la navigazione richiedeva **tre** modifiche e non due |
+| ~~**2**~~ | ~~Le pendenze della fetta C~~ — **conclusa** il 9 settembre 2026, **senza il collaudo** | `R2` `R3` | doc + una stringa di backend | [Esito](#esito-sezione-2). `R2` ha corretto il punto 10 e, rileggendo gli altri dieci, ha trovato **il punto 4** con lo stesso difetto; `R3` era in **otto** posti e non in due. Il collaudo si è staccato ed è diventato la **5-bis** |
+| ~~**3**~~ | ~~Contratti: correggere gli errori~~ — **conclusa** il 9 settembre 2026 | `R13` `R17` `R18` `R12` `R14` | backend | Era il nodo e il danno peggiore che esistesse: contratti attivi con le quote sbagliate e nessun modo di correggerli. [Piano](#piano-sezione-3) · [esito](#esito-sezione-3). Eseguirla ha chiuso **un buco che non era in elenco** — si poteva aggiungere una parte a un contratto attivo — e ne ha aperto uno nuovo: `R28`, il subentro |
+| ~~**4**~~ | ~~Stati che nessuno aggiorna~~ — **conclusa** il 9 settembre 2026 | `R1` `R11` `R25` | migration + dominio + client | [Piano](#piano-sezione-4) · [esito](#esito-sezione-4). La risposta era già in [ADR-019](08-decisioni.md#adr-019): le conseguenze si derivano. Ha corretto **un numero falso che nessuno guardava** — `v_property_occupancy` diceva zero a tutti — e ha lasciato in un test la prova che un trigger sarebbe stato sbagliato |
+| ~~**5**~~ | ~~Segnalazioni~~ — **conclusa** il 9 settembre 2026 | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Le sei voci sono uscite da questo file: [piano](#piano-sezione-5) · [esito](#esito-sezione-5). **Due** migration: la `0035` allarga chi *vede*, la `0036` chi *scrive* — e la seconda **revoca** [ADR-026](08-decisioni.md#adr-026) su due colonne, emendando nello stesso passo l'invariante di schema e il test che la difendevano. Ha reso **portante** `users_select`: è il primo client che legge un nome da `app.users` |
+| ~~**5-bis**~~ | ~~Il collaudo in undici punti~~ — **concluso** il 10 settembre 2026, per intero | — | a mano, due account | [Esito](#esito-sezione-5-bis), e con esso l'[esito della fetta C](#esito-fetta-c) **smette di essere aperto** dopo due giorni e cinque sezioni. **Nessuno degli undici punti si è fermato**: le sei voci che ne sono uscite — `R30`–`R35` — sono difetti dentro percorsi che funzionano. Il rendimento che il rinvio aveva sospeso è misurato: mezza giornata di giro ha prodotto sei voci, cinque sezioni di lettura del codice ne avevano prodotte quattro. E una, `R31`, **nessun test poteva trovarla**: ogni test costruisce un inquilino nuovo, e quel difetto vive nella seconda volta che qualcosa succede alla stessa persona |
+| ~~**5-ter**~~ | ~~Quello che il collaudo ha trovato~~ — **conclusa** il 10 settembre 2026 | `R30` `R31` `R32` `R33` `R34` | dominio + client | [Piano](#piano-sezione-5-ter) · [esito](#esito-sezione-5-ter). Un ADR e **nessuna migration**: il ramo che fa rientrare un inquilino passa dal primo ramo di `org_members_select`, che non chiede di essere già membri. Il piano aveva una premessa sbagliata — l'intestatario **non** era in `LeaseResponse` — e una decisione giusta: si è emendata la premessa con un terzo campo nella stessa query. Apre `R36`, il badge degli addebiti, che ha la stessa forma di `R30` e non lo stesso difetto |
+| ~~**5-quater**~~ | ~~Prima degli utenti veri~~ — **conclusa** il 10 settembre 2026, **due sezioni su quattro eseguite** | — | posta + dominio + migration | [Piano](#piano-utenti-veri) · [esito](#esito-utenti-veri). `Z1` e `Z2` sono codice e girano; `Z3`, `Z4` e `Z5` hanno prodotto **artefatti e un runbook** e non sono stati eseguiti — servono una VPS, un dominio e delle credenziali. **Non è deployato**, e il criterio è il punto 4 del [runbook](07-operazioni.md#il-primo-deploy--runbook): aprire il prodotto dal telefono, in 4G. Apre `R37`, la cancellazione come capacità del prodotto |
+| ~~**6**~~ | ~~Le persone~~ — **conclusa** l'11 settembre 2026 | `R7` `R16` `R38` | migration + backend + client | [Piano](#piano-sezione-6) · [esito](#esito-sezione-6). **Due migration e nessun ADR**, ed era una conclusione del piano: la revoca delle sessioni è stata resa uniforme ad [ADR-052](08-decisioni.md#adr-052) apposta per non doverne scrivere un secondo. È la prima sezione pianificata **leggendo il codice** in cui tutte e cinque le trappole previste si sono avverate; quello che il piano non aveva visto è altrove, e la voce più cara è che il divieto di uscire con un contratto in essere sarebbe valso **solo per chi non amministra** — le policy permissive si sommano in `OR`. Apre `R41` |
+| ~~**7**~~ | ~~Cancellare, in generale~~ — **conclusa** il 12 settembre 2026 | `R15` | client trasversale, **più una rotta** | [Piano](#piano-sezione-7) · [esito](#esito-sezione-7). **Una rotta, nessuna migration, nessun ADR**: la decisione l'aveva presa la `0028`. Il piano aveva **tre premesse sbagliate**, e una stava nella tabella «verificato e non dedotto»: un secondo archivio risponde `404`, non `409`, perché la famiglia del soft delete non si rilegge — e il `404` è entrato fra gli «era già così». La `USING` di `expenses_update` è più larga di «chi l'ha registrata o lo staff», e il confine è nel caso d'uso. Quattro test verificati **al contrario** prima di consegnarli. Ha trovato `R45` usando il prodotto |
+| ~~**8**~~ | ~~Il perimetro dei ruoli~~ — **conclusa** il 16 settembre 2026 | `R9` | ADR, poi migration + backend + client + `ops/` | [Piano](#piano-sezione-8) · [esito](#esito-sezione-8). [ADR-053](08-decisioni.md#adr-053) prima del codice: l'inquilino entra per invito senza un'organizzazione propria, il proprietario con un token di piattaforma emesso da un runbook, `POST /auth/register` non esiste più. **La prima sezione eseguita con agenti separati, e l'ultima**: l'esito riporta le misure e la ragione del ritiro |
+| ~~**9**~~ | ~~Spiegare come si usa il sito~~ — **conclusa** il 17 settembre 2026 | `R8` | client | [Piano](#piano-sezione-9) · [esito](#esito-sezione-9). Era ultima **apposta**, e la scelta di *dove* — gli stati vuoti spiegano, una pagina sola raccoglie, il riepilogo vuoto è il primo accesso — è nel piano con le alternative scartate. Due premesse sbagliate, nessuna decisione cambiata |
+| ~~**10**~~ | ~~Tre chiusure prima del primo deploy~~ — **conclusa** il 18 settembre 2026 | `R50` `R51` `R46` | due rotte di API, un ramo nel client, una migration | [Piano](#piano-sezione-10) · [esito](#esito-sezione-10). Ciò che il primo deploy incontra da sé nel primo mese. Una premessa incompleta, trovata dal giro a mano prima del codice: `R51` era un `502` del proxy, non un errore di rete, e il ramo copre entrambi. Ne è uscita `R52`, che non precede il deploy |
+| **11** | **Il primo deploy** — [runbook](07-operazioni.md#il-primo-deploy--runbook) | — | a mano, su una macchina | **Deciso con la 9**: si fa con i mezzi che ci sono; la 10 è verde dal 18 settembre 2026, e prima viene il merge in `dev` della PR che porta le sezioni 1-10. Servono una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC e delle credenziali. Gli artefatti sono scritti e validati per quello che si può validare senza — `docker compose config`, `bash -n` — e non sono mai stati eseguiti. Il criterio di fine è il punto 4 del runbook: **aprire il prodotto dal telefono, in 4G**. Prima del deploy va provato il **ripristino**, una volta, mentre dentro non ci sono ancora i dati di nessuno. L'esito si scrive in [11](11-piani-conclusi.md) come quello di una sezione, **mentre** lo si percorre |
+
+**Concluse la 1, la 2, la 3, la 4, la 5, il collaudo (5-bis), la 5-ter, la 5-quater, la
+6, la 7, la 8, la 9 e la 10.** Si continua dall'**11**, il
+[primo deploy](07-operazioni.md#il-primo-deploy--runbook), che non ha un piano qui perché
+il runbook lo è: il deploy non è più rinviato in fondo — la decisione è presa con la 9 —
+ma i mezzi restano da procurare, e la ragione del rinvio che c'era sta qui sotto com'era.
+
+**Le tre sezioni dopo la 5 avevano un obiettivo dichiarato che le legava**: *un
+proprietario vero, che non ha scritto il codice, usa il prodotto per un mese con i suoi
+dati*. La 5-bis ha detto che il prodotto regge un giro; la 5-ter ha corretto ciò che il
+giro ha trovato; la 5-quater ha aggiunto le quattro cose senza cui una persona esterna non
+può cominciare — **due scritte, due preparate e non eseguite**.
+
+**Il deploy si rinvia, e non per una scelta di priorità.** Servono una VPS, un dominio, un
+relay SMTP con SPF, DKIM e DMARC e delle credenziali, e non ci sono. Gli artefatti e il
+[runbook](07-operazioni.md#il-primo-deploy--runbook) sono scritti e restano lì finché
+quelle quattro cose esistono; nel frattempo si continua a costruire.
+
+**Ne segue che il criterio d'ordine cambia, e va detto.** La frase che stava qui —
+*«quale delle sezioni 6-9 per prima lo dirà quel mese»* — poggiava su un'evidenza che
+adesso non arriva. L'ordine 8 → 9 resta quello scritto sotto, ma è **scelto senza
+quella prova**: chi lo esegue non ha una misura dietro, ha un ragionamento. Il rendimento
+del collaudo — sei voci in mezza giornata contro le quattro di cinque sezioni di lettura —
+dice che il modo più economico di riprendere quella prova, **senza aspettare la VPS**, è
+un secondo giro in locale: `mailpit` mostra la posta su `localhost:8025`, e l'unica cosa
+che resta fuori è «arriva fuori dallo spam».
+
+**Che cosa «pronto» significa, e per chi.** Fino alla sezione 8 la lettura era *un
+proprietario che conosci*, non *chiunque si registri*, perché chiunque si registrasse
+diventava owner di un'organizzazione propria. Dalla 8 la registrazione aperta non esiste:
+si entra per invito, e il perimetro è *chi ha ricevuto un token* — un inquilino da chi lo
+ospita, un proprietario da chi amministra la piattaforma. Il deploy non è più tenuto
+fermo da questo.
+
+L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
+riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
+alla conversazione successiva un contesto che non può ricostruire.
+
+

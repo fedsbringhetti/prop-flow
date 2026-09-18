@@ -14,7 +14,7 @@ motivazioni.
 | [06 — Sviluppo](06-sviluppo.md) | Requisiti, avvio, strategia di test, ricette operative |
 | [07 — Operazioni](07-operazioni.md) | Configurazione, deploy, migrazioni in produzione, osservabilità, CI |
 | [08 — Decisioni](08-decisioni.md) | Registro delle decisioni architetturali con le motivazioni |
-| [09 — Stato e roadmap](09-stato-e-roadmap.md) | Cosa è implementato, cosa manca, debiti tecnici noti, **il piano in corso** |
+| [09 — Stato e roadmap](09-stato-e-roadmap.md) | Dove siamo, **il cammino** — che cosa viene adesso, che cosa dopo, che cosa è fuori e perché — il piano in corso, cosa è implementato e cosa manca, debiti tecnici noti |
 | [10 — Rilasci](10-rilasci.md) | Versionamento, changelog, flusso di rilascio, hotfix, rollback |
 | [11 — Piani conclusi](11-piani-conclusi.md) | Archivio dei piani già eseguiti, con i loro esiti. Append-only |
 | [12 — Da fare](12-da-fare.md) | La raccolta di ciò che resta da sistemare e da costruire, con un identificatore stabile per voce. **Non è un piano** |

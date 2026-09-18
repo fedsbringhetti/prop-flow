@@ -83,80 +83,15 @@ legge: questo file per sapere che cosa c'è, `09` per il piano della sezione in 
 l'esito in `11` della sezione appena chiusa per sapere che cosa è cambiato sotto i
 piedi. È la ragione per cui gli esiti si scrivono anche quando vanno bene.
 
-## L'ordine di esecuzione
+<a id="lordine-di-esecuzione"></a>
 
-Deciso l'**8 settembre 2026**. Le voci si eseguono **per sezione, una per
-conversazione**: è il vincolo che ha deciso i raggruppamenti, e non l'argomento.
+## L'ordine di esecuzione sta in [09](09-stato-e-roadmap.md#le-sezioni)
 
-Una sezione deve essere **autosufficiente** — chiudersi senza lasciare mezze cose a
-quella dopo — perché chi la esegue apre una sessione nuova che non ha visto le
-precedenti. Da qui due accorpamenti che per argomento non si farebbero:
-
-- ~~**`R13`, `R17` e `R18` stanno insieme**~~ — **erano un nodo, e la sezione 3 l'ha
-  sciolto.** Una quota sbagliata non si correggeva (`R17`), quindi il contratto non si
-  attivava, quindi non si eliminava (`R13`), perché l'unica uscita sarebbe stata
-  attivarlo. Prenderne una senza le altre avrebbe lasciato aperto il vicolo cieco, ed è la
-  ragione per cui sono state fatte insieme;
-- ~~**`R7`, `R21` e `R22` hanno la stessa radice**~~ — **la sezione 5 ha risolto la sua
-  metà.** I DTO portavano identificatori e nessuna rotta risolveva le persone; `R21` e
-  `R22` sono state fatte con le segnalazioni, dove si vedono, e la forma scelta —
-  allargare la risposta con un modello di lettura, mai una rotta che risolva le persone —
-  è [ADR-049](08-decisioni.md#adr-049). `R7` la eredita invece di riderivarla, ed è la
-  ragione per cui la 5 andava **prima** della 6.
-
-| | Sezione | Voci | Natura | Perché è lì |
-|---|---|---|---|---|
-| ~~**1**~~ | ~~Ritocchi visibili~~ — **conclusa** l'8 settembre 2026 | `R5` `R4` `R6` `R10` `R20` + il bottone del thread | solo client | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-1) · [esito](11-piani-conclusi.md#esito-sezione-1). La riga resta perché l'ordine si legge per intero, e perché l'esito dice una cosa che serve alle sezioni dopo: la navigazione richiedeva **tre** modifiche e non due |
-| ~~**2**~~ | ~~Le pendenze della fetta C~~ — **conclusa** il 9 settembre 2026, **senza il collaudo** | `R2` `R3` | doc + una stringa di backend | [Esito](11-piani-conclusi.md#esito-sezione-2). `R2` ha corretto il punto 10 e, rileggendo gli altri dieci, ha trovato **il punto 4** con lo stesso difetto; `R3` era in **otto** posti e non in due. Il collaudo si è staccato ed è diventato la **5-bis** |
-| ~~**3**~~ | ~~Contratti: correggere gli errori~~ — **conclusa** il 9 settembre 2026 | `R13` `R17` `R18` `R12` `R14` | backend | Era il nodo e il danno peggiore che esistesse: contratti attivi con le quote sbagliate e nessun modo di correggerli. [Piano](11-piani-conclusi.md#piano-sezione-3) · [esito](11-piani-conclusi.md#esito-sezione-3). Eseguirla ha chiuso **un buco che non era in elenco** — si poteva aggiungere una parte a un contratto attivo — e ne ha aperto uno nuovo: `R28`, il subentro |
-| ~~**4**~~ | ~~Stati che nessuno aggiorna~~ — **conclusa** il 9 settembre 2026 | `R1` `R11` `R25` | migration + dominio + client | [Piano](11-piani-conclusi.md#piano-sezione-4) · [esito](11-piani-conclusi.md#esito-sezione-4). La risposta era già in [ADR-019](08-decisioni.md#adr-019): le conseguenze si derivano. Ha corretto **un numero falso che nessuno guardava** — `v_property_occupancy` diceva zero a tutti — e ha lasciato in un test la prova che un trigger sarebbe stato sbagliato |
-| ~~**5**~~ | ~~Segnalazioni~~ — **conclusa** il 9 settembre 2026 | `R19` `R19-bis` `R21` `R22` `R23` `R24` | migration + dominio | Le sei voci sono uscite da questo file: [piano](11-piani-conclusi.md#piano-sezione-5) · [esito](11-piani-conclusi.md#esito-sezione-5). **Due** migration: la `0035` allarga chi *vede*, la `0036` chi *scrive* — e la seconda **revoca** [ADR-026](08-decisioni.md#adr-026) su due colonne, emendando nello stesso passo l'invariante di schema e il test che la difendevano. Ha reso **portante** `users_select`: è il primo client che legge un nome da `app.users` |
-| ~~**5-bis**~~ | ~~Il collaudo in undici punti~~ — **concluso** il 10 settembre 2026, per intero | — | a mano, due account | [Esito](11-piani-conclusi.md#esito-sezione-5-bis), e con esso l'[esito della fetta C](11-piani-conclusi.md#esito-fetta-c) **smette di essere aperto** dopo due giorni e cinque sezioni. **Nessuno degli undici punti si è fermato**: le sei voci che ne sono uscite — `R30`–`R35` — sono difetti dentro percorsi che funzionano. Il rendimento che il rinvio aveva sospeso è misurato: mezza giornata di giro ha prodotto sei voci, cinque sezioni di lettura del codice ne avevano prodotte quattro. E una, `R31`, **nessun test poteva trovarla**: ogni test costruisce un inquilino nuovo, e quel difetto vive nella seconda volta che qualcosa succede alla stessa persona |
-| ~~**5-ter**~~ | ~~Quello che il collaudo ha trovato~~ — **conclusa** il 10 settembre 2026 | `R30` `R31` `R32` `R33` `R34` | dominio + client | [Piano](11-piani-conclusi.md#piano-sezione-5-ter) · [esito](11-piani-conclusi.md#esito-sezione-5-ter). Un ADR e **nessuna migration**: il ramo che fa rientrare un inquilino passa dal primo ramo di `org_members_select`, che non chiede di essere già membri. Il piano aveva una premessa sbagliata — l'intestatario **non** era in `LeaseResponse` — e una decisione giusta: si è emendata la premessa con un terzo campo nella stessa query. Apre `R36`, il badge degli addebiti, che ha la stessa forma di `R30` e non lo stesso difetto |
-| ~~**5-quater**~~ | ~~Prima degli utenti veri~~ — **conclusa** il 10 settembre 2026, **due sezioni su quattro eseguite** | — | posta + dominio + migration | [Piano](11-piani-conclusi.md#piano-utenti-veri) · [esito](11-piani-conclusi.md#esito-utenti-veri). `Z1` e `Z2` sono codice e girano; `Z3`, `Z4` e `Z5` hanno prodotto **artefatti e un runbook** e non sono stati eseguiti — servono una VPS, un dominio e delle credenziali. **Non è deployato**, e il criterio è il punto 4 del [runbook](07-operazioni.md#il-primo-deploy--runbook): aprire il prodotto dal telefono, in 4G. Apre `R37`, la cancellazione come capacità del prodotto |
-| ~~**6**~~ | ~~Le persone~~ — **conclusa** l'11 settembre 2026 | `R7` `R16` `R38` | migration + backend + client | [Piano](11-piani-conclusi.md#piano-sezione-6) · [esito](11-piani-conclusi.md#esito-sezione-6). **Due migration e nessun ADR**, ed era una conclusione del piano: la revoca delle sessioni è stata resa uniforme ad [ADR-052](08-decisioni.md#adr-052) apposta per non doverne scrivere un secondo. È la prima sezione pianificata **leggendo il codice** in cui tutte e cinque le trappole previste si sono avverate; quello che il piano non aveva visto è altrove, e la voce più cara è che il divieto di uscire con un contratto in essere sarebbe valso **solo per chi non amministra** — le policy permissive si sommano in `OR`. Apre `R41` |
-| ~~**7**~~ | ~~Cancellare, in generale~~ — **conclusa** il 12 settembre 2026 | `R15` | client trasversale, **più una rotta** | [Piano](11-piani-conclusi.md#piano-sezione-7) · [esito](11-piani-conclusi.md#esito-sezione-7). **Una rotta, nessuna migration, nessun ADR**: la decisione l'aveva presa la `0028`. Il piano aveva **tre premesse sbagliate**, e una stava nella tabella «verificato e non dedotto»: un secondo archivio risponde `404`, non `409`, perché la famiglia del soft delete non si rilegge — e il `404` è entrato fra gli «era già così». La `USING` di `expenses_update` è più larga di «chi l'ha registrata o lo staff», e il confine è nel caso d'uso. Quattro test verificati **al contrario** prima di consegnarli. Ha trovato `R45` usando il prodotto |
-| ~~**8**~~ | ~~Il perimetro dei ruoli~~ — **conclusa** il 16 settembre 2026 | `R9` | ADR, poi migration + backend + client + `ops/` | [Piano](11-piani-conclusi.md#piano-sezione-8) · [esito](11-piani-conclusi.md#esito-sezione-8). [ADR-053](08-decisioni.md#adr-053) prima del codice: l'inquilino entra per invito senza un'organizzazione propria, il proprietario con un token di piattaforma emesso da un runbook, `POST /auth/register` non esiste più. **La prima sezione eseguita con agenti separati, e l'ultima**: l'esito riporta le misure e la ragione del ritiro |
-| ~~**9**~~ | ~~Spiegare come si usa il sito~~ — **conclusa** il 17 settembre 2026 | `R8` | client | [Piano](11-piani-conclusi.md#piano-sezione-9) · [esito](11-piani-conclusi.md#esito-sezione-9). Era ultima **apposta**, e la scelta di *dove* — gli stati vuoti spiegano, una pagina sola raccoglie, il riepilogo vuoto è il primo accesso — è nel piano con le alternative scartate. Due premesse sbagliate, nessuna decisione cambiata |
-| ~~**10**~~ | ~~Tre chiusure prima del primo deploy~~ — **conclusa** il 18 settembre 2026 | `R50` `R51` `R46` | due rotte di API, un ramo nel client, una migration | [Piano](11-piani-conclusi.md#piano-sezione-10) · [esito](11-piani-conclusi.md#esito-sezione-10). Ciò che il primo deploy incontra da sé nel primo mese. Una premessa incompleta, trovata dal giro a mano prima del codice: `R51` era un `502` del proxy, non un errore di rete, e il ramo copre entrambi. Ne è uscita `R52`, che non precede il deploy |
-| **11** | **Il primo deploy** — [runbook](07-operazioni.md#il-primo-deploy--runbook) | — | a mano, su una macchina | **Deciso con la 9**: si fa con i mezzi che ci sono; la 10 è verde dal 18 settembre 2026, e prima viene il merge in `dev` della PR che porta le sezioni 1-10. Servono una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC e delle credenziali. Gli artefatti sono scritti e validati per quello che si può validare senza — `docker compose config`, `bash -n` — e non sono mai stati eseguiti. Il criterio di fine è il punto 4 del runbook: **aprire il prodotto dal telefono, in 4G**. Prima del deploy va provato il **ripristino**, una volta, mentre dentro non ci sono ancora i dati di nessuno. L'esito si scrive in [11](11-piani-conclusi.md) come quello di una sezione, **mentre** lo si percorre |
-
-**Concluse la 1, la 2, la 3, la 4, la 5, il collaudo (5-bis), la 5-ter, la 5-quater, la
-6, la 7, la 8, la 9 e la 10.** Si continua dall'**11**, il
-[primo deploy](07-operazioni.md#il-primo-deploy--runbook), che non ha un piano qui perché
-il runbook lo è: il deploy non è più rinviato in fondo — la decisione è presa con la 9 —
-ma i mezzi restano da procurare, e la ragione del rinvio che c'era sta qui sotto com'era.
-
-**Le tre sezioni dopo la 5 avevano un obiettivo dichiarato che le legava**: *un
-proprietario vero, che non ha scritto il codice, usa il prodotto per un mese con i suoi
-dati*. La 5-bis ha detto che il prodotto regge un giro; la 5-ter ha corretto ciò che il
-giro ha trovato; la 5-quater ha aggiunto le quattro cose senza cui una persona esterna non
-può cominciare — **due scritte, due preparate e non eseguite**.
-
-**Il deploy si rinvia, e non per una scelta di priorità.** Servono una VPS, un dominio, un
-relay SMTP con SPF, DKIM e DMARC e delle credenziali, e non ci sono. Gli artefatti e il
-[runbook](07-operazioni.md#il-primo-deploy--runbook) sono scritti e restano lì finché
-quelle quattro cose esistono; nel frattempo si continua a costruire.
-
-**Ne segue che il criterio d'ordine cambia, e va detto.** La frase che stava qui —
-*«quale delle sezioni 6-9 per prima lo dirà quel mese»* — poggiava su un'evidenza che
-adesso non arriva. L'ordine 8 → 9 resta quello scritto sotto, ma è **scelto senza
-quella prova**: chi lo esegue non ha una misura dietro, ha un ragionamento. Il rendimento
-del collaudo — sei voci in mezza giornata contro le quattro di cinque sezioni di lettura —
-dice che il modo più economico di riprendere quella prova, **senza aspettare la VPS**, è
-un secondo giro in locale: `mailpit` mostra la posta su `localhost:8025`, e l'unica cosa
-che resta fuori è «arriva fuori dallo spam».
-
-**Che cosa «pronto» significa, e per chi.** Fino alla sezione 8 la lettura era *un
-proprietario che conosci*, non *chiunque si registri*, perché chiunque si registrasse
-diventava owner di un'organizzazione propria. Dalla 8 la registrazione aperta non esiste:
-si entra per invito, e il perimetro è *chi ha ricevuto un token* — un inquilino da chi lo
-ospita, un proprietario da chi amministra la piattaforma. Il deploy non è più tenuto
-fermo da questo.
-
-L'ordine non è inciso: se il collaudo o l'uso fanno emergere un danno più urgente, si
-riordina. Quello che non si fa è **eseguire mezza sezione**, perché è ciò che lascia
-alla conversazione successiva un contesto che non può ricostruire.
+Le voci si eseguono **per sezione, una per conversazione**, e la tabella delle sezioni —
+quali voci, in che ordine, con quale esito — è la roadmap: dal 18 settembre 2026 sta in
+[09 — Il cammino](09-stato-e-roadmap.md#il-cammino), che è il documento che si riscrive a
+ogni fetta. Qui restano le voci, con il loro stato. Com'era, con le ragioni dell'ordine, è
+[archiviato](11-piani-conclusi.md#ordine-di-esecuzione-com-era-in-12).
 
 ## L'elenco
 
