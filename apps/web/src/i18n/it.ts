@@ -1613,6 +1613,12 @@ export const it = {
      *  chi legge i log e possono essere riscritti in qualunque momento. */
     generic: 'Non è stato possibile completare l’operazione.',
     network: 'Non riesco a raggiungere il server. Controlla la connessione.',
+    /** Risponde il proxy, non l'API: un corpo che non è JSON prende `http.<stato>`
+     *  come codice (`apiErrorFrom`). È ciò che un ricaricamento durante un
+     *  deploy incontra, e «non è stato possibile» non direbbe che è passeggero. */
+    'http.502': 'Il server non risponde in questo momento. Riprova fra poco.',
+    'http.503': 'Il server non è disponibile in questo momento. Riprova fra poco.',
+    'http.504': 'Il server non ha risposto in tempo. Riprova fra poco.',
     'auth.token_missing': 'Devi entrare per vedere questa pagina.',
     'auth.token_expired': 'La sessione è scaduta.',
     'auth.token_invalid': 'La sessione non è più valida.',

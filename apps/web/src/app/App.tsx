@@ -1,7 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router'
 
-import { Loading } from '@/components/state'
+import { ErrorState, Loading } from '@/components/state'
 import { QueryProvider } from './query'
 import { useIsStaff, useSession } from './session'
 import { AppShell, TENANT_HOME } from './shell'
@@ -109,7 +109,7 @@ const ExpenseGroupDetailPage = lazy(async () => ({
  * di chi li ha salvati, e non è ciò che una traduzione deve fare.
  */
 export function App() {
-  const { session, restoring } = useSession()
+  const { session, restoring, restoreError, retryRestore } = useSession()
   const isStaff = useIsStaff()
   const location = useLocation()
 
@@ -130,6 +130,24 @@ export function App() {
 
   if (restoring) {
     return <Loading className="min-h-screen justify-center" />
+  }
+
+  /**
+   * **Prima** del ramo «nessuna sessione», perché non lo è: il rinnovo non ha
+   * raggiunto il server — o il server non c'era, e ha risposto il proxy — e il
+   * cookie può essere ancora buono. Mandare al form di accesso chi ha solo perso
+   * il segnale, o ha ricaricato durante un deploy, sarebbe un logout apparente
+   * senza una riga di spiegazione — sul telefono, in galleria, il caso normale.
+   * La forma è quella del terzo stato del guscio, senza «Esci»: senza rete un
+   * logout non arriva al server, e un bottone che fallisce è peggio di uno che
+   * manca.
+   */
+  if (restoreError) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center px-4 py-10">
+        <ErrorState error={restoreError} onRetry={retryRestore} />
+      </main>
+    )
   }
 
   if (!session) {
