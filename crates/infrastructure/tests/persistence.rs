@@ -14,8 +14,9 @@ mod common;
 use std::sync::Arc;
 
 use propflow_application::ports::ObjectStorage as _;
+use propflow_application::ports::OpaqueTokenFactory;
 use propflow_application::use_cases::ai::{ProcessAiJob, Processed};
-use propflow_application::use_cases::auth::{RegisterOwner, RegisterOwnerCommand};
+use propflow_application::use_cases::auth::{AcceptOwnerInvitation, AcceptOwnerInvitationCommand};
 use propflow_application::use_cases::billing::{
     GetCharge, IssueCharge, IssueChargeCommand, ListCharges, ListChargesQuery, ListUtilityBills,
     ListUtilityBillsQuery, RechargeUtilityBill, RechargeUtilityBillCommand, RegisterUtilityBill,
@@ -49,10 +50,12 @@ use propflow_application::use_cases::property::{
 };
 use propflow_application::use_cases::room::{CreateRoom, CreateRoomCommand, ListRooms};
 use propflow_application::use_cases::ticket::{
-    AssignTicket, AssignTicketCommand, CloseTicket, CloseTicketCommand, GetTicket, ListTickets,
-    ListTicketsQuery, OpenTicket, OpenTicketCommand, ReopenTicket, ReopenTicketCommand,
-    StartTicketWork, StartTicketWorkCommand, SuspendTicket, SuspendTicketCommand, TriageTicket,
-    TriageTicketCommand,
+    AssignTicket, AssignTicketCommand, CancelTicket, CancelTicketCommand, CloseTicket,
+    CloseTicketCommand, CorrectTicketReport, CorrectTicketReportCommand, GetTicket,
+    ListTicketMessages, ListTicketMessagesCommand, ListTickets, ListTicketsQuery, OpenTicket,
+    OpenTicketCommand, PostTicketMessage, PostTicketMessageCommand, ReopenTicket,
+    ReopenTicketCommand, StartTicketWork, StartTicketWorkCommand, SuspendTicket,
+    SuspendTicketCommand, TriageTicket, TriageTicketCommand,
 };
 use propflow_domain::RequestContext;
 use propflow_domain::ai::{AiJobErrorCode, AiJobStatus, AiTask};
@@ -72,8 +75,8 @@ use propflow_domain::ports::{LeaseOverlap, RepositoryError};
 use propflow_domain::property::{PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
 use propflow_domain::ticket::{
-    TicketCategory, TicketDescription, TicketPriority, TicketReference, TicketStatus,
-    TicketStatusChange, TicketTitle, WaitingOn,
+    MessageBody, TicketCategory, TicketCorrection, TicketDescription, TicketPriority,
+    TicketReference, TicketStatus, TicketStatusChange, TicketTitle, WaitingOn,
 };
 use propflow_infrastructure::db::PgWorkerUnitOfWorkFactory;
 use propflow_infrastructure::security::OpaqueTokenGenerator;
@@ -91,26 +94,47 @@ fn address(city: &str) -> Address {
 }
 
 /// Registra un proprietario e restituisce il contesto della sua organizzazione.
+///
+/// Passa da `AcceptOwnerInvitation` (ADR-053) e non più dal vecchio caso d'uso
+/// di registrazione libera: un invito da proprietario nella tabella
+/// `app.owner_invitations`, inserito con il ruolo privilegiato da
+/// `common::issue_owner_invitation` **come farà lo script**, e poi
+/// l'accettazione — lo stesso caso d'uso e lo stesso pool privilegiato che
+/// userà la rotta vera. Il vecchio caso d'uso sparisce in `F6`: i test di
+/// persistenza non devono dipendere da qualcosa che sta per sparire.
 async fn register_owner(env: &common::TestEnv, label: &str) -> RequestContext {
-    let use_case = RegisterOwner::new(
+    let email = common::unique_email(label);
+    let token = common::issue_owner_invitation(&env.pools, &email).await;
+
+    let use_case = AcceptOwnerInvitation::new(
         Arc::clone(&env.factory),
         Arc::clone(&env.hasher),
+        Arc::clone(&env.tokens),
+        Arc::clone(&env.refresh_tokens),
+        Arc::clone(&env.invitation_tokens),
         Arc::clone(&env.clock) as Arc<dyn propflow_domain::ports::Clock>,
     );
-    let result = use_case
+    let session = use_case
         .execute(
             &RequestContext::anonymous(),
-            RegisterOwnerCommand {
-                email: common::unique_email(label),
+            AcceptOwnerInvitationCommand {
+                token,
                 full_name: format!("Proprietario {label}"),
                 password: "cavallo batteria graffetta".to_owned(),
                 organization_name: Some(format!("Org {label}")),
             },
         )
         .await
-        .expect("registrazione riuscita");
+        .expect("accettazione dell'invito da proprietario riuscita");
 
-    RequestContext::authenticated(result.user_id).with_org(result.org_id, OrgRole::Owner)
+    RequestContext::authenticated(session.user_id).with_org(
+        session
+            .org_id
+            .expect("un proprietario ha sempre un'organizzazione"),
+        session
+            .org_role
+            .expect("un proprietario ha sempre un ruolo"),
+    )
 }
 
 #[tokio::test]
@@ -171,7 +195,11 @@ async fn row_level_security_isolates_organizations() {
         .execute(&alfa, ListPropertiesQuery::default())
         .await
         .expect("elenco riuscito");
-    assert!(own.items.iter().any(|item| item.id() == property.id()));
+    assert!(
+        own.items
+            .iter()
+            .any(|item| item.property.id() == property.id())
+    );
 
     // L'organizzazione Beta non vede nulla di Alfa.
     let other = list
@@ -179,7 +207,10 @@ async fn row_level_security_isolates_organizations() {
         .await
         .expect("elenco riuscito");
     assert!(
-        !other.items.iter().any(|item| item.id() == property.id()),
+        !other
+            .items
+            .iter()
+            .any(|item| item.property.id() == property.id()),
         "l'organizzazione Beta ha visto un immobile di Alfa"
     );
 
@@ -401,22 +432,27 @@ async fn rooms_are_written_and_read_back_through_their_property() {
         .expect("elenco riuscito");
     let stored = rooms
         .iter()
-        .find(|item| item.id() == room.id())
+        .find(|item| item.room.id() == room.id())
         .expect("stanza presente nell'elenco");
-    assert_eq!(stored.name(), "Camera A");
+    assert_eq!(stored.room.name(), "Camera A");
     assert_eq!(
         stored
+            .room
             .monthly_rent()
             .map(|money| money.amount().to_string()),
         Some("450.00".to_owned())
     );
     assert_eq!(
         stored
+            .room
             .utility_share_percent()
             .map(|value| value.to_string()),
         Some("33.33".to_owned())
     );
-    assert!(stored.has_private_bathroom());
+    assert!(stored.room.has_private_bathroom());
+    // Nessun contratto: la derivazione dice «libera», e lo stato memorizzato
+    // resta quello che è.
+    assert!(!stored.occupied);
 }
 
 #[tokio::test]
@@ -674,6 +710,79 @@ async fn an_expired_lease_keeps_its_stored_state_but_leaves_the_dashboard() {
     .expect("lettura dell'occupazione");
     assert_eq!(occupancy, 0);
 
+    // **E le stanze occupate non sono più sempre zero.**
+    //
+    // La vista contava `r.status = 'occupied'`, che è la colonna che nessuno
+    // scrive: `rooms_occupied` e `occupancy_percent` erano zero per ogni immobile
+    // del sistema, sempre, e nessuno se n'era accorto perché quella vista la legge
+    // solo questo test — che leggeva l'unica colonna giusta. Qui si guarda un
+    // immobile con una stanza davvero occupata, e la vista lo dice.
+    let abitato = create_property(&env, &context, "Immobile abitato", "Torino").await;
+    let stanza = CreateRoom::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &context,
+            CreateRoomCommand {
+                property_id: abitato,
+                name: "Camera occupata".to_owned(),
+                attributes: RoomChanges::default(),
+            },
+        )
+        .await
+        .expect("stanza creata");
+    let in_essere = draft_lease(
+        &env,
+        &context,
+        abitato,
+        Some(stanza.id()),
+        days_from_today(-10),
+        Some(days_from_today(355)),
+    )
+    .await;
+    // `draft_lease` aggiunge già l'inquilino al 100%: senza, l'attivazione
+    // rifiuterebbe.
+    activate(&env, &context, in_essere.id())
+        .await
+        .expect("attivazione riuscita");
+
+    // **Il contesto va installato a mano**, e il motivo è la forma della funzione:
+    // `app.room_is_occupied` è `SECURITY DEFINER` e porta il confine nel corpo —
+    // `can_access_property` — come `app.property_residents` della `0030`. Sul pool
+    // privilegiato, che non ha contesto, quel confine risponde «no» e la vista
+    // conta zero. Non è un difetto della vista: è la ragione per cui una funzione
+    // che legge senza policy deve controllare da sé chi la chiama.
+    let mut conn = env
+        .pools
+        .privileged()
+        .acquire()
+        .await
+        .expect("connessione privilegiata");
+    // Servono **tutti e due**: `can_access_property` passa da `is_org_staff`, che
+    // chiede il ruolo di *questa* persona in *quella* organizzazione.
+    sqlx::query("SELECT set_config('app.current_org_id', $1, false)")
+        .bind(org_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .expect("organizzazione installata");
+    sqlx::query("SELECT set_config('app.current_user_id', $1, false)")
+        .bind(context.user_id().expect("utente").as_uuid().to_string())
+        .execute(&mut *conn)
+        .await
+        .expect("utente installato");
+
+    let (occupate, percentuale): (i64, Option<rust_decimal::Decimal>) = sqlx::query_as(
+        "SELECT rooms_occupied, occupancy_percent
+           FROM app.v_property_occupancy WHERE property_id = $1",
+    )
+    .bind(abitato.as_uuid())
+    .fetch_one(&mut *conn)
+    .await
+    .expect("lettura dell'occupazione");
+    assert_eq!(occupate, 1, "la vista conta le stanze davvero occupate");
+    assert_eq!(
+        percentuale.map(|value| value.to_string()),
+        Some("100.00".to_owned())
+    );
+
     // Il filtro `in_force` dell'elenco usa la stessa funzione delle viste.
     let list = ListLeases::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
     let in_force = list
@@ -690,7 +799,7 @@ async fn an_expired_lease_keeps_its_stored_state_but_leaves_the_dashboard() {
         !in_force
             .items
             .iter()
-            .any(|item| item.lease.id() == expired.id()),
+            .any(|item| item.view.lease.id() == expired.id()),
         "un contratto scaduto non deve comparire fra quelli in essere"
     );
 }
@@ -757,6 +866,7 @@ async fn accepting_an_invitation_never_touches_the_privileged_pool() {
         Arc::clone(&env.factory),
         Arc::new(OpaqueTokenGenerator),
         Arc::clone(&env.clock) as _,
+        Arc::new(SilentNotifier),
     )
     .execute(
         &owner,
@@ -894,6 +1004,70 @@ async fn the_application_role_cannot_repoint_a_lease_party_to_another_lease() {
     );
 }
 
+/// I privilegi di colonna della `0038`, **una colonna per volta**.
+///
+/// `platform_role` da sola non basterebbe, ed è la ragione per cui il test le
+/// prova tutte: **è l'elenco a essere il contratto**. La `WITH CHECK` di
+/// `users_update_self` nomina la sola identità della riga, quindi ciò che il
+/// privilegio non nega resta scrivibile da chiunque abbia le credenziali del ruolo
+/// applicativo.
+///
+/// La più cara è `platform_role`, e la catena è quella scritta in testa alla
+/// migration: `Login` la mette nei claim, il contesto installa
+/// `app.platform_admin = 'on'`, e da lì `is_org_member` e `is_org_staff` sono vere
+/// su **ogni** organizzazione. Seguono `status`, con cui ci si toglie una
+/// sospensione, e `failed_login_count` con `locked_until`, che sono la difesa dal
+/// blocco dopo dieci tentativi.
+///
+/// Il privilegio si verifica **prima** delle policy e prima che le righe vengano
+/// esaminate: il tentativo fallisce anche su un identificatore inesistente, quindi
+/// non serve ricostruire lo scenario per dimostrare che la strada è chiusa.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_what_an_account_is() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    for statement in [
+        "UPDATE app.users SET platform_role = 'admin' WHERE id = $1",
+        "UPDATE app.users SET status = 'active' WHERE id = $1",
+        "UPDATE app.users SET email = 'altro@example.it' WHERE id = $1",
+        "UPDATE app.users SET email_verified_at = now() WHERE id = $1",
+        "UPDATE app.users SET last_login_at = now() WHERE id = $1",
+        "UPDATE app.users SET failed_login_count = 0 WHERE id = $1",
+        "UPDATE app.users SET locked_until = NULL WHERE id = $1",
+        "UPDATE app.users SET deleted_at = NULL WHERE id = $1",
+    ] {
+        let error = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi su `{statement}`, ottenuto: {error}"
+        );
+    }
+
+    // Le quattro concesse restano concesse, ed è la metà che rende il test un
+    // contratto invece di un divieto: `update_profile` nomina esattamente queste.
+    for statement in [
+        "UPDATE app.users SET full_name = 'Nome Nuovo' WHERE id = $1",
+        "UPDATE app.users SET phone = '+39 333 1234567' WHERE id = $1",
+        "UPDATE app.users SET locale = 'it-IT' WHERE id = $1",
+        "UPDATE app.users SET password_hash = '$argon2id$nuovo' WHERE id = $1",
+    ] {
+        let allowed = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await;
+        assert!(
+            allowed.is_ok(),
+            "`{statement}` non doveva essere negata: {:?}",
+            allowed.err()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Documenti
 // ---------------------------------------------------------------------------
@@ -903,6 +1077,28 @@ async fn the_application_role_cannot_repoint_a_lease_party_to_another_lease() {
 /// Qui si verifica il **repository**, non S3: legare questi test a un MinIO
 /// acceso significherebbe non poterli eseguire quando lo storage manca, e la
 /// query non ha nulla da guadagnarne.
+/// Doppio di `Notifier` che non fa niente.
+///
+/// Questi test verificano la **persistenza** — che cosa entra in database e che
+/// cosa la Row Level Security concede — e l'invio è best-effort dopo il commit:
+/// legarli a un canale di posta significherebbe far fallire un test dello schema
+/// perché un doppio ha detto di no.
+struct SilentNotifier;
+
+#[async_trait::async_trait]
+impl propflow_application::ports::Notifier for SilentNotifier {
+    async fn send(
+        &self,
+        _notification: &propflow_application::ports::Notification,
+    ) -> Result<(), propflow_application::ports::NotifyError> {
+        Ok(())
+    }
+
+    async fn probe(&self) -> Result<(), propflow_application::ports::NotifyError> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct MemoryStorage {
     objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
@@ -1277,10 +1473,12 @@ async fn open_ticket(
                     .expect("descrizione valida"),
                 category: None,
                 priority: None,
+                visible_to_residents: None,
             },
         )
         .await
         .expect("segnalazione aperta")
+        .ticket
 }
 
 /// Crea un immobile e restituisce il suo identificatore.
@@ -1427,19 +1625,28 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
         )
         .await
         .expect("chiusa");
-    assert!(closed.closed_at().is_some());
-    assert_eq!(closed.resolution_notes(), Some("sostituita la valvola"));
+    assert!(closed.ticket.closed_at().is_some());
+    assert_eq!(
+        closed.ticket.resolution_notes(),
+        Some("sostituita la valvola")
+    );
 
     let reopened = ReopenTicket::new(factory(), clock())
-        .execute(&context, ReopenTicketCommand { id: ticket.id() })
+        .execute(
+            &context,
+            ReopenTicketCommand {
+                id: ticket.id(),
+                reason: MessageBody::parse("Ha ricominciato a perdere").expect("motivo"),
+            },
+        )
         .await
         .expect("riaperta");
-    assert_eq!(reopened.status(), TicketStatus::Open);
+    assert_eq!(reopened.ticket.status(), TicketStatus::Open);
     // La trappola: `tickets_closed_ck` vincola una sola direzione, quindi il
     // database accetterebbe senza dire niente una segnalazione `open` con una data
     // di chiusura nel passato. Deve azzerarla il dominio, e la riga riletta lo
     // conferma — non solo l'aggregato in memoria.
-    assert_eq!(reopened.closed_at(), None);
+    assert_eq!(reopened.ticket.closed_at(), None);
 
     let mut uow = env.factory.begin(&context).await.expect("transazione");
     let read = uow
@@ -1487,6 +1694,12 @@ async fn the_whole_cycle_leaves_its_trace_in_the_history() {
 /// esiste: non serve costruire il caso reale per provare che la porta è chiusa.
 /// Il precedente è
 /// `the_application_role_cannot_repoint_a_lease_party_to_another_lease`.
+///
+/// **`title` e `description` sono passate dai rifiuti alle concessioni con la
+/// migration `0036`**, ed è la revoca di ADR-026 su quelle due sole colonne
+/// (ADR-048). Il test le tiene qui e non le toglie: che siano scrivibili è
+/// un'affermazione tanto quanto che non lo fossero, e chi togliesse la `GRANT`
+/// per prudenza vedrebbe fallire questo test invece di scoprirlo dal client.
 #[tokio::test]
 async fn the_application_role_cannot_move_a_ticket_to_another_property() {
     let env = require_db!();
@@ -1509,13 +1722,13 @@ async fn the_application_role_cannot_move_a_ticket_to_another_property() {
         );
     }
 
-    // Nemmeno il testo con cui una persona ha descritto il guasto: il thread
-    // esiste apposta per correggere il tiro.
+    // Nemmeno il riferimento, che lo assegna il trigger della `0021`, né chi ha
+    // segnalato.
     for statement in [
-        "UPDATE app.tickets SET title = 'riscritto' WHERE id = $1",
-        "UPDATE app.tickets SET description = 'riscritta' WHERE id = $1",
         "UPDATE app.tickets SET reference = 'TK-999999' WHERE id = $1",
         "UPDATE app.tickets SET reported_by = NULL WHERE id = $1",
+        "UPDATE app.tickets SET reported_by_kind = 'owner' WHERE id = $1",
+        "UPDATE app.tickets SET currency = 'USD' WHERE id = $1",
     ] {
         let error = sqlx::query(statement)
             .bind(uuid::Uuid::now_v7())
@@ -1536,6 +1749,17 @@ async fn the_application_role_cannot_move_a_ticket_to_another_property() {
         "UPDATE app.tickets SET assigned_to = NULL WHERE id = $1",
         // Concessa dalla 0021: la chiusura registra come è stata risolta.
         "UPDATE app.tickets SET resolution_notes = 'fatto' WHERE id = $1",
+        // Concessa dalla 0035: la visibilità è una scelta di chi apre, e si può
+        // cambiare idea dopo.
+        "UPDATE app.tickets SET visible_to_residents = true WHERE id = $1",
+        // **Concesse dalla 0036, ed erano negate fino a quella migration.** È la
+        // revoca di ADR-026 su queste due colonne sole, documentata in ADR-048:
+        // un refuso nel titolo è un motivo legittimo di cambiare, e annullare e
+        // riaprire costerebbe il riferimento già comunicato. Il limite «finché è
+        // `open`» non è qui e non può esserci — una policy non confronta la riga
+        // nuova con quella vecchia — ed è applicativo, come per `status`.
+        "UPDATE app.tickets SET title = 'riscritto' WHERE id = $1",
+        "UPDATE app.tickets SET description = 'riscritta' WHERE id = $1",
     ] {
         let allowed = sqlx::query(statement)
             .bind(uuid::Uuid::now_v7())
@@ -1699,6 +1923,7 @@ async fn a_ticket_refuses_a_room_or_a_lease_of_another_property() {
             .expect("descrizione"),
         category: None,
         priority: None,
+        visible_to_residents: None,
     };
 
     let error = open
@@ -1820,6 +2045,9 @@ async fn register_bill(
         )
         .await
         .expect("bolletta registrata")
+        // I casi d'uso restituiscono ora la bolletta **con i nomi dei luoghi che
+        // cita**: qui interessa il solo aggregato.
+        .value
 }
 
 /// Porta un inquilino dentro l'organizzazione come parte del contratto indicato,
@@ -1854,6 +2082,7 @@ async fn tenant_on_lease(
         Arc::clone(&env.factory),
         Arc::new(OpaqueTokenGenerator),
         Arc::clone(&env.clock) as _,
+        Arc::new(SilentNotifier),
     )
     .execute(
         owner,
@@ -2666,6 +2895,7 @@ async fn issue_charge(
         )
         .await
         .expect("addebito emesso")
+        .value
 }
 
 fn key(label: &str) -> IdempotencyKey {
@@ -4849,6 +5079,7 @@ async fn the_invited_appear_without_an_identifier_and_the_guarantor_not_at_all()
         Arc::clone(&env.factory),
         Arc::new(OpaqueTokenGenerator),
         Arc::clone(&env.clock) as _,
+        Arc::new(SilentNotifier),
     )
     .execute(
         &owner,
@@ -5619,4 +5850,586 @@ async fn a_job_of_another_organization_is_out_of_reach() {
         job_of(&env, &stranger, bill.id()).await.is_none(),
         "il job di un'altra organizzazione non deve essere visibile"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Sezione 5 — le segnalazioni: visibilità, correzione, nomi, thread chiuso
+// ---------------------------------------------------------------------------
+
+/// Apre una segnalazione **sull'immobile intero**, senza contratto indicato.
+///
+/// Senza `lease_id` il quarto ramo di `app.can_access_ticket` non può concedere
+/// niente a nessuno: è la forma che rende il test una prova del **quinto** ramo e
+/// non di un altro.
+async fn open_shared_ticket(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+    title: &str,
+    shared: bool,
+) -> propflow_domain::ticket::Ticket {
+    OpenTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            context,
+            OpenTicketCommand {
+                property_id,
+                room_id: None,
+                lease_id: None,
+                title: TicketTitle::parse(title).expect("titolo valido"),
+                description: TicketDescription::parse("La caldaia condominiale non parte")
+                    .expect("descrizione valida"),
+                category: None,
+                priority: None,
+                visible_to_residents: Some(shared),
+            },
+        )
+        .await
+        .expect("segnalazione aperta")
+        .ticket
+}
+
+/// **Il quinto ramo di `app.can_access_ticket`, sul binario vero.**
+///
+/// X apre una segnalazione sull'immobile intero — nessun contratto indicato,
+/// quindi il ramo `lease_id` è fuori gioco per costruzione — e la dichiara di
+/// interesse comune. Y, che abita la stessa casa con un **contratto proprio** e
+/// non è né chi ha segnalato né chi ha in carico, deve leggerla.
+///
+/// E deve leggere **anche il thread e lo storico**: è la ragione per cui il ramo
+/// sta nella funzione e non in `tickets_select`. Con la policy allargata da sola,
+/// questo test passerebbe sulla prima riga e fallirebbe sulle altre due — cioè
+/// esattamente la segnalazione che si apre e non si legge.
+#[tokio::test]
+async fn a_shared_ticket_reaches_the_housemates_with_its_thread_and_history() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-condiviso").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+    let a = &stage.second[0];
+
+    let shared = open_shared_ticket(&env, x, stage.home_one, "La caldaia è ferma", true).await;
+
+    PostTicketMessage::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            x,
+            PostTicketMessageCommand {
+                ticket_id: shared.id(),
+                body: MessageBody::parse("Da stamattina niente acqua calda").expect("corpo"),
+                is_internal: false,
+            },
+        )
+        .await
+        .expect("messaggio scritto");
+
+    let get = GetTicket::new(Arc::clone(&env.factory));
+    let detail = get
+        .execute(y, shared.id())
+        .await
+        .expect("il coinquilino legge la segnalazione condivisa");
+    assert_eq!(detail.ticket.id(), shared.id());
+    assert!(detail.ticket.visible_to_residents());
+    assert!(
+        !detail.history.is_empty(),
+        "lo storico passa dalla stessa funzione: se fosse vuoto il ramo sarebbe \
+         finito in `tickets_select` invece che in `can_access_ticket`"
+    );
+
+    let thread = ListTicketMessages::new(Arc::clone(&env.factory))
+        .execute(
+            y,
+            ListTicketMessagesCommand {
+                ticket_id: shared.id(),
+                after: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("il coinquilino legge il thread");
+    assert_eq!(thread.items.len(), 1);
+
+    // L'altra casa non c'entra: A è residente, ma di un immobile diverso.
+    let denied = get
+        .execute(a, shared.id())
+        .await
+        .expect_err("chi abita altrove non deve vederla");
+    assert_eq!(denied.code(), "ticket.not_found");
+
+    // E il default resta quello di sempre.
+    let private =
+        open_shared_ticket(&env, x, stage.home_one, "Perde il mio lavandino", false).await;
+    let denied = get
+        .execute(y, private.id())
+        .await
+        .expect_err("senza la casella, la segnalazione resta privata");
+    assert_eq!(
+        denied.code(),
+        "ticket.not_found",
+        "è il comportamento di prima della migration 0035, e resta il default"
+    );
+}
+
+/// **Condividere non concede una riga di scrittura.**
+///
+/// `tickets_update` ha un predicato in linea — staff, `reported_by`,
+/// `assigned_to` — e **non** passa da `can_access_ticket`: è la ragione per cui la
+/// `0035` è più piccola di quanto sembri. Il coinquilino che ora *vede* la
+/// segnalazione non deve poterla riaprire, annullare o correggere.
+#[tokio::test]
+async fn seeing_a_shared_ticket_does_not_make_it_writable() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-sola-lettura").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+
+    let shared = open_shared_ticket(&env, x, stage.home_one, "Il portone non chiude", true).await;
+
+    let refused = CancelTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(y, CancelTicketCommand { id: shared.id() })
+        .await
+        .expect_err("il coinquilino non annulla");
+    assert_eq!(refused.code(), "ticket.not_yours");
+
+    let refused = CorrectTicketReport::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            y,
+            CorrectTicketReportCommand {
+                id: shared.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Riscritto da un altro").expect("titolo")),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect_err("il coinquilino non corregge il testo di un altro");
+    assert_eq!(
+        refused.code(),
+        "ticket.not_yours",
+        "non gli manca un ruolo: non è stato lui a segnalare"
+    );
+}
+
+/// **La correzione ha la forma dell'annullamento, e non è una copia.**
+///
+/// Chi ha segnalato corregge finché è `open`; da `assigned` in poi il rifiuto è
+/// `org.staff_role_required`, perché lì il ruolo serve davvero. Lo staff corregge
+/// sempre. Su una annullata non corregge nessuno.
+///
+/// Fino alla migration `0036` la scrittura sarebbe fallita con `permission
+/// denied` prima ancora di arrivare qui: questo test è anche la prova che quel
+/// privilegio è stato concesso.
+#[tokio::test]
+async fn the_reporter_corrects_the_report_only_while_nobody_has_touched_it() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-correzione").await;
+    let x = &stage.first[0];
+
+    let correct = CorrectTicketReport::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let ticket = open_shared_ticket(&env, x, stage.home_one, "Il bolier perde", false).await;
+
+    let fixed = correct
+        .execute(
+            x,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Il boiler perde").expect("titolo")),
+                    visible_to_residents: Some(true),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect("chi ha segnalato corregge finché è aperta");
+    assert_eq!(fixed.ticket.title().as_str(), "Il boiler perde");
+    assert!(
+        fixed.ticket.visible_to_residents(),
+        "la casella si cambia anche dopo l'apertura: è uno dei tre campi della rotta"
+    );
+
+    // La descrizione non è stata nominata: resta com'era.
+    assert_eq!(
+        fixed.ticket.description().as_str(),
+        "La caldaia condominiale non parte",
+        "assente = invariato, che è la metà di PATCH che questa rotta usa"
+    );
+
+    AssignTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &stage.owner,
+            AssignTicketCommand {
+                id: ticket.id(),
+                assignee: user_of(&stage.owner),
+            },
+        )
+        .await
+        .expect("presa in carico");
+
+    let refused = correct
+        .execute(
+            x,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Troppo tardi").expect("titolo")),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect_err("da qui in poi corregge chi amministra");
+    assert_eq!(
+        refused.code(),
+        "org.staff_role_required",
+        "la segnalazione è sua, ma qualcuno ci ha messo mano"
+    );
+
+    correct
+        .execute(
+            &stage.owner,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    description: Some(
+                        TicketDescription::parse("Riformulata da chi amministra")
+                            .expect("descrizione"),
+                    ),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect("lo staff corregge sempre");
+
+    CancelTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(&stage.owner, CancelTicketCommand { id: ticket.id() })
+        .await
+        .expect("annullata");
+    let refused = correct
+        .execute(
+            &stage.owner,
+            CorrectTicketReportCommand {
+                id: ticket.id(),
+                correction: TicketCorrection {
+                    title: Some(TicketTitle::parse("Su una annullata no").expect("titolo")),
+                    ..TicketCorrection::default()
+                },
+            },
+        )
+        .await
+        .expect_err("una segnalazione annullata non si tocca più");
+    assert_eq!(refused.code(), "ticket.cancelled");
+}
+
+/// **Un thread terminato si legge e non si scrive, e riaprire dice perché.**
+///
+/// Le due metà sono una decisione sola: se dopo la chiusura non si scrive più,
+/// riaprire è l'unico modo di dire «non è risolto», e allora il motivo è l'unica
+/// cosa che spiega perché la segnalazione è tornata viva. Il motivo finisce nel
+/// thread, che non si riscrive mai — e questo test lo va a rileggere lì.
+#[tokio::test]
+async fn a_closed_thread_is_read_but_not_written_and_reopening_says_why() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-thread-chiuso").await;
+    let x = &stage.first[0];
+
+    let ticket =
+        open_shared_ticket(&env, x, stage.home_one, "Il termosifone è freddo", false).await;
+    let post = PostTicketMessage::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _);
+    let list = ListTicketMessages::new(Arc::clone(&env.factory));
+
+    post.execute(
+        x,
+        PostTicketMessageCommand {
+            ticket_id: ticket.id(),
+            body: MessageBody::parse("Non scalda da lunedì").expect("corpo"),
+            is_internal: false,
+        },
+    )
+    .await
+    .expect("finché è aperta si scrive");
+
+    CloseTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &stage.owner,
+            CloseTicketCommand {
+                id: ticket.id(),
+                resolution_notes: Some("spurgato".to_owned()),
+            },
+        )
+        .await
+        .expect("chiusa");
+
+    let refused = post
+        .execute(
+            x,
+            PostTicketMessageCommand {
+                ticket_id: ticket.id(),
+                body: MessageBody::parse("Non è risolto").expect("corpo"),
+                is_internal: false,
+            },
+        )
+        .await
+        .expect_err("su una chiusa non si scrive");
+    assert_eq!(
+        refused.code(),
+        "ticket.thread_closed",
+        "codice proprio: non è una transizione rifiutata, e il rimedio è riaprire"
+    );
+
+    // **Leggere resta permesso.** È metà della regola, ed è quella che si
+    // romperebbe mettendo la guardia nel posto sbagliato.
+    let thread = list
+        .execute(
+            x,
+            ListTicketMessagesCommand {
+                ticket_id: ticket.id(),
+                after: None,
+                limit: Some(50),
+            },
+        )
+        .await
+        .expect("un thread chiuso si rilegge per intero");
+    assert_eq!(thread.items.len(), 1);
+
+    ReopenTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            x,
+            ReopenTicketCommand {
+                id: ticket.id(),
+                reason: MessageBody::parse("Non è risolto: è tornato freddo").expect("motivo"),
+            },
+        )
+        .await
+        .expect("chi ha segnalato riapre");
+
+    let thread = list
+        .execute(
+            x,
+            ListTicketMessagesCommand {
+                ticket_id: ticket.id(),
+                after: None,
+                limit: Some(50),
+            },
+        )
+        .await
+        .expect("thread riletto");
+    assert_eq!(
+        thread.items.len(),
+        2,
+        "il motivo della riapertura è il primo messaggio del giro nuovo"
+    );
+    let last = thread.items.last().expect("il messaggio c'è");
+    assert_eq!(last.body().as_str(), "Non è risolto: è tornato freddo");
+    assert!(
+        !last.is_internal(),
+        "il punto del motivo è che lo legga l'altra parte"
+    );
+
+    // E da riaperta si torna a scrivere.
+    post.execute(
+        x,
+        PostTicketMessageCommand {
+            ticket_id: ticket.id(),
+            body: MessageBody::parse("Aggiungo una foto").expect("corpo"),
+            is_internal: false,
+        },
+    )
+    .await
+    .expect("riaperta, il thread riprende");
+}
+
+/// **I nomi arrivano dalla policy `users_select`, e questa query è il suo primo
+/// lettore.**
+///
+/// La `0030` aveva scritto che la finestra per restringere quella policy la
+/// avrebbe chiusa il primo client che leggesse un nome da lì. È questo. I due rami
+/// che reggono la sezione si provano insieme: `is_my_staff` — l'inquilino legge il
+/// nome di chi ha in carico la sua segnalazione — e `shares_home_with` — il
+/// coinquilino legge il nome di chi ha segnalato.
+#[tokio::test]
+async fn the_names_come_from_the_policy_that_0030_left_in_place() {
+    let env = require_db!();
+    let stage = two_homes(&env, "ticket-nomi").await;
+    let (x, y) = (&stage.first[0], &stage.first[1]);
+
+    let ticket = open_shared_ticket(&env, x, stage.home_one, "La caldaia è ferma", true).await;
+    AssignTicket::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &stage.owner,
+            AssignTicketCommand {
+                id: ticket.id(),
+                assignee: user_of(&stage.owner),
+            },
+        )
+        .await
+        .expect("presa in carico");
+
+    let get = GetTicket::new(Arc::clone(&env.factory));
+
+    // `is_my_staff`: l'inquilino vede il nome del proprietario.
+    let seen_by_x = get
+        .execute(x, ticket.id())
+        .await
+        .expect("visibile a chi ha segnalato");
+    assert!(
+        seen_by_x
+            .people
+            .name_of(seen_by_x.ticket.assigned_to())
+            .is_some(),
+        "«In carico a» deve dire chi, non solo quando"
+    );
+
+    // `shares_home_with`: il coinquilino vede il nome di chi ha segnalato.
+    let seen_by_y = get.execute(y, ticket.id()).await.expect("condivisa");
+    assert!(
+        seen_by_y
+            .people
+            .name_of(seen_by_y.ticket.reported_by())
+            .is_some(),
+        "in un co-living «Inquilino» non distingue due coinquilini: serve il nome"
+    );
+
+    // E lo staff vede i nomi di entrambi, dal ramo `is_staff_of_user`.
+    let seen_by_owner = get
+        .execute(&stage.owner, ticket.id())
+        .await
+        .expect("visibile allo staff");
+    assert!(
+        seen_by_owner
+            .people
+            .name_of(seen_by_owner.ticket.reported_by())
+            .is_some()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Inviti da proprietario
+// ---------------------------------------------------------------------------
+
+/// `app.owner_invitations` non ha una policy che ammetta il ruolo applicativo:
+/// `owner_invitations_none` è `USING (false)` su ogni comando (migration `0040`,
+/// ADR-053). Il ruolo applicativo non ha nemmeno il privilegio `INSERT` — la riga
+/// la scrive solo lo script in `ops/`, con il ruolo del migratore — quindi il
+/// tentativo è respinto **prima** che la RLS entri in gioco, con
+/// `permission denied` e non con zero righe.
+#[tokio::test]
+async fn the_application_role_cannot_insert_an_owner_invitation() {
+    let env = require_db!();
+    let hash = OpaqueTokenGenerator.generate().expect("hash di prova").hash;
+
+    let attempt = sqlx::query(
+        "INSERT INTO app.owner_invitations (id, email, token_hash, expires_at)
+         VALUES ($1, $2::app.email_address, $3, now() + interval '7 days')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(common::unique_email("proprietario-insert"))
+    .bind(hash.as_bytes().as_slice())
+    .execute(env.pools.application())
+    .await;
+
+    let error = attempt.expect_err("l'inserimento doveva essere negato");
+    assert!(
+        error.to_string().contains("permission denied"),
+        "atteso un rifiuto per privilegi, ottenuto: {error}"
+    );
+}
+
+/// Il ruolo applicativo ha il privilegio `SELECT` — la migration lo concede per
+/// esteso, dopo un `REVOKE ALL` che disfa il default della `0015` — e
+/// `owner_invitations_none` nega comunque ogni riga:
+/// una riga inserita dal pool privilegiato resta invisibile. La differenza con il
+/// test precedente è voluta: lì il privilegio manca e l'errore è
+/// `permission denied`; qui il privilegio c'è e la riga sparisce senza errore,
+/// perché è la RLS e non il sistema dei privilegi a fermare la lettura.
+#[tokio::test]
+async fn the_application_role_cannot_see_an_owner_invitation_inserted_by_the_privileged_role() {
+    let env = require_db!();
+    let hash = OpaqueTokenGenerator.generate().expect("hash di prova").hash;
+    let id = uuid::Uuid::now_v7();
+
+    // Il pool privilegiato è quello che lo script userebbe in produzione (qui
+    // con il ruolo `propflow_worker`, l'unica connessione che i test hanno con il
+    // privilegio di scrivere questa tabella: vedi la nota nella migration `0040`
+    // sul perché `propflow_worker` riceve anche `INSERT`).
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (id, email, token_hash, expires_at)
+         VALUES ($1, $2::app.email_address, $3, now() + interval '7 days')",
+    )
+    .bind(id)
+    .bind(common::unique_email("proprietario-select"))
+    .bind(hash.as_bytes().as_slice())
+    .execute(env.pools.privileged())
+    .await
+    .expect("inserimento privilegiato riuscito");
+
+    let seen_by_app: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM app.owner_invitations WHERE id = $1")
+            .bind(id)
+            .fetch_one(env.pools.application())
+            .await
+            .expect("la SELECT in sé non deve fallire: il privilegio SELECT c'è");
+    assert_eq!(
+        seen_by_app, 0,
+        "il ruolo applicativo ha visto una riga che `USING (false)` deve negare"
+    );
+
+    // Il pool privilegiato, che ha BYPASSRLS, la vede: prova che la riga esiste
+    // davvero e che il test precedente non passava semplicemente a vuoto.
+    let seen_by_privileged: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM app.owner_invitations WHERE id = $1")
+            .bind(id)
+            .fetch_one(env.pools.privileged())
+            .await
+            .expect("query privilegiata");
+    assert_eq!(seen_by_privileged, 1, "la riga inserita non si trova più");
+}
+
+/// Le colonne che identificano l'invito — cosa promette e a chi — non sono
+/// aggiornabili dal ruolo applicativo, come per `org_invitations` (ADR-021) e per
+/// le altre tabelle di credenziali. Solo `accepted_at` e `accepted_by`, ciò che
+/// l'accettazione scrive, restano concesse: è la coppia del controllo 12.
+///
+/// Il privilegio si verifica **prima** delle policy e prima che le righe vengano
+/// esaminate, quindi il rifiuto arriva come `permission denied` anche su un
+/// identificatore inesistente — stessa forma di
+/// `the_application_role_cannot_rewrite_what_an_account_is`.
+#[tokio::test]
+async fn the_application_role_cannot_rewrite_the_identity_of_an_owner_invitation() {
+    let env = require_db!();
+    let id = uuid::Uuid::now_v7();
+
+    for statement in [
+        "UPDATE app.owner_invitations SET email = 'altro@example.test' WHERE id = $1",
+        "UPDATE app.owner_invitations SET token_hash = '\\xdeadbeef' WHERE id = $1",
+        "UPDATE app.owner_invitations SET expires_at = now() WHERE id = $1",
+        "UPDATE app.owner_invitations SET revoked_at = now() WHERE id = $1",
+        "UPDATE app.owner_invitations SET created_at = now() WHERE id = $1",
+    ] {
+        let error = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi su `{statement}`, ottenuto: {error}"
+        );
+    }
+
+    // Le due concesse non falliscono per privilegio — `USING (false)` le negherà
+    // comunque a livello di riga, ma è la RLS a fermarle, non la `GRANT`, ed è
+    // esattamente la distinzione che il test precedente stabilisce.
+    for statement in [
+        "UPDATE app.owner_invitations SET accepted_at = now() WHERE id = $1",
+        "UPDATE app.owner_invitations SET accepted_by = NULL WHERE id = $1",
+    ] {
+        let allowed = sqlx::query(statement)
+            .bind(id)
+            .execute(env.pools.application())
+            .await;
+        assert!(
+            allowed.is_ok(),
+            "l'aggiornamento di `{statement}` non doveva essere negato per privilegio: {:?}",
+            allowed.err()
+        );
+    }
 }

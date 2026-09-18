@@ -41,6 +41,7 @@ interface Values {
   description: string
   category: TicketCategory
   priority: TicketPriority
+  visible_to_residents: boolean
 }
 
 function emptyValues(): Values {
@@ -52,6 +53,9 @@ function emptyValues(): Values {
     description: '',
     category: 'other',
     priority: 'medium',
+    // Il default è **privata**, ed è il comportamento che il modulo ha sempre
+    // avuto: un guasto dentro casa propria non riguarda i vicini di pianerottolo.
+    visible_to_residents: false,
   }
 }
 
@@ -136,6 +140,7 @@ export function NewTicketDialog() {
         ...(values.lease_id === NO_LEASE ? {} : { lease_id: values.lease_id }),
         category: values.category,
         priority: values.priority,
+        ...(values.visible_to_residents ? { visible_to_residents: true } : {}),
       }),
     onSuccess: async (ticket) => {
       setOpen(false)
@@ -286,6 +291,27 @@ export function NewTicketDialog() {
               {t.ticket.leaseNoneHint}
             </p>
           ) : null}
+
+          {/* **Sta subito sotto il contratto, e non fra le opzioni in fondo.**
+              Le due domande sono la stessa vista da due lati — chi la vedrà — e
+              l'avviso qui sopra dice il caso peggiore: senza contratto non la vede
+              nessun inquilino. Questa casella è la risposta quando il guasto è di
+              tutti, ed è l'unico posto in cui la conseguenza si legge prima di
+              averla scelta. */}
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4"
+              checked={values.visible_to_residents}
+              onChange={(event) =>
+                setValues((v) => ({ ...v, visible_to_residents: event.target.checked }))
+              }
+            />
+            <span>
+              {t.ticket.visibleToResidents}
+              <span className="block text-xs text-ink-muted">{t.ticket.visibleToResidentsHint}</span>
+            </span>
+          </label>
 
           {roomItems.length > 0 ? (
             <Field label={t.ticket.room} hint={t.common.optional}>

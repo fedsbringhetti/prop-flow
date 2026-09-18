@@ -10,6 +10,7 @@ use rust_decimal::Decimal;
 
 use super::bill::append_all;
 use super::charge::{NewChargeRequest, build_issued_charge};
+use super::read::{Placed, places_of, recharged_of};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -78,7 +79,7 @@ impl RechargeUtilityBill {
         context: &RequestContext,
         bill_id: UtilityBillId,
         command: RechargeUtilityBillCommand,
-    ) -> AppResult<Recharge> {
+    ) -> AppResult<Placed<Recharge>> {
         let org_id = authorization::ensure_staff(context)?;
         let now = self.clock.now();
 
@@ -149,8 +150,21 @@ impl RechargeUtilityBill {
             ],
         )
         .await?;
+        // I due aggregati citano due contratti **diversi**: quello a cui la
+        // bolletta è imputata e quello a cui si chiede il denaro. `Places` li
+        // risolve tutti e due in una query, e `of` sceglie per identificatore.
+        let places = places_of(
+            uow.as_mut(),
+            [bill.lease_id(), Some(charge.lease_id())].into_iter(),
+        )
+        .await?;
+        let recharged = recharged_of(uow.as_mut(), &[bill.id()]).await?;
         uow.commit().await?;
 
-        Ok(Recharge { bill, charge })
+        Ok(Placed {
+            value: Recharge { bill, charge },
+            places,
+            recharged,
+        })
     }
 }

@@ -231,6 +231,14 @@ pub struct NewTicket {
     pub description: TicketDescription,
     pub category: TicketCategory,
     pub priority: TicketPriority,
+    /// Dichiara la segnalazione di interesse comune: la leggono anche i residenti
+    /// dell'immobile, e con essa il thread e le fotografie.
+    ///
+    /// Il default è `false`, cioè il comportamento che il modulo ha sempre avuto,
+    /// e la scelta la fa chi apre. Non è un permesso applicativo: il ramo sta in
+    /// `app.can_access_ticket` (migration `0035`), quindi la riga è illeggibile a
+    /// un residente finché questo è falso.
+    pub visible_to_residents: bool,
     pub reported_by: Option<UserId>,
     pub reported_by_kind: TicketActor,
     pub now: DateTime<Utc>,
@@ -258,6 +266,12 @@ pub struct Ticket {
     category: TicketCategory,
     priority: TicketPriority,
     status: TicketStatus,
+    /// Se vero, la leggono anche i residenti dell'immobile.
+    ///
+    /// Il confine è nel database — `app.can_access_ticket` — e questo campo è la
+    /// sua faccia leggibile: serve a mostrarlo e a lasciarlo correggere, non a
+    /// decidere chi vede che cosa.
+    visible_to_residents: bool,
     reported_by: Option<UserId>,
     reported_by_kind: TicketActor,
     assigned_to: Option<UserId>,
@@ -301,6 +315,7 @@ impl Ticket {
             description,
             category,
             priority,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             now,
@@ -318,6 +333,7 @@ impl Ticket {
             category,
             priority,
             status: TicketStatus::Open,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             assigned_to: None,
@@ -488,6 +504,84 @@ impl Ticket {
         Ok(())
     }
 
+    /// Corregge ciò che è stato dichiarato aprendo: titolo, descrizione e la
+    /// scelta sulla visibilità. `true` se qualcosa è cambiato.
+    ///
+    /// **I tre campi stanno insieme perché hanno la stessa autorizzazione**, non
+    /// per comodità: sono tutti e tre ciò che chi ha segnalato ha detto, e chi può
+    /// correggerne uno può correggerli tutti. Categoria e priorità **non** sono
+    /// qui: sono il lavoro del triage, e lasciarle modificabili altrove renderebbe
+    /// `triaged` una dichiarazione non verificabile.
+    ///
+    /// Il dominio verifica lo **stato**; *chi* può correggere è autorizzazione
+    /// applicativa — lo staff sempre, chi ha segnalato solo finché è `open` — con
+    /// la stessa forma dell'annullamento.
+    ///
+    /// Rifiuta su `cancelled`, come [`Ticket::apply_costs`]: una segnalazione
+    /// annullata non si tocca più. Su una **chiusa** si corregge, e serve: la si
+    /// rilegge mesi dopo, e un titolo sbagliato lì è sbagliato per sempre.
+    ///
+    /// Nessun campo è azzerabile — titolo e descrizione non hanno un valore vuoto
+    /// che significhi qualcosa — quindi la semantica è la sola metà del `PATCH`:
+    /// assente = invariato.
+    ///
+    /// Fino alla migration `0036` titolo e descrizione non erano nemmeno
+    /// scrivibili dal ruolo applicativo: la revoca di quel privilegio è in
+    /// ADR-048, e senza quella migration questo metodo compilerebbe e la
+    /// scrittura fallirebbe con `permission denied`.
+    pub fn correct(&mut self, changes: TicketCorrection, now: DateTime<Utc>) -> DomainResult<bool> {
+        if matches!(self.status, TicketStatus::Cancelled) {
+            return Err(DomainError::Invariant(Invariant::TicketCancelled));
+        }
+
+        let TicketCorrection {
+            title,
+            description,
+            visible_to_residents,
+        } = changes;
+
+        let title = title.unwrap_or_else(|| self.title.clone());
+        let description = description.unwrap_or_else(|| self.description.clone());
+        let visible = visible_to_residents.unwrap_or(self.visible_to_residents);
+
+        let changed = title != self.title
+            || description != self.description
+            || visible != self.visible_to_residents;
+        if !changed {
+            return Ok(false);
+        }
+
+        self.title = title;
+        self.description = description;
+        self.visible_to_residents = visible;
+        self.updated_at = now;
+        Ok(true)
+    }
+
+    /// Verifica che il thread accetti ancora scritture.
+    ///
+    /// **Si scrive nei sei stati di lavorazione e in nessun altro.** Il predicato
+    /// è [`TicketStatus::is_working`], lo stesso che guardano `close` e `cancel`,
+    /// e riusarlo invece di enumerare «non `closed` e non `cancelled`» copre da sé
+    /// il terzo caso: `resolved`, che l'applicazione non scrive mai ma che una
+    /// riga scritta a mano può contenere.
+    ///
+    /// **Leggere resta permesso**: un thread chiuso si rilegge per intero. Ciò che
+    /// finisce è la scrittura, e con essa la conversazione che continuava sotto
+    /// uno stato che dice «finita». Chi vuole dire «non è risolto» **riapre**, e
+    /// il motivo della riapertura diventa il primo messaggio del giro nuovo
+    /// (ADR-050).
+    ///
+    /// Sta qui e non nel costruttore di `TicketMessage` di proposito: la
+    /// riapertura scrive un messaggio nella stessa transizione, e con la guardia
+    /// nel costruttore inciamperebbe nella propria regola.
+    pub const fn ensure_open_to_messages(&self) -> DomainResult<()> {
+        if self.status.is_working() {
+            return Ok(());
+        }
+        Err(DomainError::Invariant(Invariant::TicketThreadClosed))
+    }
+
     /// Applica una modifica parziale ai costi. `true` se qualcosa è cambiato.
     ///
     /// I costi sono l'unico attributo che il `PATCH` tocca: tutto il resto o è
@@ -580,6 +674,10 @@ impl Ticket {
         self.status
     }
     #[must_use]
+    pub const fn visible_to_residents(&self) -> bool {
+        self.visible_to_residents
+    }
+    #[must_use]
     pub const fn reported_by(&self) -> Option<UserId> {
         self.reported_by
     }
@@ -649,6 +747,7 @@ impl Ticket {
             category,
             priority,
             status,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             assigned_to,
@@ -675,6 +774,7 @@ impl Ticket {
             category,
             priority,
             status,
+            visible_to_residents,
             reported_by,
             reported_by_kind,
             assigned_to,
@@ -690,6 +790,17 @@ impl Ticket {
             archived_at,
         }
     }
+}
+
+/// Correzione parziale di ciò che è stato dichiarato aprendo.
+///
+/// `None` = invariato. Non c'è il doppio `Option` della [`Patch`] perché nessuno
+/// dei tre campi è azzerabile: un titolo vuoto non è un titolo.
+#[derive(Debug, Clone, Default)]
+pub struct TicketCorrection {
+    pub title: Option<TicketTitle>,
+    pub description: Option<TicketDescription>,
+    pub visible_to_residents: Option<bool>,
 }
 
 /// Modifica parziale dei costi.
@@ -730,6 +841,7 @@ pub struct TicketParts {
     pub category: TicketCategory,
     pub priority: TicketPriority,
     pub status: TicketStatus,
+    pub visible_to_residents: bool,
     pub reported_by: Option<UserId>,
     pub reported_by_kind: TicketActor,
     pub assigned_to: Option<UserId>,
@@ -761,6 +873,7 @@ mod tests {
             description: TicketDescription::parse("Perde da ieri sera").expect("valida"),
             category: TicketCategory::Other,
             priority: TicketPriority::Medium,
+            visible_to_residents: false,
             reported_by: Some(UserId::generate()),
             reported_by_kind: TicketActor::Tenant,
             now: Utc::now(),

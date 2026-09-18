@@ -2,6 +2,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 
 use crate::error::{DomainError, DomainResult, Invariant};
+use crate::property::Patch;
 use crate::shared::{Email, LeaseId, LeasePartyId, OrgId, UserId, text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,26 @@ pub struct NewLeaseParty {
     pub is_primary: bool,
 }
 
+/// Le correzioni ammesse su una parte già inserita.
+///
+/// `None` = invariato, `Some(None)` = azzerato, `Some(Some(v))` = impostato: è la
+/// semantica `Patch` del resto del progetto, e serve perché svuotare un telefono
+/// inserito per sbaglio dev'essere possibile.
+///
+/// **`user_id` non c'è, e non è una dimenticanza**: collegare un utente è
+/// `link_user`, che ha una regola sua — non si sovrascrive un collegamento — e
+/// passa dall'accettazione di un invito. Una correzione amministrativa non deve
+/// poter trasferire un contratto a un'altra persona.
+#[derive(Debug, Clone, Default)]
+pub struct LeasePartyChanges {
+    pub full_name: Option<String>,
+    pub email: Patch<Email>,
+    pub phone: Patch<String>,
+    pub role: Option<LeasePartyRole>,
+    pub share_percent: Option<Decimal>,
+    pub is_primary: Option<bool>,
+}
+
 impl LeaseParty {
     pub fn new(party: NewLeaseParty, now: DateTime<Utc>) -> DomainResult<Self> {
         let NewLeaseParty {
@@ -116,6 +137,103 @@ impl LeaseParty {
         Ok(())
     }
 
+    /// Corregge una parte inserita male.
+    ///
+    /// # Perché esiste
+    ///
+    /// Senza, una quota sbagliata era definitiva: il contratto non si attivava
+    /// (`ensure_tenancy_complete` rifiuta), e non si poteva nemmeno rifare, perché
+    /// annullare non era esposto. `remaining_share` dell'invito porta scritto da
+    /// sempre che una quota a zero «chi amministra la correggerà» — questa è
+    /// l'operazione che quel commento presupponeva e che non esisteva.
+    ///
+    /// # L'email si tocca solo finché la parte non ha un utente
+    ///
+    /// L'email è ciò a cui l'invito è intestato e ciò che l'accettazione confronta:
+    /// finché nessuno l'ha usata, correggerla è rimediare a un refuso. Dopo, la
+    /// stessa modifica sposterebbe un rapporto già stabilito sotto i piedi di chi
+    /// l'ha accettato, e chi legge la riga non vedrebbe che è successo.
+    ///
+    /// # La somma delle quote **non** si ricontrolla qui
+    ///
+    /// È deliberato, e senza sarebbe impossibile rimediare: per portare due parti
+    /// da `100 / 0` a `50 / 50` bisogna passare da uno stato intermedio in cui la
+    /// somma non fa 100. L'invariante vive dove è sempre vissuto — l'attivazione —
+    /// e su un contratto già attivo, che è il caso dei contratti rotti che esistono
+    /// oggi, la responsabilità è di chi corregge.
+    pub fn correct(
+        &mut self,
+        changes: LeasePartyChanges,
+        now: DateTime<Utc>,
+    ) -> DomainResult<bool> {
+        let LeasePartyChanges {
+            full_name,
+            email,
+            phone,
+            role,
+            share_percent,
+            is_primary,
+        } = changes;
+
+        if email.is_some() && self.user_id.is_some() {
+            return Err(DomainError::Invariant(Invariant::LeasePartyEmailLocked));
+        }
+
+        let changed = full_name.is_some()
+            || email.is_some()
+            || phone.is_some()
+            || role.is_some()
+            || share_percent.is_some()
+            || is_primary.is_some();
+        if !changed {
+            return Ok(false);
+        }
+
+        if let Some(name) = full_name {
+            self.full_name = text::required("full_name", &name, 200)?;
+        }
+        if let Some(email) = email {
+            self.email = email;
+        }
+        if let Some(phone) = phone {
+            self.phone = match phone {
+                Some(value) => text::optional("phone", Some(value), 40)?,
+                None => None,
+            };
+        }
+        if let Some(role) = role {
+            self.role = role;
+        }
+        if let Some(share) = share_percent {
+            self.share_percent = validate_share(share)?;
+        }
+        if let Some(is_primary) = is_primary {
+            self.is_primary = is_primary;
+        }
+
+        self.updated_at = now;
+        Ok(true)
+    }
+
+    /// Toglie una parte inserita per sbaglio: cancellazione soft.
+    ///
+    /// **Solo se non è mai stata collegata a un utente.** Con un utente dietro non
+    /// è più una correzione: è una persona che esce di casa, che ha una data
+    /// (`left_at`), conseguenze sui suoi addebiti e una domanda aperta su che cosa
+    /// veda dopo. Confondere le due operazioni farebbe sparire senza traccia un
+    /// inquilino vero.
+    pub fn remove(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
+        if self.user_id.is_some() {
+            return Err(DomainError::Invariant(Invariant::LeasePartyHasUser));
+        }
+        if self.archived_at.is_some() {
+            return Ok(());
+        }
+        self.archived_at = Some(now);
+        self.updated_at = now;
+        Ok(())
+    }
+
     /// Le quote di chi abita devono coprire il canone per intero, e ci deve essere
     /// almeno un inquilino.
     ///
@@ -131,6 +249,17 @@ impl LeaseParty {
 
         if tenancy.is_empty() {
             return Err(DomainError::Invariant(Invariant::LeaseWithoutTenantParty));
+        }
+
+        // **Una quota a zero è un errore, e la somma non lo vede.** `100 + 0` fa
+        // 100 e passava: era il caso osservato in database, dove il 100% stava su
+        // una parte che non aveva mai accettato l'invito e l'inquilino vero non
+        // doveva niente. Vedi ADR-046.
+        if tenancy
+            .iter()
+            .any(|party| party.share_percent == Decimal::ZERO)
+        {
+            return Err(DomainError::Invariant(Invariant::LeaseTenantWithoutShare));
         }
 
         let total: Decimal = tenancy.iter().map(|party| party.share_percent).sum();

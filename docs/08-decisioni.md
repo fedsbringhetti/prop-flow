@@ -474,6 +474,10 @@ marcarlo per primo si toglierebbe il permesso di completare il resto.
 `AcceptInvitation` scrive nell'ordine membership → parte contrattuale → invito, e il
 commento nel codice lo dice.
 
+**Emendata da [ADR-051](#adr-051):** la prima delle tre scritture si salta quando la
+membership esiste già ed è attiva. L'ordine resta questo, perché a rendere falso
+`has_pending_invitation` è l'ultima scrittura e non la prima.
+
 **Difetto osservato durante l'implementazione.** Le tre scritture riuscivano e
 l'accettazione falliva sull'**ultimo** statement: l'evento di dominio. Chi accetta
 arriva con il contesto della propria organizzazione personale — di quella
@@ -714,6 +718,22 @@ sta in `/app/config`. Altrove il file non viene trovato e figment lo salta senza
 protestare, perché è dichiarato opzionale: le quattro impostazioni obbligatorie
 falliscono rumorosamente, le altre ripiegano sui default del codice.
 
+**Aggiornamento dell'8 settembre 2026: adesso lo carica `just`, e la decisione non
+cambia.** Il `justfile` ha `set dotenv-load`, quindi `just api` e `just worker`
+leggono `.env` da sé e il passo `set -a; source .env; set +a` serve solo a chi lancia
+un binario a mano. **Non è una terza sorgente di configurazione** e non tocca niente
+di ciò che è deciso qui sopra: nessun crate dipende da `dotenvy`, il processo continua
+a non leggere quel file, e `just` lo carica **fuori** dal processo esattamente come
+faceva la shell — produce variabili d'ambiente come tutte le altre. È cambiata
+l'ergonomia, non una proprietà del sistema, ed è per questo che l'aggiornamento è una
+nota e non un ADR nuovo.
+
+L'occasione per scriverlo è stata `R3`: l'affermazione «`.env` lo carica la shell»
+viveva in **otto** posti — il messaggio d'errore di `AppConfig` e il commento del tipo,
+`CLAUDE.md`, `README.md`, `.env.example`, due righe di [06](06-sviluppo.md), due di
+[07](07-operazioni.md) e questo ADR — ed è invecchiata in tutti insieme il giorno in cui
+il `justfile` è entrato.
+
 Non c'è un avviso perché non c'è ancora dove scriverlo: la configurazione si carica
 **prima** della telemetria — è la configurazione a dire come inizializzarla — quindi
 un `warn!` non avrebbe alcun subscriber, e scrivere su stderr da una funzione di
@@ -886,6 +906,12 @@ Restano fuori `property_id`, `room_id`, `lease_id`, `reported_by`,
 `set_updated_at`, che è `BEFORE UPDATE` e non è soggetto ai privilegi di colonna del
 chiamante.
 
+> **`title` e `description` non sono più fuori.** La migration `0036` le riconcede, e il
+> perché è in [ADR-048](#adr-048), che **emenda questa sezione invece di riscriverla**: il
+> criterio dichiarato più sotto non cambia — cambia il fatto, perché ora quelle due
+> colonne hanno un motivo legittimo di cambiare. Tutte le altre restano fuori, e per loro
+> vale ancora «si annulla e si riapre».
+
 **Il criterio, dichiarato.** Lo strumento serve in due casi, non in uno:
 
 1. quando una policy concede scrittura **oltre il confine** di isolamento (ADR-021);
@@ -895,7 +921,9 @@ chiamante.
 
 Il secondo caso è quello delle segnalazioni, ed è quello che rende la scelta quasi
 gratuita: una segnalazione aperta sull'immobile sbagliato **si annulla e si riapre** —
-`cancelled` esiste per questo — e non si corregge spostandola.
+`cancelled` esiste per questo — e non si corregge spostandola. Resta vero per l'immobile,
+la stanza e il contratto; **non** per il testo, che [ADR-048](#adr-048) ha reso
+correggibile perché un refuso non è una riga incoerente.
 
 **Conseguenza sul dove va fatto il controllo.** L'incoerenza strutturale può ora
 nascere **solo all'apertura**. Il controllo applicativo sta lì, una volta sola
@@ -2620,3 +2648,972 @@ ancora membri fa rispondere `403` a una richiesta legittima. `acceptInvitation` 
 con `withoutOrganization`, ed è verificato da un test che guarda **l'header vero** e non
 il codice che lo scrive — perché la prossima persona che passa di lì vedrà un'eccezione
 alla regola «`X-Org-Id` sempre» e sarà tentata di toglierla.
+
+<a id="adr-046"></a>
+
+## ADR-046 — L'attivazione guarda il senso delle quote, non solo la somma
+
+**9 settembre 2026.** Passo `U4` della sezione 3. È la regola che impedisce di
+riprodurre il danno che la stessa sezione consegna gli strumenti per riparare.
+
+### Il fatto
+
+In database sono esistiti contratti **attivi** con due parti così:
+
+| parte | quota | intestatario | ha accettato |
+|---|---|---|---|
+| `inq2` | **100,00** | sì | **no** |
+| `inq3` | **0,00** | no | sì |
+
+Cioè: l'inquilino entrato davvero non doveva niente, e il 100% era di qualcuno che non
+aveva mai accettato l'invito. Il contratto era `active`, quindi aveva superato ogni
+controllo — perché il controllo che c'era è `100 + 0 = 100`, e quella somma è giusta.
+
+Il difetto nasceva dal concorso di quattro cose, e nessuna delle quattro è sbagliata da
+sola: il form propone `100` e *intestatario principale* alla prima parte; ogni invito
+successivo riceve `remaining_share`, che a quel punto è **zero**, e nessuno lo dice;
+l'attivazione verifica la somma; e niente di tutto questo si correggeva
+([`R17`](12-da-fare.md#lelenco), chiuso da questa sezione).
+
+### Decisione
+
+**Un inquilino con quota zero impedisce l'attivazione**, accanto all'invariante che
+esisteva già sulla somma. Una quota a zero non è un caso d'uso che sappiamo nominare: un
+inquilino che non deve niente non è un inquilino, è una riga rimasta indietro.
+
+**Aggiungere una parte è ammesso solo finché il contratto è in bozza o in attesa di
+firma.** `AddLeaseParty` non guardava lo stato — controllava il ruolo, caricava il
+contratto e inseriva — quindi si poteva aggiungere una parte a un contratto **attivo**, e
+da quel momento le quote non sommavano più a 100 senza che niente protestasse:
+l'invariante è verificata *al momento* dell'attivazione, e nessuno la riverificava dopo.
+Il client offriva già il bottone solo in bozza, ma quella è una scelta di che cosa
+offrire, non un confine — la stessa distinzione di [ADR-042](#adr-042).
+
+### Che cosa questa regola **non** garantisce, e va detto
+
+**Non pretende che l'intestatario principale abbia accettato l'invito.** Un contratto si
+firma sulla carta prima che l'inquilino apra un account, e pretenderlo bloccherebbe un
+giro legittimo: si attiva, poi si invita. È la seconda faccia del difetto osservato — il
+100% era di chi non aveva accettato — e resta possibile. La si accetta perché il rimedio
+costerebbe più del danno: impedirebbe di attivare un contratto vero in attesa che una
+persona si registri.
+
+**Non sana i contratti già rotti.** Le invarianti valgono sulle transizioni future: un
+contratto già attivo con una quota a zero resta com'è, e si corregge a mano con
+`PATCH /lease-parties/{id}`, che questa sezione introduce. Non esiste una migration di
+bonifica, e non è una dimenticanza: quale sia la quota giusta lo sa solo chi amministra.
+
+**Non impedisce che le quote smettano di sommare a 100 dopo l'attivazione.** La
+correzione di una parte non ricontrolla la somma, ed è deliberato: per portare due parti
+da `100 / 0` a `50 / 50` bisogna passare da uno stato intermedio in cui la somma non fa
+100. Su un contratto attivo la responsabilità è di chi corregge.
+
+### Alternative scartate
+
+**Ricontrollare la somma a ogni correzione.** Renderebbe impossibile il rimedio, per la
+ragione qui sopra: non si possono cambiare due righe in una richiesta.
+
+**Ammettere l'aggiunta su un contratto attivo ricontrollando la somma dopo.** Non si può
+fare in una richiesta sola — per aggiungere un terzo inquilino bisogna prima abbassare le
+quote degli altri due — quindi o si rifiuta, o si inventa una richiesta che porta tutte le
+parti insieme. Quella è il **subentro**, che è un'operazione a sé e non è progettata: sta
+in [12](12-da-fare.md) come voce nuova.
+
+**Un valore minimo di quota diverso da zero** (per esempio l'1%). Sarebbe una soglia
+arbitraria travestita da regola: zero è l'unico valore che significa qualcosa — «questa
+persona non paga niente» — e gli altri sono decisioni di chi amministra.
+
+---
+
+<a id="adr-047"></a>
+
+## ADR-047 — Una segnalazione può essere di interesse comune, e il ramo sta nella funzione
+
+**9 settembre 2026.** Nasce da [`R19`](12-da-fare.md#lelenco), pianificata come sezione 5
+delle segnalazioni.
+
+### Il fatto, che non è un difetto
+
+Una segnalazione aperta sull'immobile intero — la caldaia condominiale, la serratura del
+portone — **non la vede nessun altro inquilino**. Non è una svista: è ciò che
+`app.can_access_ticket` dice dalla `0014`. Concede l'accesso allo staff, a chi ha
+segnalato, a chi è assegnato, e poi a `t.lease_id IS NOT NULL AND can_access_lease(...)`
+— quindi il quarto ramo passa dal **contratto**, e una segnalazione senza contratto resta
+privata.
+
+Quel default è giusto e **resta**: un guasto dentro casa propria non riguarda i vicini di
+pianerottolo, e la maggior parte delle segnalazioni è di quel tipo.
+
+### La decisione
+
+Una colonna `app.tickets.visible_to_residents BOOLEAN NOT NULL DEFAULT false`, una
+casella nel form di apertura, e **un quinto ramo in `app.can_access_ticket`**:
+
+```sql
+OR (t.visible_to_residents
+    AND EXISTS (SELECT 1 FROM app.property_residents(t.property_id) pr
+                 WHERE pr.user_id = app.current_user_id()))
+```
+
+Migration `0035_a_ticket_can_be_shared_with_residents.sql`. La visibilità è un **confine
+del database** e non un filtro applicativo: metterla nel service layer lascerebbe la riga
+leggibile a una query scritta a mano, che è la constatazione della `0029` e della `0030`.
+
+### Perché nella funzione e non in `tickets_select`
+
+È la parte che si sbaglia, ed è la ragione principale per cui questa voce esiste.
+`app.can_access_ticket` non serve una policy sola: la chiamano `tickets_select`,
+`ticket_messages_select`, `ticket_status_history_select` e
+`can_access_attachment('ticket', …)`. Allargare la sola policy di riga darebbe a un
+coinquilino una segnalazione **che si apre e non si legge** — senza thread, senza
+storico, senza le fotografie del guasto, e senza un errore che spieghi perché.
+
+La funzione si sostituisce con `CREATE OR REPLACE FUNCTION` e la stessa firma: le policy
+la referenziano per oid, quindi non vanno toccate né ricreate.
+
+### Che cosa la condivisione dà, e che cosa non dà
+
+**Dà anche il thread e le fotografie**, ed è voluto: una visibilità che permetta di
+leggere «ho chiamato il tecnico» ma non di rispondere «da me non funziona ancora»
+sarebbe una bacheca, non una segnalazione condivisa. `ticket_messages_insert` passa dalla
+stessa funzione, quindi un residente può scrivere nel thread.
+
+**Non dà nessuna scrittura sulla segnalazione.** `tickets_update` ha un predicato **in
+linea** — staff, `reported_by`, `assigned_to` — e non passa da `can_access_ticket`: un
+residente non riapre, non annulla, non corregge, non chiude. È la stessa asimmetria che
+il modulo ha già per il coinquilino sullo stesso contratto, e la ragione per cui questa
+migration è più piccola di quanto sembri.
+
+**Le note interne restano invisibili**: `ticket_messages_select` ha un `AND` a parte su
+`is_internal`, che questo ramo non tocca.
+
+### Il predicato è `app.property_residents`, e la scelta non è di gusto
+
+La `0030` ha introdotto due predicati sul perimetro della casa, e vanno scelti e non
+riscritti — una terza definizione di «chi abita qui» è la trappola che quel file
+documenta alla sua terza occorrenza.
+
+`app.shares_home_with(p_user_id)` è **utente↔utente**: userebbe `reported_by` come
+termine di confronto, e ne verrebbero due difetti. `reported_by` è
+`ON DELETE SET NULL`, quindi la condivisione sparirebbe da sé il giorno in cui l'autore
+viene cancellato; e quella funzione **non filtra `app.lease_in_force`** — è deliberato,
+il suo commento lo dice, perché è un *pavimento* per la leggibilità dei nomi e non un
+elenco di chi ci abita adesso. Un inquilino uscito due anni fa vedrebbe le segnalazioni
+nuove della casa in cui non vive più.
+
+`app.property_residents(p_property_id)` è **ancorata all'immobile**, che è la dimensione
+giusta perché `property_id` è obbligatorio su ogni segnalazione. Filtra `lease_in_force`,
+filtra `left_at IS NULL`, esclude i garanti, e ha già `can_access_property` come confine
+nel corpo.
+
+### Conseguenze
+
+- **il booleano va scritto per primo**, e il ramo per ultimo nell'`OR`.
+  `can_access_ticket` è `COST 500` e viene valutata **per riga** nell'elenco: con il
+  booleano davanti, la funzione che restituisce righe non viene chiamata affatto sulle
+  segnalazioni private, che sono il default;
+- **la funzione ha il confine dentro**, quindi sul pool privilegiato — che non ha
+  contesto — risponde «no». È la lezione che la sezione 4 ha lasciato scritta in un test
+  su `v_property_occupancy`: chi verifica questo ramo deve installare
+  `app.current_org_id` **e** `app.current_user_id`;
+- la colonna entra nella `GRANT UPDATE` di `propflow_app` — si può cambiare idea dopo
+  l'apertura, vedi [ADR-048](#adr-048) — e **non** entra fra le colonne strutturali del
+  controllo `colonna-strutturale-scrivibile`;
+- il nome della colonna dice **residenti** e non «tutti gli inquilini»: quest'ultima
+  formula si legge come «dell'organizzazione», che sarebbe un confine più largo e
+  sbagliato — un inquilino di un'altra casa dello stesso proprietario non c'entra. La
+  casella nel form usa invece la parola comune, perché lì il confine è già chiaro dal
+  contesto.
+
+### Alternative scartate
+
+**Un `ALTER POLICY tickets_select` con il ramo in più.** È la via che il backlog
+indicava, e produce la segnalazione che si apre e non si legge.
+
+**Una terza funzione, `app.lives_in_property(uuid)`.** Sarebbe più leggibile di un
+`EXISTS` su una funzione tabellare, e sarebbe la seconda definizione di «chi abita qui»
+che la `0030` esiste per impedire.
+
+**Un filtro applicativo.** Lascia la riga leggibile a chi non passa dal service layer, e
+questo progetto ha già una migration — la `0029` — dedicata a smettere di fidarsi di
+regole applicative su confini che il database lascia aperti.
+
+---
+
+<a id="adr-048"></a>
+
+## ADR-048 — Il testo di una segnalazione si corregge, e questo emenda ADR-026
+
+**9 settembre 2026.** Nasce da [`R19-bis`](12-da-fare.md#lelenco). **Revoca in parte
+[ADR-026](#adr-026)**, e va letta con quella davanti.
+
+### Il fatto: oggi non è una scelta applicativa, è un privilegio
+
+Chi apre una segnalazione con un refuso nel titolo non può correggerlo, e non perché
+manchi una rotta: `title` e `description` **non sono scrivibili dal ruolo applicativo**.
+La `0020` gliele ha tolte, e a difendere quella scelta ci sono tre cose oltre alla
+migration:
+
+| Dove | Che cosa |
+|---|---|
+| `ops/sql/checks/schema_invariants.sql` | il controllo `colonna-strutturale-scrivibile` fallisce se `propflow_app` acquista l'`UPDATE` su quelle colonne |
+| `crates/infrastructure/tests/persistence.rs` | `the_application_role_cannot_move_a_ticket_to_another_property` asserisce il `permission denied` |
+| `docs/05-api.md`, i commenti del dominio, il catalogo del client | la frase «di una segnalazione si modificano solo i costi» |
+
+Ne segue che questa non è una capacità da aggiungere: è una decisione da **revocare**, e
+il posto per farlo è qui, prima del codice.
+
+### Che cosa cambia, e che cosa no
+
+**Il criterio di ADR-026 non cambia.** Diceva che il privilegio di colonna serve *«quando
+una colonna non ha un motivo legittimo di cambiare»*. Quello che cambia è il fatto: ora
+ce l'ha. La `0020` teneva `title` e `description` fuori con l'argomento «una segnalazione
+sbagliata si annulla e si riapre», che vale per l'**immobile** — dove riaprire è l'unico
+modo di rimettere insieme una riga coerente — e non per un refuso, dove costa a chi
+segnala di rifare tutto e di perdere il riferimento `TK-000042` che ha già comunicato.
+
+**Restano fuori** `property_id`, `room_id`, `lease_id`, `reported_by`,
+`reported_by_kind`, `reference` e `currency`, e per loro la frase della `0020` resta vera
+alla lettera. La causa radice che ADR-026 descrive — lo schema non ha **alcun vincolo**
+fra `room_id`, `lease_id` e `property_id` — non è stata rimossa, e il privilegio resta la
+sola difesa che copre quella porta.
+
+### La decisione
+
+Migration `0036_a_report_can_be_corrected.sql`:
+`GRANT UPDATE (title, description) ON app.tickets TO propflow_app`, insieme a
+`visible_to_residents` che la [`0035`](#adr-047) ha appena introdotto.
+
+E una rotta a sé: **`PATCH /api/v1/tickets/{id}/report`**, con `title`, `description` e
+`visible_to_residents` facoltativi e la semantica generale del `PATCH` (assente =
+invariato; nessuno dei tre è azzerabile). L'autorizzazione è **una sola per l'intera
+rotta**: lo staff sempre, chi ha segnalato finché la segnalazione è `open`.
+
+### Perché una rotta a sé e non `PATCH /tickets/{id}`
+
+Allargare il `PATCH` dei costi darebbe una rotta con **due autorizzazioni diverse a
+seconda dei campi presenti** — i costi allo staff, il testo a chi ha segnalato. Il modo
+in cui si sbaglia è concreto: con la semantica del `PATCH` i campi sono *assenti*, quindi
+l'autorizzazione dipenderebbe da quali chiavi ci sono nel JSON, e un campo aggiunto un
+anno dopo senza toccare quel ramo sarebbe scrivibile da chi non deve. È un difetto muto,
+che non compare in nessun test finché qualcuno non manda quella combinazione.
+
+`report` è un **sostantivo** e non un verbo perché non è una transizione: le sotto-risorse
+di questo modulo — `/triage`, `/assign`, `/close` — sono `POST` e hanno effetti propri,
+mentre questa è la correzione di un attributo e resta `PATCH`. I tre campi stanno insieme
+perché sono tutti e tre **ciò che chi ha segnalato ha dichiarato**, e hanno per questo la
+stessa autorizzazione.
+
+### Chi corregge, e fino a quando
+
+**Lo staff sempre, chi ha segnalato finché è `open`.** È la forma che l'annullamento ha
+già — «finché nessuno ci ha messo mano» — e la regola vive in **una sola funzione**
+condivisa con `cancel`: due copie della stessa condizione sono due regole che
+divergeranno alla prima modifica di una delle due.
+
+I codici di rifiuto restano quelli in catalogo, con la distinzione che già esiste:
+`ticket.not_yours` a chi non ha segnalato — non gli manca un ruolo, gli manca l'aver
+segnalato — e `org.staff_role_required` a chi ha segnalato ma la segnalazione è già in
+lavorazione, dove il ruolo serve davvero.
+
+Il dominio rifiuta su `cancelled` con `ticket.cancelled`, come fa già `apply_costs`. Su
+una **chiusa** si corregge, e serve: la si rilegge mesi dopo, e un titolo sbagliato lì è
+sbagliato per sempre.
+
+### Che cosa il privilegio smette di garantire
+
+Va detto per intero, perché è il pezzo che si perde revocando. Dal momento del `GRANT`,
+un inquilino che sia `reported_by` può riscrivere titolo e descrizione **da qualunque
+stato** con una `UPDATE` scritta a mano sotto RLS: il limite «finché è `open`» è
+applicativo, e una policy non può esprimerlo perché **non può confrontare la riga nuova
+con quella vecchia** — la constatazione di ADR-021 e ADR-026, qui a proprio sfavore.
+
+Resta vero ciò che la `0020` aveva **misurato** e non dedotto: il confine di isolamento
+tiene — dopo la scrittura quell'inquilino non vede una riga in più — e ogni `UPDATE`
+finisce in `audit_log`. È esattamente il compromesso che già vale per `status`,
+`assigned_to` e `actual_cost`, che sono concesse e la cui disciplina è applicativa,
+transizione per transizione.
+
+**Non si prova a stringere il confine nella `USING` di `tickets_update`.** Restringerla a
+`status = 'open'` per chi ha segnalato romperebbe la **riapertura**, che parte proprio da
+`closed`.
+
+### Conseguenze
+
+- il controllo `colonna-strutturale-scrivibile` perde due righe, e il commento che lo
+  accompagna cambia con esse: continua a dire perché le altre sei ci sono;
+- il test dei privilegi sposta due `UPDATE` dal blocco dei rifiuti a quello delle
+  concessioni. **L'emendamento del controllo e del test è il documento della revoca**, e
+  va fatto nello stesso passo della migration — non è un fastidio da togliere di mezzo
+  per far passare `just ci`;
+- `docs/05-api.md` cambia in due punti: la tabella delle rotte e la sezione «Perché le
+  transizioni sono sotto-risorse e il `PATCH` è solo per i costi», che resta vera per
+  categoria, priorità, immobile, stanza e contratto;
+- **categoria e priorità non diventano correggibili**: sono il lavoro del triage, e
+  lasciarle modificabili altrove renderebbe `triaged` una dichiarazione non verificabile.
+
+### Alternative scartate
+
+**`PUT /tickets/{id}/report` con i tre campi obbligatori.** Toglie il problema dei campi
+assenti alla radice, e obbliga chi cambia solo la casella di visibilità a rimandare
+indietro un testo che non ha toccato, cioè a sovrascriverlo con una copia possibilmente
+vecchia. Il progetto non usa `PUT` da nessuna parte e non è questo il caso per
+introdurlo.
+
+**Nessuna rotta: la correzione passa dall'annullamento**, che è ciò che la `0020`
+prescrive oggi. Su un refuso costa il riferimento già comunicato e tutto il testo.
+
+**Solo chi ha segnalato, senza lo staff.** Lascerebbe un refuso incorreggibile appena la
+segnalazione passa ad `assigned`, e romperebbe la simmetria con l'annullamento senza
+comprare niente: ogni scrittura è comunque in `audit_log`.
+
+---
+
+<a id="adr-049"></a>
+
+## ADR-049 — I nomi delle persone viaggiano nella risposta, ed è il primo lettore di `users_select`
+
+**9 settembre 2026.** Nasce da [`R21`](12-da-fare.md#lelenco) e
+[`R22`](12-da-fare.md#lelenco). Applica il criterio di [ADR-043](#adr-043) a un modulo in
+cui la fonte del nome è diversa, e **chiude una finestra** che la
+[`0030`](#adr-036) aveva lasciato aperta per iscritto.
+
+### Il fatto
+
+`TicketResponse` porta `assigned_to` come UUID e `assigned_at`, e nessun nome: la scheda
+mostra **la data al posto della persona**. `TicketMessageResponse` porta `author_id` e
+`author_kind`, quindi il thread dice il **ruolo** — *Inquilino*, *Proprietario* — e non
+chi.
+
+Il ruolo è già a schermo e non va rifatto. Il caso che resta scoperto è il **co-living**:
+due coinquilini nel thread compaiono tutti e due come *Inquilino*, e «me lo dice il
+proprietario o un coinquilino?» ha già risposta mentre «quale coinquilino?» non ne ha
+nessuna.
+
+### La decisione
+
+Un **modello di lettura**, con la forma che la sezione 3 ha già stabilito per i nomi degli
+immobili: una porta, **una query per pagina**, la composizione nello use case, campi
+opzionali nel DTO. `TicketResponse` guadagna `reported_by_name` e `assigned_to_name`;
+`TicketMessageResponse` guadagna `author_name`.
+
+La fonte è `app.users.full_name`, letta **sotto Row Level Security**. Il precedente è
+`list_organizations_for_user` ([ADR-041](#adr-041)), che si affida alla policy invece di
+ripetere il confine nel `WHERE`: la RLS restringe il join, e ciò che il chiamante non
+può vedere semplicemente non torna.
+
+**Quando il nome non torna, il campo è assente e il client mette un'etichetta neutra dal
+catalogo. Mai l'UUID**: è la regola di [ADR-043](#adr-043), ed è la stessa forma di
+«Immobile archiviato» che la sezione 3 usa quando un `LEFT JOIN` non trova il nome.
+
+### Perché non una rotta che risolva le persone
+
+Perché è già stata scartata due volte. [ADR-036](#adr-036) ha deciso che il perimetro è
+la casa e che nessuna rotta proietta un utente per identificatore; [ADR-043](#adr-043)
+l'ha riconfermato, e con parole che valgono identiche qui: *«è la domanda di ADR-036 —
+quali colonne un membro possa vedere di un'altra persona — riaperta per un problema di
+presentazione»*.
+
+I nomi viaggiano quindi **dentro** la risposta della segnalazione, che è la via che la
+sezione 3 ha percorso per gli immobili, e non da una rotta che risolva le persone.
+
+### Perché non si denormalizza il nome sulla riga
+
+Lo schema denormalizza i nomi **dove si mostrano** — `lease_parties.full_name`,
+`expense_group_members.display_name` — e sarebbe stata la terza occorrenza. Si scarta per
+due ragioni. Costerebbe due colonne, una migration e due `GRANT` per un dato che la
+policy già concede. E soprattutto **congelerebbe il nome al momento della scrittura**: su
+una membership è la proprietà che serve — [ADR-043](#adr-043) esiste perché quel nome
+sopravviva a chi se ne va — mentre su una segnalazione aperta ieri il nome giusto è
+quello di adesso.
+
+### La finestra che si chiude
+
+La `0030` aveva ristretto `users_select` dall'organizzazione alla casa, e nel farlo aveva
+scritto una cosa che questa voce viene a incassare:
+
+> Il verde della suite non è la prova che sia giusto. Restringendo, **nessun test
+> fallisce**. […] prova che la capacità per cui `shares_org_with` esiste — «mostrare i
+> nomi delle controparti» — **non è mai stata costruita**. La finestra per restringere è
+> aperta e la chiude il primo client che legga un nome da lì.
+
+**Questa sezione è quel primo client.** Da qui in avanti `users_select` è portante:
+restringerla non è più gratuito, e i suoi quattro rami vanno letti come contratto e non
+come pavimento. In particolare:
+
+| Ramo | Che cosa tiene in piedi qui |
+|---|---|
+| `shares_home_with(id)` | un coinquilino legge il nome dell'altro nel thread — **il caso di `R22`** |
+| `is_my_staff(id)` | l'inquilino legge il nome di chi ha in carico la sua segnalazione — **il caso di `R21`** |
+| `is_staff_of_user(id)` | il proprietario legge i nomi dei propri inquilini |
+| `id = current_user_id()` | il proprio nome |
+
+`shares_home_with` **non filtra `lease_in_force`**, ed è quello che rende leggibile il
+nome dell'autore di un messaggio su una segnalazione vecchia di chi si è nel frattempo
+trasferito. Era già scritto nel suo commento come una scelta; qui diventa una dipendenza.
+
+### Conseguenze
+
+- **`reported_by_name` entra pur non essendo nella lettera di `R21` né di `R22`**: è lo
+  stesso identificatore, risolto dalla stessa query, mostrato nella stessa scheda tre
+  righe più su di «In carico a». Lasciarlo fuori consegnerebbe una schermata in cui un
+  nome compare e l'altro no;
+- il ruolo resta **accanto** al nome e non al suo posto — *Proprietario · Mario Rossi* —
+  perché dice una cosa che il nome non dice: da che parte del rapporto sta chi scrive;
+- una **query per pagina** e non una per riga: l'elenco ne mostra venticinque, e
+  risolverli uno alla volta sarebbe il problema `N+1` scritto a mano. È la stessa nota
+  che porta `LeaseRepository::labels`;
+- la [sezione 6](12-da-fare.md#lordine-di-esecuzione) — `R7`, il proprio account —
+  eredita questo modo di risolvere un nome, ed è la ragione per cui l'ordine di
+  esecuzione mette la 5 prima della 6.
+
+---
+
+<a id="adr-050"></a>
+
+## ADR-050 — Un thread chiuso non riceve messaggi, e riaprire dice perché
+
+**9 settembre 2026.** Nasce da [`R23`](12-da-fare.md#lelenco) e
+[`R24`](12-da-fare.md#lelenco), che sono **una decisione sola**: la seconda esiste perché
+la prima chiude una porta.
+
+### Il fatto
+
+`PostTicketMessage` fa `ensure_member` e **non guarda lo stato**. Nessun invariante lo
+vieta, quindi il thread di una segnalazione chiusa o annullata accetta scritture: una
+conversazione continua sotto uno stato che dice «finita», e nessuno la legge più perché
+la segnalazione è fuori da ogni coda.
+
+E `POST /tickets/{id}/reopen` **non accetta nulla**: né il client né l'handler hanno un
+corpo. Una segnalazione torna viva e non c'è niente, da nessuna parte, che dica perché.
+
+### La decisione, parte prima: si scrive nei sei stati di lavorazione
+
+Un invariante di dominio legato a `TicketStatus::is_working()`. È lo stesso predicato che
+`close` e `cancel` usano già come guardia, e riusarlo invece di enumerare «non `closed` e
+non `cancelled`» copre da sé il terzo caso: `resolved`, che l'applicazione non scrive mai
+ma che una riga scritta a mano può contenere ([ADR-019](#adr-019)).
+
+**È una regola di dominio e non un controllo di interfaccia**: nasconderla nel client
+lascerebbe la rotta aperta. **Leggere resta permesso**, e un thread chiuso si rilegge per
+intero: ciò che finisce è la scrittura.
+
+### La decisione, parte seconda: il motivo della riapertura è obbligatorio
+
+Con la parte prima, riaprire diventa **l'unico modo** di dire «non è risolto». Il motivo
+smette quindi di essere un di più: è l'unica cosa che spiega perché la segnalazione è
+tornata viva, e `POST /tickets/{id}/reopen` acquista un corpo con `reason` non vuoto.
+
+**È un'asimmetria con `resolution_notes`, che resta facoltativo**, e ha una ragione: la
+chiusura lascia comunque `closed_at` e una riga di storico, mentre la riapertura senza
+motivo non lascia niente — e la parte prima ha appena tolto il canale alternativo.
+
+### Dove va il motivo: nel thread
+
+`ReopenTicket` scrive, **nella stessa transazione** della transizione, un messaggio
+pubblico con quel testo, di chi ha riaperto. Tre ragioni:
+
+- **il thread non si riscrive mai** — `app.ticket_messages` ha due sole policy, `_select`
+  e `_insert` — quindi il motivo sopravvive alla chiusura successiva. `resolution_notes`
+  invece viene **cancellato dalla riapertura stessa**, e una colonna simmetrica lo
+  sarebbe a sua volta alla chiusura dopo;
+- una segnalazione si riapre **più volte**, e tre riaperture hanno tre motivi. Una colonna
+  ne tiene uno;
+- chiude il cerchio della parte prima invece di lasciarlo aperto: chi vuole dire «non è
+  risolto» lo dice riaprendo, e le sue parole finiscono dove finiscono tutte le altre.
+
+### `ticket_status_history.reason` resta non scritta, e non è una svista
+
+È la colonna fatta apposta — esiste dalla `0007`, `TicketStatusChange::reason()` la legge,
+il DTO la serializza e il client la **renderizza già** — ed è sempre `null`. Riempirla
+avrebbe chiuso un campo morto, e costa un **secondo canale verso il trigger**: la riga la
+scrive `tg_ticket_status_history`, che è `SECURITY DEFINER` perché quella tabella non ha
+policy di `INSERT`, quindi il motivo dovrebbe arrivargli da una `set_config`
+transazionale — il meccanismo di `app.current_user_id()`, che esiste e funziona.
+
+Si scarta per due ragioni. Una `set_config` locale vale per **tutta la transazione**,
+quindi una seconda transizione nella stessa richiesta erediterebbe il motivo della prima,
+e il rimedio — un trigger che consuma il valore azzerandolo — è macchina nuova per un
+campo di testo. E `TicketRepository::update` prende `&Ticket`: il motivo **non è un
+attributo dell'aggregato**, e farcelo passare vorrebbe dire o un campo che non appartiene
+alla segnalazione, o una firma diversa per una transizione sola.
+
+**La differenza con il numero falso della sezione 4 va detta**, perché le due cose si
+somigliano: là `v_property_occupancy` **mostrava** uno zero non vero, qui un campo vuoto
+non compare affatto — `HistoryRow` lo renderizza già condizionalmente. Un campo non
+riempito è un debito; un numero falso è un difetto.
+
+### Conseguenze
+
+- la guardia della parte prima sta nello use case che **pubblica**, non nel costruttore
+  del messaggio: la riapertura scrive il proprio messaggio dopo aver riportato lo stato a
+  `open`, e con la guardia nel costruttore inciamperebbe nella propria regola;
+- la sequenza comune delle transizioni vive in `run()` (`transition.rs`), che esiste
+  perché nessuna dimentichi `TicketStatusChanged`. **Non si duplica per la riapertura**:
+  acquista un punto in cui inserire un messaggio dentro la stessa unità di lavoro, e le
+  altre sei lo lasciano vuoto;
+- il client toglie la casella di scrittura sugli stati terminali e **dice perché**,
+  indicando la riapertura a chi ha segnalato; il dialogo di riapertura passa da conferma a
+  form con un campo obbligatorio, e il testo avverte che quello che si scrive finisce
+  nella conversazione;
+- un invariante nuovo, un codice nuovo, un messaggio nel catalogo.
+
+### Alternative scartate
+
+**Ammettere le repliche su `closed`** e vietarle solo su `cancelled` e `resolved`.
+Lascerebbe la riapertura facoltativa, e con essa il caso che il modulo è fatto per
+evitare: una conversazione che continua sotto uno stato che dice «finita».
+
+**Il motivo facoltativo.** Con la parte prima è l'unica traccia che resta, e un campo
+facoltativo che è anche l'unica traccia è un campo che resterà vuoto proprio quando
+serve.
+
+**Una colonna `reopen_reason` su `app.tickets`.** Simmetrica a `resolution_notes` e con lo
+stesso difetto: ne tiene uno solo, e la chiusura successiva dovrebbe cancellarlo — cioè
+perderebbe esattamente ciò per cui esiste.
+
+---
+
+<a id="adr-051"></a>
+
+## ADR-051 — Un inquilino che torna passa dalla stessa porta
+
+**10 settembre 2026.** Nasce da [`R31`](12-da-fare.md#lelenco), trovata **usando** e non
+leggendo il codice: mezza giornata di collaudo percorsa da chi non l'aveva scritto.
+Emenda [ADR-020](#adr-020) su un punto solo — quando la membership si inserisce — e non
+tocca niente del resto.
+
+### Il fatto
+
+Il ciclo di vita normale del prodotto: un contratto scade o si disdice, e con la stessa
+persona se ne fa un altro. **Oggi non si può**, e il modo in cui non si può è il peggiore:
+
+1. `InviteTenant` non guarda niente: crea la parte contrattuale ed emette l'invito. Il
+   proprietario vede un codice buono e lo consegna;
+2. `AcceptInvitation` fa **sempre** `uow.members().insert(...)`, che sbatte contro
+   `org_members_org_user_uk`;
+3. `map_membership_conflict` lo traduce in `409 membership.already_exists`.
+
+L'inquilino riceve un errore su un invito appena emesso, e non c'è nessuna via
+alternativa: `lease_parties.user_id` **lo scrive solo quel percorso**. `PATCH
+/lease-parties/{id}` tocca nome, telefono, ruolo, quota e intestatario, non l'utente.
+
+**Nessun test lo copriva, e la ragione vale più del difetto**: ogni test di integrazione
+costruisce un inquilino **nuovo**. Il difetto vive nella *seconda* volta che qualcosa
+succede alla stessa persona, che è esattamente lo spazio che una suite verde non
+attraversa. Vale la pena portarsi dietro la domanda: *quali altri percorsi il prodotto
+attraversa solo la seconda volta?*
+
+### La decisione
+
+`AcceptInvitation` verifica la membership prima di inserirla: se chi accetta è **già
+membro attivo** di quella organizzazione, salta l'inserimento e prosegue a collegare la
+parte contrattuale e a marcare l'invito.
+
+**Il ruolo non si tocca.** Chi è già `owner` o `manager` e viene invitato come `tenant`
+resta quello che è: l'invito serve a collegare la parte contrattuale, non a retrocedere
+qualcuno. È anche il caso vero di [01](01-prodotto.md) — chi affitta una casa e ne abita
+un'altra.
+
+### Perché una via sola e non due
+
+L'invito è già il gesto che il proprietario compie: lo ha appena compiuto, e ha ricevuto
+un codice buono. Una rotta «collega una persona già dentro» darebbe **due meccanismi per
+lo stesso fatto**, e il proprietario dovrebbe sapere in anticipo quale gli tocca — cioè
+ricordarsi se quella persona è già stata sua inquilina.
+
+### La guardia è sulla membership **attiva**, e oggi non serve a niente
+
+`org_members` ha `status` e `deleted_at`, ma nessuno li valorizza finché
+[`R16`](12-da-fare.md#uscire-da-unorganizzazione) non esiste: oggi da un'organizzazione
+non si esce, quindi non c'è nessuno da far rientrare e la distinzione fra «una
+membership» e «una membership attiva» non cambia il comportamento di una sola riga.
+
+Va scritta lo stesso, ed è il punto per cui questa voce esiste. Il giorno in cui `R16`
+arriva, una guardia che accettasse una membership *qualunque* farebbe rientrare chi è
+stato fatto uscire — e sarebbe **questa** la porta di servizio, trovata mesi dopo in
+un'altra sezione, quando nessuno starà più guardando qui.
+
+Il conflitto sull'indice **resta mappato**: `org_members_org_user_uk` non è parziale su
+`deleted_at` e `OrgMemberRepository::find` filtra il soft delete, quindi una membership
+non attiva non si vede e l'`INSERT` sbatte comunque. Il giorno in cui `R16` la produrrà,
+quel `409` sarà la domanda giusta da porsi e non un errore da nascondere.
+
+### Che cosa non cambia di ADR-020
+
+**L'ordine delle scritture.** `app.has_pending_invitation` abilita la membership e il
+collegamento della parte, e diventa falso appena l'invito è marcato accettato: a renderlo
+falso è l'**ultima** scrittura, quindi saltare la **prima** non sposta le altre due. La
+`SELECT` aggiunta passa dal primo ramo di `org_members_select` — `user_id =
+app.current_user_id()` — che non chiede di essere già membri, quindi non serve nessuna
+policy nuova e **nessuna migration**.
+
+**La verifica del token e le due difese indipendenti** restano identiche: l'applicazione
+prova il possesso del token, la RLS prova che un invito pendente esiste.
+
+### Verifica
+
+Due test di integrazione, e provano i due lati. Il primo percorre la riproduzione che ha
+prodotto questa voce — invito, accettazione, secondo invito, seconda accettazione — e
+pretende `200` con **due** contratti visibili e **una sola** appartenenza; il secondo fa
+accettare un invito come inquilino a chi è già `owner` e pretende che il ruolo resti
+`owner`. Il secondo è l'assert che qualcuno toglierebbe «uniformando» il ramo.
+
+### Alternativa scartata
+
+**`PATCH /lease-parties/{id}` che accetta `user_id`.** Sposta la scelta della persona su
+chi amministra, che dovrebbe cercarla in un elenco — e l'elenco delle persone di
+un'organizzazione **non esiste ed è aperto apposta** ([ADR-036](#adr-036),
+[ADR-043](#adr-043)). Costruirlo per questo sarebbe riaprire quella domanda per un
+problema di comodità.
+
+---
+
+<a id="adr-052"></a>
+
+## ADR-052 — Il codice di recupero si incolla, non si clicca
+
+**10 settembre 2026.** Scritta **prima** del codice, come il metodo impone e come
+[ADR-051](#adr-051) non è stata. Governa il recupero della password: la forma del
+codice, che cosa fa alle sessioni, che cosa risponde a chi lo chiede e come si limita.
+
+### Il fatto
+
+Le rotte di autenticazione sono quattro — `register`, `login`, `refresh`, `logout` — e
+non c'è **nessun** modo di recuperare una password. Il primo «non mi ricordo la
+password» di un utente vero finisce in una `UPDATE` scritta a mano sul database di
+produzione. È la ragione per cui la posta ([Z1](11-piani-conclusi.md#piano-utenti-veri))
+viene prima: senza un canale non c'è niente da recapitare.
+
+### 1. Un codice da incollare, non un link da cliccare
+
+[ADR-045](#adr-045) ha già deciso questa domanda per l'invito, e l'argomento vale
+identico: **il token è una credenziale**, e un link `/nuova-password/<token>` la scrive
+in tre archivi che nessuno ripulisce — la cronologia del browser, il `Referer` verso
+qualunque risorsa esterna, e i log di ogni proxy davanti al client.
+
+L'email porta quindi un codice e la schermata ha un campo in cui incollarlo. Nessun
+meccanismo nuovo: `OpaqueTokenFactory` e `TokenHash` esistono per l'invito, e in
+database finisce lo hash.
+
+**Il costo è reale e va detto**: incollare è più scomodo di un clic, e succede nel
+momento in cui una persona è già frustrata. L'alternativa — il link, con la pagina che
+ripulisce l'URL e `Referrer-Policy: no-referrer` — chiuderebbe due archivi su tre e
+introdurrebbe **due forme diverse** per due credenziali che si somigliano. Si sceglie la
+coerenza; se un collaudo dirà che l'attrito è troppo, sarà una voce nuova con una misura
+dietro invece di un'ipotesi.
+
+### 2. Confermare revoca **tutte** le sessioni
+
+È la parte che si dimentica, ed è quella che rende il recupero una difesa invece di una
+comodità: chi ha ottenuto l'accesso a un account ha in mano un refresh token che vive
+**trenta giorni**, e cambiare la password senza revocarlo non lo butta fuori.
+
+`SessionRepository::revoke_all_for_user` esiste già — la usa il rilevamento del riuso di
+un token ruotato — quindi è una chiamata e non un meccanismo. Chi recupera resta fuori
+anche lui e rifà l'accesso: è il comportamento giusto, perché non sa quali sessioni
+fossero sue.
+
+**Ma «tutte le sessioni» sono i refresh token, non gli access token**, e la differenza va
+detta perché la frase si legge come «lo butta fuori adesso». L'access token è un JWT
+firmato e **non è revocabile** ([ADR-012](#adr-012)): chi ne ha uno in mano resta dentro
+fino alla scadenza, quindici minuti. La revoca chiude la catena — nessun rinnovo, e da lì
+in poi è fuori — ma la finestra esiste.
+
+È il baratto che ADR-012 ha già scelto, e recuperare la password non lo cambia: chiuderla
+vorrebbe dire una lista di revoca consultata a ogni richiesta, cioè uno stato condiviso
+per ogni chiamata di ogni utente per coprire quindici minuti. **Scoperto scrivendo il
+test**, che asseriva la cosa sbagliata — che la vecchia sessione smettesse subito di
+leggere — e che ora asserisce quella giusta: il refresh non rinnova più.
+
+### 3. La risposta è la stessa per un indirizzo noto e per uno sconosciuto
+
+Regola di [ADR-017](#adr-017), che il modulo degli inviti applica già: distinguere
+sarebbe un oracolo per sapere chi ha un account. La rotta risponde `202` sempre, e la
+schermata dice «se quell'indirizzo ha un account, riceverà un codice» — che è la verità
+e non una scusa.
+
+**E il tempo di risposta è uguale**, che è la metà che si dimentica insieme. Per un
+indirizzo senza account non si crea nessuna riga: un ramo fa una lettura, l'altro fa una
+lettura, calcola uno hash e inserisce. ADR-017 governa il **contenuto** della risposta,
+non la sua durata, e un tempo che distingue è un oracolo come un codice che distingue. Il
+percorso è quindi a **tempo costante**: anche per un indirizzo sconosciuto si calcola lo
+hash di un valore fittizio.
+
+**Ne segue che l'invio non può essere riportato al chiamante.** Si tenta solo per un
+indirizzo che ha un account, quindi qualunque cosa distingua i due rami — un codice di
+errore, un messaggio, una durata — riapre l'oracolo. Un relay caduto è perciò **muto**, e
+il rimedio non sta nella risposta: sta nel controllo di prontezza, che interroga SMTP
+apposta perché una posta ferma si sappia **prima** che la incontri chi è chiuso fuori
+(vedi `Notifier::probe`).
+
+### 4. Il limite agli invii è per **email**, e sta nel modello
+
+Un recupero senza limiti è un modo per far arrivare cinquanta email a un indirizzo
+altrui. Il rimedio **non è il rate limiting per IP**: quello vuole uno stato condiviso, un
+servizio in più da avviare, mettere in sicurezza, monitorare e ripristinare, e non serve
+con una sola istanza — resta fra i trasversali mancanti.
+
+È invece una colonna: quando è stato emesso l'ultimo codice per quell'email, e un rifiuto
+**silenzioso** se è troppo recente. Silenzioso perché dirlo sarebbe di nuovo l'oracolo del
+punto 3.
+
+### 5. Il pool privilegiato è legittimo qui, ed è l'unico posto nuovo in cui lo diventa
+
+La regola 27 di `CLAUDE.md` riserva `begin_privileged()` ai flussi in cui un contesto di
+sicurezza **non può** esistere: registrazione, login, rotazione del refresh token. Chi ha
+dimenticato la password non è autenticato **per definizione**, quindi non ha un contesto
+da installare e la Row Level Security non ha nulla su cui appoggiarsi.
+
+È la differenza con l'accettazione di un invito, dove [ADR-020](#adr-020) ha scelto di
+estendere la RLS invece di aggirarla: là il contesto **esiste** — chi accetta è
+autenticato — e manca solo la membership. Qui non esiste affatto.
+
+Va scritto nel commento del caso d'uso, o alla prossima lettura sembrerà una violazione
+della regola.
+
+### Conseguenze
+
+- una migration nuova: la tabella dei codici, con lo hash e non il codice, una scadenza
+  breve, l'uso singolo e la colonna che regge il limite;
+- due rotte, `POST /api/v1/auth/password-reset` e
+  `POST /api/v1/auth/password-reset/confirm`, e due schermate nel client;
+- una variante nuova di `NotificationContent`, con il suo `Debug` redatto: il codice è
+  una credenziale come il token d'invito;
+- **il cambio password da autenticati non arriva con questa voce.** Sta in
+  [`R7`](12-da-fare.md#interfaccia-e-prodotto) e condivide con il recupero la revoca
+  delle sessioni e la validazione, quindi sembra incluso e non lo è.
+
+### Alternativa scartata
+
+**Una password provvisoria spedita per email.** Toglie la tabella e il giro in due tempi,
+e mette una credenziale **valida** in un archivio che non si ripulisce — la casella di
+posta — invece di un codice a uso singolo che scade. È lo stesso argomento del punto 1,
+peggiorato: il link almeno non era la password.
+
+---
+
+<a id="adr-053"></a>
+
+## ADR-053 — Si entra per invito: l'inquilino nel conto di chi lo ospita, il proprietario con un token di piattaforma
+
+**13 settembre 2026.** Scritta **prima** del codice, come il metodo impone: è il primo
+passo della [sezione 8](11-piani-conclusi.md#piano-sezione-8), e la sezione non scrive
+una riga finché queste sei domande non hanno una risposta. Chiude la parte di `R9` che è
+una decisione; il resto di `R9` è il codice che ne discende.
+
+### Il fatto
+
+Chiunque si registri diventa **owner di un'organizzazione propria**: `RegisterOwner` è
+l'unico caso d'uso di registrazione e chiama `Organization::personal(...)` e
+`OrgMember::active(..., OrgRole::Owner, ...)` senza un ramo. Un inquilino invitato deve
+registrarsi *prima* di accettare — `AcceptInvitation` è `Authenticated` — quindi **ogni
+inquilino è anche owner di un'organizzazione vuota**, dove può registrare immobili a
+ragione: la Row Level Security e `ensure_staff` glielo concedono, e il client lì gli
+mostra «Registra un immobile» perché `useIsStaff()` dice il vero.
+
+[ADR-042](#adr-042) lo dichiarava: il ramo sul ruolo nel client è una scelta di che cosa
+offrire e **non un confine**. Il confine mancava nel modello, ed è tollerabile finché il
+prodotto è «per un proprietario che conosci». Smette di esserlo il giorno in cui la
+registrazione è aperta a sconosciuti — cioè il deploy.
+
+Verificando le premesse del piano sono emerse altre due cose che questa decisione deve
+coprire: il login preferisce la membership `Owner` (`pick_default_membership`), quindi un
+inquilino appena registrato atterra **nella propria organizzazione vuota** e non in
+quella di chi lo ha invitato; e un utente **senza nessuna organizzazione** è uno stato
+che il guscio non conosce — l'effetto di riallineamento esce su `items.length === 0`, e
+ogni elenco risponderebbe `403 org.not_selected`.
+
+### 1. Un utente nato inquilino non ha un'organizzazione propria
+
+La membership arriva **solo con l'invito**. La registrazione di un inquilino parte
+dall'invito — il codice ricevuto per email, incollato come in [ADR-045](#adr-045) — e
+finisce nell'organizzazione di chi lo ha invitato, con la parte contrattuale collegata,
+**in una sola transazione**: utente, membership, collegamento, invito marcato. Non
+esiste un istante in cui l'inquilino è registrato e senza organizzazione.
+
+*Alternativa scartata: l'organizzazione personale come oggi, nascosta meglio.* È `R9`
+stesso; nascondere non è un confine, e ADR-042 l'aveva già detto.
+
+*Alternativa scartata: un'organizzazione personale «spenta»*, con una colonna e un ramo
+in ogni policy dello staff. Sembra economica ed è una migration larga più un **secondo
+criterio di staff** da tenere allineato al primo per sempre: `is_org_staff` è chiamata
+in ogni policy di scrittura dello schema.
+
+**Conseguenza sul guscio.** Lo stato «nessuna organizzazione» diventa uno stato di
+prima classe, anche se la transazione sopra fa sì che nessun utente nuovo ci nasca:
+ci si arriva **uscendo** dall'unica organizzazione che si aveva (sezione 6, `R16`) —
+da inquilino, da gestore, o da proprietario che non era l'ultimo. *(Emendato il 16
+settembre 2026: la prima stesura diceva «o quando l'invito che ci aveva portati dentro
+viene revocato», ed è impreciso — un invito accettato non si revoca, e uno non accettato
+non ha mai fatto entrare nessuno.)* Il guscio mostra una
+schermata che dice che cosa si è e che cosa si aspetta — un invito — invece di una
+navigazione vuota che risponde `403`. `getOrganizations` e `/me` funzionano già senza
+`X-Org-Id` per la ragione del [poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6).
+
+### 2. Un proprietario nasce da un invito di piattaforma
+
+Un genere di invito nuovo, **senza organizzazione**: la crea l'accettazione. Chi lo
+accetta si registra e riceve ciò che `RegisterOwner` dà oggi a chiunque — utente,
+organizzazione personale, membership `owner` — in una transazione, dietro un token.
+`RegisterOwner` smette di essere una rotta aperta.
+
+**Tabella nuova, `app.owner_invitations`**, e non `org_invitations` con `org_id`
+annullabile: `org_invitations_staff` è `FOR ALL USING (is_org_staff(org_id))`, e un
+`org_id` nullo la renderebbe falsa o da riscrivere; l'indice parziale
+`org_invitations_pending_uk` è su `(org_id, email)`; e ogni query su quella tabella
+erediterebbe un ramo «senza organizzazione» che oggi non ha. La tabella nuova ha la forma
+di `password_reset_codes` (migration `0037`, [ADR-052](#adr-052)): `email`,
+`token_hash`, `expires_at`, `accepted_at`, `accepted_by`, `revoked_at`, `created_at`,
+nessun `org_id`, nessun `deleted_at`. Lo hash è SHA-256 del token in chiaro, come
+`OpaqueTokenGenerator` fa per inviti e sessioni.
+
+*Alternativa scartata: registrazione libera più una colonna «verificato»* che sblocca lo
+staff. Lascia aperta la porta della registrazione e sposta il confine in ogni policy
+dello staff — lo stesso costo dell'organizzazione «spenta», con in più un utente che
+esiste e non può fare niente.
+
+### 3. La verifica è fuori dal prodotto, e il token si emette da un runbook
+
+Come si accerti che una persona sia un proprietario — un'email, una telefonata, un
+documento — è una decisione di chi amministra la piattaforma e **non vive nel prodotto**.
+Nel prodotto vive solo il fatto che il token esiste.
+
+Il token lo emette uno **script in `ops/`**, con il ruolo del migratore, documentato in
+[07](07-operazioni.md): genera 256 bit casuali, li codifica come fa
+`OpaqueTokenGenerator` (`base64url` senza padding), scrive lo hash nella tabella e
+stampa il token in chiaro **una volta**, perché lo si mandi. Nessuna rotta HTTP:
+sarebbe la prima rotta *di piattaforma* del prodotto, un perimetro di sicurezza nuovo
+da difendere e testare per un gesto che oggi si fa qualche volta al mese. `platform_role`
+resta com'è — assegnato a mano, valore `'admin'` — e **questa decisione non lo usa**: il
+giorno in cui l'emissione diventa una rotta, `is_platform_admin()` è il suo guardiano,
+ed è già scritto.
+
+### 4. Gli utenti esistenti: il database si svuota
+
+Non c'è produzione, e non c'è nessun utente che non sia un dato di prova: il primo
+deploy è [rinviato](12-da-fare.md#lordine-di-esecuzione) per mancanza di mezzi, e i
+database locali si ricreano. **Nessuna migration di dati**, nessuna regola per
+distinguere «chi è un proprietario» da «chi si era registrato per un invito», nessuna
+archiviazione di organizzazioni personali vuote. Chi ha un database locale con dei dati
+lo azzera (`just down-hard`, poi `just setup`) quando prende questa sezione.
+
+Va detto che cosa questa scelta **non** copre, perché è il caso che tornerà: il giorno in
+cui ci sarà un database con utenti veri, un cambiamento della stessa specie avrà bisogno
+della migration che qui non si scrive. Questo ADR non la anticipa.
+
+### 5. Il login non cambia
+
+`pick_default_membership` preferisce `Owner`, poi `Manager`, poi `Tenant`. Con la
+decisione 1 un inquilino non ha una membership `Owner` da preferire, e con la 4 non
+esistono utenti vecchi che ce l'abbiano: il caso che rendeva l'ordine sbagliato
+**sparisce** invece di essere corretto. Per chi è owner di un'organizzazione e inquilino
+in un'altra — il caso vero di [01](01-prodotto.md) — preferire quella che amministra
+resta giusto.
+
+### 6. `/invito` è l'ingresso di chi è invitato, per entrambi i generi
+
+Un codice incollato in un campo, come [ADR-045](#adr-045); se la persona non ha un
+account, la registrazione **parte da lì** e porta il codice con sé, invece di mandare a
+una registrazione che crea un'organizzazione. I due generi di invito si distinguono dal
+codice — il server sa in quale tabella cercarlo — e il form chiede le stesse cose:
+nome, password. Il nome dell'organizzazione lo chiede solo a chi accetta un invito da
+proprietario, perché solo lui ne crea una.
+
+**L'email della registrazione è quella dell'invito**, e non un campo: un invito è per
+una persona, e la policy `has_pending_invitation` confronta l'email dell'utente con
+quella dell'invito. Chi vuole un altro indirizzo chiede un altro invito.
+
+**Il genere del token lo dice il server, e solo a chi lo possiede** *(aggiunto il 16
+settembre 2026, confermato dal passo `F7`)*. Il form non sa se il codice incollato è da
+inquilino o da proprietario, e **non esiste una rotta di sola lettura** che glielo
+dica: risponderebbe anche per codici che chi chiede non possiede, cioè un oracolo su
+quali token sono stati emessi. Il form chiede nome e password e manda a
+`register-from-invitation`; se il token è un invito da proprietario **valido** il
+server risponde `409 invitation.owner_token`, e solo allora il form chiede il nome
+dell'organizzazione e rimanda lo stesso corpo a `accept-owner-invitation`. Chi
+indovina un token riceve `401` come per un token inesistente: il `409` esce solo a chi
+ha in mano un token che darebbe comunque un account.
+
+**Le risposte a «token inesistente» e a «token valido, ma già usato o scaduto» sono la
+stessa** (`401 auth.invalid_credentials`, come già per l'invito e per il codice di
+recupero): un token è una credenziale, e distinguere i due casi darebbe un oracolo su
+quali token sono stati emessi.
+
+### Conseguenze
+
+- `RegisterOwner` diventa l'accettazione di un invito da proprietario; nasce la
+  registrazione dell'inquilino dall'invito; `AcceptInvitation` resta per chi **ha già**
+  un account — l'inquilino che torna di [ADR-051](#adr-051), o chi è owner altrove;
+- entrambe le registrazioni girano sul pool privilegiato (regola 27: prima
+  dell'autenticazione non c'è contesto) e **senza Row Level Security**: la prova di
+  possesso del token è dell'applicazione, per hash e per stato, e l'email dell'invito
+  vincola quella dell'utente;
+- il guscio ha uno stato «nessuna organizzazione»;
+- l'harness dei test smette di costruire ogni inquilino come owner di qualcosa: è la
+  prima cosa da cambiare, con la suite verde, **prima** del prodotto;
+- una migration (`app.owner_invitations`, con la sua policy e i privilegi di colonna
+  nella forma della `0019`), uno script in `ops/`, un runbook in [07](07-operazioni.md);
+- `R9` esce da [12](12-da-fare.md) con l'esito della sezione 8; `R41` — chiedere di
+  rientrare — resta dov'è: questa decisione non la tocca.
+
+<a id="adr-054"></a>
+
+## ADR-054 — Chi è uscito non legge più: la membership nel ramo dell'inquilino, al livello della RLS
+
+**18 settembre 2026**, sezione 10. Chiude `R46`.
+
+### Il fatto
+
+Chi esce da un'organizzazione continua a leggerne i dati — e a scriverci — per i
+quindici minuti del suo access token. `middleware::context` si fida del ruolo nel token
+quando `X-Org-Id` coincide con l'`org_id` dei claim, senza rileggere la membership: è il
+baratto del JWT non revocabile di [ADR-012](#adr-012), che parla di *validità* del token
+e non di *membership*. Per lo staff quei minuti sono già vuoti: ogni policy passa da
+`member_role`, che filtra `status = 'active'`
+([poscritto della 6](11-piani-conclusi.md#poscritto-sezione-6)). Per l'inquilino no: il
+ramo suo in `app.can_access_lease` e `app.can_access_property` (`0014`) passava da
+`lease_parties.user_id = current_user_id()` **senza guardare `org_members`**, e uscire
+(`0039`) tocca `org_members` e non le parti. `GET /leases` rispondeva `200` **con il
+contratto disdetto nel corpo**, e con lo stesso token si apriva una segnalazione
+nell'organizzazione lasciata.
+
+Prima di [ADR-053](#adr-053) il caso era raro — il token di un inquilino portava la sua
+organizzazione personale, mai quella di chi lo ospitava, quindi la rilettura scattava
+sempre. Dopo, porta quella di chi lo ospita: è il caso di **ogni** inquilino che esce.
+
+### Decisione
+
+**`AND app.is_org_member(<org>)` nel ramo dell'inquilino delle due funzioni**, con una
+migration che le riscrive per intero (`0041`, `CREATE OR REPLACE` con la stessa firma:
+le policy referenziano per oid e non si toccano). Il difetto sta nel solo ramo che non
+guardava la membership, e si chiude lì, al livello che una lettura non può aggirare.
+
+Il costo: una lettura in più di `org_members` per riga valutata, sull'indice che
+`member_role` usa già. Le funzioni sono `SECURITY DEFINER`, e `is_org_member` anche.
+
+`member_role` **non si tocca**: è la funzione di tutte le policy dello staff, e un
+cambiamento lì cambia tutto.
+
+### Alternativa scartata
+
+**Rileggere la membership in `Authenticated` a ogni richiesta.** Chiuderebbe il caso
+per tutte le rotte, ma cambia la forma del baratto di ADR-012 per tutti — staff
+compreso, dove non c'è nulla da chiudere — e sposta il confine dalla riga alla
+richiesta: una query in più per ogni chiamata, per un difetto che sta in un ramo di due
+funzioni. Resta la via da riconsiderare se un giorno un altro ramo si rivelasse cieco
+alla membership; oggi non ce n'è.
+
+### Conseguenze
+
+- il token vecchio, dopo l'uscita, vede un elenco **vuoto** dove prima vedeva il
+  contratto: `200` con zero elementi, come per lo staff, non `403`. È coerente con il
+  cambio di organizzazione, che non distingue «non esiste» da «non ne fai parte»;
+- aprire una segnalazione nell'organizzazione lasciata risponde `404
+  property.not_found`: l'immobile non si legge, e il bordo lo traduce come traduce ogni
+  risorsa che «non è tua» — non `403`, che direbbe che la risorsa c'è;
+- il test `a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back`
+  smette di fare un login nuovo dopo l'uscita e afferma con il **token vecchio**;
+- il rientro ([ADR-051](#adr-051)) non cambia: riattivata la membership, la parte del
+  contratto torna a valere.
+

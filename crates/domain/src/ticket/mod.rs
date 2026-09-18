@@ -16,8 +16,8 @@ mod thread;
 mod value_objects;
 
 pub use aggregate::{
-    NewTicket, Ticket, TicketActor, TicketCategory, TicketCosts, TicketParts, TicketPriority,
-    TicketStatus, WaitingOn,
+    NewTicket, Ticket, TicketActor, TicketCategory, TicketCorrection, TicketCosts, TicketParts,
+    TicketPriority, TicketStatus, WaitingOn,
 };
 pub use thread::{NewTicketMessage, TicketMessage, TicketStatusChange};
 pub use value_objects::{MessageBody, TicketDescription, TicketReference, TicketTitle};

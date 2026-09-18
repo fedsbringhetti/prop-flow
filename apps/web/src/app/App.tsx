@@ -1,7 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router'
 
-import { Loading } from '@/components/state'
+import { ErrorState, Loading } from '@/components/state'
 import { QueryProvider } from './query'
 import { useIsStaff, useSession } from './session'
 import { AppShell, TENANT_HOME } from './shell'
@@ -23,7 +23,16 @@ import { AppShell, TENANT_HOME } from './shell'
  */
 const AuthPage = () => import('@/features/auth/AuthPage')
 const LoginPage = lazy(async () => ({ default: (await AuthPage()).LoginPage }))
-const RegisterPage = lazy(async () => ({ default: (await AuthPage()).RegisterPage }))
+// `/registrazione` non è più un form (`F6`, ADR-053): è un rimando che dice
+// perché, così chi arriva da un segnalibro o da un motore di ricerca legge la
+// ragione invece di un `404` muto.
+const RegistrationMovedPage = lazy(async () => ({
+  default: (await AuthPage()).RegistrationMovedPage,
+}))
+const PasswordResetPage = lazy(async () => ({ default: (await AuthPage()).PasswordResetPage }))
+const PrivacyPage = lazy(async () => ({
+  default: (await import('@/features/legal/PrivacyPage')).PrivacyPage,
+}))
 
 const InvitationPage = () => import('@/features/invitations/AcceptInvitationPage')
 const AcceptInvitationPage = lazy(async () => ({
@@ -35,6 +44,12 @@ const AcceptInvitationSignedOutPage = lazy(async () => ({
 
 const DashboardPage = lazy(async () => ({
   default: (await import('@/features/dashboard/DashboardPage')).DashboardPage,
+}))
+const AccountPage = lazy(async () => ({
+  default: (await import('@/features/account/AccountPage')).AccountPage,
+}))
+const GuidePage = lazy(async () => ({
+  default: (await import('@/features/guide/GuidePage')).GuidePage,
 }))
 const PropertiesPage = lazy(async () => ({
   default: (await import('@/features/properties/PropertiesPage')).PropertiesPage,
@@ -94,7 +109,7 @@ const ExpenseGroupDetailPage = lazy(async () => ({
  * di chi li ha salvati, e non è ciò che una traduzione deve fare.
  */
 export function App() {
-  const { session, restoring } = useSession()
+  const { session, restoring, restoreError, retryRestore } = useSession()
   const isStaff = useIsStaff()
   const location = useLocation()
 
@@ -117,6 +132,24 @@ export function App() {
     return <Loading className="min-h-screen justify-center" />
   }
 
+  /**
+   * **Prima** del ramo «nessuna sessione», perché non lo è: il rinnovo non ha
+   * raggiunto il server — o il server non c'era, e ha risposto il proxy — e il
+   * cookie può essere ancora buono. Mandare al form di accesso chi ha solo perso
+   * il segnale, o ha ricaricato durante un deploy, sarebbe un logout apparente
+   * senza una riga di spiegazione — sul telefono, in galleria, il caso normale.
+   * La forma è quella del terzo stato del guscio, senza «Esci»: senza rete un
+   * logout non arriva al server, e un bottone che fallisce è peggio di uno che
+   * manca.
+   */
+  if (restoreError) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center px-4 py-10">
+        <ErrorState error={restoreError} onRetry={retryRestore} />
+      </main>
+    )
+  }
+
   if (!session) {
     return (
       /* **Un confine di `Suspense` senza il suo stato è una pagina bianca** dove
@@ -128,12 +161,22 @@ export function App() {
       <Suspense fallback={<Loading className="min-h-screen justify-center" />}>
         <Routes>
         <Route path="/accesso" element={<LoginPage />} />
-        <Route path="/registrazione" element={<RegisterPage />} />
-        {/* Accettare un invito richiede una sessione — la rotta dell'API è
-            autenticata — quindi chi arriva qui con un codice in mano e senza
-            account non va al login in silenzio: gli si dice che cosa fare
-            prima. Mandarlo al login gli farebbe leggere «entra» senza sapere
-            che deve prima registrarsi, e il codice giusto darebbe `401`. */}
+        {/* Non un form: da `F6` non c'è una porta aperta, si entra solo da un
+            invito (ADR-053). Chi arriva qui — un segnalibro vecchio, un motore
+            di ricerca — legge perché e dove andare, invece di un `404` muto. */}
+        <Route path="/registrazione" element={<RegistrationMovedPage />} />
+        {/* Il recupero vive fuori dalla sessione per definizione: chi lo apre non
+            riesce a entrare. Una rotta sola per i due tempi — si chiede il codice,
+            si incolla — perché fra i due non c'è niente da ricordare tranne
+            l'indirizzo, e mandare altrove chi è già frustrato non compra niente. */}
+        <Route path="/recupero-password" element={<PasswordResetPage />} />
+        {/* L'informativa si legge **prima** di dare i propri dati, quindi sta
+            fra le rotte di chi non è entrato e non solo dentro il guscio. */}
+        <Route path="/privacy" element={<PrivacyPage />} />
+        {/* Il codice **prima**, il form di registrazione **dopo**, con il codice
+            già dentro (ADR-053): non serve più mandare a `/registrazione`, che
+            non esiste più come form, e non serve una sessione per accettare —
+            questa pagina registra direttamente dall'invito. */}
         <Route path="/invito" element={<AcceptInvitationSignedOutPage />} />
         {/* Chi arriva su una pagina interna senza sessione va al login **e non
             perde dove stava andando**: il percorso resta nello stato, e un
@@ -187,14 +230,29 @@ export function App() {
               di `PaymentsPage`. */}
           <Route path="/spese" element={<ExpenseGroupsPage />} />
           <Route path="/spese/:id" element={<ExpenseGroupDetailPage />} />
+          {/* Il proprio account: dati, password, uscita. Del ruolo non è: ci si
+              arriva dal menù dell'organizzazione, e vale per staff e inquilini. */}
+          <Route path="/account" element={<AccountPage />} />
           <Route path="/invito" element={<AcceptInvitationPage />} />
         </Route>
-        {/* Chi è già entrato non deve poter tornare al login da un segnalibro:
+        {/* La guida sta **fuori** dal guscio, come l'informativa: senza
+            un'organizzazione il guscio rende la schermata dedicata al posto di
+            ogni rotta, e la guida deve aprirsi anche da lì. Il ruolo sceglie la
+            versione; senza ruolo si legge quella di chi abita. */}
+        <Route
+          path="/guida"
+          element={
+            <Suspense fallback={<Loading className="min-h-screen justify-center" />}>
+              <GuidePage />
+            </Suspense>
+          }
+        />
+        {/* Chi è già entrato non deve poter tornare al login — o a una rotta di
+            registrazione che ormai non esiste come form — da un segnalibro:
             vedrebbe un form che non serve a niente. **Torna dove stava
-            andando**, che è la promessa che lo `state` qui sopra scrive e che
-            fino a questo passo nessuno manteneva: chi si registra per accettare
-            un invito ripassa da `/invito` invece di atterrare sul riepilogo
-            vuoto della propria organizzazione. */}
+            andando**, che è la promessa che lo `state` qui sopra scrive: chi
+            arriva su `/invito` senza sessione, registra e accetta insieme
+            (ADR-053), e non passa più da qui per farlo. */}
         <Route path="/accesso" element={<Navigate to={returnTo} replace />} />
         <Route path="/registrazione" element={<Navigate to={returnTo} replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -4,9 +4,9 @@ use super::repositories::{
     AiJobQueue, AiJobRepository, ChargeRepository, DashboardRepository, DocumentRepository,
     EventSink, ExpenseGroupRepository, ExpenseRepository, InvitationRepository,
     LeasePartyRepository, LeaseRepository, OrgMemberRepository, OrganizationRepository,
-    PaymentRepository, PropertyRepository, RepositoryResult, RoomRepository, SessionRepository,
-    SettlementRepository, TicketMessageRepository, TicketRepository, UserRepository,
-    UtilityBillRepository,
+    OwnerInvitationRepository, PasswordResetCodeRepository, PaymentRepository, PropertyRepository,
+    RepositoryResult, RoomRepository, SessionRepository, SettlementRepository,
+    TicketMessageRepository, TicketRepository, UserRepository, UtilityBillRepository,
 };
 use crate::context::RequestContext;
 
@@ -26,6 +26,14 @@ pub trait UnitOfWork: Send {
     fn members(&mut self) -> &mut dyn OrgMemberRepository;
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn invitations(&mut self) -> &mut dyn InvitationRepository;
+    /// Inviti da proprietario. **Letta e scritta solo dal pool privilegiato**
+    /// per convenzione applicativa (regola 27) e non per un tipo diverso: la
+    /// tabella nega tutto al ruolo soggetto alla Row Level Security
+    /// (`USING (false)`, migration `0040`), quindi una transazione applicativa
+    /// vedrebbe comunque zero righe. È la stessa postura di
+    /// [`UserRepository::update`].
+    fn owner_invitations(&mut self) -> &mut dyn OwnerInvitationRepository;
+    fn password_reset_codes(&mut self) -> &mut dyn PasswordResetCodeRepository;
     fn properties(&mut self) -> &mut dyn PropertyRepository;
     fn rooms(&mut self) -> &mut dyn RoomRepository;
     fn leases(&mut self) -> &mut dyn LeaseRepository;

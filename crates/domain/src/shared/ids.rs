@@ -64,6 +64,8 @@ typed_id!(RoomId, "una stanza");
 typed_id!(LeaseId, "un contratto di locazione");
 typed_id!(LeasePartyId, "una parte contrattuale");
 typed_id!(InvitationId, "un invito");
+typed_id!(OwnerInvitationId, "un invito da proprietario");
+typed_id!(PasswordResetCodeId, "un codice di recupero della password");
 typed_id!(DocumentId, "un documento");
 typed_id!(TicketId, "una segnalazione");
 typed_id!(TicketMessageId, "un messaggio di una segnalazione");

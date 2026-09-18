@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use propflow_domain::lease::{Lease, LeaseParts};
 use propflow_domain::ports::{
-    LeasePage, LeaseQuery, LeaseRepository, RepositoryError, RepositoryResult,
+    LeaseLabels, LeasePage, LeaseQuery, LeaseRepository, RepositoryError, RepositoryResult,
 };
-use propflow_domain::shared::{Currency, LeaseId, Money, OrgId, PropertyId, RoomId};
+use propflow_domain::shared::{Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId};
 
 use super::user::try_get;
 use crate::db::db_enums;
@@ -213,6 +213,75 @@ impl LeaseRepository for PgUnitOfWork {
             return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
+    }
+
+    async fn has_in_force_for_user(
+        &mut self,
+        org_id: OrgId,
+        user_id: UserId,
+    ) -> RepositoryResult<bool> {
+        // **La funzione della policy, e non una condizione riscritta.** È la stessa
+        // `app.has_lease_in_force` che `org_members_update_self` interroga: una
+        // seconda definizione di «in essere» divergerebbe dalla prima, e il sintomo
+        // sarebbe una schermata che dice di sì e un'`UPDATE` che dice di no.
+        //
+        // `SECURITY DEFINER`, quindi risponde il vero anche a chi
+        // `leases_select` non mostrerebbe quei contratti — che è il caso di uno
+        // staff che guardi la posizione di un altro.
+        let row: (bool,) = sqlx::query_as("SELECT app.has_lease_in_force($1, $2)")
+            .bind(org_id.as_uuid())
+            .bind(user_id.as_uuid())
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(row.0)
+    }
+
+    async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **`LEFT JOIN` su entrambi, e non è pignoleria.** Con un `INNER` un
+        // contratto sull'immobile intero — che non ha stanza — sparirebbe
+        // dall'elenco, e con lui ogni contratto il cui immobile è stato
+        // archiviato: due modi di far scomparire righe che esistono, per andare a
+        // prendere un nome.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT l.id                AS lease_id,
+                    p.label             AS property_label,
+                    r.name              AS room_name,
+                    t.full_name         AS primary_tenant
+               FROM app.leases l
+               LEFT JOIN app.properties p
+                      ON p.id = l.property_id AND p.deleted_at IS NULL
+               LEFT JOIN app.rooms r
+                      ON r.id = l.room_id AND r.deleted_at IS NULL
+               -- L'intestatario è al più uno: `lease_parties_primary_uk` è unico
+               -- su `(lease_id) WHERE is_primary AND deleted_at IS NULL`, quindi il
+               -- join non può moltiplicare le righe. Senza quel vincolo servirebbe
+               -- un `LATERAL … LIMIT 1`, che nasconderebbe il problema invece di
+               -- appoggiarsi alla garanzia che c'è.
+               LEFT JOIN app.lease_parties t
+                      ON t.lease_id = l.id AND t.is_primary AND t.deleted_at IS NULL
+              WHERE l.id = ANY($1) AND l.deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let lease_id: Uuid = try_get(&row, "lease_id")?;
+                Ok(LeaseLabels {
+                    lease_id: LeaseId::from_uuid(lease_id),
+                    property_label: try_get(&row, "property_label")?,
+                    room_name: try_get(&row, "room_name")?,
+                    primary_tenant: try_get(&row, "primary_tenant")?,
+                })
+            })
+            .collect()
     }
 }
 

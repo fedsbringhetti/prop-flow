@@ -96,6 +96,14 @@ export function LeasesPage() {
             />
             {t.lease.inForce}
           </label>
+          {/* **Dove nasce la domanda.** Il badge mostra lo stato derivato, quindi
+              chi chiede «attivo» può vedersi tornare una riga marcata «Scaduto»:
+              la spiegazione sta accanto al filtro che l'ha prodotta, e compare
+              solo quando un filtro è attivo. Prima viveva fra parentesi su ogni
+              riga, che è `R30`. */}
+          {status ? (
+            <p className="text-xs text-ink-muted">{t.lease.filteredByDeclaredStatus}</p>
+          ) : null}
         </div>
 
         <Async
@@ -103,9 +111,15 @@ export function LeasesPage() {
           isEmpty={(items) => items.length === 0}
           empty={
             <Empty
-              title={t.lease.empty}
-              hint={isStaff ? t.lease.emptyHint : t.lease.emptyForTenant}
-              {...(isStaff
+              title={status || inForce ? t.state.filteredTitle : t.lease.empty}
+              hint={
+                status || inForce
+                  ? t.state.filteredHint
+                  : isStaff
+                    ? t.lease.emptyHint
+                    : t.lease.emptyForTenant
+              }
+              {...(isStaff && !status && !inForce
                 ? {
                     action: (
                       <Button asChild variant="primary">
@@ -122,6 +136,7 @@ export function LeasesPage() {
               <TableCaption>{t.lease.title}</TableCaption>
               <thead>
                 <tr>
+                  <Th>{t.lease.property}</Th>
                   <Th>{t.lease.type}</Th>
                   <Th>{t.lease.status}</Th>
                   <Th>{t.lease.startDate}</Th>
@@ -132,14 +147,22 @@ export function LeasesPage() {
               <tbody>
                 {items.map((lease) => (
                   <Tr key={lease.id}>
+                    {/* **Il nome di ciò che si affitta, non il tipo.** Tipo più
+                        date rendeva ogni riga uguale all'altra, che è il difetto
+                        per cui questa colonna esiste. La stanza sta sotto perché
+                        distingue due contratti nella stessa casa. */}
                     <Td>
                       <Link
                         to={`/contratti/${lease.id}`}
                         className="font-medium text-accent underline-offset-4 hover:underline"
                       >
-                        {t.lease.types[lease.lease_type]}
+                        {lease.property_label ?? t.common.archivedProperty}
                       </Link>
+                      {lease.room_name ? (
+                        <span className="block text-xs text-ink-muted">{lease.room_name}</span>
+                      ) : null}
                     </Td>
+                    <Td>{t.lease.types[lease.lease_type]}</Td>
                     <Td>
                       <LeaseStatusBadge
                         status={lease.status}

@@ -1,0 +1,73 @@
+# Il reverse proxy di **produzione**.
+#
+# È il gemello di `ops/web/Caddyfile`, che realizza lo stesso contratto in
+# sviluppo: `/` ai file statici, `/api/v1` all'API, **una sola origine**. Da quel
+# contratto discende tutto ciò che il progetto non ha dovuto fare — niente CORS da
+# montare, nessun elenco di origini da tenere allineato, e un cookie di prima parte
+# `SameSite=Strict` invece di `SameSite=None; Secure` (ADR-038).
+#
+# Due file e non uno, e la ragione è che divergono in tre punti: il dominio al posto
+# della porta, l'HSTS, e Swagger UI che qui non si espone. Un file solo con delle
+# variabili avrebbe nascosto proprio quelle tre differenze.
+#
+# IL CERTIFICATO
+# Caddy lo prende da Let's Encrypt da sé, alla prima richiesta sul dominio, e lo
+# rinnova. Perché funzioni servono due cose e nessuna delle due è in questo file:
+# il DNS del dominio deve puntare alla macchina, e le porte 80 e 443 devono essere
+# raggiungibili — la 80 serve alla convalida, anche se poi tutto va in HTTPS.
+#
+# {$PROPFLOW_DOMAIN} arriva dall'ambiente: `docker compose` lo passa al container.
+{$PROPFLOW_DOMAIN} {
+	encode zstd gzip
+
+	# **HSTS, che Caddy non aggiunge da sé.** Il reindirizzamento da HTTP a HTTPS
+	# c'è già, e non basta: la prima richiesta di ogni visita parte comunque in
+	# chiaro, e un cookie di sessione non deve mai attraversarla. Un anno, e
+	# `includeSubDomains` perché il cookie è del dominio.
+	#
+	# Va dichiarato sapendo che cosa comporta: per la durata dichiarata il browser
+	# **rifiuta** di parlare in chiaro con questo host, quindi un certificato
+	# scaduto diventa un sito irraggiungibile e non un avviso da saltare.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# Difese al bordo che non costano niente e che il client non può darsi da sé.
+	header X-Content-Type-Options "nosniff"
+	header X-Frame-Options "DENY"
+	header Referrer-Policy "strict-origin-when-cross-origin"
+	# Caddy annuncia sé stesso: è ricognizione gratuita.
+	header -Server
+
+	# L'API per prima: un percorso che comincia con `/api/v1` non deve mai arrivare
+	# al file server, che risponderebbe `index.html` con un `200`. Sarebbe il
+	# difetto peggiore da diagnosticare — una chiamata che «riesce» e restituisce
+	# HTML dove il client aspetta JSON.
+	handle /api/v1/* {
+		reverse_proxy {$PROPFLOW_API_UPSTREAM:api:8080}
+	}
+
+	# **Swagger UI non si espone.** In sviluppo `/docs` è comodo; in produzione è
+	# l'elenco completo delle rotte servito a chiunque passi. La specifica resta
+	# raggiungibile da dentro la rete del compose, per chi ha accesso alla macchina.
+	handle /docs* {
+		respond 404
+	}
+	handle /api-docs* {
+		respond 404
+	}
+
+	handle {
+		root * /srv
+		# Gli asset hanno l'hash nel nome: sono immutabili. Tutto il resto —
+		# `index.html` per primo — va riletto a ogni caricamento, altrimenti un
+		# rilascio non arriva mai a chi ha la pagina in cache e continua a chiedere
+		# asset che non esistono più.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		header ?Cache-Control "no-cache"
+
+		# L'applicazione ha percorsi lato client (`/immobili/{id}`): un ricaricamento
+		# su uno di quelli deve servire `index.html`, non un `404`.
+		try_files {path} /index.html
+		file_server
+	}
+}

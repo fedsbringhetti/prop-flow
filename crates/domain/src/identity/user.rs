@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::error::{Denial, DomainError, DomainResult};
+use crate::property::Patch;
 use crate::shared::{Email, UserId, text};
 
 /// Hash della password, opaco per il dominio.
@@ -61,6 +62,52 @@ impl UserStatus {
     #[must_use]
     pub const fn can_authenticate(self) -> bool {
         matches!(self, Self::Active)
+    }
+}
+
+/// Ciò che una persona corregge di sé.
+///
+/// **Tre campi, e l'email non è fra questi.** Non è una mancanza: `users.email` è
+/// la credenziale d'accesso e la chiave con cui tre cose si ritrovano — gli inviti
+/// pendenti, che uniscono per indirizzo; le policy che poggiano su
+/// `app.current_user_email()`; e la riga di `lease_parties` che l'accettazione
+/// cerca. Cambiarla bene richiede un giro di verifica sul nuovo indirizzo, che è
+/// fuori perimetro; cambiarla male dà un account che non riceve più niente e un
+/// invito che non si può più accettare, **con un sintomo muto in entrambi i casi**.
+///
+/// Nemmeno la password: quella ha un percorso suo, che pretende la vecchia.
+#[derive(Debug, Clone, Default)]
+pub struct UserProfileChanges {
+    pub full_name: Option<String>,
+    /// `Patch` e non `Option`: un telefono si toglie, e senza la distinzione fra
+    /// «non menzionato» e «azzerato» un PATCH non potrebbe mai cancellarlo.
+    pub phone: Patch<String>,
+    pub locale: Option<String>,
+}
+
+impl UserProfileChanges {
+    /// Nomi dei campi menzionati dal chiamante, nell'ordine di dichiarazione.
+    ///
+    /// Finiscono nell'evento al posto dei valori: `docs/04-sicurezza.md` vieta i
+    /// dati personali negli eventi di dominio, e un nome e un telefono lo sono.
+    #[must_use]
+    pub fn changed_field_names(&self) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        if self.full_name.is_some() {
+            fields.push("full_name");
+        }
+        if self.phone.is_some() {
+            fields.push("phone");
+        }
+        if self.locale.is_some() {
+            fields.push("locale");
+        }
+        fields
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.changed_field_names().is_empty()
     }
 }
 
@@ -177,6 +224,64 @@ impl User {
         }
     }
 
+    /// Sostituisce la password, e **sblocca l'account**.
+    ///
+    /// Il contatore dei tentativi falliti e il blocco temporaneo si azzerano, ed è
+    /// deliberato: chi ha dimostrato di controllare la casella di posta ha superato
+    /// una prova più forte di quella che il blocco difende, e lasciarlo fuori per
+    /// altri quindici minuti sarebbe punire la persona sbagliata.
+    ///
+    /// **Non revoca le sessioni**: quelle non sono un attributo dell'utente e
+    /// vivono in `app.user_sessions`. Lo fa il caso d'uso, che è anche l'unico
+    /// posto da cui si vede che le due cose vanno insieme ([ADR-052](../../../../docs/08-decisioni.md)).
+    pub fn set_password(&mut self, password_hash: PasswordHash) {
+        self.password_hash = Some(password_hash);
+        self.failed_login_count = 0;
+        self.locked_until = None;
+    }
+
+    /// Sostituisce la password **da dentro**, e non sblocca l'account.
+    ///
+    /// È la differenza con [`User::set_password`], ed è deliberata in due sensi.
+    /// Il primo è di privilegi: la migration `0038` concede al ruolo applicativo
+    /// `full_name`, `phone`, `locale` e `password_hash` e nient'altro, quindi
+    /// `failed_login_count` e `locked_until` **non sono scrivibili** da una
+    /// richiesta autenticata — un metodo che li azzerasse mentirebbe al chiamante,
+    /// perché la scrittura non arriverebbe in database.
+    ///
+    /// Il secondo è di significato: chi recupera la password ha dimostrato di
+    /// controllare la casella di posta, cioè ha superato una prova **diversa** da
+    /// quella che il blocco difende. Chi la cambia da dentro sta rifacendo la
+    /// stessa prova di sempre — conosce la password corrente — e non c'è motivo di
+    /// annullare un blocco che quella prova non supera. Un account bloccato lo
+    /// resta per i suoi quindici minuti.
+    pub fn change_password(&mut self, password_hash: PasswordHash) {
+        self.password_hash = Some(password_hash);
+    }
+
+    /// Applica una correzione parziale ai propri dati anagrafici.
+    ///
+    /// Restituisce `false` quando il chiamante non ha menzionato nessun campo: il
+    /// caso d'uso lo usa per non scrivere e non emettere un evento per una
+    /// richiesta vuota.
+    pub fn apply_profile(&mut self, changes: UserProfileChanges) -> DomainResult<bool> {
+        if changes.is_empty() {
+            return Ok(false);
+        }
+        if let Some(full_name) = changes.full_name {
+            self.full_name = text::required("full_name", &full_name, 200)?;
+        }
+        if let Some(phone) = changes.phone {
+            self.phone = text::optional("phone", phone, 32)?
+                .map(validate_phone)
+                .transpose()?;
+        }
+        if let Some(locale) = changes.locale {
+            self.locale = validate_locale(&text::required("locale", &locale, 35)?)?;
+        }
+        Ok(true)
+    }
+
     pub fn mark_email_verified(&mut self, now: DateTime<Utc>) {
         if self.email_verified_at.is_none() {
             self.email_verified_at = Some(now);
@@ -237,6 +342,54 @@ impl User {
     }
 }
 
+/// Il telefono, con la **stessa forma** del `CHECK` di `app.users.phone`.
+///
+/// La regola è ripetuta qui e nello schema di proposito, come per i limiti di
+/// lunghezza di `text`: senza, un numero malformato passerebbe il dominio e
+/// morirebbe sul vincolo del database, cioè con un `409 conflict.constraint_violated`
+/// dove il chiamante merita un `422` che nomina il campo.
+fn validate_phone(value: String) -> DomainResult<String> {
+    let digits = value.chars().filter(char::is_ascii_digit).count();
+    let shape_ok = value.chars().enumerate().all(|(index, c)| {
+        c.is_ascii_digit() || matches!(c, ' ' | '(' | ')' | '.' | '-') || (index == 0 && c == '+')
+    });
+    if !shape_ok || !(6..=32).contains(&value.chars().count()) || digits == 0 {
+        return Err(DomainError::validation(
+            "phone",
+            "must be 6 to 32 characters of digits, spaces and ( ) . - with an optional leading +",
+        ));
+    }
+    Ok(value)
+}
+
+/// La lingua, come etichetta BCP-47 plausibile.
+///
+/// Non si verifica che esista davvero — l'elenco delle lingue non appartiene a
+/// questo dominio — ma che abbia la **forma**, ed è una difesa concreta e non
+/// formale: il client formatta date e importi con `Intl` passando questo valore
+/// (regola 19), e `Intl.DateTimeFormat` **solleva** su un'etichetta malformata. Un
+/// `locale` di spazzatura accettato qui diventa una schermata che non si apre più,
+/// e il rimedio sarebbe un `UPDATE` a mano.
+fn validate_locale(value: &str) -> DomainResult<String> {
+    let well_formed = !value.is_empty()
+        && value.split('-').enumerate().all(|(index, part)| {
+            let len = part.chars().count();
+            part.chars().all(|c| c.is_ascii_alphanumeric())
+                && if index == 0 {
+                    (2..=8).contains(&len) && part.chars().all(|c| c.is_ascii_alphabetic())
+                } else {
+                    (1..=8).contains(&len)
+                }
+        });
+    if !well_formed {
+        return Err(DomainError::validation(
+            "locale",
+            "must be a BCP 47 language tag, such as `it-IT`",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +439,104 @@ mod tests {
         user.record_successful_login(Utc::now());
         assert_eq!(user.failed_login_count(), 0);
         assert!(user.locked_until().is_none());
+    }
+
+    #[test]
+    fn an_empty_patch_changes_nothing_and_says_so() {
+        let mut user = user();
+        assert!(
+            !user
+                .apply_profile(UserProfileChanges::default())
+                .expect("valido")
+        );
+        assert_eq!(user.full_name(), "Mario Rossi");
+    }
+
+    #[test]
+    fn a_profile_patch_sets_what_it_names_and_clears_what_it_nulls() {
+        let mut user = user();
+        assert!(
+            user.apply_profile(UserProfileChanges {
+                full_name: Some("  Maria Rossi  ".to_owned()),
+                phone: Some(Some("+39 333 1234567".to_owned())),
+                locale: Some("en-GB".to_owned()),
+            })
+            .expect("valido")
+        );
+        assert_eq!(user.full_name(), "Maria Rossi");
+        assert_eq!(user.phone(), Some("+39 333 1234567"));
+        assert_eq!(user.locale(), "en-GB");
+
+        // Il telefono si toglie, ed è la ragione per cui è un `Patch` e non un
+        // `Option`: il nome, non menzionato, resta quello di prima.
+        assert!(
+            user.apply_profile(UserProfileChanges {
+                phone: Some(None),
+                ..UserProfileChanges::default()
+            })
+            .expect("valido")
+        );
+        assert_eq!(user.phone(), None);
+        assert_eq!(user.full_name(), "Maria Rossi");
+    }
+
+    /// La forma del telefono è quella del `CHECK` di `app.users.phone`: senza
+    /// questa validazione il rifiuto arriverebbe dal database, come un conflitto di
+    /// vincolo invece che come un `422` che nomina il campo.
+    #[test]
+    fn a_malformed_phone_is_a_validation_error_and_not_a_constraint_violation() {
+        for bad in ["abc123", "12345", "+39-333-123456789012345678901234567890"] {
+            let mut user = user();
+            assert!(
+                user.apply_profile(UserProfileChanges {
+                    phone: Some(Some(bad.to_owned())),
+                    ..UserProfileChanges::default()
+                })
+                .is_err(),
+                "`{bad}` doveva essere rifiutato"
+            );
+        }
+    }
+
+    /// `Intl.DateTimeFormat` **solleva** su un'etichetta malformata: un `locale` di
+    /// spazzatura accettato qui diventa una schermata che non si apre più.
+    #[test]
+    fn a_malformed_locale_is_refused() {
+        for bad in ["", "it_IT", "it--IT", "1t-IT", "abcdefghi-IT"] {
+            let mut user = user();
+            assert!(
+                user.apply_profile(UserProfileChanges {
+                    locale: Some(bad.to_owned()),
+                    ..UserProfileChanges::default()
+                })
+                .is_err(),
+                "`{bad}` doveva essere rifiutato"
+            );
+        }
+    }
+
+    /// Cambiare la password **da dentro** non sblocca l'account, al contrario del
+    /// recupero: la migration `0038` non concede `locked_until` a una richiesta
+    /// autenticata, e un metodo che l'azzerasse mentirebbe al chiamante.
+    #[test]
+    fn changing_the_password_from_the_inside_does_not_lift_a_lockout() {
+        let mut user = user();
+        let now = Utc::now();
+        for _ in 0..User::MAX_FAILED_LOGINS {
+            user.record_failed_login(now, chrono::Duration::minutes(15));
+        }
+
+        user.change_password(PasswordHash::new("$argon2id$nuovo").expect("hash valido"));
+        assert_eq!(
+            user.password_hash().map(PasswordHash::as_str),
+            Some("$argon2id$nuovo")
+        );
+        assert!(user.locked_until().is_some());
+        assert_eq!(user.failed_login_count(), User::MAX_FAILED_LOGINS);
+
+        // Il recupero, invece, sblocca: le due prove d'identità sono diverse.
+        user.set_password(PasswordHash::new("$argon2id$recuperata").expect("hash valido"));
+        assert!(user.locked_until().is_none());
+        assert_eq!(user.failed_login_count(), 0);
     }
 }

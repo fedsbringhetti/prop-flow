@@ -41,7 +41,7 @@ docker run -d --name "$PROPFLOW_TEST_MINIO_CONTAINER" \
   -e "MINIO_ROOT_USER=${ACCESS_KEY}" \
   -e "MINIO_ROOT_PASSWORD=${SECRET_KEY}" \
   -p "${PROPFLOW_TEST_MINIO_PORT}:9000" \
-  minio/minio:latest server /data >/dev/null
+  quay.io/minio/minio:latest server /data >/dev/null
 
 # La sonda è quella dichiarata da MinIO: risponde 200 quando accetta richieste.
 for _ in $(seq 1 60); do
@@ -56,7 +56,7 @@ curl -fsS "${ENDPOINT}/minio/health/live" >/dev/null
 # un `create_bucket` e non deve averlo, perché in produzione significherebbe dare
 # all'API il privilegio di crearne.
 log "bucket ${PROPFLOW_TEST_S3_BUCKET}"
-docker run --rm --network host --entrypoint sh minio/mc:latest -c "
+docker run --rm --network host --entrypoint sh quay.io/minio/mc:latest -c "
   mc alias set test '${ENDPOINT}' '${ACCESS_KEY}' '${SECRET_KEY}' >/dev/null
   mc mb --ignore-existing 'test/${PROPFLOW_TEST_S3_BUCKET}' >/dev/null
 " >&2

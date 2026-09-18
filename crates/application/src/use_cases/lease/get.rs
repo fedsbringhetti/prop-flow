@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use propflow_domain::lease::{Lease, LeaseParty, LeaseStatus};
-use propflow_domain::ports::{Clock, UnitOfWorkFactory};
+use propflow_domain::ports::{Clock, LeaseLabels, UnitOfWorkFactory};
 use propflow_domain::shared::LeaseId;
 use propflow_domain::{Entity, RequestContext};
 
@@ -14,6 +14,9 @@ pub struct LeaseDetail {
     pub lease: Lease,
     pub effective_status: LeaseStatus,
     pub parties: Vec<LeaseParty>,
+    /// Come si chiama ciò che affitta: serve a dire *quale* contratto è questo,
+    /// e non appartiene all'aggregato.
+    pub labels: Option<LeaseLabels>,
 }
 
 /// Legge un contratto.
@@ -46,12 +49,14 @@ impl GetLease {
             .await?
             .ok_or(AppError::not_found(Entity::Lease))?;
         let parties = uow.lease_parties().list_for_lease(lease.id()).await?;
+        let labels = uow.leases().labels(&[lease.id()]).await?.into_iter().next();
 
         let today = self.clock.now().date_naive();
         Ok(LeaseDetail {
             effective_status: lease.effective_status(today),
             lease,
             parties,
+            labels,
         })
     }
 }

@@ -110,7 +110,13 @@ export function ExpenseGroupsPage() {
         <Async
           query={groups}
           isEmpty={(rows) => rows.length === 0}
-          empty={<Empty title={t.expense.groupsEmpty} hint={t.expense.groupsEmptyHint} />}
+          empty={
+            <Empty
+              title={t.expense.groupsEmpty}
+              hint={t.expense.groupsEmptyHint}
+              action={<NewGroupDialog />}
+            />
+          }
         >
           {(rows) => (
             /* Un elenco e non una tabella: le colonne sarebbero tre, e la

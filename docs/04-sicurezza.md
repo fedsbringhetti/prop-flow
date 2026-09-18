@@ -47,9 +47,19 @@ autoconsistente resta valido anche dopo un logout. La fonte di verità è la rig
 - In database va solo lo **hash SHA-256**. Un digest semplice basta: con 256 bit di
   entropia non esiste il dizionario che renderebbe utile un KDF lento. Ma una
   copia del dump non deve permettere di impersonare nessuno.
-- Vita: **30 giorni**.
+- Vita: **30 giorni**, e la finestra è **scorrevole**. I trenta giorni contano
+  dall'**ultimo uso** e non dal login: la rotazione emette un token nuovo con
+  `expires_at = now + 30 giorni`, quindi chi apre il prodotto anche una sola volta
+  al mese resta dentro a tempo indeterminato. **Non esiste un tetto assoluto**, né
+  un timeout di inattività più corto, né una scelta di chi entra: vale sempre e per
+  tutti.
+
+  Va scritto perché «vita: 30 giorni» si legge come un tetto, e non lo è. Le uniche
+  cose che chiudono una sessione sono il logout, il cambio o il recupero della
+  password, e il rilevamento del riuso. Che sia la forma giusta è una domanda
+  aperta e ha una voce sua in [12](12-da-fare.md).
 - **Rotazione a uso singolo**: ogni refresh consuma il token presentato ed emette
-  uno nuovo.
+  uno nuovo, con una scadenza nuova.
 - **Viaggia solo in un cookie** `HttpOnly; Secure; SameSite=Strict;
   Path=/api/v1/auth`, e non compare più nel corpo di alcuna risposta. Metterlo
   anche nel JSON del login vanificherebbe `HttpOnly`: un XSS lo leggerebbe da lì
@@ -109,6 +119,81 @@ presentare un token che abbiamo firmato noi, quindi si dice solo a chi già lo s
 Il **refresh** invece resta indistinto: lì separare "scaduto" da "riusato" direbbe a
 chi ha rubato un token se è ancora vivo.
 
+### Ci si registra solo da un invito, e l'invito dice chi si diventa
+
+Non esiste una registrazione aperta ([ADR-053](08-decisioni.md#adr-053)): `POST
+/auth/register` risponde `404 endpoint.not_found` come ogni rotta inesistente. Un
+account nasce in due modi soltanto, ed entrambi partono da un token che qualcuno ha
+emesso per una persona precisa:
+
+| Chi | Con che cosa | Che cosa riceve |
+|---|---|---|
+| un **inquilino** | l'invito che lo staff di un'organizzazione ha emesso per un contratto (`org_invitations`) | utente **dentro** quell'organizzazione, come `tenant`, con la parte contrattuale collegata — in una transazione, e **nessuna organizzazione propria** |
+| un **proprietario** | un invito di piattaforma emesso da uno script con il ruolo del migratore (`owner_invitations`, [§ Inviti da proprietario](#inviti-da-proprietario)) | utente, organizzazione personale e membership `owner` |
+
+**L'email non è un campo**: è quella dell'invito, e un corpo che la porta è un
+`422`. Chi vuole un altro indirizzo chiede un altro invito. Il confine fra chi
+amministra e chi abita passa quindi da chi può emettere quale token, non da un
+ramo del client — è ciò che [ADR-042](08-decisioni.md#adr-042) diceva mancare.
+
+**Un solo caso in cui il server distingue il genere del token**, ed è un `409` e non
+un oracolo: `register-from-invitation` con un token da proprietario **valido**
+risponde `409 invitation.owner_token`, perché il client deve chiedere il nome
+dell'organizzazione e rimandare a `accept-owner-invitation`. Lo riceve solo chi
+possiede quel token; un token inesistente, usato, scaduto o revocato riceve lo stesso
+`401 auth.invalid_credentials` su entrambe le rotte. Non c'è, e non ci sarà, una rotta
+di sola lettura che dica di che genere è un codice: risponderebbe anche per codici
+che chi chiede non possiede.
+
+### Il recupero della password non riapre nessuna di queste porte
+
+Le stesse tre proprietà, applicate a una rotta nuova. La risposta è `202` **sempre**,
+senza corpo: un indirizzo noto e uno sconosciuto ricevono la stessa cosa. Il **tempo**
+è lo stesso, perché per un indirizzo senza account si calcola comunque lo hash di un
+valore fittizio — è il punto 2 qui sopra, spostato dalla verifica Argon2 alla
+generazione del codice. E il limite agli invii rifiuta **in silenzio**: dire «troppo
+presto» confermerebbe che l'account esiste.
+
+Ne segue una cosa che va saputa: **un fallimento dell'invio non può essere riportato a
+chi chiede**. Si tenta solo per un indirizzo che ha un account, quindi qualunque
+differenza — un codice, un messaggio, una durata — riaprirebbe l'oracolo. Un relay di
+posta caduto è perciò **muto**, e a renderlo visibile è il controllo di prontezza, che
+interroga SMTP insieme al database.
+
+Il codice vale trenta minuti e una volta sola; sconosciuto, scaduto e già usato danno lo
+stesso `401`. In database c'è lo **hash**, come per il token d'invito e per il refresh:
+il valore in chiaro esiste solo nell'email.
+
+**Confermare revoca tutte le sessioni**, e la frase va letta con precisione: revoca i
+**refresh token**. L'access token è un JWT firmato e non è revocabile
+([ADR-012](08-decisioni.md#adr-012)), quindi chi ne ha uno in mano resta dentro fino
+alla scadenza — quindici minuti. La catena si chiude, e da lì in poi non si rinnova più.
+
+### Cambiare la password da dentro chiude tutto, come il recupero
+
+`POST /api/v1/me/password`, e **pretende la password corrente** anche se chi chiama è
+già autenticato. Non è cerimonia: il contesto è diverso da quello del recupero. Là la
+prova d'identità è il controllo della casella di posta; qui è **una sessione**, e una
+sessione può essere una scheda lasciata aperta. Senza la vecchia, chiunque si sieda
+davanti a un browser non bloccato si prende l'account per sempre.
+
+**Revoca tutte le sessioni, compresa quella da cui si è chiesto**, esattamente come il
+recupero — e l'uniformità è la decisione, presa contro l'alternativa che sembra più
+gentile. *«Cambiare la password chiude tutto»* è **una frase sola**, e va scritta in
+quattro posti: la schermata del recupero, quella del proprio account,
+[05](05-api.md#il-proprio-account) e questo documento. Due regole diverse per due
+percorsi che una persona non distingue divergono alla prima modifica. Vale identica la
+precisazione qui sopra: si revocano i **refresh token**, e chi ha un access token in
+mano resta dentro fino alla scadenza — ciò che muore all'istante è il **rinnovo**.
+
+**La password corrente errata dà `401` e non incrementa il contatore dei tentativi**, al
+contrario del login. Il blocco dopo dieci tentativi difende chi *non* è autenticato; qui
+chi prova ha già una sessione, e incrementarlo darebbe a chiunque rubi una scheda il
+modo di bloccare fuori il legittimo proprietario. Per la stessa ragione il cambio da
+dentro **non sblocca** un account bloccato, mentre il recupero sì: le due prove
+d'identità non sono la stessa, e il pool applicativo non ha comunque il privilegio di
+scrivere `locked_until` (migration `0038`).
+
 ### Blocco dopo tentativi falliti
 
 Dieci tentativi consecutivi bloccano l'account per **15 minuti**. Temporaneo e non
@@ -139,16 +224,37 @@ database**: la policy su `org_members` mostra a ciascuno le proprie appartenenze
 Non si distingue "organizzazione inesistente" da "non ne fai parte": la differenza
 rivelerebbe l'esistenza di organizzazioni altrui.
 
+**Chi è uscito dall'organizzazione del proprio token** ne ha ancora il ruolo nei claim
+per i quindici minuti dell'access token, e il middleware non lo rilegge: è il baratto di
+[ADR-012](08-decisioni.md#adr-012). Il confine che regge in quei minuti è la Row Level
+Security, e dalla migration `0041` regge anche per l'inquilino: `app.can_access_lease` e
+`app.can_access_property` chiedono la membership attiva oltre alla parte del contratto,
+come le policy dello staff passano già da `member_role`. Senza, chi usciva leggeva il
+proprio contratto disdetto e apriva segnalazioni nell'organizzazione lasciata finché il
+token non scadeva ([ADR-054](08-decisioni.md#adr-054)).
+
 ### Il pool privilegiato
 
 `begin_privileged()` usa un ruolo con `BYPASSRLS`. Ammesso **solo** dove un
 contesto di sicurezza non può esistere:
 
-- registrazione — utente, organizzazione e membership non esistono ancora;
 - login — la policy su `users` mostra una riga solo a chi è già identificato;
-- rotazione del refresh token — il chiamante presenta un token, non un'identità.
+- rotazione del refresh token — il chiamante presenta un token, non un'identità;
+- **recupero della password** — chi l'ha dimenticata non è autenticato per
+  definizione, quindi non c'è un `current_user_id` da installare e la Row Level
+  Security non ha nulla su cui appoggiarsi ([ADR-052](08-decisioni.md#adr-052));
+- **accettazione di un invito da proprietario** e **registrazione di un
+  inquilino da invito** — le due rotte di [ADR-053](08-decisioni.md#adr-053), e
+  le sole due porte di registrazione che esistono: creano l'utente (e per la
+  prima, l'organizzazione) quando nessuno dei due esiste ancora. La prova di possesso del token è tutta
+  dell'applicazione — hash e stato, con la stessa forma del recupero della
+  password — perché qui non c'è nessuna Row Level Security a fare da seconda
+  guardia, a differenza dell'accettazione di un invito da inquilino qui sotto.
 
-Ogni altro uso è un errore di progetto. Il logout, per contrasto, passa dal
+Ogni altro uso è un errore di progetto — e il **cambio password da autenticati** è il
+caso che mostra dove passa il confine: somiglia al recupero, condivide con esso la
+validazione e la revoca delle sessioni, e gira sul pool **applicativo**, perché chi lo
+chiede una sessione ce l'ha. Il logout, per contrasto, passa dal
 contesto normale: la policy su `user_sessions` impedisce di revocare la sessione di
 qualcun altro anche presentandone l'hash corretto.
 
@@ -182,6 +288,33 @@ distinguerli e i codici esistono, ma il caso d'uso li ripiega tutti su
 giorni**: abbastanza perché un'email non urgente venga letta, poco perché una casella
 compromessa mesi dopo valga ancora come credenziale.
 
+### Inviti da proprietario
+
+Stessa forma dell'invito da inquilino — token opaco a 256 bit, hash SHA-256 in
+database, sette giorni di validità di default — con due differenze che discendono
+da [ADR-053](08-decisioni.md#adr-053).
+
+**Nessuna prova aggiuntiva oltre il token.** L'invito da inquilino ha due controlli
+indipendenti: l'hash del token e la policy che verifica un invito pendente per
+l'email di chi è già autenticato. Qui non c'è un'email da confrontare con quella di
+un utente esistente — l'utente non esiste ancora — quindi il token è l'unica prova
+che esiste, ed è anche per questo che lo emette uno script con il ruolo del
+migratore e non una rotta: verificare che il possessore del token sia davvero un
+proprietario è un giudizio umano che sta fuori dal prodotto.
+
+**Quattro esiti, una sola risposta.** Scaduto, revocato e **già accettato** danno lo
+stesso `401 auth.invalid_credentials` di un token inesistente — a differenza
+dell'invito da inquilino, dove "già accettato" resta un `409` distinto perché chi lo
+presenta è già autenticato e merita di saperlo. Qui non lo è: distinguere "già
+accettato" da "mai esistito" sarebbe un oracolo su quali token sono stati emessi,
+esattamente come per un token mai emesso.
+
+**Il token non sblocca da solo il ruolo di piattaforma.** `platform_role = 'admin'`
+resta assegnato a mano — ADR-053 non lo tocca — e l'invito da proprietario dà
+soltanto ciò che la registrazione aperta dava a chiunque prima di ADR-053:
+un'organizzazione personale con sé stesso come `owner`. Le due cose restano indipendenti finché non nasce una rotta
+che usi `is_platform_admin()`.
+
 ## Dati personali
 
 ### Il perimetro dell'anagrafica è la casa, non l'organizzazione
@@ -209,6 +342,20 @@ compare in tre query, tutte nei flussi di autenticazione, tutte sul chiamante st
 Non prova che restringere sia sicuro. La verifica è una matrice di visibilità su uno
 scenario a due immobili, ed è un test di integrazione. Ragioni in
 [ADR-036](08-decisioni.md#adr-036).
+
+**Quella policy è ora portante, e non lo era.** La `0030` aveva scritto che la finestra
+per restringere l'avrebbe chiusa il primo client che leggesse un nome da lì: è la sezione
+5 delle segnalazioni, che risolve i nomi di chi ha segnalato, di chi ha in carico e di chi
+scrive nel thread leggendo `app.users.full_name` **sotto queste cinque condizioni**
+([ADR-049](08-decisioni.md#adr-049)). Da qui in avanti restringere `users_select` non è
+più gratuito, e i due rami che quel modulo poggia sono `shares_home_with` — il coinquilino
+legge il nome dell'altro — e `is_my_staff` — l'inquilino legge il nome di chi ha in carico
+la sua segnalazione.
+
+La proiezione è di **una colonna sola**, `full_name`, e non dell'aggregato `User`: email e
+telefono restano dove sono. È la stessa forma di `app.property_residents` — proiettare
+invece di rendere leggibile — e la ragione per cui un nome che non torna non è un errore,
+ma un'etichetta neutra a schermo.
 
 I due rami sullo staff non sono decorazione e **non sono l'uno l'inverso dell'altro**:
 senza il terzo il proprietario perderebbe di vista i propri inquilini, senza il quarto
@@ -253,6 +400,14 @@ Regola: **niente dati personali nei log, nelle tracce, negli eventi.**
   tecnico resta nei log correlato da quello. Un messaggio di errore del database in
   una risposta HTTP è ricognizione gratuita.
 - Gli eventi di dominio trasportano identificatori e nomi di campo, non valori.
+- **L'adattatore SMTP è il posto più facile in cui far uscire dati personali**, perché
+  una notifica *deve* trasportarli: senza l'indirizzo non si recapita niente. Un client
+  che registrasse la richiesta scriverebbe destinatario, oggetto e corpo insieme. Non
+  si registra nulla dell'invio riuscito, e del fallito solo la **classe** dell'errore.
+  `Notification` e `NotificationContent` hanno `Debug` redatto, e l'adattatore non lo
+  annulla. Il fallimento di un invito registra l'identificatore dell'invito, mai il
+  destinatario né il token; quello di un codice di recupero non registra nemmeno
+  l'identificatore, perché lì l'unica cosa da cui si risalirebbe è l'indirizzo.
 
 ## Difese al bordo HTTP
 

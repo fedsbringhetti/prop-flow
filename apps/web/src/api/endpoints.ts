@@ -1,5 +1,6 @@
 import type { ApiClient } from './client'
 import type {
+  Account,
   BillOcrStatus,
   BillStatus,
   Charge,
@@ -17,6 +18,7 @@ import type {
   LeaseDetail,
   LeaseParty,
   LeasePartyRole,
+  LeftOrganization,
   Organization,
   Page,
   Payment,
@@ -72,15 +74,91 @@ function query(params: Record<string, string | number | boolean | undefined>): s
  *
  * È la sola rotta dell'API che risponda anche senza un'organizzazione attiva, e
  * non è una deroga: «quali organizzazioni sono mie» non appartiene a nessuna di
- * esse. `ApiClient` manda comunque `X-Org-Id` quando ce n'è una — la risposta non
- * cambia — perché l'eccezione sta nell'endpoint e non nel client, e un secondo
- * modo di non mandare l'header sarebbe un secondo modo di sbagliarlo.
+ * esse.
+ *
+ * # `withoutOrganization`, e perché non era così
+ *
+ * Mandava `X-Org-Id` come ogni altra chiamata, con la ragione scritta che
+ * l'eccezione stesse nell'endpoint e non nel client. Sembrava innocuo — la
+ * risposta non cambia — e non lo era: **questa è la richiesta che ripara
+ * l'organizzazione attiva quando è sbagliata**, e mandare l'header la faceva
+ * rifiutare proprio nel caso in cui serviva.
+ *
+ * `Authenticated` risolve il ruolo per qualunque richiesta che porti `X-Org-Id` e
+ * risponde `403 org.not_a_member` su un'appartenenza non attiva — **prima**
+ * dell'handler. Chi usciva da un'organizzazione restava con il suo identificatore
+ * in `localStorage`, e da quel momento l'unica chiamata che avrebbe potuto
+ * correggerlo portava addosso il motivo del rifiuto. React Query tiene i dati
+ * dell'ultimo successo quando un refetch fallisce, quindi l'elenco continuava a
+ * contenere l'organizzazione lasciata e il riallineamento non partiva mai.
+ * Sopravviveva anche al ricaricamento, perché il ricordo viene riselezionato prima
+ * che l'elenco sia chiesto.
+ *
+ * Questa è quindi la seconda chiamata che l'header non lo manda, e per la stessa
+ * ragione della prima: dichiarare un'organizzazione è ciò che qui va evitato.
  *
  * **Nessun cursore**: le organizzazioni di una persona sono la propria più quelle
  * di chi le affitta casa.
  */
 export function getOrganizations(client: ApiClient): Promise<Items<Organization>> {
-  return client.get<Items<Organization>>('/organizations')
+  return client.get<Items<Organization>>('/organizations', { withoutOrganization: true })
+}
+
+/**
+ * Esce da un'organizzazione.
+ *
+ * **`withoutOrganization`**, come `getOrganizations`: si esce anche da
+ * un'organizzazione che non è quella attiva, e `POST /organizations/{id}/leave`
+ * prende l'identificatore dal percorso — mandare `X-Org-Id` non serve e
+ * confonderebbe il caso in cui si sta uscendo proprio da quella attiva.
+ *
+ * `409 membership.lease_in_force` con un contratto in essere — il rifiuto arriva
+ * dalla policy, non da un `if` — `409 membership.last_owner` per l'ultimo
+ * proprietario, `409 membership.already_left` se si era già usciti.
+ */
+export function leaveOrganization(client: ApiClient, id: Uuid): Promise<LeftOrganization> {
+  return client.post<LeftOrganization>(`/organizations/${id}/leave`, {}, { withoutOrganization: true })
+}
+
+// ---------------------------------------------------------------------------
+// Il proprio account
+
+/**
+ * I propri dati, **senza `X-Org-Id`**: non appartengono a nessuna organizzazione,
+ * e pretenderne una attiva romperebbe il caso di chi è appena uscito dall'unica in
+ * cui abitava.
+ */
+export function getAccount(client: ApiClient): Promise<Account> {
+  return client.get<Account>('/me', { withoutOrganization: true })
+}
+
+/**
+ * Corregge i propri dati anagrafici. `PATCH` parziale: un campo assente resta,
+ * `phone: null` lo azzera.
+ *
+ * **`email` non c'è**, ed è la scelta della sezione: mandarla darebbe `422` con
+ * `errors[].field = "email"`. Non è un campo che il client offre, e per questo il
+ * tipo dell'input non lo prevede.
+ */
+export function updateAccount(
+  client: ApiClient,
+  input: { full_name?: string; phone?: string | null; locale?: string },
+): Promise<Account> {
+  return client.patch<Account>('/me', input, { withoutOrganization: true })
+}
+
+/**
+ * Cambia la password **da dentro**: pretende quella vecchia e revoca **tutte** le
+ * sessioni, compresa la corrente. Il client lo dice prima di mandare.
+ *
+ * `401` per la vecchia sbagliata, `422` per la nuova troppo debole. `204` senza
+ * corpo quando riesce.
+ */
+export function changePassword(
+  client: ApiClient,
+  input: { current_password: string; new_password: string },
+): Promise<void> {
+  return client.post('/me/password', input, { withoutOrganization: true })
 }
 
 // ---------------------------------------------------------------------------
@@ -93,7 +171,14 @@ export function getDashboard(client: ApiClient): Promise<Dashboard> {
 // Immobili
 
 export interface PropertyFilters {
-  status?: PropertyStatus | undefined
+  /**
+   * **Solo stati memorizzati.** `rented` e `partially_rented` sono derivati dai
+   * contratti e rispondono `422` con `property.derived_status_filter`: si filtra
+   * con `occupied`, come si fa con `in_force` sui contratti.
+   */
+  status?: Exclude<PropertyStatus, 'rented' | 'partially_rented'> | undefined
+  /** Immobili con almeno un contratto in essere, o senza nessuno. */
+  occupied?: boolean | undefined
   city?: string | undefined
   after?: Uuid | undefined
 }
@@ -103,7 +188,13 @@ export function listProperties(
   filters: PropertyFilters = {},
 ): Promise<Page<Property>> {
   return client.get<Page<Property>>(
-    `/properties${query({ limit: LIMIT, status: filters.status, city: filters.city, after: filters.after })}`,
+    `/properties${query({
+      limit: LIMIT,
+      status: filters.status,
+      occupied: filters.occupied,
+      city: filters.city,
+      after: filters.after,
+    })}`,
   )
 }
 
@@ -162,8 +253,11 @@ export interface CreateRoomInput {
   name: string
   monthly_rent?: string
   size_sqm?: string
+  floor?: number
   has_private_bathroom?: boolean
   is_furnished?: boolean
+  /** 0–100 come stringa decimale. Assente significa «in parti uguali». */
+  utility_share_percent?: string
 }
 
 export function createRoom(
@@ -232,6 +326,26 @@ export function createLease(client: ApiClient, input: CreateLeaseInput): Promise
   return client.post<Lease>('/leases', input)
 }
 
+/**
+ * Corregge una parte, con la semantica `PATCH`: assente = invariato, `null` =
+ * azzerato.
+ *
+ * `email` la rifiuta l'API con `409 lease.party_email_locked` se la parte è già
+ * collegata a un utente — è ciò a cui l'invito è intestato.
+ */
+export function correctLeaseParty(
+  client: ApiClient,
+  partyId: Uuid,
+  patch: Record<string, unknown>,
+): Promise<LeaseParty> {
+  return client.patch<LeaseParty>(`/lease-parties/${partyId}`, patch)
+}
+
+/** Toglie una parte inserita per sbaglio: `204`. Rifiutata se ha un utente. */
+export function removeLeaseParty(client: ApiClient, partyId: Uuid): Promise<void> {
+  return client.delete(`/lease-parties/${partyId}`)
+}
+
 export interface AddPartyInput {
   role: LeasePartyRole
   full_name: string
@@ -255,6 +369,16 @@ export function activateLease(client: ApiClient, id: Uuid): Promise<Lease> {
 
 export function terminateLease(client: ApiClient, id: Uuid, reason?: string): Promise<Lease> {
   return client.post<Lease>(`/leases/${id}/terminate`, reason ? { reason } : {})
+}
+
+/**
+ * Annulla un contratto mai entrato in vigore.
+ *
+ * **Senza corpo**, a differenza della disdetta: non c'è stato alcun rapporto,
+ * quindi non c'è una ragione da registrare accanto a una data che non esiste.
+ */
+export function cancelLease(client: ApiClient, id: Uuid): Promise<Lease> {
+  return client.post<Lease>(`/leases/${id}/cancel`, {})
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +409,36 @@ export function acceptInvitation(
   return client.post('/auth/accept-invitation', { token }, { withoutOrganization: true })
 }
 
+/**
+ * Chiede un codice di recupero.
+ *
+ * **Risponde sempre `202`**, per un indirizzo noto come per uno sconosciuto:
+ * distinguerli sarebbe un oracolo per sapere chi ha un account. Il client non ha
+ * quindi niente da ramificare sull'esito, e la schermata lo dice a parole.
+ */
+export function requestPasswordReset(client: ApiClient, email: string): Promise<void> {
+  return client.post('/auth/password-reset', { email }, { withoutOrganization: true })
+}
+
+/**
+ * Consuma il codice e imposta la password nuova.
+ *
+ * `401` per un codice sconosciuto, scaduto o già usato — i tre casi non si
+ * distinguono — e `422` per una password troppo debole, che invece è un errore del
+ * chiamante e va detto.
+ */
+export function confirmPasswordReset(
+  client: ApiClient,
+  code: string,
+  newPassword: string,
+): Promise<void> {
+  return client.post(
+    '/auth/password-reset/confirm',
+    { code, new_password: newPassword },
+    { withoutOrganization: true },
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Segnalazioni
 
@@ -306,6 +460,16 @@ export interface OpenTicketInput {
   category?: TicketCategory
   /** Assente vale `medium`. */
   priority?: TicketPriority
+  /**
+   * Dichiara la segnalazione di **interesse comune per la casa**.
+   *
+   * Assente vale `false`, che è il comportamento di sempre. Con `true` la leggono
+   * anche i residenti dell'immobile — la caldaia condominiale interessa a tutti —
+   * e con essa il thread e le fotografie, perché il confine è
+   * `app.can_access_ticket`, che serve quattro policy. Non concede nessuna
+   * scrittura.
+   */
+  visible_to_residents?: boolean
 }
 
 /**
@@ -414,10 +578,11 @@ export function triageTicket(
  *
  * Il corpo vuole un `assignee_id`, e il client passa **sempre chi chiama**:
  * l'azione è «prendi in carico». Non è una semplificazione — un'organizzazione ha
- * esattamente uno staff, perché l'unico modo di diventarlo è `RegisterOwner` e
- * `InviteTenant` scrive `role: tenant` fisso: `OrgRole::Manager` è nell'enum e
- * nessuno lo scrive mai. Un menù delle persone sarebbe vuoto. Il giorno in cui
- * esisterà un invito che crea un gestore, quell'azione diventa un menù.
+ * esattamente uno staff, perché l'unico modo di diventarlo è accettare un invito
+ * da proprietario (ADR-053) e `InviteTenant` scrive `role: tenant` fisso:
+ * `OrgRole::Manager` è nell'enum e nessuno lo scrive mai. Un menù delle persone
+ * sarebbe vuoto. Il giorno in cui esisterà un invito che crea un gestore,
+ * quell'azione diventa un menù.
  */
 export function assignTicket(client: ApiClient, id: Uuid, assigneeId: Uuid): Promise<Ticket> {
   return client.post<Ticket>(`/tickets/${id}/assign`, { assignee_id: assigneeId })
@@ -452,9 +617,15 @@ export function closeTicket(client: ApiClient, id: Uuid, resolutionNotes?: strin
  * Spetta a **chi ha segnalato**, oltre che allo staff, e a un coinquilino l'API
  * risponde `403 ticket.not_yours` — non `org.staff_role_required`: non gli manca
  * un ruolo, gli manca l'essere stato lui a segnalare, e i due rimedi sono diversi.
+ *
+ * **Il motivo è obbligatorio**, e senza l'API risponde `422`. Da quando un thread
+ * chiuso non riceve più messaggi, riaprire è l'unica via per dire «non è risolto»:
+ * il motivo è l'unica cosa che spiega perché la segnalazione è tornata viva, e
+ * finisce **nel thread** come primo messaggio del giro nuovo — dove sopravvive
+ * alla chiusura successiva, che invece cancella `resolution_notes`.
  */
-export function reopenTicket(client: ApiClient, id: Uuid): Promise<Ticket> {
-  return client.post<Ticket>(`/tickets/${id}/reopen`, {})
+export function reopenTicket(client: ApiClient, id: Uuid, reason: string): Promise<Ticket> {
+  return client.post<Ticket>(`/tickets/${id}/reopen`, { reason })
 }
 
 /**
@@ -485,6 +656,34 @@ export function updateTicketCosts(
   patch: Record<string, unknown>,
 ): Promise<Ticket> {
   return client.patch<Ticket>(`/tickets/${id}`, patch)
+}
+
+export interface CorrectTicketReportInput {
+  title?: string
+  description?: string
+  visible_to_residents?: boolean
+}
+
+/**
+ * Corregge ciò che chi ha segnalato aveva dichiarato: titolo, descrizione e la
+ * casella della visibilità.
+ *
+ * **È una rotta a sé e non il `PATCH` dei costi allargato.** Quello avrebbe due
+ * autorizzazioni diverse secondo i campi presenti nel corpo — i costi allo staff,
+ * il testo a chi ha segnalato — che è il genere di cosa che si sbaglia in
+ * silenzio. Qui l'autorizzazione è una sola: lo staff sempre, chi ha segnalato
+ * finché la segnalazione è `open`, con la forma dell'annullamento.
+ *
+ * **Categoria e priorità non ci sono**: sono il lavoro del triage. Assente =
+ * invariato; nessuno dei tre campi si azzera, quindi `null` qui non significa
+ * niente.
+ */
+export function correctTicketReport(
+  client: ApiClient,
+  id: Uuid,
+  input: CorrectTicketReportInput,
+): Promise<Ticket> {
+  return client.patch<Ticket>(`/tickets/${id}/report`, input)
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +749,16 @@ export function updateBill(
 
 export function validateBill(client: ApiClient, id: Uuid): Promise<UtilityBill> {
   return client.post<UtilityBill>(`/utility-bills/${id}/validate`, {})
+}
+
+/**
+ * Dichiara la bolletta pagata **al fornitore**.
+ *
+ * Non è un pagamento del modulo dei pagamenti, che registra il denaro in entrata:
+ * qui si dichiara un fatto avvenuto fuori dal prodotto, e la data è adesso.
+ */
+export function markBillPaid(client: ApiClient, id: Uuid): Promise<UtilityBill> {
+  return client.post<UtilityBill>(`/utility-bills/${id}/pay`, {})
 }
 
 export function voidBill(client: ApiClient, id: Uuid): Promise<UtilityBill> {
@@ -1020,6 +1229,18 @@ export function listExpenses(
 /** Il dettaglio **con le quote**, la cui somma è esattamente l'importo. */
 export function getExpense(client: ApiClient, id: Uuid): Promise<Expense> {
   return client.get<Expense>(`/expenses/${id}`)
+}
+
+/**
+ * Annulla una spesa: soft delete, ed **esce dai saldi da sola**.
+ *
+ * Anche dopo un regolamento confermato, e i saldi cambiano di conseguenza: un
+ * regolamento salda un saldo, non una spesa. Chi può: chi l'ha registrata, chi
+ * l'ha anticipata, o lo staff — altrimenti `403 expense.not_yours`. Dopo, la
+ * spesa non si legge più, e un secondo annullamento risponde `404`.
+ */
+export function cancelExpense(client: ApiClient, id: Uuid): Promise<Expense> {
+  return client.post<Expense>(`/expenses/${id}/cancel`, {})
 }
 
 export interface RecordExpenseInput {

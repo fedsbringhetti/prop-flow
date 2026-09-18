@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use propflow_domain::RequestContext;
-use propflow_domain::identity::RefreshSession;
+use propflow_domain::identity::{RefreshSession, RevocationReason};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::SessionId;
 
@@ -59,7 +59,7 @@ impl RefreshSessionUseCase {
         if current.was_rotated() {
             let revoked = uow
                 .sessions()
-                .revoke_all_for_user(current.user_id())
+                .revoke_all_for_user(current.user_id(), RevocationReason::RefreshTokenReuse)
                 .await?;
             uow.commit().await?;
             tracing::warn!(

@@ -93,12 +93,13 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `settlement.not_addressed_to_you` | 403 | confermare o rifiutare un regolamento spetta a **chi riceve**: è l'unico che sa se il bonifico è arrivato |
 | `settlement.not_declared_by_you` | 403 | ritirare un regolamento spetta a **chi lo ha dichiarato**. A chi riceve tocca il rifiuto, che è un fatto diverso |
 | `expense_group.membership_not_yours` | 403 | si esce da un gruppo di spesa per sé stessi; togliere qualcun altro richiede lo staff. Dalla `0029` lo dice anche la RLS: il codice qui è la versione parlante di un rifiuto che la policy darebbe comunque |
+| `expense.not_yours` | 403 | una spesa la annulla chi l'ha **registrata**, chi l'ha **anticipata**, o lo staff. Qui la RLS è più larga — `expenses_update` ammette qualunque membro attivo del gruppo — quindi è un confine del contratto dell'API e non di sicurezza |
 
 **Risorse non trovate**
 
 | `code` | Stato |
 |---|---|
-| `property.not_found` · `room.not_found` · `lease.not_found` · `invitation.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` · `expense_group.not_found` · `expense.not_found` · `settlement.not_found` | 404 |
+| `property.not_found` · `room.not_found` · `lease.not_found` · `lease.party_not_found` · `invitation.not_found` · `membership.not_found` · `document.not_found` · `ticket.not_found` · `utility_bill.not_found` · `charge.not_found` · `payment.not_found` · `expense_group.not_found` · `expense.not_found` · `settlement.not_found` | 404 |
 | `endpoint.not_found` | 404 (rotta sconosciuta) |
 
 **Conflitti**
@@ -114,6 +115,7 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `utility_bill.duplicate` | 409 | fattura già registrata per questo fornitore: `utility_bills_dedup_uk` è unico su `(org_id, supplier_vat, invoice_number)` e scatta solo quando **entrambi** sono valorizzati |
 | `payment.idempotency_key_reused` | 409 | la chiave di idempotenza è già stata usata per un **altro** pagamento. Non è il doppio invio, che risponde `200`: è la stessa chiave verso un addebito diverso, oppure una chiave già usata da qualcuno di cui il chiamante non vede i pagamenti |
 | `expense_group.membership_exists` | 409 | la persona è già membro attivo del gruppo. `expense_group_members_group_user_uk` non è parziale: il rientro è un aggiornamento, non un secondo inserimento |
+| `invitation.owner_token` | 409 | `register-from-invitation` ha ricevuto un token da **proprietario**, pendente e valido: il client deve rimandare lo stesso corpo, più il nome dell'organizzazione, a `accept-owner-invitation` |
 | `conflict.constraint_violated` | 409 | vincolo violato che l'API non sa ancora nominare |
 
 **Stato non ammesso**
@@ -138,6 +140,9 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `expense_group.membership_unchanged` | 409 | è già uscito, oppure c'è già: l'operazione non avrebbe niente da fare |
 | `expense.payer_not_in_group` | 409 | chi ha anticipato non è un membro attivo. Lo schema non lo impone, e senza il controllo quel credito non comparirebbe in nessun saldo |
 | `settlement.invalid_transition` | 409 | conferma, rifiuto o ritiro non ammessi nello stato attuale: `pending` è l'unico da cui si esce, e ne ha **tre** uscite |
+| `membership.lease_in_force` | 409 | non si esce da un'organizzazione in cui si è parte di un contratto in essere, garanti compresi. Dalla `0039` lo dice anche la RLS: il codice qui è la versione parlante di un rifiuto che la policy darebbe comunque |
+| `membership.last_owner` | 409 | l'ultimo proprietario non esce: l'organizzazione resterebbe senza nessuno che la amministri, e non c'è nessuna operazione del prodotto per rientrarci. È l'unico dei tre che **nessuna policy garantisce** |
+| `membership.already_left` | 409 | si era già usciti. La riga resta — uscire è uno stato — quindi il caso è osservabile e merita un messaggio invece di un secondo `200` muto |
 | `session.refresh_token_reused` | 409 | refresh token già ruotato |
 
 **Validazione e interni**
@@ -202,8 +207,8 @@ scrittura, evento o riga di audit.
 
 | Metodo | Percorso | Auth | Note |
 |---|---|---|---|
-| GET | `/health` | no | Liveness. **Non tocca il database**: se lo facesse, un'indisponibilità di PostgreSQL farebbe riavviare in loop tutti i pod, che è il contrario di quel che serve mentre il database torna su |
-| GET | `/ready` | no | Readiness: verifica il database. `503` se non raggiungibile |
+| GET | `/health`, `/api/v1/health` | no | Liveness. **Non tocca il database**: se lo facesse, un'indisponibilità di PostgreSQL farebbe riavviare in loop tutti i pod, che è il contrario di quel che serve mentre il database torna su |
+| GET | `/ready`, `/api/v1/ready` | no | Readiness: verifica il database e la posta. `503` se una delle due non risponde. Le due forme sono lo stesso handler: la radice per l'`healthcheck` del container, il prefisso per chi passa dal reverse proxy, che inoltra solo `/api/v1/*` ([07](07-operazioni.md#sonde)) |
 | GET | `/docs` | no | Swagger UI |
 | GET | `/openapi.json` | no | Specifica |
 
@@ -211,10 +216,47 @@ scrittura, evento o riga di audit.
 
 | Metodo | Percorso | Auth | Esito |
 |---|---|---|---|
-| POST | `/api/v1/auth/register` | no | `201` con `user_id` e `organization_id`. Crea utente e organizzazione personale in una transazione |
 | POST | `/api/v1/auth/login` | no | `200` con la sessione, più il **cookie** del refresh token |
 | POST | `/api/v1/auth/refresh` | cookie | `200`, ruota il refresh token e riposa il cookie. **Nessun corpo** |
 | POST | `/api/v1/auth/logout` | sì, più il cookie | `204`, idempotente. Cancella il cookie |
+| POST | `/api/v1/auth/accept-owner-invitation` | no | `201` con la sessione e il cookie, come il login. Crea proprietario e organizzazione personale dietro un token di piattaforma (ADR-053) |
+| POST | `/api/v1/auth/register-from-invitation` | no | `201` con la sessione e il cookie, come il login. Registra un inquilino **dentro l'organizzazione di chi lo ha invitato**, con zero organizzazioni proprie (ADR-053) |
+| POST | `/api/v1/auth/password-reset` | no | `202` **sempre**, senza corpo. Se quell'indirizzo ha un account, riceve un codice |
+| POST | `/api/v1/auth/password-reset/confirm` | no | `204`. **Revoca tutte le sessioni.** `401` se il codice non vale, `422` se la password è debole |
+
+Il **cambio password da autenticati** non è qui: è
+[`/api/v1/me/password`](#il-proprio-account), sotto, perché chi lo chiede **è** già
+dentro. Le due rotte qui sopra servono a chi **non può entrare**.
+
+#### Il recupero della password
+
+Quattro proprietà, e tre si dimenticano. Vedi [ADR-052](08-decisioni.md#adr-052).
+
+**La risposta è la stessa per un indirizzo noto e per uno sconosciuto**, e non ha un
+corpo: `202` a chiunque. Distinguerli sarebbe un oracolo per sapere chi ha un account
+([ADR-017](08-decisioni.md#adr-017)). **Anche il tempo è lo stesso**: per un indirizzo
+senza account si calcola comunque lo hash di un valore fittizio, altrimenti la latenza
+direbbe ciò che la risposta tace. Il client scrive «se quell'indirizzo ha un account,
+riceverà un codice», che è la verità e non una scusa.
+
+**Il codice si incolla, non si clicca.** L'email porta un codice e non un link: un token
+in un URL finisce nella cronologia, nel `Referer` e nei log di ogni proxy davanti al
+client. È la stessa decisione presa per l'invito ([ADR-045](08-decisioni.md#adr-045)).
+Vale **trenta minuti** e una volta sola; sconosciuto, scaduto e già usato danno lo stesso
+`401`.
+
+**Confermare revoca tutte le sessioni** — ma sono i **refresh token**, non gli access
+token, che sono JWT firmati e non revocabili ([ADR-012](08-decisioni.md#adr-012)): chi ne
+ha uno in mano resta dentro fino alla scadenza, quindici minuti. La catena si chiude
+comunque, e da lì in poi non si rinnova più.
+
+**Il limite agli invii è per email**: un secondo codice chiesto entro due minuti viene
+rifiutato **in silenzio**, con lo stesso `202`. Dirlo sarebbe di nuovo l'oracolo — «troppo
+presto» conferma che l'account esiste.
+
+**Il cambio password da autenticati è [`/api/v1/me/password`](#il-proprio-account)**,
+non qui: questa coppia di rotte serve a chi **non può entrare**, non a chi è già dentro.
+Le due condividono la revoca di tutte le sessioni e la validazione della password.
 
 Risposta di sessione, nella forma attesa da un client OAuth2 **meno il refresh
 token**:
@@ -290,11 +332,58 @@ Il **logout senza cookie resta `204`**. Non c'è nulla da revocare, il cookie si
 cancella comunque, e costringere un client che l'ha già perso a distinguere due
 esiti che per lui sono lo stesso non lo aiuterebbe.
 
+#### Registrarsi è entrare su invito, non aprire una porta
+
+[ADR-053](08-decisioni.md#adr-053): **`POST /auth/register` non esiste più**
+(`F6`) — non «richiede un token»: sparisce, perché un corpo con un campo in
+più su una rotta che si chiama ancora `register` insegnerebbe il contrario di
+ciò che questa decisione stabilisce. Risponde `404 endpoint.not_found`, come
+qualunque altra rotta sconosciuta, per ogni verbo. Le due vie sotto sono le
+sole su cui il prodotto atterra. Entrambe rispondono `201` con la stessa
+`SessionResponse` e lo stesso cookie del login: chi le chiama è dentro, non
+deve rifare un secondo `POST /auth/login`.
+
+**`POST /auth/accept-owner-invitation`** (`token`, `full_name`, `password`,
+`organization_name?`): crea un proprietario e la sua organizzazione personale
+dietro un token emesso da uno script in `ops/` e non su una rotta aperta a
+chiunque. Il token è quello che
+[07 — Operazioni](07-operazioni.md#emettere-un-invito-da-proprietario) descrive
+come emetterlo e consegnarlo.
+
+**`POST /auth/register-from-invitation`** (`token`, `full_name`, `password`):
+registra un inquilino **a partire dall'invito**, in una transazione: non esiste
+un istante in cui l'inquilino è registrato e senza organizzazione. Chi si
+registra così entra **nell'organizzazione di chi lo ha invitato**, con zero
+organizzazioni proprie: non passa dall'accettazione di un invito da
+proprietario, e quindi non erediterebbe mai un'organizzazione personale
+vuota. **Nessun campo `email`**: è quella dell'invito, e si riconosce e si
+rifiuta con `422` se il corpo la porta, con la stessa forma di `email` in
+`PATCH /me` — un campo sconosciuto si ignora ovunque nell'API, ma questo non
+lo è: è quello che chiunque proverà a mandare per primo.
+
+**Le quattro cause di rifiuto rispondono tutte `401 auth.invalid_credentials`**,
+identico in ogni caso, su entrambe le rotte: token inesistente, scaduto, usato
+o revocato. Distinguerle sarebbe un oracolo su quali token sono stati emessi —
+la stessa ragione di [ADR-017](08-decisioni.md#adr-017) per l'invito
+all'inquilino e per il codice di recupero. **Un'eccezione sola**, e solo su
+`register-from-invitation`: un token che corrisponde a un invito da
+**proprietario** pendente e valido dà `409 invitation.owner_token` invece di
+`401`, perché il client deve chiedere il nome dell'organizzazione e rimandare
+lo stesso corpo a `accept-owner-invitation`. Resta vero che un token che non
+esiste, in **nessuna** delle due tabelle, o che non è più valido in
+**entrambe**, dà sempre `401`: il `409` esce solo a chi possiede davvero un
+token da proprietario, quindi non è un secondo oracolo.
+
+Rate limit: **nessuno**, oggi, né su queste due rotte né su `login` — è una
+premessa del piano che l'esecuzione ha trovato imprecisa, non un debito
+introdotto qui.
+
 ### Organizzazioni
 
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
 | GET | `/api/v1/organizations` | **autenticato** | `200` con le organizzazioni di cui si è membro attivo, ognuna con `id`, `name`, `slug` e il proprio `role` |
+| POST | `/api/v1/organizations/{id}/leave` | **autenticato** | `200` con `organization_id` e `role`. Esce dall'organizzazione: `status` passa a `left`, **la riga resta**. `404 membership.not_found`, `409 membership.lease_in_force` / `membership.last_owner` / `membership.already_left` |
 
 ```json
 {
@@ -335,6 +424,201 @@ Compaiono le sole appartenenze **attive**. Non è prudenza: `app.member_role` es
 `status = 'active'`, quindi un'appartenenza sospesa o lasciata comparirebbe nel
 menù e poi non concederebbe una sola riga — una schermata vuota senza errore, che è
 il modo peggiore di sbagliare.
+
+#### Uscire da un'organizzazione
+
+`POST /api/v1/organizations/{id}/leave`. Non prende corpo, e **prende un
+identificatore** al contrario di `/api/v1/me`: non si agisce su di sé, si agisce su
+un **rapporto**, e quale sia va detto. Non dev'essere quella attiva — chi ne ha due
+può uscire da quella che non sta guardando — e per questo la rotta non pretende
+`X-Org-Id`.
+
+```json
+{ "organization_id": "019fce41-8a02-7c19-9d33-2b7cc9107ef1", "role": "tenant" }
+```
+
+**Uscire è uno stato, non una cancellazione.** `app.org_members.status` passa a
+`left` e la riga **resta**. Con `deleted_at` sarebbe sparita da
+`OrgMemberRepository::find`, e `org_members_org_user_uk` è unico e **non parziale**:
+chi fosse uscito così non potrebbe più rientrare né con un `INSERT`, che sbatte sul
+vincolo, né con un `UPDATE` su una riga che non si trova. È il difetto che la
+[`0029`](03-modello-dati.md) ha già pagato sulle spese co-living.
+
+**Chi è uscito rientra dalla stessa porta**: accettando un invito nuovo.
+`AcceptInvitation` riattiva una membership non attiva invece di inserirne una — è il
+ramo che [ADR-051](08-decisioni.md#adr-051) aveva previsto per iscritto lasciandolo
+non scritto, *«perché finché non si esce non serve a nessuno»*. Il **ruolo non si
+tocca**: chi era `owner` ed è uscito rientra `owner`, e il privilegio di colonna
+della `0039` lo garantisce comunque, perché `role` non è scrivibile dal pool
+applicativo.
+
+I tre rifiuti, e **chi li garantisce davvero**:
+
+| Codice | Stato | Garantito da |
+|---|---|---|
+| `membership.not_found` | `404` | la Row Level Security: la riga non torna |
+| `membership.lease_in_force` | `409` | la `WITH CHECK` di `org_members_update_self`, che interroga `app.has_lease_in_force` |
+| `membership.last_owner` | `409` | il **service layer**, e niente altro |
+| `membership.already_left` | `409` | il dominio: `OrgMember::leave` su una riga già `left` |
+
+I primi due sono la versione **parlante** di un rifiuto che il database darebbe
+comunque: senza la lettura anticipata, il secondo risponderebbe
+`auth.denied_by_policy`, che nella tassonomia di [ADR-022](08-decisioni.md#adr-022)
+significa «difetto nostro» e manderebbe a cercare un guasto invece di una disdetta.
+Il caso d'uso e la policy interrogano **la stessa funzione**, perché due definizioni
+di «in essere» divergerebbero e il sintomo sarebbe una schermata che dice di sì e
+un'`UPDATE` che dice di no.
+
+Il terzo no, ed è l'unico che vive per intero nel service layer: lo schema dichiara
+«almeno un owner per org» come invariante applicativa, perché un trigger cross-row
+sarebbe workflow nel database. Senza, uscire dalla propria organizzazione personale
+la lascerebbe **senza nessuno che la amministri** — e `organizations_select` è
+`is_org_member(id)`, quindi immobili, contratti e addebiti resterebbero in una riga
+che non è più visibile a nessuno, senza nessuna operazione del prodotto per
+rientrarci.
+
+**Il divieto vale anche per lo staff**, ed è una riga in più nella migration: le
+policy permissive si combinano in **OR**, quindi la `WITH CHECK` di
+`org_members_update` — `is_org_staff(org_id)` — avrebbe lasciato passare l'uscita di
+un proprietario con un contratto in essere, cioè lo stesso caso dalla porta accanto.
+La `0039` la emenda con lo stesso ramo.
+
+**Chi esce dall'unica organizzazione in cui abita resta con la propria**, personale
+e vuota: è il caso di [ADR-045](08-decisioni.md#adr-045) al contrario. Il client lo
+dice **prima**, non lo lascia scoprire dopo con un riepilogo vuoto e nessuna
+spiegazione.
+
+**Togliere qualcun altro dalla propria organizzazione non esiste**, ed è il gemello
+di questa rotta e non questa rotta: vedi [12](12-da-fare.md).
+
+<a id="il-proprio-account"></a>
+
+### Il proprio account
+
+| Metodo | Percorso | Ruolo minimo | Esito |
+|---|---|---|---|
+| GET | `/api/v1/me` | **autenticato** | `200` con identificatore, email, nome, telefono, lingua e la data di verifica dell'email |
+| PATCH | `/api/v1/me` | **autenticato** | `200` con i dati aggiornati. Corpo vuoto: `200` invariato, nessuna scrittura |
+| POST | `/api/v1/me/password` | **autenticato** | `204`. Pretende la password corrente e **revoca tutte le sessioni** |
+
+```json
+{
+  "id": "019fce2b-77aa-7a1e-9d7c-2c0a5e1b44c1",
+  "email": "mario.rossi@example.it",
+  "full_name": "Mario Rossi",
+  "phone": "+39 333 1234567",
+  "locale": "it-IT",
+  "created_at": "2026-01-14T09:12:00Z"
+}
+```
+
+**Il percorso non prende mai un identificatore di utente**, ed è la forma e non una
+comodità: è ciò che tiene chiusa la domanda di
+[ADR-036](08-decisioni.md#adr-036) — nessuna rotta proietta un utente per
+identificatore. Un `PATCH /users/{id}` che accettasse **solo** il proprio sarebbe la
+stessa cosa con una guardia applicativa davanti, cioè la porta aperta e un cartello:
+la prima persona che rimuovesse quella guardia «uniformando» le rotte non
+troverebbe niente che glielo impedisca. Chi si legge viene dal token.
+
+**Risponde senza `X-Org-Id`**, come `/organizations`, e per la stessa ragione: i
+propri dati non appartengono a nessuna organizzazione. Pretenderne una attiva
+romperebbe proprio il caso in cui la rotta serve di più — chi è appena uscito
+dall'unica in cui abitava. Regge perché `users_select` ammette
+`id = app.current_user_id()` come primo ramo, e quel ramo non guarda
+`app.current_org_id()`.
+
+**Non escono `platform_role`, `failed_login_count` e `locked_until`.** Il ruolo di
+piattaforma è una proprietà del sistema e non dell'account, e i due contatori sono
+una difesa: mostrarli direbbe a chi ha rubato una scheda quanto gli manca per
+bloccare fuori il proprietario.
+
+#### Che cosa si corregge, e che cosa no
+
+`full_name`, `phone`, `locale`. Semantica del `PATCH` di sempre: campo omesso
+significa invariato, `null` esplicito cancella — e `phone` è l'unico dei tre che si
+può azzerare.
+
+**L'email si legge e non si modifica**, e questa è la decisione che sembra una
+mancanza e non lo è. `users.email` non è un dato anagrafico: è **la credenziale
+d'accesso**, ed è la chiave con cui tre cose si ritrovano.
+
+- `app.has_pending_invitation` fa `JOIN app.users u ON u.email = i.email`: cambiare
+  l'email **rompe in silenzio** ogni invito pendente per quell'indirizzo;
+- `app.current_user_email()` è ciò su cui poggiano quattro policy della `0018`;
+- `lease_parties.email` è come l'accettazione trova la propria riga.
+
+Cambiarla bene richiede un giro di verifica sul nuovo indirizzo — cioè la verifica
+dell'email, che è deliberatamente fuori perimetro — e una decisione su che cosa
+succede agli inviti pendenti. Farla male significa un account che non riceve più
+niente e un invito che non si può più accettare, con un sintomo muto in entrambi i
+casi.
+
+**`email` nel corpo si riconosce e si rifiuta con `422`**, invece di essere ignorata
+come ogni altro campo sconosciuto. È l'eccezione alla tolleranza dell'API, e la
+ragione è che non è un campo sconosciuto: è quello che chiunque proverà a mandare
+per primo. Ignorarla darebbe `200` con l'indirizzo di prima — cioè esattamente il
+sintomo muto che questa scelta esiste per non produrre.
+
+Il telefono e la lingua sono **validati nel dominio** e non solo nello schema.
+`app.users.phone` ha un `CHECK` con una forma precisa, e senza la stessa regola nel
+dominio un numero malformato morirebbe sul vincolo, cioè con un `409
+conflict.constraint_violated` dove il chiamante merita un `422` che nomina il campo.
+`locale` dev'essere un'etichetta BCP 47 plausibile per una ragione concreta e non
+formale: il client formatta date e importi con `Intl` passando quel valore, e
+`Intl.DateTimeFormat` **solleva** su un'etichetta malformata — un `locale` di
+spazzatura accettato qui diventa una schermata che non si apre più.
+
+#### Cambiare la password da dentro
+
+`POST /api/v1/me/password`, con `current_password` e `new_password`.
+
+**La vecchia serve**, anche se chi chiama è già autenticato, perché il contesto è
+diverso da quello del recupero: là la prova d'identità è il controllo della casella
+di posta, qui è **una sessione** — e una sessione può essere una scheda lasciata
+aperta. Senza la vecchia, chiunque si sieda davanti a un browser non bloccato si
+prende l'account per sempre.
+
+**Revoca tutte le sessioni, compresa la propria**, esattamente come
+[ADR-052](08-decisioni.md#adr-052) fa per il recupero. La scelta è l'**uniformità**,
+ed è stata presa contro l'alternativa che sembra più gentile — tenere viva la
+sessione da cui si sta cambiando, riconoscendola dal cookie di refresh che la
+richiesta porta già. Il motivo: *«cambiare la password chiude tutto»* è **una frase
+sola**, e va scritta in quattro posti — la schermata del recupero, quella del
+proprio account, [04](04-sicurezza.md) e questo documento. Due regole diverse per
+due percorsi che una persona non distingue sono due frasi da tenere allineate, e la
+seconda diverge alla prima modifica. L'attrito che si paga è piccolo e visibile:
+chi cambia rientra subito con la password che ha appena scelto.
+
+**E «tutte le sessioni» sono i refresh token, non gli access token.** L'access token
+è un JWT firmato e non è revocabile ([ADR-012](08-decisioni.md#adr-012)): chi ne ha
+uno in mano resta dentro fino alla scadenza, quindici minuti. Ciò che muore
+all'istante è il **rinnovo**. È la nota di ADR-052 che si dimentica di continuo, ed
+è la stessa su cui un test della 5-quater aveva asserito la cosa sbagliata.
+
+**La password corrente errata dà `401` e non scrive niente — nemmeno il contatore
+dei tentativi.** Il blocco dopo dieci tentativi difende il *login*, dove chi prova
+non è autenticato; qui chi prova ha già una sessione, e incrementarlo darebbe a
+chiunque rubi una scheda il modo di bloccare fuori il legittimo proprietario. La
+`0038` non concede comunque quella colonna al pool applicativo.
+
+**Il `204` non ripulisce il cookie di refresh**, ed è una scelta: il cookie è
+limitato a `Path=/api/v1/auth`, quindi questa rotta non lo raggiunge nemmeno; e il
+refresh che porta è ormai revocato, quindi il prossimo rinnovo fallisce e il client
+torna all'accesso da sé.
+
+#### Che cosa scrive, e con quale privilegio
+
+Gira sul pool **applicativo** — chi cambia la propria password è autenticato, quindi
+la regola 27 non ammette il privilegiato — e questo è il motivo per cui la
+[`0038`](03-modello-dati.md) esiste. Quella migration revoca al ruolo applicativo
+l'`UPDATE` sull'intera `app.users` e lo riconcede su quattro colonne sole:
+`full_name`, `phone`, `locale`, `password_hash`. Tutto il resto — `platform_role`,
+`status`, `email`, i due contatori del blocco — lo scrive il pool privilegiato, dove
+vivono login e recupero password.
+
+**`/api/v1/me` è la prima rotta che scrive `app.users` dal pool applicativo**, ed è
+la ragione per cui quella migration entra in questa fetta e non in una sua: finché
+non esisteva, la porta era chiusa da un privilegio che nessuno usava.
 
 ### Dashboard
 
@@ -518,6 +802,31 @@ Il tipo di contratto **non si dichiara**: si deduce dalla presenza di `room_id`.
 Dichiararlo a parte sarebbe soltanto un modo di contraddirlo, e il `CHECK`
 `leases_target_ck` lo rifiuterebbe.
 
+#### `property_label`, `room_name`, `primary_tenant`: come si chiama un contratto
+
+I tre campi che rendono un contratto riconoscibile in un elenco. Un contratto non ha un
+nome proprio in database, e senza di loro l'elenco mostra tipo e date: venticinque righe
+identiche.
+
+| Campo | Assente quando |
+|---|---|
+| `property_label` | l'immobile è **archiviato** — la riga non si legge più, il contratto resta |
+| `room_name` | il contratto è sull'**immobile intero**, che è il caso normale |
+| `primary_tenant` | non c'è ancora una parte marcata `is_primary` — una bozza vuota |
+
+Vengono da un **modello di lettura** e non dall'aggregato: il nome di un immobile
+appartiene all'immobile, e un contratto che se lo portasse dietro avrebbe due fonti di
+verità che divergono alla prima correzione. Una query per pagina, con `LEFT JOIN` e
+`deleted_at IS NULL` sulle righe collegate.
+
+`primary_tenant` completa gli altri due dove non bastano: due contratti sulla stessa
+stanza in due anni diversi hanno lo stesso immobile e la stessa stanza, e a distinguerli
+è chi ci abita. È il `full_name` denormalizzato su `lease_parties`, che sopravvive a chi
+se ne va ([ADR-043](08-decisioni.md#adr-043)).
+
+**Assenti sulle risposte a una singola operazione** — attivazione, disdetta,
+annullamento — dove chi chiama ha già il contratto sotto gli occhi.
+
 #### `status` ed `effective_status`
 
 La risposta porta due stati:
@@ -676,14 +985,15 @@ domanda «qual è il documento di questa riga».
 | GET | `/api/v1/tickets` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `open` |
 | GET | `/api/v1/tickets/{id}` | membro | `200` con lo storico degli stati, o `404` |
 | PATCH | `/api/v1/tickets/{id}` | staff | `200`. Solo i costi. `409` se annullata |
-| POST | `/api/v1/tickets/{id}/messages` | membro | `201`. `403` a un inquilino che chiede `is_internal` |
+| PATCH | `/api/v1/tickets/{id}/report` | staff, o chi ha segnalato finché è `open` | `200`. Titolo, descrizione, `visible_to_residents`. `409` se annullata |
+| POST | `/api/v1/tickets/{id}/messages` | membro | `201`. `403` a un inquilino che chiede `is_internal`. **`409 ticket.thread_closed` se la segnalazione non è più in lavorazione** |
 | GET | `/api/v1/tickets/{id}/messages` | membro | `200`, pagina keyset. Le note interne non compaiono all'inquilino |
 | POST | `/api/v1/tickets/{id}/triage` | staff | `200`. Imposta categoria e priorità |
 | POST | `/api/v1/tickets/{id}/assign` | staff | `200`. Corpo: `assignee_id` |
 | POST | `/api/v1/tickets/{id}/start` | staff | `200`. Avvia la lavorazione, o la riprende |
 | POST | `/api/v1/tickets/{id}/wait` | staff | `200`. Corpo: `waiting_on` (`tenant` o `owner`) |
 | POST | `/api/v1/tickets/{id}/close` | staff | `200`. Valorizza `closed_at` e, se inviato, `resolution_notes` |
-| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Riporta a `open` e azzera `closed_at` e `resolution_notes` |
+| POST | `/api/v1/tickets/{id}/reopen` | **chi ha segnalato**, o staff | `200`. Corpo: `reason`, **obbligatorio**. Riporta a `open`, azzera `closed_at` e `resolution_notes`, e scrive il motivo nel thread |
 | POST | `/api/v1/tickets/{id}/cancel` | staff, o chi ha segnalato finché è `open` | `200` |
 
 L'apertura è annidata sotto l'immobile perché una segnalazione nasce **sempre** su un
@@ -693,8 +1003,55 @@ dei documenti.
 
 **Ruolo minimo `membro` in apertura, elenco, dettaglio e thread.** È il modulo in cui
 l'inquilino prende la parola: fino a qui poteva solo leggere. Quali segnalazioni siano
-sue lo decide `app.can_access_ticket` — chi ha aperto, chi è assegnato, e chi è parte
-del contratto indicato — non un ramo applicativo sul ruolo.
+sue lo decide `app.can_access_ticket` — chi ha aperto, chi è assegnato, chi è parte
+del contratto indicato, e chi **abita l'immobile** se la segnalazione è dichiarata di
+interesse comune — non un ramo applicativo sul ruolo.
+
+#### La visibilità è una scelta di chi apre
+
+`visible_to_residents` nasce `false`, che è il comportamento di sempre: una segnalazione
+la vedono lo staff, chi l'ha aperta, chi ce l'ha in carico e chi è parte del contratto
+indicato. Con `true` la leggono anche i **residenti dell'immobile** — la caldaia
+condominiale interessa a tutti — e con essa il **thread**, lo **storico** e le
+**fotografie**, perché il ramo sta dentro `app.can_access_ticket`, che quattro policy
+consultano. Il predicato dei residenti è `app.property_residents`, la funzione che la
+`0030` ha già introdotto, e non una terza definizione di «chi abita qui».
+
+**Non concede nessuna scrittura**: `tickets_update` ha un predicato in linea — staff,
+`reported_by`, `assigned_to` — e non passa da quella funzione. Un residente vede e non
+riapre, non annulla, non corregge. Le **note interne** restano invisibili: le filtra un
+`AND` a parte di `ticket_messages_select`.
+
+Migration `0035`, [ADR-047](08-decisioni.md#adr-047).
+
+#### Chi è chi: i nomi viaggiano nella risposta
+
+`TicketResponse` porta `reported_by_name` e `assigned_to_name`; `TicketMessageResponse`
+porta `author_name`. Sono **facoltativi**, e l'assenza non è un errore: la policy
+`users_select` non concede a chiunque la riga di chiunque, e chi legge deve mettere
+un'etichetta neutra — mai l'identificatore ([ADR-043](08-decisioni.md#adr-043)).
+
+I nomi viaggiano **dentro** la risposta e non da una rotta che risolva le persone, che
+[ADR-036](08-decisioni.md#adr-036) e ADR-043 hanno già scartato due volte. Il ruolo resta
+accanto al nome e non al suo posto: `author_kind` dice da che parte del rapporto sta chi
+scrive, il nome dice chi è — e in un co-living due coinquilini sono entrambi `tenant`.
+Vedi [ADR-049](08-decisioni.md#adr-049).
+
+#### E dove: `property_label` e `room_name`
+
+`TicketResponse` porta anche i nomi **del posto**: `property_label` e `room_name`. Stessa
+forma e stessa regola dell'assenza — campo mancante, etichetta neutra, mai
+l'identificatore — con una differenza fra i due:
+
+| Campo | Assente quando |
+|---|---|
+| `property_label` | l'immobile è **archiviato**. La segnalazione resta, il nome no |
+| `room_name` | la segnalazione riguarda l'**immobile intero**, che è il caso normale |
+
+La query è un `LEFT JOIN` con `deleted_at IS NULL` sulle righe collegate, **una per
+pagina**. Con un `INNER JOIN` sparirebbero dall'elenco tutte le segnalazioni di ogni
+immobile archiviato, che è il modo di far scomparire righe che esistono per andare a
+prendere un nome — la trappola che la sezione 3 aveva già pagato sui contratti.
 
 #### Il ciclo di vita
 
@@ -713,6 +1070,12 @@ lavorazione: si entra con `/wait` e si esce con `/start`. Servono a dire perché
 segnalazione è ferma — «aspetto che tu sia in casa» è lo stato più comune di una
 manutenzione reale, e senza un nome resta una segnalazione che sembra abbandonata.
 
+**Su una segnalazione che non è più in lavorazione il thread si legge e non si
+scrive.** `POST /messages` risponde `409 ticket.thread_closed` su `closed`, `cancelled`
+e `resolved`; `GET /messages` continua a rispondere `200` con il thread intero. È una
+regola di **dominio** — il predicato è `TicketStatus::is_working`, lo stesso di `close` e
+`cancel` — e non un controllo di interfaccia. Chi vuole dire «non è risolto» **riapre**.
+
 **La riapertura è dell'inquilino**, ed è ciò che rende la segnalazione un rapporto
 invece di una casella postale: senza, un guasto ricorrente diventa una segnalazione
 nuova ogni volta e lo storico si frantuma proprio dove servirebbe intero. Solo **chi
@@ -726,6 +1089,15 @@ gli manca un ruolo — nessun ruolo gli darebbe questa operazione — gli manca 
 stato lui a segnalare, e i due rimedi sono diversi. `org.staff_role_required` resta
 invece corretto in un caso: chi ha segnalato prova ad **annullare** una segnalazione
 già in lavorazione, dove il ruolo di staff serve davvero.
+
+**Riaprire pretende un `reason`**, e l'asimmetria con `resolution_notes` — che è
+facoltativo — è deliberata: la chiusura lascia comunque `closed_at` e una riga di
+storico, mentre da quando il thread chiuso non riceve messaggi la riapertura senza motivo
+non lascerebbe niente che la spieghi. Il motivo **diventa il primo messaggio del thread**,
+pubblico e di chi ha riaperto: il thread non si riscrive mai, quindi sopravvive alla
+chiusura successiva, e una segnalazione riaperta tre volte ha tre motivi, che una colonna
+non terrebbe. `ticket_status_history.reason` resta **non scritta**, e la ragione è in
+[ADR-050](08-decisioni.md#adr-050).
 
 Chiudere accetta un corpo con `resolution_notes`, facoltativo: è la risposta a «com'è
 andata a finire», che altrimenti andrebbe dedotta rileggendo il thread. La vede
@@ -746,13 +1118,19 @@ Ognuna ha effetti propri — `closed_at`, una riga di storico, un evento — e u
 che li producesse di soppiatto renderebbe invisibile che siano avvenuti. È la stessa
 scelta di attivazione e disdetta dei contratti.
 
-Il `PATCH` resta per ciò che è davvero un attributo: `estimated_cost` e `actual_cost`,
-con la semantica generale del PATCH (assente = invariato, `null` = azzerato). Il resto
-non è modificabile, e non per dimenticanza:
+Il `PATCH` di `/tickets/{id}` resta per ciò che è davvero un attributo:
+`estimated_cost` e `actual_cost`, con la semantica generale del PATCH (assente =
+invariato, `null` = azzerato). Il resto:
 
-- **titolo e descrizione** sono il testo con cui una persona ha descritto un guasto in
-  un momento preciso, e il thread esiste apposta per correggere il tiro. Un titolo
-  riscritto dopo tre messaggi rende incomprensibili i tre messaggi;
+- **titolo, descrizione e visibilità** si correggono da `PATCH /tickets/{id}/report`, che
+  è una **rotta a sé** e non un allargamento di questa. La ragione è
+  l'autorizzazione: qui è staff, là è «staff sempre, chi ha segnalato finché è `open`», e
+  una rotta sola avrebbe due autorizzazioni **secondo i campi presenti nel corpo** — che è
+  il genere di cosa che si sbaglia in silenzio, perché con la semantica del `PATCH` i
+  campi sono assenti e un campo aggiunto un anno dopo sfuggirebbe al ramo.
+  [ADR-048](08-decisioni.md#adr-048) spiega perché la scelta di prima — «il testo non si
+  modifica, il thread esiste per correggere il tiro» — è stata revocata, e che cosa la
+  revoca costa;
 - **categoria e priorità** si impostano con il triage, perché sono ciò che `triaged`
   *significa*: lasciarle modificabili altrove renderebbe lo stato una dichiarazione
   non verificabile;
@@ -887,6 +1265,44 @@ bolletta invece resta dov'è**: lì non c'è nessuna affermazione da smentire, c
 proposta di una macchina, e correggerla *è* la revisione. Vedi
 [Lettura automatica](#lettura-automatica-delle-bollette).
 
+#### `recharged_amount`: quanto è già stato riaddebitato
+
+`UtilityBillResponse` porta la somma delle quote già riaddebitate. Il **residuo** è
+`total_amount` meno quel valore, e serve a una cosa sola: riaddebitare una bolletta
+d'immobile a tre contratti sono tre sottrazioni a mente, e a mente si sbagliano.
+
+**Non è un vincolo, ed è deliberato.** Nessuno verifica che le quote sommino al totale:
+lo schema non ha il vincolo e un controllo applicativo cadrebbe fra due riaddebiti
+concorrenti — il criterio di [ADR-015](08-decisioni.md#adr-015), per cui un'invariante
+del genere sta nel database o non sta da nessuna parte. **Riaddebitare più del totale
+resta possibile**, e il residuo va sotto zero.
+
+Gli addebiti **annullati non contano**: `void` dice «non doveva essere chiesto», quindi
+quella quota torna disponibile. Gli **stornati sì**: erano dovuti, e rinunciare a
+incassarli non disfa il riaddebito.
+
+**`null` per chi non è staff**, come `estimated_cost` sulle segnalazioni ma con una
+ragione più stringente. La somma si legge sotto Row Level Security e `charges_select`
+mostra all'inquilino le sole quote sue: il numero che riceverebbe sarebbe **parziale e
+indistinguibile da un totale**. Un numero sbagliato è peggio di un numero assente.
+
+#### `property_label` e `room_name`: il **contratto imputato**, non l'immobile della bolletta
+
+`UtilityBillResponse` porta i due nomi, e nominano il **contratto** a cui la bolletta è
+imputata: è ciò a cui il collegamento porta, e il nome di un contratto è la casa più la
+stanza. L'immobile *della bolletta* resta `property_id` e non ha un nome nella risposta.
+
+L'assenza ha quindi **due cause diverse**, entrambe legittime: la bolletta non è imputata
+a nessun contratto — il caso della bolletta d'immobile intero, che non la vede nessun
+inquilino — oppure l'immobile di quel contratto è archiviato. In entrambi i casi il campo
+manca e chi legge mette un'etichetta neutra, mai l'identificatore
+([ADR-043](08-decisioni.md#adr-043), [ADR-049](08-decisioni.md#adr-049)).
+
+I due campi ci sono su **ogni** risposta che porti una bolletta, transizioni comprese, e
+non sulle sole letture: una risposta che li portasse a volte sì e a volte no non
+permetterebbe di distinguere «archiviato» da «non risolto», e un client mostrerebbe
+l'etichetta neutra subito dopo un'azione riuscita.
+
 #### Lettura automatica delle bollette
 
 Allegare una scansione a una bolletta **in bozza** accoda un job di OCR. Il
@@ -988,6 +1404,18 @@ riferimento polimorfico dei documenti, come per ogni altro aggregato.
 | POST | `/api/v1/charges/{charge_id}/payment-declarations` | membro | `201`. Vedi [Pagamenti](#pagamenti) |
 | GET | `/api/v1/charges/{charge_id}/payments` | membro | `200`, pagina keyset |
 
+#### `property_label` e `room_name`
+
+`ChargeResponse` porta i nomi del contratto a cui l'addebito è emesso: **la casa e la
+stanza**, che è come `R14` aveva già risolto lo stesso difetto nell'elenco dei contratti.
+Un collegamento etichettato «Contratti» non dice a chi il denaro è chiesto, e in un
+co-living con una riga per stanza non distingue niente.
+
+`room_name` è assente sui contratti sull'immobile intero, che è il caso normale;
+`property_label` è assente quando l'immobile è archiviato. Vale anche qui la regola
+dell'etichetta neutra e la presenza su **ogni** risposta, transizioni comprese: vedi
+[le bollette](#property_label-e-room_name-il-contratto-imputato-non-limmobile-della-bolletta).
+
 #### Le due uscite non sono simmetriche
 
 **`void` è ammesso dal solo `issued`; `write-off` anche da `partially_paid`.**
@@ -1017,8 +1445,9 @@ scrivere. Prorogare una scadenza si fa **annullando e riemettendo**
 **Non esiste nemmeno uno stato di bozza.** `draft` è nell'enum del database e nessuno
 lo scrive: la policy `charges_select` non guarda lo stato, quindi una bozza comparirebbe
 nell'elenco di chi deve pagarla esattamente come un addebito emesso; ed emettere non
-manda niente a nessuno, perché la porta `Notifier` è dichiarata e senza adattatore. Fra
-i due stati non resterebbe alcuna differenza osservabile.
+manda niente a nessuno, perché `NotificationContent` non ha una variante per gli
+addebiti — la posta recapita inviti e codici di recupero, non solleciti. Fra i due stati
+non resterebbe alcuna differenza osservabile.
 
 **`void` e `write_off` non sono sinonimi.** `void` dice «non doveva essere chiesto»,
 `write_off` dice «era dovuto e ci rinunciamo». Entrambi escono dall'insoluto, ma solo il
@@ -1285,6 +1714,7 @@ riga di questo modulo entra nella sua contabilità.
 | POST | `/api/v1/expense-groups/{id}/expenses` | membro | `201` con le **quote** |
 | GET | `/api/v1/expense-groups/{id}/expenses` | membro | `200`, pagina keyset |
 | GET | `/api/v1/expenses/{id}` | membro | `200` con le quote |
+| POST | `/api/v1/expenses/{id}/cancel` | **chi l'ha registrata o anticipata**, o staff | `200`. Soft delete: **esce dai saldi**, anche dopo un regolamento |
 | POST | `/api/v1/expense-groups/{id}/settlements` | membro | `201`, stato **`pending`**: non muove i saldi |
 | GET | `/api/v1/expense-groups/{id}/settlements` | membro | `200`. `?status=pending` è la coda di chi deve confermare |
 | POST | `/api/v1/settlements/{id}/confirm` | **chi riceve**, o staff | `200`. Da qui i saldi si muovono |
@@ -1296,6 +1726,27 @@ concessione: le policy della migration `0014` erano già scritte così —
 `expense_groups_insert` chiede `is_org_member`, tutto il resto chiede
 `can_access_expense_group`. Un co-living che non può organizzarsi da sé non è il
 prodotto descritto in [01 — Prodotto](01-prodotto.md).
+
+#### Una spesa sbagliata si annulla, e i saldi cambiano
+
+`POST /expenses/{id}/cancel` scrive `deleted_at` — la migration `0028` concede la
+colonna «per l'annullamento», e `app.expenses` non ha uno stato: il soft delete **è**
+l'annullamento. `app.v_expense_group_balances` filtra `deleted_at IS NULL` dalla
+`0027`, quindi la spesa esce dai saldi da sola, senza nessuna vista da toccare.
+
+**Annullare una spesa già regolata cambia i saldi**, ed è voluto: un regolamento salda
+un *saldo*, non una spesa. Se Marco ha rimborsato 33,33 € a Giulia per una spesa che
+poi si rivela sbagliata, annullarla lascia il regolamento e toglie la spesa — e Giulia
+si ritrova in debito di 33,33 € verso Marco, che è esattamente lo stato vero. Il
+client lo dice nella conferma; l'API non chiede nulla di più.
+
+Dopo, la spesa **non si legge più**: `GET /expenses/{id}` risponde `404`, l'elenco non
+la contiene, e un secondo annullamento risponde `404` e non `409` — è la stessa forma
+di immobili, stanze e documenti, e un client che agisce su più righe la tratta come
+«era già così». Non esiste un ripristino: una spesa annullata per sbaglio si riscrive.
+
+Su un gruppo **archiviato** non si annulla (`409 expense_group.archived`): disfare una
+spesa è una scrittura sul conto, e un conto chiuso non ne accetta.
 
 #### Chi crea un gruppo ne è già membro
 
@@ -1534,23 +1985,34 @@ Emettere l'invito crea anche la **parte contrattuale** con `user_id` nullo, se n
 esiste già una riga con quella email: è ciò che l'invitato collegherà a sé, e senza
 di essa accettare non lo renderebbe parte di nulla.
 
-Il token in chiaro esiste **solo** nella risposta a `POST .../invitations`, come il
-refresh token: in database ne resta lo hash. L'invio dell'email non è implementato —
-la porta `Notifier` è dichiarata e senza adattatore — quindi è il proprietario a
-consegnare il token.
+Il token in chiaro esiste **solo** nella risposta a `POST .../invitations` e
+nell'email, come il refresh token: in database ne resta lo hash.
+
+**L'email parte dopo il commit e best-effort**, e il token resta nella risposta anche
+per questo: se il relay non risponde, l'invito è valido lo stesso e il proprietario
+consegna il codice come faceva prima: legare la validità di un invito alla
+disponibilità di un servizio esterno sarebbe il baratto sbagliato. Il fallimento va nei
+log **senza il destinatario e senza il token**.
+
+**L'invito non passa dall'outbox**, e non è un dettaglio implementativo: gli eventi di
+dominio trasportano identificatori e nomi di campo, mai valori, quindi un worker che
+leggesse `TenantInvited` non avrebbe niente da spedire. Metterci il token dentro
+significherebbe scrivere una credenziale in una tabella fatta per essere pubblicata su
+un broker.
 
 `accept-invitation` richiede l'autenticazione ma **non** l'appartenenza: è
 l'operazione che la crea. Chi accetta non deve passare `X-Org-Id`, perché di quella
 organizzazione non è ancora membro.
 
-**Dopo l'accettazione `X-Org-Id` serve, e non basta rifare il login.** La
-registrazione crea sempre un'organizzazione personale di cui l'utente è owner, e
-l'organizzazione predefinita all'accesso è quella con il ruolo più alto — owner,
-poi manager, poi tenant (`pick_default_membership` in `application::use_cases::auth`).
-Un inquilino che si è registrato da sé ha quindi sempre la propria organizzazione in
-testa, e senza `X-Org-Id` un `GET /api/v1/leases` gli risponde `200` con zero
-elementi: nessun errore, nessun indizio. È registrato fra i debiti noti in
-[09 — Stato e roadmap](09-stato-e-roadmap.md#debiti-tecnici-noti).
+**Dopo l'accettazione `X-Org-Id` serve.** L'organizzazione predefinita all'accesso è
+quella con il ruolo più alto — owner, poi manager, poi tenant
+(`pick_default_membership` in `application::use_cases::auth`) — e per chi è owner
+altrove e accetta un invito da inquilino la nuova organizzazione non è quella in
+testa: senza `X-Org-Id` il contesto ricade sull'organizzazione del token, e un
+`GET /api/v1/leases` risponde `200` con i contratti di **quella** — nessun errore,
+nessun indizio. Il client la manda sempre (regola
+24 di `CLAUDE.md`). Il caso dell'inquilino che aveva un'organizzazione propria in
+testa non esiste più da [ADR-053](08-decisioni.md#adr-053).
 
 Un token sconosciuto e un token valido intestato a un'altra email danno lo stesso
 `401` con lo stesso corpo: distinguerli sarebbe un oracolo per capire quali inviti

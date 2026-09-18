@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use propflow_domain::RequestContext;
 use propflow_domain::lease::LeaseStatus;
-use propflow_domain::ports::{Clock, LeaseQuery, UnitOfWorkFactory};
+use propflow_domain::ports::{Clock, LeaseLabels, LeaseQuery, UnitOfWorkFactory};
 use propflow_domain::shared::{LeaseId, PropertyId};
 
 use super::LeaseView;
@@ -18,10 +18,21 @@ pub struct ListLeasesQuery {
     pub limit: Option<u16>,
 }
 
+/// Un contratto in elenco: lo stato effettivo, e come si chiama ciò che affitta.
+///
+/// I nomi sono qui e non dentro `LeaseView` perché non appartengono al contratto:
+/// sono ciò che serve a **distinguere le righe**, che senza mostrano tipo e date e
+/// si somigliano tutte.
+#[derive(Debug, Clone)]
+pub struct LeaseListItem {
+    pub view: LeaseView,
+    pub labels: Option<LeaseLabels>,
+}
+
 /// Pagina di contratti, ognuno con lo stato effettivo già calcolato.
 #[derive(Debug, Clone)]
 pub struct LeaseListPage {
-    pub items: Vec<LeaseView>,
+    pub items: Vec<LeaseListItem>,
     pub next_cursor: Option<LeaseId>,
 }
 
@@ -79,12 +90,29 @@ impl ListLeases {
         let mut uow = self.unit_of_work.begin(context).await?;
         let page = uow.leases().list(&repository_query).await?;
 
+        // **Una query per la pagina intera**, non una per riga: venticinque
+        // contratti risolti uno alla volta sarebbero venticinque viaggi al
+        // database per scrivere venticinque nomi.
+        let ids: Vec<LeaseId> = page
+            .items
+            .iter()
+            .map(propflow_domain::lease::Lease::id)
+            .collect();
+        let mut labels = uow.leases().labels(&ids).await?;
+
         let today = self.clock.now().date_naive();
         Ok(LeaseListPage {
             items: page
                 .items
                 .into_iter()
-                .map(|lease| LeaseView::new(lease, today))
+                .map(|lease| {
+                    let id = lease.id();
+                    let position = labels.iter().position(|entry| entry.lease_id == id);
+                    LeaseListItem {
+                        labels: position.map(|index| labels.swap_remove(index)),
+                        view: LeaseView::new(lease, today),
+                    }
+                })
                 .collect(),
             next_cursor: page.next_cursor,
         })

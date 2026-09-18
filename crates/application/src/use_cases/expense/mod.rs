@@ -56,7 +56,7 @@ pub use group::{
     ListExpenseGroupsQuery,
 };
 pub use record::{
-    GetExpense, ListExpenses, ListExpensesQuery, RecordExpense, RecordExpenseCommand,
+    CancelExpense, GetExpense, ListExpenses, ListExpensesQuery, RecordExpense, RecordExpenseCommand,
 };
 pub use settlement::{
     CancelSettlement, ConfirmSettlement, DeclareSettlement, DeclareSettlementCommand,

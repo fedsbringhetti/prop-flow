@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, Check, LogOut, Undo2, X } from 'lucide-react'
+import { Archive, Ban, Check, LogOut, Undo2, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import {
   archiveExpenseGroup,
+  cancelExpense,
   cancelSettlement,
   confirmSettlement,
   getGroupBalances,
@@ -27,12 +28,24 @@ import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmAction } from '@/components/ui/confirm'
 import { PageHeader, PageSection } from '@/components/ui/page'
-import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
+import {
+  TableCaption,
+  TableFrame,
+  Td,
+  TdNumeric,
+  TdSelect,
+  Th,
+  ThNumeric,
+  ThSelect,
+  Tr,
+  useSelection,
+} from '@/components/ui/table'
 import { keys } from '@/app/query'
-import { useApi, useSession } from '@/app/session'
+import { useApi, useIsStaff, useSession } from '@/app/session'
 import { t } from '@/i18n'
 import { compareDecimals } from '@/lib/decimal'
 import { formatAmount, formatDate, formatDateTime, formatDecimal } from '@/lib/format'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { AddMemberDialog } from './AddMemberDialog'
 import { balancesSumToZero, NetAmount } from './balance'
@@ -58,12 +71,13 @@ import { RecordExpenseDialog } from './RecordExpenseDialog'
  * riportare dentro chi è uscito con un debito è il modo in cui quella persona può
  * tornare a vederlo — e su un conto chiuso è esattamente il caso che capita.
  *
- * # Il ruolo qui non decide niente
+ * # Il ruolo qui decide una cosa sola
  *
- * Non c'è un `useIsStaff()` in questa schermata: quasi tutto il modulo è
- * `ensure_member`, e a distinguere chi può fare che cosa sono l'appartenenza al
- * gruppo e — per i rimborsi — l'essere il destinatario o l'autore della
- * dichiarazione. Si instrada sugli identificatori, non sul ruolo.
+ * Quasi tutto il modulo è `ensure_member`, e a distinguere chi può fare che cosa
+ * sono l'appartenenza al gruppo e — per i rimborsi — l'essere il destinatario o
+ * l'autore della dichiarazione. Si instrada sugli identificatori, non sul ruolo.
+ * L'unica eccezione è l'annullamento di una spesa, che lo staff può fare su
+ * qualunque riga: è `CancelExpense`, e `ExpensesCard` lo sa.
  */
 export function ExpenseGroupDetailPage() {
   const { id = '' } = useParams()
@@ -284,24 +298,66 @@ function BalancesCard({
 }
 
 /**
+ * Il verbo della spesa è **Annulla**, ed è il soft delete: la spesa non ha uno
+ * stato. La conferma dice ciò a cui chi annulla non pensa — i rimborsi già
+ * confermati restano, e i saldi si spostano.
+ */
+const CANCEL_EXPENSE: Verb = {
+  label: t.expense.cancel,
+  confirmOne: t.expense.cancelConfirm,
+  confirmMany: t.expense.cancelConfirmMany,
+  explain: t.expense.cancelExplain,
+}
+
+/**
  * Le spese del gruppo, paginate a cursore.
  *
  * L'elenco **non porta le quote**: si leggono dal dettaglio, che è la modale. È la
  * stessa divisione del thread di una segnalazione — ciò che non ha un tetto sta
  * dietro la sua richiesta.
+ *
+ * # Chi può annullare, come lo dice l'API
+ *
+ * Chi l'ha registrata, chi l'ha anticipata, o lo staff: è il confine di
+ * `CancelExpense`, e a chi non ci rientra l'API risponde `403 expense.not_yours`.
+ * Qui si evita di offrire ciò che verrebbe rifiutato, e su un conto chiuso non si
+ * offre a nessuno: disfare una spesa è una scrittura sul conto.
  */
 function ExpensesCard({ group, nameOf }: { group: ExpenseGroup; nameOf: NameOf }) {
   const client = useApi()
+  const isStaff = useIsStaff()
+  const { session } = useSession()
+  const queryClient = useQueryClient()
   const query = usePagedQuery({
     queryKey: keys.expenses(group.id),
     fetchPage: (after) => listExpenses(client, group.id, { after }),
   })
+
+  const userId = session?.userId
+  const cancellable = (expense: Expense) =>
+    !group.is_archived &&
+    (isStaff || expense.paid_by_user_id === userId || expense.created_by === userId)
+
+  const selection = useSelection(
+    (query.data ?? []).filter(cancellable).map((expense) => expense.id),
+  )
+  const discard = useBulkAction({
+    selection,
+    action: (id) => cancelExpense(client, id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: keys.expenses(group.id) })
+      // I saldi si leggono dalla vista, e la spesa ne è appena uscita.
+      await queryClient.invalidateQueries({ queryKey: keys.groupBalances(group.id) })
+    },
+  })
+  const column = selection.total > 0
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>{t.expense.expenses}</CardTitle>
       </CardHeader>
+      <BulkBar selection={selection} verb={CANCEL_EXPENSE} bulk={discard} icon={<Ban aria-hidden />} />
 
       <Async
         query={query}
@@ -318,6 +374,7 @@ function ExpensesCard({ group, nameOf }: { group: ExpenseGroup; nameOf: NameOf }
             <TableCaption>{t.expense.expenses}</TableCaption>
             <thead>
               <tr>
+                {column ? <ThSelect selection={selection} /> : null}
                 <Th>{t.expense.expenseDate}</Th>
                 <Th>{t.expense.description}</Th>
                 <Th>{t.expense.category}</Th>
@@ -331,6 +388,15 @@ function ExpensesCard({ group, nameOf }: { group: ExpenseGroup; nameOf: NameOf }
             <tbody>
               {items.map((expense: Expense) => (
                 <Tr key={expense.id}>
+                  {column ? (
+                    <TdSelect
+                      selection={selection}
+                      id={expense.id}
+                      label={expense.description}
+                      failure={discard.failureFor(expense.id)}
+                      disabled={!cancellable(expense)}
+                    />
+                  ) : null}
                   <Td className="whitespace-nowrap">{formatDate(expense.expense_date)}</Td>
                   <Td>{expense.description}</Td>
                   <Td>{t.expense.categories[expense.category]}</Td>
@@ -338,8 +404,18 @@ function ExpensesCard({ group, nameOf }: { group: ExpenseGroup; nameOf: NameOf }
                   <TdNumeric>
                     {formatAmount(expense.amount, { currency: expense.currency })}
                   </TdNumeric>
-                  <Td className="text-right">
-                    <ExpenseDetailDialog expense={expense} nameOf={nameOf} />
+                  <Td className="text-right whitespace-nowrap">
+                    <span className="inline-flex gap-1">
+                      <ExpenseDetailDialog expense={expense} nameOf={nameOf} />
+                      {cancellable(expense) ? (
+                        <VerbButton
+                          verb={CANCEL_EXPENSE}
+                          ids={[expense.id]}
+                          run={discard.run}
+                          rowLabel={expense.description}
+                        />
+                      ) : null}
+                    </span>
                   </Td>
                 </Tr>
               ))}
@@ -616,7 +692,7 @@ function MembersCard({
       </CardHeader>
 
       {members.length === 0 ? (
-        <Empty />
+        <Empty title={t.expense.membersEmpty} hint={t.expense.membersEmptyHint} />
       ) : (
         <ul className="divide-y divide-border-subtle">
           {members.map((member) => (

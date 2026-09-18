@@ -17,7 +17,8 @@ same origin behind a reverse proxy.
 docker compose up -d postgres minio minio-setup
 ./ops/dev/generate-jwt-keys.sh          # requires OpenSSL 3
 
-# Nothing loads .env on its own: copy it, adapt it, then hand it to the shell.
+# The process never reads .env: `just` loads it (set dotenv-load), and the shell
+# does it for you when you run a binary by hand.
 cp .env.example .env
 set -a; source .env; set +a
 

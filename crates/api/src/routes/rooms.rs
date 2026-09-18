@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, patch};
 use axum::{Json, Router};
 use propflow_application::use_cases::room::{
-    ArchiveRoomCommand, CreateRoomCommand, UpdateRoomCommand,
+    ArchiveRoomCommand, CreateRoomCommand, RoomView, UpdateRoomCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::property::{Patch, Room, RoomChanges, RoomStatus};
@@ -164,7 +164,19 @@ pub struct RoomResponse {
     pub property_id: Uuid,
     pub organization_id: Uuid,
     pub name: String,
+    /// Lo stato **memorizzato**: `available`, oppure `unavailable` quando chi
+    /// amministra dichiara la stanza fuori uso — una ristrutturazione, un danno.
+    /// È un giudizio, e resta di chi lo dà.
     pub status: RoomStatusDto,
+    /// Lo stato **alla data odierna**: `occupied` quando un contratto in essere
+    /// impegna la stanza — il suo, o quello sull'immobile intero.
+    ///
+    /// Derivato e mai scritto: l'occupazione dipende dal calendario, e una
+    /// colonna aggiornata da un trigger sarebbe già falsa alla mezzanotte in cui
+    /// un contratto comincia (ADR-019). Quando i due valori divergono si mostrano
+    /// **entrambi**: una stanza dichiarata non disponibile mentre ci abita
+    /// qualcuno è un'anomalia da vedere.
+    pub effective_status: RoomStatusDto,
     #[schema(value_type = Option<String>)]
     pub size_sqm: Option<Decimal>,
     pub floor: Option<i16>,
@@ -182,6 +194,14 @@ pub struct RoomResponse {
 }
 
 impl RoomResponse {
+    fn from_view(view: &RoomView) -> Self {
+        let mut response = Self::from_domain(&view.room);
+        if view.occupied {
+            response.effective_status = RoomStatusDto::Occupied;
+        }
+        response
+    }
+
     fn from_domain(room: &Room) -> Self {
         Self {
             id: room.id().as_uuid(),
@@ -189,6 +209,8 @@ impl RoomResponse {
             organization_id: room.org_id().as_uuid(),
             name: room.name().to_owned(),
             status: room.status().into(),
+            // Coincidono finché non c'è un contratto: `from_view` sovrascrive.
+            effective_status: room.status().into(),
             size_sqm: room.size_sqm(),
             floor: room.floor(),
             has_private_bathroom: room.has_private_bathroom(),
@@ -276,7 +298,7 @@ async fn list(
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(RoomListResponse {
-        items: rooms.iter().map(RoomResponse::from_domain).collect(),
+        items: rooms.iter().map(RoomResponse::from_view).collect(),
     }))
 }
 

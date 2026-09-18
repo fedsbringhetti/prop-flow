@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use propflow_domain::ports::{RepositoryError, RepositoryResult, RoomRepository};
+use propflow_domain::ports::{RepositoryError, RepositoryResult, RoomOccupancy, RoomRepository};
 use propflow_domain::property::{Room, RoomParts};
 use propflow_domain::shared::{Currency, Money, OrgId, PropertyId, RoomId};
 
@@ -62,6 +62,35 @@ impl RoomRepository for PgUnitOfWork {
         .await
         .map_err(map_sqlx_error)?;
         rows.into_iter().map(map_room).collect()
+    }
+
+    async fn occupancy(&mut self, ids: &[RoomId]) -> RepositoryResult<Vec<RoomOccupancy>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // La definizione sta **nel database**, in `app.room_is_occupied`, e usa
+        // `app.lease_in_force`: qui non si confrontano date, o sarebbe la seconda
+        // definizione di «in essere» che la `0030` esiste per impedire.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT id, app.room_is_occupied(id) AS occupied
+               FROM app.rooms
+              WHERE id = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let id: Uuid = try_get(&row, "id")?;
+                Ok(RoomOccupancy {
+                    room_id: RoomId::from_uuid(id),
+                    occupied: try_get::<Option<bool>>(&row, "occupied")?.unwrap_or(false),
+                })
+            })
+            .collect()
     }
 
     async fn insert(&mut self, room: &Room) -> RepositoryResult<()> {

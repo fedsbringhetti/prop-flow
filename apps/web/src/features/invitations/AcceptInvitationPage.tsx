@@ -1,15 +1,17 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
 
 import { acceptInvitation } from '@/api/endpoints'
-import { ApiError } from '@/api/problem'
+import { ApiError, fieldErrorFor } from '@/api/problem'
 import type { OrgRole } from '@/api/types'
-import { InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 import { PageHeader, PageSection } from '@/components/ui/page'
 import { Card, CardBody } from '@/components/ui/card'
+import { AuthFrame, PASSWORD_MIN_LENGTH, PasswordInput } from '@/features/auth/AuthPage'
+import { InvitationCodeError } from './errors'
 import { keys } from '@/app/query'
 import { useApi, useSession } from '@/app/session'
 import { TENANT_HOME } from '@/app/shell'
@@ -77,7 +79,7 @@ export function AcceptInvitationPage() {
                 mutation.mutate()
               }}
             >
-              <AcceptError error={mutation.error} />
+              <InvitationCodeError error={mutation.error} />
               <Field label={t.invitation.tokenLabel} hint={t.invitation.acceptCodeHint} required>
                 {(props) => (
                   <Input
@@ -112,68 +114,215 @@ export function AcceptInvitationPage() {
   )
 }
 
-/**
- * I rifiuti di questa rotta, tradotti **qui** e non nel catalogo globale.
- *
- * `auth.invalid_credentials` è la risposta a un codice sbagliato, scaduto o
- * intestato a un altro indirizzo — l'API non li distingue apposta, perché
- * distinguerli direbbe a chi prova quali inviti esistono. Nel catalogo quel codice
- * significa «email o password non corrette», che qui sarebbe una frase su una
- * password che nessuno ha digitato: il messaggio è dello schermo, non del codice.
- */
-function AcceptError({ error }: { error: unknown }) {
-  if (!error) return null
-
-  const local =
-    error instanceof ApiError
-      ? error.code === 'auth.invalid_credentials'
-        ? t.invitation.acceptCodeRejected
-        : error.code === 'invitation.already_accepted'
-          ? t.invitation.acceptAlreadyDone
-          : null
-      : null
-
-  if (!local) return <InlineError error={error} />
-  return (
-    <p
-      role="alert"
-      className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger"
-    >
-      {local}
-    </p>
-  )
+interface InviteRegisterValues {
+  fullName: string
+  password: string
+  organizationName: string
 }
 
 /**
- * La stessa schermata per chi **non ha ancora un account**.
+ * `/invito`, da fuori sessione (`F7`, ADR-053): il codice **prima**, e solo dopo
+ * il form di registrazione, con il codice già dentro e **senza il campo
+ * email** — non ne serve uno, l'email è quella dell'invito.
  *
- * `POST /auth/accept-invitation` è autenticata, quindi accettare richiede una
- * sessione. Mandare qui chi arriva senza produrrebbe un `401` su un codice
- * giusto: la conseguenza si progetta invece di subirla, e si dice che cosa fare
- * prima — con i due link, e con la promessa che si torna qui.
+ * # Due passi, e non una rotta di sola lettura prima del form
+ *
+ * Sapere se un codice è da proprietario o da inquilino **prima** di mostrare il
+ * form giusto vorrebbe dire una rotta che lo dica senza consumarlo — cioè un
+ * oracolo su quali codici esistono, raggiungibile da chiunque ne provi uno a
+ * caso. Il form si manda e basta: se il codice è da proprietario, il server
+ * risponde `409 invitation.owner_token` e questa schermata chiede il nome
+ * dell'organizzazione e rimanda lo stesso corpo a `accept-owner-invitation`,
+ * senza far ridigitare nome e password. Chi indovina un codice riceve `401`,
+ * come per un token inesistente — non un secondo oracolo.
+ *
+ * # Due passi, e non un modulo solo
+ *
+ * Il codice arriva da un messaggio e si incolla; nome e password si scelgono.
+ * Chiederli in un unico form costringerebbe a tenere a mente un codice lungo
+ * mentre si pensa a una password, ed è la stessa ragione per cui il recupero
+ * della password li separa (ADR-052).
+ *
+ * # `POST /auth/accept-invitation` resta per chi ha già un account
+ *
+ * Questa schermata copre solo chi **non** ne ha uno: chi torna — l'inquilino di
+ * [ADR-051](../../../../docs/08-decisioni.md), o un proprietario invitato altrove
+ * — passa dal login e trova `AcceptInvitationPage`, sopra in questo file.
  */
 export function AcceptInvitationSignedOutPage() {
+  const { store } = useSession()
+  const navigate = useNavigate()
+
+  const [stage, setStage] = useState<'code' | 'register'>('code')
+  const [token, setToken] = useState('')
+  // Compare solo dopo il `409`: prima non si sa ancora di che genere sia il
+  // codice, e mostrarlo da subito chiederebbe un nome d'organizzazione anche a
+  // chi sta solo accettando un invito da inquilino.
+  const [needsOrganizationName, setNeedsOrganizationName] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+
+  const form = useForm<InviteRegisterValues>({
+    defaultValues: { fullName: '', password: '', organizationName: '' },
+  })
+
+  const submit = form.handleSubmit(async (values) => {
+    setError(null)
+    try {
+      const session = needsOrganizationName
+        ? await store.acceptOwnerInvitation({
+            token,
+            fullName: values.fullName,
+            password: values.password,
+            organizationName: values.organizationName || undefined,
+          })
+        : await store.registerFromInvitation({
+            token,
+            fullName: values.fullName,
+            password: values.password,
+          })
+      // Niente da invalidare qui, e non per dimenticanza: questa pagina vive
+      // **fuori** da `QueryProvider` — le rotte da fuori sessione non hanno un
+      // client, e `useQueryClient()` qui è una pagina bianca, non un errore
+      // gestito. Quando la sessione nasce, `App` monta il ramo autenticato con
+      // un `QueryClient` nuovo: l'elenco delle organizzazioni parte da zero.
+      // La pagina iniziale è quella del **ruolo**, non la radice: per chi abita
+      // la radice rimanda comunque allo scadenzario, e passarci in mezzo
+      // farebbe lampeggiare una schermata che non è la sua.
+      await navigate(session.role === 'tenant' ? TENANT_HOME : '/', { replace: true })
+    } catch (failure) {
+      // Il codice era giusto, serviva solo l'altra rotta: non è un errore da
+      // mostrare, è il segnale che manca un campo. Nome e password restano.
+      if (
+        !needsOrganizationName &&
+        failure instanceof ApiError &&
+        failure.code === 'invitation.owner_token'
+      ) {
+        setNeedsOrganizationName(true)
+        return
+      }
+      const passwordProblem = fieldErrorFor(failure, 'password')
+      if (passwordProblem) {
+        form.setError('password', { message: passwordProblem })
+        return
+      }
+      setError(failure)
+    }
+  })
+
+  if (stage === 'code') {
+    return (
+      <AuthFrame
+        title={t.invitation.entryTitle}
+        subtitle={t.invitation.entrySubtitle}
+        footer={
+          <Link to="/accesso" className="text-accent underline-offset-4 hover:underline">
+            {t.auth.toLogin}
+          </Link>
+        }
+      >
+        <form
+          noValidate
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (token.trim() === '') return
+            setStage('register')
+          }}
+        >
+          <Field label={t.invitation.tokenLabel} hint={t.invitation.acceptCodeHint} required>
+            {(props) => (
+              <Input
+                {...props}
+                value={token}
+                autoFocus
+                // Un codice incollato da un messaggio si porta dietro spazi e
+                // maiuscole automatiche del telefono: nessuna delle due fa
+                // parte del token.
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            )}
+          </Field>
+          <Button type="submit" variant="primary" size="lg" disabled={token.trim() === ''}>
+            {t.invitation.entryContinue}
+          </Button>
+        </form>
+      </AuthFrame>
+    )
+  }
+
   return (
-    <main className="flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="w-full max-w-sm">
-        <p className="mb-6 text-sm font-semibold text-accent">{t.app.name}</p>
-        <h1 className="text-xl font-semibold tracking-tight text-ink">
-          {t.invitation.acceptNeedsAccountTitle}
-        </h1>
-        <p className="mt-1 mb-6 text-sm text-ink-muted">{t.invitation.acceptNeedsAccountBody}</p>
-        <div className="flex flex-col gap-3">
-          <Button asChild variant="primary" size="lg">
-            <Link to="/registrazione" state={{ from: '/invito' }}>
-              {t.auth.submitRegister}
-            </Link>
-          </Button>
-          <Button asChild size="lg">
-            <Link to="/accesso" state={{ from: '/invito' }}>
-              {t.auth.submitLogin}
-            </Link>
-          </Button>
-        </div>
-      </div>
-    </main>
+    <AuthFrame
+      title={t.invitation.registerTitle}
+      subtitle={t.invitation.registerSubtitle}
+      footer={
+        <button
+          type="button"
+          onClick={() => {
+            setStage('code')
+            setNeedsOrganizationName(false)
+            setError(null)
+          }}
+          className="text-accent underline-offset-4 hover:underline"
+        >
+          {t.invitation.backToCode}
+        </button>
+      }
+    >
+      <form onSubmit={submit} noValidate className="flex flex-col gap-4">
+        <InvitationCodeError error={error} />
+        <Field label={t.auth.fullName} error={form.formState.errors.fullName?.message} required>
+          {(props) => (
+            <Input
+              {...props}
+              {...form.register('fullName', { required: t.validation.required })}
+              autoComplete="name"
+              autoFocus
+            />
+          )}
+        </Field>
+        <Field
+          label={t.auth.password}
+          hint={t.auth.passwordHint}
+          error={form.formState.errors.password?.message}
+          required
+        >
+          {(props) => (
+            <PasswordInput
+              {...props}
+              {...form.register('password', {
+                required: t.validation.required,
+                // Verificarlo qui evita un giro di rete per dire una cosa che
+                // si sa già, e **non** sostituisce il controllo del server,
+                // che resta l'autorità.
+                minLength: { value: PASSWORD_MIN_LENGTH, message: t.validation.passwordTooShort },
+              })}
+              autoComplete="new-password"
+            />
+          )}
+        </Field>
+        {/* Solo dopo il `409 invitation.owner_token`: il codice crea anche
+            un'organizzazione, e solo lui la chiede. */}
+        {needsOrganizationName ? (
+          <>
+            <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">
+              {t.invitation.ownerTokenPrompt}
+            </p>
+            <Field
+              label={t.auth.organizationName}
+              hint={t.auth.organizationNameHint}
+              error={form.formState.errors.organizationName?.message}
+            >
+              {(props) => <Input {...props} {...form.register('organizationName')} autoFocus />}
+            </Field>
+          </>
+        ) : null}
+        <Button type="submit" variant="primary" size="lg" disabled={form.formState.isSubmitting}>
+          {form.formState.isSubmitting ? t.common.saving : t.invitation.registerSubmit}
+        </Button>
+      </form>
+    </AuthFrame>
   )
 }

@@ -11,6 +11,29 @@
  * plurali e genere quando le lingue saranno due. Serve che i componenti non
  * conoscano il testo.
  */
+/**
+ * Le voci della navigazione, fuori dal catalogo perché la guida le **usa** come
+ * titoli delle proprie sezioni: una sezione della guida si chiama come la voce
+ * che spiega, e con una copia le due divergerebbero senza che nessuno se ne accorga.
+ */
+const nav = {
+  dashboard: 'Riepilogo',
+  properties: 'Immobili',
+  leases: 'Contratti',
+  /** Al singolare, e solo per l'inquilino: per chi abita il contratto è uno. */
+  lease: 'Contratto',
+  tickets: 'Segnalazioni',
+  bills: 'Bollette',
+  charges: 'Addebiti',
+  payments: 'Pagamenti',
+  /** Solo per chi abita: il denaro fra coinquilini non riguarda chi amministra. */
+  expenses: 'Spese',
+  main: 'Navigazione principale',
+  account: 'Il mio account',
+  /** Nel menù dell'account, con le cose che si fanno su di sé. */
+  guide: 'Come si usa',
+} as const
+
 export const it = {
   app: {
     name: 'PropFlow',
@@ -20,6 +43,13 @@ export const it = {
   common: {
     save: 'Salva',
     cancel: 'Annulla',
+    /**
+     * Il bottone che **non fa niente** in una conferma. Non «Annulla»: tre
+     * entità si *annullano*, e una modale con «Annulla» a sinistra e «Annulla» a
+     * destra — una lascia stare, l'altra annulla l'addebito — è una domanda a cui
+     * si risponde a caso. Trovata montando il verbo in blocco, esisteva da prima.
+     */
+    keep: 'Lascia com’è',
     close: 'Chiudi',
     create: 'Crea',
     edit: 'Modifica',
@@ -38,6 +68,16 @@ export const it = {
     search: 'Cerca',
     all: 'Tutti',
     saving: 'Salvataggio…',
+    /**
+     * L'etichetta neutra di un nome che l'API non ha potuto risolvere.
+     *
+     * Sta in `common` e non sotto un modulo perché la stessa frase serve a
+     * contratti, segnalazioni, addebiti e bollette: le query dei nomi filtrano
+     * `deleted_at IS NULL` come impone la regola 10, quindi un immobile archiviato
+     * lascia il campo assente ovunque. **Mai l'identificatore al suo posto**
+     * (ADR-043): un UUID a schermo non è un nome, è un guasto che si vede.
+     */
+    archivedProperty: 'Immobile archiviato',
   },
 
   state: {
@@ -45,26 +85,141 @@ export const it = {
     errorTitle: 'Qualcosa non ha funzionato',
     errorRequestId: 'Riferimento della richiesta',
     emptyTitle: 'Non c’è ancora niente',
+    /** Il vuoto di un elenco **con un filtro attivo** non è il vuoto della
+     *  sezione: dice che è del filtro, e non spiega la sezione a chi la conosce
+     *  già. Vale per ogni elenco filtrabile, quindi sta qui e non per modulo. */
+    filteredTitle: 'Niente che corrisponda ai filtri.',
+    filteredHint: 'I filtri sono attivi: toglili per vedere tutto.',
+  },
+
+  /**
+   * La selezione in tabella e l'azione in blocco, che è la sezione 7.
+   *
+   * Nessuna di queste frasi dice «Elimina»: il verbo è dell'entità e sta nel
+   * suo modulo — *Archivia*, *Annulla* — perché il prodotto non cancella niente
+   * e ogni entità esce di scena a modo suo. Qui c'è solo ciò che è uguale per
+   * tutte: contare, scegliere, dire come è andata.
+   */
+  selection: {
+    selectPage: 'Seleziona tutte le righe caricate',
+    selectRow: 'Seleziona',
+    region: 'Righe selezionate',
+    /** «Caricate» e mai «tutte»: gli elenchi sono a cursore, e la pagina è ciò
+     *  che si vede, non l'elenco intero. */
+    count: '{count} selezionate su {total} caricate',
+    progress: 'In corso: {done} di {total}',
+    clear: 'Deseleziona',
+    /**
+     * L'esito di un giro, quando qualcosa non è passato. Le righe non fatte
+     * restano selezionate con il motivo accanto, e questa frase dice solo che
+     * cosa guardare. `{failed}` è il numero di righe rimaste.
+     */
+    partial: '{done} fatte. {failed} non fatte: restano selezionate, con il motivo accanto. Correggi e riprova.',
   },
 
   auth: {
     loginTitle: 'Entra in PropFlow',
     loginSubtitle: 'Amministra i tuoi immobili, i contratti e la contabilità.',
-    registerTitle: 'Crea il tuo account',
-    registerSubtitle: 'Bastano un’email e una password per cominciare.',
+    /** `/registrazione` da fuori sessione, da `F6`: non più un form, un rimando
+     *  che dice perché — non c'è una porta aperta, si entra da un invito. */
+    registrationMovedTitle: 'Ci si registra da un invito',
+    registrationMovedBody:
+      'PropFlow non ha una registrazione aperta: chi ti ospita, o chi amministra la piattaforma, ti manda un codice da incollare.',
+    registrationMovedAction: 'Ho un codice d’invito',
     email: 'Email',
     password: 'Password',
     passwordHint: 'Almeno 12 caratteri. Una frase lunga vale più di un simbolo.',
+    /** L'etichetta cambia con lo stato: l'icona da sola è ambigua fra «adesso è
+     *  visibile» e «premi per renderla visibile». */
+    showPassword: 'Mostra la password',
+    hidePassword: 'Nascondi la password',
     fullName: 'Nome e cognome',
     organizationName: 'Nome dell’organizzazione',
     organizationNameHint: 'Se lo lasci vuoto usiamo il tuo nome.',
     submitLogin: 'Entra',
-    submitRegister: 'Crea l’account',
     toRegister: 'Non hai un account? Registrati',
     toLogin: 'Hai già un account? Entra',
     logout: 'Esci',
     sessionExpired: 'La sessione è scaduta. Entra di nuovo.',
-    registeredNowSignIn: 'Account creato. Entra con le tue credenziali.',
+
+    /** Il recupero della password. Le stringhe dicono **la verità** su ciò che
+     *  succede: la risposta è la stessa per un indirizzo noto e per uno
+     *  sconosciuto, e dirlo è più onesto che lasciarlo intuire (ADR-052). */
+    forgotten: 'Password dimenticata?',
+    resetTitle: 'Recupera la password',
+    resetSubtitle: 'Ti mandiamo un codice da incollare qui.',
+    resetSubmit: 'Mandami il codice',
+    /** Non «ti abbiamo mandato un'email»: sarebbe una promessa che il prodotto non
+     *  può mantenere per un indirizzo che non ha un account, e dirla renderebbe la
+     *  sua assenza un modo per sapere chi è registrato. */
+    resetSent:
+      'Se quell’indirizzo ha un account, riceverà un codice. Vale 30 minuti e si usa una volta sola.',
+    resetCode: 'Codice ricevuto per email',
+    /** Come per l'invito: un codice si incolla, non si clicca. Un token dentro un
+     *  URL finisce nella cronologia, nel «Referer» e nei log di ogni proxy. */
+    resetCodeHint: 'Incollalo come l’hai ricevuto.',
+    newPassword: 'Password nuova',
+    resetConfirmTitle: 'Scegli la password nuova',
+    resetConfirmSubtitle: 'Il codice vale una volta sola.',
+    resetConfirmSubmit: 'Cambia la password',
+    /** La revoca è l'unica parte con una conseguenza che si sente: va detta prima,
+     *  non scoperta dopo trovandosi disconnessi ovunque. */
+    resetRevokesSessions:
+      'Cambiare la password chiude le sessioni aperte su tutti i dispositivi.',
+    resetDone: 'Password cambiata. Entra con quella nuova.',
+    backToLogin: 'Torna all’accesso',
+  },
+
+  /**
+   * L'informativa sulla privacy.
+   *
+   * **Il testo sta qui e non nel componente**, come ogni altra stringa visibile
+   * (regola 18): è prosa lunga, e la tentazione di scriverla nel JSX «perché è un
+   * caso a parte» è precisamente il modo in cui l'indirezione si perde. Le sezioni
+   * sono un elenco, così aggiungerne una non tocca il componente.
+   *
+   * **Dice quello che il prodotto fa davvero**, e non quello che si vorrebbe: la
+   * cancellazione è una richiesta da scrivere e non un bottone, perché il ruolo
+   * applicativo non ha il privilegio `DELETE` e tutto passa da `deleted_at`
+   * (ADR-003). Promettere un bottone sarebbe una promessa che il prodotto non può
+   * mantenere — vedi `R37`.
+   */
+  privacy: {
+    title: 'Privacy e dati personali',
+    subtitle:
+      'Che cosa raccogliamo, perché, dove sta e come si chiede la cancellazione.',
+    updated: 'Ultimo aggiornamento',
+    contactLabel: 'Per qualunque richiesta',
+    sections: [
+      {
+        title: 'Chi tratta i dati',
+        body: 'Il titolare del trattamento è la persona o la società che gestisce questa installazione di PropFlow, ed è la stessa a cui hai chiesto di usarlo. I contatti sono in fondo a questa pagina.',
+      },
+      {
+        title: 'Che cosa raccogliamo',
+        body: 'Di chi usa il prodotto: nome, email, e la password in una forma da cui non si torna indietro. Di chi è parte di un contratto: nome, email e telefono, se chi amministra li inserisce. Poi ciò che serve al servizio: immobili, contratti, importi, segnalazioni, bollette e i documenti che vengono caricati. Non raccogliamo dati di navigazione a fini pubblicitari e non usiamo strumenti di profilazione.',
+      },
+      {
+        title: 'Perché',
+        body: 'Per far funzionare il servizio che hai chiesto: gestire i tuoi immobili e i rapporti con chi ci abita. La base giuridica è il contratto con te, e per i dati di terzi che inserisci — i tuoi inquilini — sei tu a doverli informare, perché sei tu ad averli raccolti.',
+      },
+      {
+        title: 'Dove stanno e per quanto',
+        body: 'Su un server nell’Unione Europea, in un database e in uno storage di documenti che stanno sulla stessa macchina. Le copie di sicurezza sono cifrate e conservate fuori da quella macchina. I dati restano finché usi il servizio, e le copie di sicurezza per il periodo dichiarato nel contratto.',
+      },
+      {
+        title: 'Chi altro li vede',
+        body: 'Nessuno oltre a chi amministra la tua organizzazione e alle persone a cui quei dati si riferiscono. Non li vendiamo e non li cediamo. Il fornitore del server e quello della posta li trattano per conto nostro, per il solo fatto di ospitarli e di recapitare le email del servizio.',
+      },
+      {
+        title: 'Che cosa puoi chiedere',
+        body: 'Di sapere quali dati abbiamo, di correggerli, di riceverne una copia, di limitarne l’uso e di farli cancellare. Scrivi all’indirizzo qui sotto: rispondiamo entro trenta giorni. La cancellazione oggi è una procedura che eseguiamo a mano, non un bottone nel prodotto, e la differenza è che richiede la richiesta scritta.',
+      },
+      {
+        title: 'Che cosa la cancellazione non porta via',
+        body: 'Restano le righe che servono a un obbligo di legge — la contabilità, per il tempo che la legge impone — e la traccia tecnica delle operazioni, che non contiene i tuoi dati ma il fatto che qualcosa sia successo. Restano anche i dati che riguardano un’altra persona: se il tuo nome è in un contratto, quel contratto è anche di qualcun altro.',
+      },
+    ],
   },
 
   org: {
@@ -83,21 +238,171 @@ export const it = {
     /** Il nome non è ancora arrivato: si mostra questo e non l'UUID, che è
      *  esattamente ciò da cui questo passo libera. */
     unknownName: 'Organizzazione',
+
+    /**
+     * Il terzo stato del guscio (`F7`, ADR-053): nessuna organizzazione, non un
+     * errore e non il vuoto di un elenco. Ci si arriva uscendo dall'unica che
+     * si aveva — da inquilino, da gestore, o da proprietario non ultimo — non
+     * dalla revoca di un invito: un invito non accettato non ha mai fatto
+     * entrare nessuno.
+     */
+    noneTitle: 'Nessuna organizzazione',
+    noneBody: (name: string) =>
+      `${name}, non fai parte di nessuna organizzazione: su PropFlow si entra da un invito.`,
+    /** Finché `/me` non è arrivata: dice la stessa cosa senza il nome. */
+    noneBodyFallback: 'Non fai parte di nessuna organizzazione: su PropFlow si entra da un invito.',
+    noneHint: 'Se hai un codice, incollalo qui: ti mette dentro l’organizzazione di chi te lo ha mandato.',
   },
 
-  nav: {
-    dashboard: 'Riepilogo',
-    properties: 'Immobili',
-    leases: 'Contratti',
-    /** Al singolare, e solo per l'inquilino: per chi abita il contratto è uno. */
-    lease: 'Contratto',
-    tickets: 'Segnalazioni',
-    bills: 'Bollette',
-    charges: 'Addebiti',
-    payments: 'Pagamenti',
-    /** Solo per chi abita: il denaro fra coinquilini non riguarda chi amministra. */
-    expenses: 'Spese',
-    main: 'Navigazione principale',
+  /**
+   * Il proprio account: i dati anagrafici, il cambio password, l'uscita.
+   *
+   * **Le conseguenze si dicono prima del bottone**, non si scoprono dopo: cambiare
+   * la password disconnette ovunque, e uscire dall'unica organizzazione in cui si
+   * abita lascia con la propria, vuota. Un avviso dopo il fatto si legge come un
+   * guasto.
+   */
+  account: {
+    menuEntry: 'Il mio account',
+    title: 'Il mio account',
+    subtitle: 'I tuoi dati, la password e le organizzazioni a cui appartieni.',
+
+    profileTitle: 'I tuoi dati',
+    fullName: 'Nome e cognome',
+    phone: 'Telefono',
+    phoneHint: 'Facoltativo. Lascialo vuoto per toglierlo.',
+    /** L'email si mostra e **non si modifica**, con la riga che dice perché: un
+     *  campo disabilitato senza spiegazione si legge come un difetto. */
+    email: 'Email',
+    emailLocked:
+      'L’email è la tua credenziale d’accesso e per ora non si cambia da qui.',
+    saveProfile: 'Salva i dati',
+    profileSaved: 'Dati aggiornati.',
+
+    passwordTitle: 'Cambia la password',
+    currentPassword: 'Password attuale',
+    /** La stessa frase del recupero (`auth.resetRevokesSessions`): la conseguenza
+     *  è identica dai due lati — «ho cambiato la password» — e due frasi diverse
+     *  divergerebbero alla prima modifica. */
+    passwordRevokesSessions:
+      'Cambiando la password chiudi le sessioni aperte su tutti i dispositivi, questo compreso: dovrai rientrare con quella nuova.',
+    changePassword: 'Cambia la password',
+    /** Non «fatto e basta»: il cambio disconnette, quindi si dice che si sta per
+     *  tornare all’accesso. */
+    passwordChanged: 'Password cambiata. Entra di nuovo con quella nuova.',
+    /** La vecchia sbagliata è un `401` che non dice altro: qui il messaggio è
+     *  esplicito perché è l’unico errore su cui chi scrive può agire. */
+    currentPasswordWrong: 'La password attuale non è corretta.',
+
+    leaveTitle: 'Esci da un’organizzazione',
+    leaveHint: 'Smetti di far parte di un’organizzazione a cui qualcuno ti ha aggiunto.',
+    leave: 'Esci',
+    /** L’avviso che dice che cosa resta **prima** di uscire: chi esce dall’unica
+     *  organizzazione in cui abita resta con la propria, personale e vuota. */
+    leaveConfirmTitle: 'Vuoi uscire da {org}?',
+    leaveConfirmBody:
+      'Non vedrai più i contratti, gli addebiti e le segnalazioni di questa organizzazione. Se qualcuno ti reinvita potrai rientrare.',
+    leaveConfirm: 'Sì, esci',
+    left: 'Sei uscito da {org}.',
+    /** Accanto alla propria organizzazione, dove il bottone «esci» non c'è: ne sei
+     *  l'unico proprietario, e dirlo è meglio di un bottone che darebbe errore. */
+    leaveLastOwnerShort: 'La tua organizzazione',
+  },
+
+  nav,
+
+  /**
+   * La guida: una pagina, due versioni scelte dal ruolo. Racconta un ciclo — un
+   * immobile, un contratto, un invito, gli addebiti, gli incassi — e per chi abita
+   * l'altro lato dello stesso ciclo; non è un elenco di funzioni. Le sezioni si
+   * chiamano come le voci di `nav`, e i paragrafi stanno qui e non nel JSX, come
+   * `privacy.sections`.
+   */
+  guide: {
+    title: 'Come si usa PropFlow',
+    entry: 'Come si entra',
+    back: 'Torna all’applicazione',
+    /** Il rimando dagli stati vuoti che sono un primo schermo. */
+    read: 'Leggi come si usa',
+    /** Dalla schermata senza organizzazione: chi aspetta un invito legge la
+     *  versione di chi abita. */
+    fromNoOrganization: 'Come funziona PropFlow',
+    staff: {
+      subtitle:
+        'Il giro completo di chi amministra: un immobile, un contratto, un invito, gli addebiti, gli incassi.',
+      sections: [
+        {
+          title: 'Come si entra',
+          body: 'Si entra da un invito: chi gestisce questa installazione ti ha mandato un codice. Dalla pagina di accesso, «Registrati» lo chiede: lo incolli, scegli nome e password, e la tua organizzazione nasce con te. L’email è quella a cui l’invito è arrivato, e non si cambia. Da lì in poi si entra con email e password; se la password non la ricordi, «Recupera la password» ti manda un codice.',
+        },
+        {
+          title: nav.dashboard,
+          body: 'È la prima schermata, e dice che cosa richiede attenzione adesso: quanti immobili e contratti attivi, i canoni attesi al mese, l’insoluto, gli addebiti scaduti, le segnalazioni aperte, i contratti che finiscono entro novanta giorni, le bollette da rivedere. Resta vuota finché non c’è un immobile: ogni numero parte da lì.',
+        },
+        {
+          title: nav.properties,
+          body: 'Un immobile è il punto di partenza: si registra con un’etichetta, l’indirizzo e il tipo. Le stanze servono solo se affitti per stanza — ogni contratto potrà poi riguardarne una — e se non ne aggiungi il contratto riguarderà l’immobile intero. Nella scheda stanno gli allegati (planimetrie, certificazioni, verbali) e chi ci abita. Un immobile non si cancella: si archivia, e la traccia resta.',
+        },
+        {
+          title: nav.leases,
+          body: 'Un contratto lega un immobile, o una stanza, a chi ci abita per un periodo e un canone. Nasce in bozza: aggiungi le parti — le persone che abiteranno lì, con le quote se il canone si divide — e per ciascuna generi un invito, che è un codice da consegnare; quando lo usa, la persona entra nella tua organizzazione come inquilino e vede il proprio contratto. Poi lo attivi, e da quel momento il periodo è occupato. Si disdice ciò che è in corso e si annulla ciò che non è mai entrato in vigore: sono due cose diverse, e i due bottoni lo dicono.',
+        },
+        {
+          title: nav.charges,
+          body: 'Un addebito è una somma chiesta a chi abita: il canone, una spesa, una bolletta riaddebitata. Si emette dalla scheda del contratto, con una scadenza; da quella lo stato si deriva da sé — scaduto quando la data passa, pagato quando entra tutto. Un addebito emesso non si modifica: si annulla e si riemette. Se non incasserai mai, la rinuncia lo chiude e la cifra finisce fra le perdite del riepilogo.',
+        },
+        {
+          title: nav.payments,
+          body: 'Quando un inquilino dichiara di aver pagato, la dichiarazione arriva qui, in attesa: finché non la confermi non muove il saldo, e puoi rifiutarla. Gli incassi che ricevi direttamente li registri dalla scheda dell’addebito, e il residuo si aggiorna da solo. Sotto «Tutti» c’è ogni movimento, decisi compresi.',
+        },
+        {
+          title: nav.bills,
+          body: 'Una bolletta è una spesa dell’immobile — luce, gas, acqua, condominio — da riaddebitare a chi abita. La registri con fornitore, periodo e importo e alleghi la scansione: la lettura automatica propone i valori che ha letto accanto a quelli che hai scritto, e li rivedi tu. Con «Riaddebita» nasce un addebito sul contratto che scegli, per la quota che indichi.',
+        },
+        {
+          title: nav.tickets,
+          body: 'Una segnalazione è un guasto o un problema in casa, aperto da chi ci abita — o da te. La prendi in carico, la lavori, la chiudi, e ogni passaggio resta scritto con la data. Dentro ci sono una conversazione, gli allegati (una foto dice più di una descrizione) e i costi sostenuti. Con «Solo quelle aperte» spuntato vedi ciò che è in lavorazione; le chiuse restano sotto «Tutte».',
+        },
+        {
+          title: nav.account,
+          body: 'Dal menù dell’organizzazione — in fondo alla barra laterale, o in alto dal telefono: i tuoi dati, la password, le organizzazioni a cui appartieni e l’uscita da ciascuna, l’informativa sulla privacy. Se hai ricevuto un altro codice d’invito, «Ho un codice d’invito» sta nello stesso menù.',
+        },
+      ],
+    },
+    tenant: {
+      subtitle:
+        'L’altro lato dello stesso giro: chi amministra registra il contratto e gli addebiti, tu vedi quanto devi e dichiari quando paghi.',
+      sections: [
+        {
+          title: 'Come si entra',
+          body: 'Chi amministra la casa in cui abiti ti ha invitato con un codice. Dalla pagina di accesso, «Registrati» lo chiede: lo incolli, scegli nome e password, e sei dentro la sua organizzazione come inquilino: non ne hai una tua, e vedi solo ciò che riguarda te. L’email è quella a cui l’invito è arrivato. Da lì in poi si entra con email e password; se la password non la ricordi, «Recupera la password» ti manda un codice.',
+        },
+        {
+          title: nav.charges,
+          body: 'È la prima schermata: quanto devi, con la scadenza e quanto resta da pagare di ciascun addebito. Gli addebiti li emette chi amministra — il canone, le spese, le bollette riaddebitate — e quando ne arriva uno lo vedi qui. Quando paghi, apri l’addebito e dichiaralo con «Ho pagato»: resta in attesa finché chi amministra lo conferma, e da quel momento il residuo scende. Non si può ritirare una dichiarazione: se hai sbagliato, dillo a chi amministra.',
+        },
+        {
+          title: nav.lease,
+          body: 'Il tuo contratto: l’immobile o la stanza, il periodo, il canone e la tua quota se lo dividi con altri. Finché chi amministra non lo attiva è in bozza, e lo vedi lo stesso. Nella scheda stanno gli allegati — il contratto firmato, le ricevute — e gli addebiti che ne derivano.',
+        },
+        {
+          title: nav.bills,
+          body: 'Le bollette dell’immobile che chi amministra ti ha riaddebitato, con la scansione da aprire. Non le modifichi: sono qui perché un addebito che nasce da una bolletta si possa risalire al documento, invece di accettare una cifra sulla fiducia.',
+        },
+        {
+          title: nav.tickets,
+          body: 'Se qualcosa non funziona in casa, segnalalo qui: una riga per dire che cosa succede, una foto se aiuta. Resta scritto con la data, chi amministra lo vede subito e lo prende in carico, e ogni passaggio fino alla chiusura lo vedi nella scheda, dove c’è anche una conversazione. Puoi annullare una segnalazione finché è ancora aperta.',
+        },
+        {
+          title: nav.expenses,
+          body: 'Il conto fra coinquilini: un gruppo è la cassa di una casa. Chi anticipa una spesa la registra, dicendo con chi la divide; i saldi dicono chi deve a chi, e quando qualcuno rimborsa lo dichiara. Chi amministra non lo vede: è denaro fra chi abita, non fra voi e la proprietà.',
+        },
+        {
+          title: nav.account,
+          body: 'Dal menù dell’organizzazione — in fondo alla barra laterale, o in alto dal telefono: i tuoi dati, la password, l’informativa sulla privacy, e l’uscita dall’organizzazione — che non è possibile finché il tuo contratto è in vigore. Se ricevi un altro codice d’invito, «Ho un codice d’invito» sta nello stesso menù.',
+        },
+      ],
+    },
   },
 
   dashboard: {
@@ -123,7 +428,16 @@ export const it = {
     goToLeases: 'Vedi i contratti',
     goToTickets: 'Vedi le segnalazioni',
     goToProperties: 'Vedi gli immobili',
-    empty: 'Comincia registrando il tuo primo immobile.',
+    /** Il vuoto del riepilogo è il **primo schermo** di ogni proprietario nuovo:
+     *  racconta il giro in tre passi con i tre gesti, e rimanda alla guida. Non è
+     *  un primo accesso guidato con un overlay: è lo stesso `Empty`, con un
+     *  `action` che è un gruppo di tre. */
+    empty: 'Si comincia da un immobile.',
+    emptyHint:
+      'Il giro è in tre passi: registri un immobile, redigi un contratto su di esso, inviti chi ci abita. Da lì arrivano gli addebiti e gli incassi, e questa pagina si riempie.',
+    /** L'invito si genera dalla scheda del contratto: il terzo passo porta ai
+     *  contratti, che è dove sta. */
+    inviteStep: 'Invita chi abita',
   },
 
   property: {
@@ -147,15 +461,24 @@ export const it = {
     notes: 'Note',
     archive: 'Archivia',
     archiveConfirm: 'Archiviare questo immobile?',
+    /** In blocco cambia il numero, non la frase: la conseguenza è la stessa. */
+    archiveConfirmMany: 'Archiviare {count} immobili?',
     archiveExplain:
       'Non viene cancellato: sparisce dagli elenchi e non è più modificabile. La traccia resta.',
     archived: 'Immobile archiviato.',
     created: 'Immobile registrato.',
     updated: 'Immobile aggiornato.',
     empty: 'Nessun immobile registrato.',
-    emptyHint: 'Un immobile è il punto di partenza: da lì nascono stanze e contratti.',
+    emptyHint:
+      'Un immobile è il punto di partenza: da lì nascono le stanze, i contratti e gli addebiti.',
+    /** Chi abita non registra immobili, e l'elenco gli mostra solo quelli dei
+     *  suoi contratti: il vuoto dice chi lo riempie e quando. */
+    emptyForTenant:
+      'Gli immobili li registra chi amministra: il tuo compare qui quando un contratto a tuo nome lo riguarda.',
     residents: 'Chi ci abita',
     residentsEmpty: 'Nessuno ci abita in questo momento.',
+    residentsEmptyHint:
+      'Chi abita compare qui quando un contratto su questo immobile è attivo e la persona ha accettato l’invito.',
     residentPending: 'Invitato, non ha ancora accettato',
     notFound: 'Questo immobile non esiste, o non è tuo.',
     types: {
@@ -177,6 +500,19 @@ export const it = {
       maintenance: 'In manutenzione',
       archived: 'Archiviato',
     },
+    /** Lo stato che chi amministra decide: gli altri due discendono dai contratti
+     *  e non si scelgono (ADR-019). */
+    statusLabel: 'Stato dichiarato',
+    statusHint:
+      'Affittato e parzialmente affittato non si scelgono: li calcolano i contratti in essere.',
+    /** Il badge mostra il fatto; il dichiarato compare accanto solo quando è un
+     *  giudizio che il fatto smentisce — un immobile in manutenzione e insieme
+     *  affittato. Nella scheda c'è comunque, per chi lo cerca. */
+    filteredByDeclaredStatus:
+      'Il filtro usa lo stato dichiarato; il badge mostra quello che dicono i contratti in essere.',
+    occupancy: 'Occupazione',
+    filterOccupied: 'Con contratti in essere',
+    filterFree: 'Senza contratti in essere',
   },
 
   room: {
@@ -187,24 +523,39 @@ export const it = {
     nameHint: 'Unico nell’immobile: «Camera doppia», «Singola sul cortile».',
     monthlyRent: 'Canone mensile',
     surface: 'Superficie',
+    floor: 'Piano',
     privateBathroom: 'Bagno privato',
     furnished: 'Arredata',
     status: 'Stato',
+    utilityShare: 'Quota delle utenze',
+    /** Un campo numerico vuoto, in una schermata di co-living, è ambiguo fra
+     *  «zero» e «non specificato»: qui il vuoto ha un significato e va scritto. */
+    utilityShareHint: 'Percentuale delle utenze a carico di questa stanza. Vuota vale «in parti uguali».',
+    /** Il nome è unico nell'immobile, quindi «tanto lo sistemo dopo» è proprio
+     *  la cosa da dire a chi crea una stanza — e non era detta da nessuna parte. */
+    newExplain: 'Non serve avere tutto adesso: ogni dato si corregge dopo, aprendo la stanza dall’elenco.',
     /** L'unica superficie che una stanza abbia: `GET /rooms/{id}` non esiste. */
-    dialogExplain: 'Correggi i dati della stanza, o archiviala per liberarne il nome.',
-    archive: 'Archivia la stanza',
+    dialogExplain: 'Correggi i dati della stanza. Per liberarne il nome, archiviala dall’elenco.',
+    archive: 'Archivia',
     archiveConfirm: 'Archiviare questa stanza?',
+    archiveConfirmMany: 'Archiviare {count} stanze?',
     archiveExplain: 'Il nome torna libero per una stanza nuova. La traccia resta.',
     created: 'Stanza aggiunta.',
     updated: 'Stanza aggiornata.',
     archived: 'Stanza archiviata.',
     empty: 'Nessuna stanza: il contratto riguarderà l’immobile intero.',
+    emptyHint:
+      'Le stanze servono solo se affitti per stanza: ogni contratto potrà poi riguardarne una.',
     nameTaken: 'Questo nome è già usato da un’altra stanza dell’immobile.',
     statuses: {
       available: 'Disponibile',
       occupied: 'Occupata',
       unavailable: 'Non disponibile',
     },
+    /** «Occupata» non è una scelta: discende dai contratti. Quello che si dichiara
+     *  è se la stanza sia fuori uso. */
+    statusLabel: 'Stato dichiarato',
+    statusHint: 'Occupata non si sceglie: lo dice il contratto in essere.',
   },
 
   lease: {
@@ -214,6 +565,14 @@ export const it = {
     property: 'Immobile',
     room: 'Stanza',
     wholeProperty: 'Immobile intero',
+    /** L'avviso arriva **prima**, ma non vieta: due bozze sullo stesso periodo
+     *  sono ipotesi alternative, e i vincoli del database le ammettono apposta. */
+    overlapTitle: 'Su questo periodo c’è già un contratto',
+    overlapExplain:
+      'La bozza si crea lo stesso — due ipotesi sullo stesso periodo sono ammesse — ma l’attivazione verrà rifiutata finché l’altro contratto è in essere.',
+    overlapAcknowledge: 'L’ho visto: crea la bozza lo stesso.',
+    overlapPeriod: (start: string, end: string) => `In essere dal ${start} al ${end}.`,
+    overlapNoEnd: (start: string) => `In essere dal ${start}, senza scadenza.`,
     startDate: 'Inizio',
     endDate: 'Fine',
     endDateHint: 'Esclusiva: per un contratto valido fino al 31 dicembre indica il 1° gennaio.',
@@ -232,11 +591,39 @@ export const it = {
     partyPrimary: 'Intestatario principale',
     addParty: 'Aggiungi una parte',
     partyAdded: 'Parte aggiunta.',
+    partyPhone: 'Telefono',
+    /** Il residuo detto **prima** di digitare: proponendo 100 a tutti, il primo si
+     *  prendeva tutto e all'invito successivo restava zero (ADR-046). */
+    partyShareRemaining: (remaining: string) => `Resta da assegnare: ${remaining} %.`,
+    partyPrimaryTaken:
+      'L’intestatario principale c’è già: è uno solo per contratto. Per cambiarlo, correggi la parte che lo è adesso.',
+    editParty: 'Correggi',
+    editPartyTitle: 'Correggi la parte',
+    /** La correzione esiste perché una quota sbagliata bloccava tutto: il
+     *  contratto non si attivava e non si poteva nemmeno rifare. */
+    editPartyExplain:
+      'Si corregge anche a contratto attivo: è il modo di sistemare le quote sbagliate che sono già in essere.',
+    partyCorrected: 'Parte corretta.',
+    /** L'email è ciò a cui l'invito è intestato: cambiarla dopo sposterebbe il
+     *  rapporto sotto i piedi di chi l'ha accettato. */
+    partyEmailLocked: 'Non si cambia: questa persona ha già accettato l’invito.',
+    removeParty: 'Togli dalla lista',
+    removePartyConfirm: 'Togliere questa parte?',
+    removePartyExplain:
+      'Si toglie ciò che è stato inserito per sbaglio. Il posto di intestatario principale torna libero.',
+    partyRemoved: 'Parte tolta.',
     activate: 'Attiva',
     activateConfirm: 'Attivare questo contratto?',
     activateExplain:
       'Il periodo viene occupato e il contratto diventa in essere. Serve almeno un inquilino, e le quote devono sommare a 100.',
     activated: 'Contratto attivato.',
+    /** Annullare e disdire non sono la stessa cosa, e le due frasi devono
+     *  dirlo: si annulla ciò che non è mai stato, si disdice ciò che è in corso. */
+    cancel: 'Annulla il contratto',
+    cancelConfirm: 'Annullare questo contratto?',
+    cancelExplain:
+      'Resta negli elenchi, con lo stato «Annullato», e il suo periodo torna libero per un altro contratto. Si annulla solo ciò che non è mai entrato in vigore.',
+    cancelled: 'Contratto annullato.',
     terminate: 'Disdici',
     terminateConfirm: 'Disdire questo contratto?',
     terminateExplain: 'Indica la data di fine rapporto. Il periodo si libera.',
@@ -244,17 +631,32 @@ export const it = {
     terminated: 'Contratto disdetto.',
     created: 'Contratto redatto.',
     empty: 'Nessun contratto.',
-    emptyHint: 'Un contratto nasce in bozza: si aggiungono le parti e poi si attiva.',
+    emptyHint:
+      'Un contratto lega un immobile a chi ci abita. Nasce in bozza: si aggiungono le parti, si attiva, e da lì partono gli addebiti.',
     /** Il vuoto di chi abita non è lo stesso di chi amministra: lui non ha un
      *  gesto per riempirlo, e dirgli «creane uno» sarebbe indicargli una porta
-     *  che l'API gli chiude. */
-    emptyForTenant: 'Non risulta nessun contratto a tuo nome in questa organizzazione.',
+     *  che l'API gli chiude. Gli si dice chi lo riempie. */
+    emptyForTenant:
+      'Non risulta nessun contratto a tuo nome in questa organizzazione. I contratti li redige chi amministra: se te ne aspetti uno, chiedi a chi ti ha invitato.',
+    /** Il vuoto degli addebiti dentro la scheda: il gesto per chi lo ha, chi lo
+     *  farà per chi non lo ha. */
+    chargesEmptyHint:
+      'Il primo addebito si emette da qui: il canone, una spesa, una bolletta riaddebitata.',
+    chargesEmptyForTenant:
+      'Gli addebiti di questo contratto li emette chi amministra: quando ne arriva uno lo vedi qui e negli addebiti.',
     noTenantParty: 'Il contratto non ha inquilini fra le parti.',
     sharesNotHundred: 'Le quote degli inquilini non sommano a 100.',
     periodOverlap: 'Il periodo si sovrappone a una locazione già attiva.',
     /** `expiring` ed `expired` sono derivati: si mostrano e non si filtrano. */
     derivedStatusNote:
       'In scadenza e scaduto sono stati derivati dalla data: si vedono, non si filtrano.',
+    /** La risposta alla domanda che il filtro fa nascere: «ho chiesto gli attivi e
+     *  me ne torna uno marcato Scaduto». Sta accanto al filtro perché è lì che la
+     *  domanda nasce, e non ripetuta su ogni riga — che era `R30`. */
+    filteredByDeclaredStatus:
+      'Il filtro usa lo stato dichiarato; il badge mostra quello derivato dalle date.',
+    /** Lo stato che qualcuno ha scelto, distinto da quello che le date dicono. */
+    statusLabel: 'Stato dichiarato',
     charges: 'Addebiti del contratto',
     issueCharge: 'Emetti un addebito',
     types: { whole_property: 'Immobile intero', room: 'Stanza' },
@@ -294,8 +696,13 @@ export const it = {
     uploadHint: 'PDF o immagine, fino a 25 MB.',
     download: 'Scarica',
     empty: 'Nessun allegato.',
-    archive: 'Archivia l’allegato',
+    emptyHint: 'Carica un PDF o un’immagine: resta qui, con la data e chi lo ha caricato.',
+    /** Chi abita e non può caricare — le scansioni di una bolletta — legge chi
+     *  lo farà, non un titolo e basta. */
+    emptyForTenant: 'Gli allegati qui li carica chi amministra: quando ci sono, li apri da questa scheda.',
+    archive: 'Archivia',
     archiveConfirm: 'Archiviare questo allegato?',
+    archiveConfirmMany: 'Archiviare {count} allegati?',
     /** La policy ammette lo staff **oppure** chi ha caricato: il messaggio non
      *  promette un ruolo, perché all'uploader quel ruolo non serve. */
     archiveExplain:
@@ -318,6 +725,10 @@ export const it = {
     inviteTitle: 'Invita un inquilino',
     email: 'Email dell’invitato',
     fullName: 'Nome e cognome',
+    /** Che quota riceverà, detto prima di generare l'invito: è il passo in cui una
+     *  quota a zero passava inosservata. */
+    shareOnAccept: (share: string) =>
+      `Alla parte creata da questo invito andrà il ${share} % del canone. Si corregge dopo, dall’elenco delle parti.`,
     send: 'Genera l’invito',
     revoke: 'Revoca',
     revoked: 'Invito revocato.',
@@ -353,18 +764,40 @@ export const it = {
       'Incolla il codice che ti ha mandato chi affitta la casa: ti mette dentro la sua organizzazione, dove trovi il contratto e quello che devi.',
     acceptSubmit: 'Entra',
     acceptCodeHint: 'Vale sette giorni dall’emissione. Non è la password del tuo account.',
-    /** Accettare richiede una sessione: la rotta è autenticata. Chi arriva senza
-     *  account trova scritto che cosa fare, non un `401`. */
-    acceptNeedsAccountTitle: 'Prima serve il tuo account',
-    acceptNeedsAccountBody:
-      'Un invito si accetta da dentro PropFlow: crea il tuo account — o entra, se ce l’hai già — e torna qui con il codice.',
     /** `auth.invalid_credentials` è ciò che l'API risponde a un codice sbagliato,
      *  scaduto o intestato a un altro indirizzo: distinguerli direbbe a chi prova
      *  quali inviti esistono. Il messaggio del catalogo — «email o password non
      *  corrette» — qui sarebbe fuori posto, quindi la schermata lo riscrive. */
     acceptCodeRejected:
       'Questo codice non è valido: può essere sbagliato, scaduto, o intestato a un’altra email. Chiedine uno nuovo a chi te lo ha mandato.',
-    acceptAlreadyDone: 'Questo invito è già stato accettato: sei già dentro.',
+    /** «Già accettato» non vuol dire «ancora dentro»: dalla sezione 6 si può
+ *  uscire, e chi ripresenta il codice dopo l'uscita è esattamente chi legge
+ *  questa riga. Un invito si spende una volta; la via per rientrare è un
+ *  altro invito (`R41`). */
+    acceptAlreadyDone:
+      'Questo invito è già stato usato e non vale una seconda volta. Se sei uscito dall’organizzazione, chiedi un invito nuovo a chi te lo aveva mandato.',
+
+    /**
+     * `/invito` da fuori sessione (`F7`, ADR-053): il codice **prima**, il form
+     * di registrazione **dopo**, con il codice già dentro. Due passi e non uno
+     * solo perché il primo non fa nessuna chiamata — non esiste una rotta di
+     * sola lettura che dica di che genere è un invito, per non regalare un
+     * oracolo su quali codici esistono — e il secondo si adatta a quel che il
+     * server risponde davvero.
+     */
+    entryTitle: 'Entra con un invito',
+    entrySubtitle:
+      'Incolla il codice che hai ricevuto: da chi ti affitta casa, o da chi amministra la piattaforma se diventi proprietario.',
+    entryContinue: 'Continua',
+    /** Step due: nessun campo email, è quella dell'invito (ADR-053, decisione 6). */
+    registerTitle: 'Crea il tuo account',
+    registerSubtitle: 'Il codice è quello che hai appena incollato: non serve un’altra email.',
+    registerSubmit: 'Crea l’account ed entra',
+    /** Compare **solo** dopo `409 invitation.owner_token`: il codice incollato
+     *  era da proprietario, non da inquilino, e crea un'organizzazione. */
+    ownerTokenPrompt:
+      'Questo codice è da proprietario: crea anche un’organizzazione. Dalle un nome.',
+    backToCode: 'Ho sbagliato codice',
   },
 
   ticket: {
@@ -420,10 +853,18 @@ export const it = {
     resolutionNotes: 'Com’è andata a finire',
     resolutionNotesHint: 'Facoltativo. Una riapertura la cancella, perché fa parte della chiusura.',
     history: 'Storico degli stati',
+    /** Irraggiungibile in pratica — la prima riga la scrive il trigger — ma
+     *  «Non c'è ancora niente» non direbbe che cosa ci finirà. */
+    historyEmpty: 'Nessun passaggio di stato.',
+    historyEmptyHint:
+      'Ogni passaggio — presa in carico, lavorazione, chiusura — resta scritto qui, con la data e chi lo ha fatto.',
     /** La prima riga la scrive il trigger all'inserimento, fuori da un contesto
      *  di richiesta: `changed_by` può quindi mancare, e non è un difetto. */
     historyOpened: 'Aperta',
     thread: 'Conversazione',
+    /** Il thread non è live per scelta: i messaggi arrivano quando li si va a
+     *  prendere, e il bottone lo dice invece di far credere il contrario. */
+    threadRefresh: 'Aggiorna',
     threadEmpty: 'Nessun messaggio.',
     threadEmptyHint: 'Scrivi qui per aggiungere qualcosa: il thread non si riscrive mai.',
     message: 'Messaggio',
@@ -467,8 +908,9 @@ export const it = {
      *  sul proprio stato. */
     reopenExplain:
       'Torna aperta, e la nota su com’era andata a finire viene cancellata: fa parte della chiusura. Quello che deve restare va scritto nel thread.',
-    cancel: 'Annulla la segnalazione',
+    cancel: 'Annulla',
     cancelTitle: 'Annullare questa segnalazione?',
+    cancelTitleMany: 'Annullare {count} segnalazioni?',
     cancelExplain:
       'Vuol dire «non serve più». Resta visibile con la sua storia, e non si modifica più.',
     /** L'API risponde `ticket.not_yours` e non `org.staff_role_required`: non
@@ -477,14 +919,50 @@ export const it = {
      *  spiega **prima** il caso in cui il bottone non compare affatto. */
     onlyOpenCancelledByReporter:
       'Puoi annullarla finché nessuno ci ha messo mano. Da qui in poi la annulla chi amministra.',
+    /** La visibilità è una scelta di chi apre, e il default resta «privata».
+     *  Il confine è nel database — `app.can_access_ticket`, migration `0035` — e
+     *  non una preferenza di interfaccia. */
+    visibleToResidents: 'Riguarda tutta la casa',
+    visibleToResidentsHint:
+      'La leggono anche gli altri che abitano in questo immobile, con la conversazione e le foto. Senza la casella la vedi solo tu e chi amministra.',
+    visibility: 'Visibilità',
+    visibilityShared: 'Visibile a chi abita qui',
+    visibilityPrivate: 'Solo tu e chi amministra',
+    /** La correzione è una rotta a sé — `PATCH /tickets/{id}/report` — perché ha
+     *  un'autorizzazione sola: lo staff sempre, chi ha segnalato finché nessuno
+     *  ci ha messo mano. */
+    correct: 'Correggi',
+    correctTitle: 'Correggi la segnalazione',
+    correctExplain:
+      'Puoi sistemare il testo e cambiare idea sulla visibilità. Categoria e priorità no: le decide chi amministra classificandola.',
+    onlyOpenCorrectedByReporter:
+      'Puoi correggerla finché nessuno ci ha messo mano. Da qui in poi la corregge chi amministra.',
+    /** Un thread terminato si **legge** e non si scrive: è una regola di dominio,
+     *  e il client dice perché invece di far sparire la casella in silenzio. */
+    threadClosed: 'La conversazione è chiusa.',
+    threadClosedHintReporter:
+      'Se il guasto non è risolto, riapri la segnalazione: il motivo che scrivi diventa il primo messaggio.',
+    threadClosedHint: 'Riaprendo la segnalazione la conversazione riprende.',
+    /** Il motivo è obbligatorio perché è l'unica cosa che spiega perché la
+     *  segnalazione è tornata viva: dopo la chiusura non si scrive più. */
+    reopenReason: 'Perché la riapri',
+    reopenReasonHint: 'Finisce nella conversazione, e resta anche dopo la prossima chiusura.',
+    reopenReasonPlaceholder: 'Ha ricominciato a perdere due giorni dopo…',
     onlyOpen: 'Solo quelle aperte',
     /** `?open=true` non è `status <> 'closed'`: l'indice parziale
      *  `tickets_open_ix` è definito su esattamente sei valori. */
     onlyOpenHint: 'Le sei fasi di lavorazione, chiuse e annullate escluse.',
     empty: 'Nessuna segnalazione.',
     emptyOpen: 'Nessuna segnalazione aperta.',
-    emptyHintTenant: 'Se qualcosa non funziona in casa, segnalalo: resta scritto, con la sua data.',
-    emptyHintStaff: 'Quando un inquilino segnala un guasto, lo trovi qui.',
+    /** Il vuoto con «Solo quelle aperte» spuntato è il vuoto di un **filtro**,
+     *  non della sezione: dice dove stanno le altre, e non spiega la sezione a
+     *  chi la conosce già. Il gesto resta, perché è anche la prima schermata. */
+    emptyOpenHint:
+      'Niente in lavorazione. Le segnalazioni chiuse e annullate compaiono togliendo «Solo quelle aperte».',
+    emptyHintTenant:
+      'Se qualcosa non funziona in casa, segnalalo qui: resta scritto, con la sua data, e chi amministra lo vede subito.',
+    emptyHintStaff:
+      'Quando un inquilino segnala un guasto, lo trovi qui e lo prendi in carico. Puoi aprirne una anche tu.',
     /** Nessun immobile su cui aprire: senza un contratto in essere non c'è una
      *  casa di cui segnalare i guasti. */
     noProperty: 'Non risulta nessun immobile a te collegato: non c’è nulla su cui aprire una segnalazione.',
@@ -526,6 +1004,10 @@ export const it = {
       system: 'Sistema',
       ai: 'Assistente automatico',
     },
+    /** Quando l'API non manda il nome perché `users_select` non concede quella
+     *  riga a chi guarda. **Mai l'UUID**: un identificatore in faccia a chi legge
+     *  non è informazione, è una resa — stessa regola di `expense.memberUnknown`. */
+    personUnknown: 'Persona non più visibile',
   },
 
   bill: {
@@ -557,8 +1039,17 @@ export const it = {
     validateExplain: 'Stai affermando che questi numeri sono quelli giusti.',
     validated: 'Bolletta validata.',
     validatedAt: 'Validata il',
+    /** Dichiarare, non registrare un pagamento: il denaro in uscita non è
+     *  modellato, e questa è la differenza che la frase deve far capire. */
+    pay: 'Dichiara pagata',
+    payConfirm: 'Dichiarare pagata questa bolletta?',
+    payExplain:
+      'Registra che l’hai pagata al fornitore, con la data di oggi. Non è un pagamento tracciato: è una dichiarazione, e non si disfa.',
+    paid: 'Bolletta dichiarata pagata.',
+    paidAt: 'Pagata il',
     void: 'Annulla',
     voidConfirm: 'Annullare questa bolletta?',
+    voidConfirmMany: 'Annullare {count} bollette?',
     voidExplain: 'Sparisce dagli elenchi e il numero fattura torna reinseribile. La traccia resta.',
     voided: 'Bolletta annullata.',
     correctionUndoesValidation:
@@ -569,12 +1060,27 @@ export const it = {
       'Crea un addebito verso l’inquilino. Si può ripetere su più contratti; nessuno verifica che le quote sommino al totale.',
     rechargeAmount: 'Importo da riaddebitare',
     rechargeDueDate: 'Scadenza dell’addebito',
+    /** Il conto che si faceva a mente, e a mente si sbagliava: riaddebitare una
+     *  bolletta d'immobile a tre contratti sono tre sottrazioni. */
+    rechargeRemaining: 'Da riaddebitare',
+    rechargeAlready: 'Già riaddebitato',
+    /** Superare il totale **è ammesso** e resta ammesso: qui si avvisa, non si
+     *  vieta. Il vincolo non esiste in database, e uno applicativo cadrebbe fra
+     *  due riaddebiti concorrenti. */
+    rechargeOverBudget: 'Questo importo supera quanto resta da riaddebitare.',
+    /** Solo i contratti in corso ricevono un addebito: una bozza non è ancora un
+     *  rapporto, un contratto annullato o disdetto non lo è più. */
+    rechargeNoLeases: 'Nessun contratto in corso su questo immobile.',
     recharged: 'Riaddebito effettuato.',
     created: 'Bolletta registrata.',
     updated: 'Bolletta aggiornata.',
     duplicate: 'Questa fattura di questo fornitore è già registrata.',
     empty: 'Nessuna bolletta registrata.',
-    emptyHint: 'Registra una bolletta e allega la scansione: la lettura automatica parte da lì.',
+    emptyHint:
+      'Una bolletta è una spesa dell’immobile da riaddebitare a chi abita. Registrala e allega la scansione: la lettura automatica parte da lì.',
+    /** Chi abita non carica scansioni: `ocr.none` gli direbbe «quando ne carichi
+     *  una». */
+    scanEmpty: 'Nessuna scansione.',
     emptyForTenant:
       'Nessuna bolletta imputata al tuo contratto. Le registra chi amministra, e le vedi qui quando ti riguardano.',
     scan: 'Scansione',
@@ -680,6 +1186,7 @@ export const it = {
     lease: 'Contratto',
     void: 'Annulla',
     voidConfirm: 'Annullare questo addebito?',
+    voidConfirmMany: 'Annullare {count} addebiti?',
     voidExplain:
       'Vuol dire «non doveva essere chiesto». Resta visibile a chi doveva pagarlo, e il residuo va a zero.',
     voided: 'Addebito annullato.',
@@ -694,6 +1201,12 @@ export const it = {
     writtenOff: 'Rinuncia registrata.',
     created: 'Addebito emesso.',
     empty: 'Nessun addebito.',
+    /** È la prima schermata di ogni inquilino: il vuoto dice perché è qui e
+     *  che cosa arriverà, e a chi amministra dice da dove si emette. */
+    emptyHintStaff:
+      'Un addebito è una somma chiesta a chi abita: il canone, una spesa, una bolletta riaddebitata. Si emette dalla scheda di un contratto.',
+    emptyHintTenant:
+      'Gli addebiti li emette chi amministra: il canone, le spese, le bollette riaddebitate. Quando ne arriva uno lo vedi qui, con la scadenza e quanto resta da pagare.',
     emptyOutstanding: 'Nessun insoluto: sono tutti pagati.',
     noPatch: 'Un addebito emesso non si modifica: si annulla e si riemette.',
     /** `?status=overdue` risponde 422: lo stato è derivato dalla scadenza. */
@@ -743,7 +1256,10 @@ export const it = {
     amount: 'Importo incassato',
     method: 'Strumento',
     paidAt: 'Data del movimento',
-    paidAtHint: 'Vuoto significa adesso.',
+    /** Il campo mostra oggi e la richiesta tace finché non lo si cambia: così un
+     *  pagamento delle 18 resta delle 18 invece di diventare delle 00:00. Il
+     *  suggerimento dice a chi guarda che cosa succede se non tocca niente. */
+    paidAtHint: 'Lasciata a oggi vale l’istante dell’invio. Cambiala se il movimento è di un altro giorno.',
     reference: 'Causale o riferimento',
     referenceHint: 'Quello che leggi sull’estratto conto: serve a ritrovarlo.',
     payer: 'A chi attribuirlo',
@@ -796,9 +1312,25 @@ export const it = {
     rejectExplain:
       'La dichiarazione passa ad annullata. Il saldo resta dov’è: una dichiarazione in attesa non lo aveva mosso.',
     rejected: 'Dichiarazione rifiutata.',
+    /** Il vuoto della scheda di un addebito, e quello dell'elenco intero: la
+     *  stessa stringa su `/pagamenti` diceva «su questo addebito» a chi ne
+     *  guardava tutti. */
     empty: 'Nessun movimento su questo addebito.',
+    emptyHintStaff: 'Quando incassi, registralo con «Registra un incasso»: il residuo si aggiorna da solo.',
+    emptyHintTenant:
+      'Se hai pagato, dichiaralo con «Ho pagato»: resta in attesa finché chi amministra lo conferma.',
+    emptySettled: 'Questo addebito è chiuso e non accetta più movimenti.',
+    listEmpty: 'Nessun movimento.',
+    listEmptyHintStaff:
+      'Un movimento è un incasso che registri tu, o un pagamento che un inquilino dichiara e tu confermi. Si registra dalla scheda di un addebito.',
+    listEmptyHintTenant:
+      'Quando paghi, dichiaralo dalla scheda dell’addebito: il movimento compare qui, in attesa finché chi amministra lo conferma.',
+    goToCharges: 'Vai agli addebiti',
     queueEmpty: 'Nessuna dichiarazione in attesa.',
-    queueEmptyHint: 'Quando un inquilino dichiara di aver pagato, lo trovi qui.',
+    /** È il vuoto di un filtro — la coda — e lo dice: gli altri movimenti stanno
+     *  sotto «Tutti». */
+    queueEmptyHint:
+      'Quando un inquilino dichiara di aver pagato, lo trovi qui. Gli incassi e le dichiarazioni già decise stanno sotto «Tutti».',
     pendingDoesNotMove: 'In attesa: non muove il saldo finché non la confermi.',
     onlyStaffDecides:
       'A confermare o rifiutare è chi amministra: chi ha dichiarato non può ritirare.',
@@ -896,6 +1428,17 @@ export const it = {
     archiveExplain:
       'Non accetterà più spese né rimborsi. Non è una cancellazione: saldi e spese restano leggibili a tutti. Si chiude anche con dei conti aperti, e quelli restano aperti.',
     archivedNote: 'Il conto è chiuso: niente più spese né rimborsi. I saldi restano leggibili.',
+    /**
+     * Il verbo della spesa: **Annulla**, che qui è il soft delete — la spesa non
+     * ha uno stato. La conseguenza da dire è quella che chi annulla non pensa:
+     * i regolamenti già confermati restano, e i saldi si spostano.
+     */
+    cancel: 'Annulla',
+    cancelConfirm: 'Annullare questa spesa?',
+    cancelConfirmMany: 'Annullare {count} spese?',
+    cancelExplain:
+      'Esce dai saldi del gruppo. I rimborsi già confermati restano: se questa spesa era già stata regolata, i saldi cambiano di conseguenza.',
+    cancelled: 'Spesa annullata.',
 
     members: 'Chi c’è dentro',
     /** L'intestazione della colonna dei nomi, dove «Chi c'è dentro» sarebbe falsa:
@@ -910,6 +1453,8 @@ export const it = {
      *  l'UUID: un identificatore in faccia a chi legge non è informazione. */
     memberUnknown: 'Membro del gruppo',
     you: 'tu',
+    membersEmpty: 'Nessuno nel gruppo.',
+    membersEmptyHint: 'Chi crea il gruppo ne fa parte; gli altri residenti si aggiungono con «Aggiungi qualcuno».',
     addMember: 'Aggiungi qualcuno',
     addMemberTitle: 'Aggiungi al gruppo',
     addMemberExplain:
@@ -921,8 +1466,9 @@ export const it = {
     /** Un residente senza `user_id` si mostra **non selezionabile con la
      *  ragione**, non si nasconde: nasconderlo farebbe cercare una persona che
      *  sullo schermo c'è. */
-    addMemberNoCandidates:
-      'Non c’è nessun altro da aggiungere: gli altri residenti sono già nel gruppo o non hanno ancora accettato l’invito.',
+    addMemberNoCandidates: 'Nessuno da aggiungere.',
+    addMemberNoCandidatesHint:
+      'Gli altri residenti sono già nel gruppo, o non hanno ancora accettato l’invito.',
     addMemberOutsider:
       'Si può aggiungere anche chi non abita più qui: chi se n’è andato lasciando un conto aperto va tenuto nel gruppo, non tolto.',
 
@@ -963,7 +1509,8 @@ export const it = {
 
     expenses: 'Spese',
     expensesEmpty: 'Nessuna spesa in questo gruppo.',
-    expensesEmptyHint: 'La prima spesa fa comparire i saldi.',
+    expensesEmptyHint:
+      'Chi anticipa qualcosa per la casa la registra qui, con chi la divide: la prima spesa fa comparire i saldi.',
     record: 'Registra una spesa',
     recordTitle: 'Nuova spesa',
     recordExplain: 'Quello che qualcuno ha anticipato per la casa. Si divide subito fra i membri attivi.',
@@ -1066,6 +1613,12 @@ export const it = {
      *  chi legge i log e possono essere riscritti in qualunque momento. */
     generic: 'Non è stato possibile completare l’operazione.',
     network: 'Non riesco a raggiungere il server. Controlla la connessione.',
+    /** Risponde il proxy, non l'API: un corpo che non è JSON prende `http.<stato>`
+     *  come codice (`apiErrorFrom`). È ciò che un ricaricamento durante un
+     *  deploy incontra, e «non è stato possibile» non direbbe che è passeggero. */
+    'http.502': 'Il server non risponde in questo momento. Riprova fra poco.',
+    'http.503': 'Il server non è disponibile in questo momento. Riprova fra poco.',
+    'http.504': 'Il server non ha risposto in tempo. Riprova fra poco.',
     'auth.token_missing': 'Devi entrare per vedere questa pagina.',
     'auth.token_expired': 'La sessione è scaduta.',
     'auth.token_invalid': 'La sessione non è più valida.',
@@ -1079,6 +1632,11 @@ export const it = {
     'ticket.not_found': 'Segnalazione non trovata.',
     'ticket.invalid_transition': 'Non si può fare da questo stato.',
     'ticket.cancelled': 'La segnalazione è annullata e non si modifica più.',
+    /** Codice proprio e non `ticket.invalid_transition`: non è una transizione
+     *  rifiutata — nessuno stava chiedendo di muovere la segnalazione — e il
+     *  rimedio è diverso, cioè riaprire. */
+    'ticket.thread_closed':
+      'Questa segnalazione è chiusa: per riprendere la conversazione va riaperta.',
     'org.staff_role_required': 'Serve il ruolo di proprietario o gestore.',
     'validation.failed': 'Controlla i campi segnalati.',
     'property.not_found': 'Immobile non trovato.',
@@ -1088,14 +1646,30 @@ export const it = {
     'room.archived': 'La stanza è archiviata e non è modificabile.',
     'lease.not_found': 'Contratto non trovato.',
     'lease.period_overlap': 'Il periodo si sovrappone a una locazione già attiva.',
+    'property.derived_status_filter':
+      'Affittato e parzialmente affittato si calcolano dai contratti: filtra per occupazione.',
+    'lease.party_not_found': 'Questa parte non esiste più.',
+    'lease.party_email_locked':
+      'L’email non si cambia: questa persona ha già accettato l’invito con quell’indirizzo.',
+    'lease.party_has_user':
+      'Questa parte è collegata a un inquilino registrato e non si toglie: è una persona che abita, non una riga sbagliata.',
     'lease.invalid_transition': 'Non si può fare da questo stato.',
     'lease.no_tenant_party': 'Il contratto non ha inquilini fra le parti.',
     'lease.shares_not_hundred': 'Le quote degli inquilini non sommano a 100.',
+    'lease.tenant_without_share':
+      'Un inquilino ha la quota a zero: correggila prima di attivare, o toglilo dalle parti.',
+    'lease.parties_locked':
+      'Le parti si aggiungono finché il contratto è in bozza. Su un contratto in essere si correggono quelle che ci sono.',
     'lease.primary_party_exists': 'C’è già un intestatario principale.',
     'lease.derived_status_filter': 'Questo stato è derivato e non si può filtrare.',
     'invitation.not_found': 'Invito non trovato.',
     'invitation.already_pending': 'C’è già un invito in attesa per questa email.',
     'invitation.already_accepted': 'Questo invito è già stato accettato.',
+    /** Non un errore da mostrare così com'è: il form di registrazione
+     *  dall'invito lo intercetta e mostra il campo dell'organizzazione invece
+     *  di questo messaggio. Il catalogo lo porta comunque, per non lasciare un
+     *  codice muto se compare in un punto che non lo gestisce. */
+    'invitation.owner_token': 'Questo codice è da proprietario: crea anche un’organizzazione.',
     'utility_bill.not_found': 'Bolletta non trovata.',
     'utility_bill.duplicate': 'Questa fattura di questo fornitore è già registrata.',
     'utility_bill.invalid_transition': 'Non si può fare da questo stato.',
@@ -1116,6 +1690,7 @@ export const it = {
     'expense_group.membership_exists': 'Questa persona è già nel gruppo.',
     'expense_group.membership_unchanged': 'Non c’è niente da cambiare: è già così.',
     'expense.not_found': 'Spesa non trovata.',
+    'expense.not_yours': 'A annullare una spesa è chi l’ha registrata o chi l’ha anticipata.',
     'expense.payer_not_in_group': 'Chi ha anticipato non è un membro attivo del gruppo.',
     'settlement.not_found': 'Rimborso non trovato.',
     'settlement.invalid_transition': 'Questo rimborso non è più in attesa.',
@@ -1123,6 +1698,15 @@ export const it = {
      *  dichiarato: due rifiuti diversi, due rimedi diversi. */
     'settlement.not_addressed_to_you': 'A confermare o rifiutare è chi doveva ricevere il denaro.',
     'settlement.not_declared_by_you': 'A ritirare una dichiarazione è chi l’ha fatta.',
+    'membership.not_found': 'Non fai parte di questa organizzazione.',
+    /** I tre rifiuti dell'uscita, ognuno con il proprio rimedio. Il primo arriva
+     *  dalla policy e non da un `if`; il secondo è l'invariante «almeno un owner
+     *  per org»; il terzo è osservabile perché la riga resta. */
+    'membership.lease_in_force':
+      'Hai un contratto in essere in questa organizzazione: non puoi uscirne finché è attivo.',
+    'membership.last_owner':
+      'Sei l’unico proprietario di questa organizzazione e non puoi uscirne: è la tua organizzazione personale.',
+    'membership.already_left': 'Eri già uscito da questa organizzazione.',
     'document.not_found': 'Documento non trovato.',
     'request.payload_too_large': 'Il file è troppo grande.',
     'endpoint.not_found': 'Questa pagina non esiste.',

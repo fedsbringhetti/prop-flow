@@ -46,66 +46,147 @@ async fn an_invalid_token_is_refused() {
     assert_eq!(body["code"], "auth.token_invalid", "corpo: {body}");
 }
 
+/// Le sonde rispondono uguali alla radice e sotto `/api/v1` (`R50`).
+///
+/// La radice è per l'`healthcheck` del container, che parla all'API senza proxy;
+/// il prefisso è l'unica forma che attraversa il reverse proxy, e quella che il
+/// runbook del primo deploy usa per dichiararsi riuscito. Senza la seconda,
+/// `…/api/v1/ready` cadrebbe nel `fallback` con `404 endpoint.not_found` — e il
+/// confronto sul corpo lo vedrebbe. Il `200` si afferma a parte: due `404`
+/// uguali sarebbero «uguali» anche loro.
+#[tokio::test]
+async fn the_probes_answer_the_same_at_the_root_and_under_the_prefix() {
+    let app = require_app!();
+    for probe in ["health", "ready"] {
+        let (root_status, root_body) = app.send("GET", &format!("/{probe}"), None, None).await;
+        let (prefixed_status, prefixed_body) = app
+            .send("GET", &format!("/api/v1/{probe}"), None, None)
+            .await;
+        assert_eq!(root_status, StatusCode::OK, "`/{probe}`: {root_body}");
+        assert_eq!(
+            prefixed_status, root_status,
+            "`/api/v1/{probe}` non risponde come `/{probe}`: {prefixed_body}"
+        );
+        assert_eq!(prefixed_body, root_body, "su `{probe}`");
+    }
+}
+
+/// `F6` ha chiuso `POST /auth/register`: la validazione della password alla
+/// registrazione si prova adesso sulle due rotte da invito (ADR-053), che sono
+/// le sole rimaste. `password_policy::validate` è condivisa da entrambe —
+/// `create_owner_account`, dietro `accept-owner-invitation`, e
+/// `RegisterTenantFromInvitation` — quindi un `422` mancante su una delle due
+/// sarebbe una regressione della condivisione, non solo del test.
 #[tokio::test]
 async fn weak_passwords_are_rejected_with_field_errors() {
     let app = require_app!();
+
+    let owner_email = common::unique_email("debole-proprietario");
+    let owner_token = common::issue_owner_invitation(&app, &owner_email).await;
     let (status, body) = app
         .post(
-            "/api/v1/auth/register",
+            "/api/v1/auth/accept-owner-invitation",
             serde_json::json!({
-                "email": common::unique_email("debole"),
+                "token": owner_token,
                 "full_name": "Tizio",
                 "password": "corta",
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
+    assert_eq!(body["code"], "validation.failed", "corpo: {body}");
+    assert_eq!(body["errors"][0]["field"], "password", "corpo: {body}");
+
+    let (owner, _) = common::register_and_login(&app, "debole-inquilino").await;
+    let property = create_property(&app, &owner, "Immobile per password debole").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let tenant_email = common::unique_email("debole-inquilino-invitato");
+    let (_, tenant_invite_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": tenant_invite_token,
+                "full_name": "Caio",
+                "password": "corta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
     assert_eq!(body["code"], "validation.failed", "corpo: {body}");
     assert_eq!(body["errors"][0]["field"], "password", "corpo: {body}");
 }
 
+/// Sulle rotte da invito l'email **non è un campo**: è quella dell'invito
+/// (ADR-053, decisione 6), quindi un indirizzo malformato non può più
+/// arrivarci — non c'è dove scriverlo. La validazione del formato vive adesso
+/// dove un invito nasce, `POST /leases/{id}/invitations`, che prima non aveva
+/// un test di contratto dedicato.
 #[tokio::test]
-async fn malformed_email_is_rejected() {
+async fn malformed_email_is_rejected_where_an_invitation_is_issued() {
     let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "email-malformata").await;
+    let property = create_property(&app, &owner, "Immobile per email malformata").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
     let (status, body) = app
-        .post(
-            "/api/v1/auth/register",
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            &owner,
             serde_json::json!({
                 "email": "non-una-email",
                 "full_name": "Tizio",
-                "password": "cavallo batteria graffetta",
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
     assert_eq!(body["errors"][0]["field"], "email", "corpo: {body}");
 }
 
+/// Nessun test di F4 provava già questo caso sulle rotte nuove: l'oracolo
+/// dell'email esiste ed è voluto (ADR-053, «l'oracolo delle email esiste
+/// già»), ma resta uno solo — `auth.email_taken` — anche quando ad accettare
+/// due inviti da proprietario distinti è la stessa persona.
 #[tokio::test]
-async fn registering_the_same_email_twice_is_a_conflict() {
+async fn accepting_two_owner_invitations_for_the_same_email_is_a_conflict() {
     let app = require_app!();
-    let email = common::unique_email("duplicata");
-    let payload = serde_json::json!({
-        "email": email,
-        "full_name": "Tizio",
-        "password": "cavallo batteria graffetta",
-    });
+    let email = common::unique_email("proprietario-duplicato");
+    let full_name = "Proprietario Duplicato";
+    let password = "cavallo batteria graffetta";
 
-    let (first, _) = app.post("/api/v1/auth/register", payload.clone()).await;
-    assert_eq!(first, StatusCode::CREATED);
+    let first_token = common::issue_owner_invitation(&app, &email).await;
+    let (first, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({ "token": first_token, "full_name": full_name, "password": password }),
+        )
+        .await;
+    assert_eq!(first, StatusCode::CREATED, "corpo: {body}");
 
-    let (second, body) = app.post("/api/v1/auth/register", payload).await;
+    // L'indice unico su `owner_invitations` è parziale sui soli inviti
+    // pendenti: il primo è ormai accettato, quindi un secondo invito per lo
+    // stesso indirizzo si emette senza sbattere contro di lui — è il
+    // `409 auth.email_taken` dell'account, non un conflitto sull'invito.
+    let second_token = common::issue_owner_invitation(&app, &email).await;
+    let (second, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({ "token": second_token, "full_name": full_name, "password": password }),
+        )
+        .await;
     assert_eq!(second, StatusCode::CONFLICT, "corpo: {body}");
+    assert_eq!(body["code"], "auth.email_taken", "corpo: {body}");
 }
 
 #[tokio::test]
 async fn wrong_credentials_are_indistinguishable_from_an_unknown_account() {
     let app = require_app!();
     let email = common::unique_email("credenziali");
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
+        "/api/v1/auth/accept-owner-invitation",
         serde_json::json!({
-            "email": email,
+            "token": invitation_token,
             "full_name": "Tizio",
             "password": "cavallo batteria graffetta",
         }),
@@ -235,9 +316,10 @@ async fn refresh_rotates_the_token_and_reuse_revokes_the_chain() {
     let app = require_app!();
     let email = common::unique_email("rotazione");
     let password = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
-        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+        "/api/v1/auth/accept-owner-invitation",
+        serde_json::json!({ "token": invitation_token, "full_name": "Tizio", "password": password }),
     )
     .await;
     let (_, session, first_refresh) = app
@@ -332,9 +414,10 @@ async fn the_session_cookie_is_refused_by_business_routes() {
     let app = require_app!();
     let email = common::unique_email("csrf");
     let password = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
-        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+        "/api/v1/auth/accept-owner-invitation",
+        serde_json::json!({ "token": invitation_token, "full_name": "Tizio", "password": password }),
     )
     .await;
     let (_, _, cookie) = app
@@ -377,9 +460,10 @@ async fn logout_clears_the_cookie_and_is_idempotent() {
     let app = require_app!();
     let email = common::unique_email("uscita");
     let password = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
     app.post(
-        "/api/v1/auth/register",
-        serde_json::json!({ "email": email, "full_name": "Tizio", "password": password }),
+        "/api/v1/auth/accept-owner-invitation",
+        serde_json::json!({ "token": invitation_token, "full_name": "Tizio", "password": password }),
     )
     .await;
     let (_, session, cookie) = app
@@ -766,6 +850,89 @@ async fn full_lease_lifecycle() {
     assert_eq!(status, StatusCode::CONFLICT);
 }
 
+/// **Annullare una bozza**, e le due metà che rendono utile l'operazione.
+///
+/// La transizione esisteva nel dominio da sempre e non la esponeva nessuna rotta:
+/// un contratto redatto per sbaglio restava lì, perché l'unica uscita sarebbe
+/// stata attivarlo e disdirlo — che è ciò che non riesce quando le quote sono
+/// sbagliate.
+///
+/// Il test guarda **tre** cose, e la seconda è quella che una cancellazione soft
+/// avrebbe superato in silenzio fallendo lo scopo:
+///
+/// 1. la bozza diventa `cancelled`;
+/// 2. **resta leggibile**, e il filtro per quello stato la trova. Con `deleted_at`
+///    sarebbe sparita da ogni elenco, e il filtro sarebbe rimasto quello che era:
+///    un'opzione che non può corrispondere a niente;
+/// 3. il periodo **torna libero**, perché i vincoli di esclusione della `0005`
+///    coprono `pending_signature`, `active` ed `expiring`, e `cancelled` non è
+///    fra questi.
+#[tokio::test]
+async fn a_cancelled_draft_stays_readable_and_frees_its_period() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "annullamento").await;
+    let property = create_property(&app, &token, "Immobile ripensato").await;
+
+    let wrong = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    let (status, cancelled) = app
+        .post_auth(
+            &format!("/api/v1/leases/{wrong}/cancel"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cancelled}");
+    assert_eq!(cancelled["status"], "cancelled");
+
+    // Resta negli elenchi: è la metà che distingue «annullare» da «cancellare».
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases?property_id={property}&status=cancelled"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let items = page["items"].as_array().expect("elenco");
+    assert_eq!(items.len(), 1, "corpo: {page}");
+    assert_eq!(items[0]["id"], serde_json::json!(wrong));
+
+    // Annullarlo due volte non è ammesso.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{wrong}/cancel"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Lo stesso periodo si può rifare, ed è il motivo per cui si annulla.
+    let good = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &good, "Inquilino Vero", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{good}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    // E un contratto in vigore non si annulla: per quello c'è la disdetta, che
+    // registra un fatto invece di dire che non è mai successo niente.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{good}/cancel"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.invalid_transition");
+}
+
 #[tokio::test]
 async fn an_overlapping_activation_says_what_is_occupied() {
     let app = require_app!();
@@ -926,6 +1093,532 @@ async fn a_room_of_another_property_cannot_be_let() {
     assert_eq!(problem["errors"][0]["field"], "room_id");
 }
 
+/// **Il vicolo cieco, percorso da capo a fondo.**
+///
+/// Era questo: una parte inserita con la quota sbagliata non si correggeva, quindi
+/// il contratto non si attivava — le quote degli inquilini devono sommare a 100 —
+/// e non si poteva nemmeno rifare, perché annullarlo non era esposto. Il contratto
+/// restava lì per sempre, non attivabile e non rimovibile, e l'unico rimedio era
+/// crearne un altro lasciando in elenco quello rotto.
+///
+/// Il test cammina l'uscita: si sbaglia, si toglie ciò che è di troppo, si
+/// corregge, si attiva.
+#[tokio::test]
+async fn a_wrong_share_can_be_corrected_and_the_lease_activates() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "correzione").await;
+    let property = create_property(&app, &token, "Immobile con le quote sbagliate").await;
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    let (status, first) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({
+                "full_name": "Inquilino Uno",
+                "share_percent": "30",
+                "is_primary": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first}");
+    let first_party = first["id"].as_str().expect("id").to_owned();
+
+    // Il muro: la somma non fa 100, e prima non c'era modo di uscirne.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.shares_not_hundred");
+
+    // Una parte aggiunta per sbaglio, che va tolta e non corretta.
+    let (status, second) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({ "full_name": "Aggiunta Per Sbaglio", "share_percent": "70" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second}");
+    let second_party = second["id"].as_str().expect("id").to_owned();
+
+    // Un contratto ha un solo intestatario principale, e il vincolo parziale lo
+    // dice con il suo codice invece che come "vincolo violato".
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{second_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "is_primary": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.primary_party_exists");
+
+    let (status, _) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/lease-parties/{second_party}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Tolta davvero: l'elenco delle parti torna a una.
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        detail["parties"].as_array().map(Vec::len),
+        Some(1),
+        "corpo: {detail}"
+    );
+
+    // La correzione, che è l'operazione che mancava.
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{first_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "share_percent": "100", "phone": "+39 011 0000000" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["share_percent"], "100.00");
+    assert_eq!(corrected["phone"], "+39 011 0000000");
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    assert_eq!(activated["status"], "active");
+}
+
+/// **Le due regole che impediscono di rifare il danno.** Vedi ADR-046.
+///
+/// La prima: `100 + 0` fa 100, e passava. Era il caso osservato in database — il
+/// 100% su una parte che non aveva mai accettato, e l'inquilino vero a zero — e la
+/// somma non ha nulla da eccepire, perché il difetto non è nella somma.
+///
+/// La seconda: aggiungere una parte a un contratto **attivo** era ammesso, e da lì
+/// le quote smettevano di sommare a 100 senza che niente protestasse. Il client
+/// offriva il bottone solo in bozza, ma quella è una scelta di che cosa offrire.
+#[tokio::test]
+async fn a_zero_share_blocks_activation_and_an_active_lease_takes_no_new_parties() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "quota-zero").await;
+    let property = create_property(&app, &token, "Immobile in coabitazione").await;
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    // Il concorso che produceva il danno: il primo si prende tutto, al secondo
+    // resta zero, e la somma torna.
+    let (status, first) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({
+                "full_name": "Primo Inquilino",
+                "share_percent": "100",
+                "is_primary": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first}");
+    let first_party = first["id"].as_str().expect("id").to_owned();
+
+    let (status, second) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({ "full_name": "Secondo Inquilino", "share_percent": "0" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second}");
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.tenant_without_share");
+
+    // Corrette le due quote, l'attivazione passa.
+    let (status, _) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{first_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "share_percent": "50" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let second_party = second["id"].as_str().expect("id").to_owned();
+    let (status, _) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{second_party}"),
+            Some(&token),
+            Some(serde_json::json!({ "share_percent": "50" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    // E da qui non si aggiungono parti: la somma non verrebbe più riverificata.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            &token,
+            serde_json::json!({ "full_name": "Terzo Inquilino", "share_percent": "10" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.parties_locked");
+}
+
+/// **Una parte con una persona dietro non è una riga sbagliata.**
+///
+/// Due rifiuti, e sono la ragione per cui correggere e togliere non sono la stessa
+/// operazione: l'email è ciò a cui l'invito è intestato, e cambiarla dopo
+/// l'accettazione sposterebbe il rapporto sotto i piedi di chi l'ha usata;
+/// togliere una parte collegata farebbe sparire un inquilino vero senza traccia,
+/// mentre uscire di casa è un fatto con una data.
+///
+/// La quota invece **si corregge anche a contratto attivo**, ed è deliberato: i
+/// contratti con le quote sbagliate che esistono già sono attivi, e rifiutare lì
+/// lascerebbe irreparabili proprio quelli.
+#[tokio::test]
+async fn a_party_with_a_user_keeps_its_email_and_its_place() {
+    let app = require_app!();
+    let (owner, _org) = common::register_and_login(&app, "parte-collegata").await;
+    let property = create_property(&app, &owner, "Immobile con inquilino vero").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("inquilino-collegato");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Collegato",
+        "cavallo batteria graffetta",
+    )
+    .await;
+
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let party = detail["parties"][0]["id"].as_str().expect("id").to_owned();
+
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{party}"),
+            Some(&owner),
+            Some(serde_json::json!({ "email": "un-altro@example.it" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_email_locked");
+
+    let (status, problem) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/lease-parties/{party}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_has_user");
+
+    // Il contratto si attiva — la quota dell'invito è 100 — e la correzione
+    // continua a funzionare da lì in avanti.
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (status, corrected) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{party}"),
+            Some(&owner),
+            Some(serde_json::json!({ "full_name": "Nome Corretto" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["full_name"], "Nome Corretto");
+}
+
+/// **L'occupazione la decide il calendario, e per questo non è una colonna.**
+///
+/// È la prova che un trigger su attivazione e disdetta sarebbe sbagliato: il
+/// secondo contratto è **attivo** e comincia fra un mese, quindi la sua stanza
+/// oggi è libera. Un `UPDATE` all'attivazione l'avrebbe già marcata occupata, e
+/// nessun trigger scatterebbe la notte in cui il contratto comincia davvero.
+///
+/// Guarda anche la seconda metà della decisione: lo stato **dichiarato** resta
+/// quello che qualcuno ha scritto, e i due valori viaggiano insieme — una stanza
+/// dichiarata fuori uso mentre ci abita una persona è un'anomalia da vedere, non
+/// da nascondere dietro la precedenza di un campo sull'altro.
+#[tokio::test]
+async fn a_room_is_occupied_by_the_calendar_and_not_by_a_column() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "occupazione").await;
+    let property = create_property(&app, &token, "Immobile in co-living").await;
+
+    let mut ids = Vec::new();
+    for nome in ["Stanza abitata", "Stanza che lo sarà"] {
+        let (status, room) = app
+            .post_auth(
+                &format!("/api/v1/properties/{property}/rooms"),
+                &token,
+                serde_json::json!({ "name": nome, "monthly_rent": "400.00" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "corpo: {room}");
+        // Appena creata, nessuna stanza è occupata.
+        assert_eq!(room["status"], "available");
+        assert_eq!(room["effective_status"], "available");
+        ids.push(room["id"].as_str().expect("id").to_owned());
+    }
+    let (abitata, futura) = (&ids[0], &ids[1]);
+
+    // Il primo contratto è in essere adesso.
+    let ora = draft_lease(&app, &token, &property, Some(abitata), -10, Some(355)).await;
+    add_tenant(&app, &token, &ora, "Inquilino Presente", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{ora}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Il secondo è attivo e comincia **fra un mese**.
+    let domani = draft_lease(&app, &token, &property, Some(futura), 30, Some(395)).await;
+    add_tenant(&app, &token, &domani, "Inquilino Futuro", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{domani}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, page) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}/rooms"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let rooms = page["items"].as_array().expect("stanze");
+    let occupata = rooms
+        .iter()
+        .find(|room| room["id"] == serde_json::json!(abitata))
+        .expect("stanza abitata");
+    let libera = rooms
+        .iter()
+        .find(|room| room["id"] == serde_json::json!(futura))
+        .expect("stanza futura");
+
+    assert_eq!(occupata["effective_status"], "occupied", "corpo: {page}");
+    // Lo stato dichiarato **non** è cambiato: nessuno lo ha scritto.
+    assert_eq!(occupata["status"], "available", "corpo: {page}");
+    // E la stanza del contratto che comincia fra un mese è libera oggi.
+    assert_eq!(libera["effective_status"], "available", "corpo: {page}");
+}
+
+/// **Lo stato dell'immobile segue le sue stanze**, e il filtro che serve è
+/// l'occupazione.
+///
+/// `?status=rented` non può funzionare — quel valore non è memorizzato — e
+/// restituire zero righe sarebbe il modo peggiore di dirlo: risponde `422`
+/// indicando il filtro giusto, come fanno i contratti con `in_force` e gli
+/// addebiti con `outstanding`.
+#[tokio::test]
+async fn a_property_is_partially_rented_when_one_of_its_rooms_is() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "occupazione-immobile").await;
+    let property = create_property(&app, &token, "Immobile a metà").await;
+
+    let mut ids = Vec::new();
+    for nome in ["Prima stanza", "Seconda stanza"] {
+        let (_, room) = app
+            .post_auth(
+                &format!("/api/v1/properties/{property}/rooms"),
+                &token,
+                serde_json::json!({ "name": nome }),
+            )
+            .await;
+        ids.push(room["id"].as_str().expect("id").to_owned());
+    }
+
+    let lease = draft_lease(&app, &token, &property, Some(&ids[0]), -1, Some(364)).await;
+    add_tenant(&app, &token, &lease, "Inquilino", None).await;
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["status"], "draft", "lo stato dichiarato non cambia");
+    assert_eq!(
+        detail["effective_status"], "partially_rented",
+        "corpo: {detail}"
+    );
+
+    // Il filtro che funziona.
+    let (status, page) = app
+        .send(
+            "GET",
+            "/api/v1/properties?occupied=true",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "corpo: {page}"
+    );
+
+    let (status, page) = app
+        .send(
+            "GET",
+            "/api/v1/properties?occupied=false",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(0),
+        "corpo: {page}"
+    );
+
+    // E quello che non può funzionare, che lo dice invece di rispondere vuoto.
+    let (status, problem) = app
+        .send(
+            "GET",
+            "/api/v1/properties?status=rented",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.derived_status_filter");
+}
+
+/// **Una bolletta pagata si può dire pagata**, e non è un pagamento.
+///
+/// `app.bill_status` contiene `'paid'` da sempre e nessuna transizione lo
+/// scriveva: l'elenco non distingueva le bollette saldate da quelle da saldare,
+/// che è la sola domanda che ci si fa guardandolo.
+#[tokio::test]
+async fn a_validated_bill_can_be_declared_paid() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "bolletta-pagata").await;
+    let property = create_property(&app, &token, "Immobile con gas").await;
+    let bill = register_bill(&app, &token, &property, None, "PAGATA-1").await;
+
+    // In bozza non si dichiara: i numeri non li ha confermati nessuno.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/pay"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "utility_bill.invalid_transition");
+
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, pagata) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/pay"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {pagata}");
+    assert_eq!(pagata["status"], "paid");
+    // La data è obbligatoria a schema quando lo stato c'è: senza, «pagata» non
+    // direbbe quando.
+    assert!(pagata["paid_at"].is_string(), "corpo: {pagata}");
+
+    // Non si dichiara due volte: una bolletta pagata resta pagata.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/pay"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
 /// Emette un invito su un contratto e restituisce (`invitation_id`, `token`).
 async fn invite_tenant(app: &TestApp, token: &str, lease: &str, email: &str) -> (String, String) {
     let (status, body) = app
@@ -988,21 +1681,15 @@ async fn a_tenant_becomes_real_and_sees_only_what_is_theirs() {
     // `Decimal` va sul filo come stringa, con la scala che ha nel database.
     assert_eq!(party["share_percent"], "100.00");
 
-    // L'inquilino si registra con la stessa email e accetta.
-    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    assert_ne!(tenant_org, owner_org);
-
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
-    assert_eq!(accepted["organization_id"], owner_org);
-    assert_eq!(accepted["role"], "tenant");
-    assert_eq!(accepted["lease_id"], lease);
+    // L'inquilino si registra dall'invito: nasce direttamente dentro
+    // l'organizzazione di chi lo ospita, senza una propria (ADR-053).
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Reale",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // Da qui l'inquilino vede il proprio contratto nell'organizzazione del
     // proprietario: la visibilità arriva da `lease_parties.user_id`.
@@ -1142,15 +1829,13 @@ async fn the_organizations_of_a_user_come_back_with_their_names() {
 
     let tenant_email = common::unique_email("inquilino");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, tenant_org, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, body) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Test",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // **Senza `X-Org-Id`**: è la condizione che la decisione dichiara possibile.
     let (status, page) = app
@@ -1159,13 +1844,14 @@ async fn the_organizations_of_a_user_come_back_with_their_names() {
     assert_eq!(status, StatusCode::OK, "corpo: {page}");
 
     let items = page["items"].as_array().expect("elenco");
-    assert_eq!(items.len(), 2, "due organizzazioni attese: {page}");
-
-    let personal = items
-        .iter()
-        .find(|item| item["id"] == serde_json::Value::String(tenant_org.clone()))
-        .expect("l'organizzazione personale dell'inquilino");
-    assert_eq!(personal["role"], "owner");
+    // Una sola organizzazione, quella di chi ha invitato: prima di ADR-053
+    // l'inquilino ne aveva anche una propria vuota, e questo elenco ne contava
+    // **due**.
+    assert_eq!(
+        items.len(),
+        1,
+        "un inquilino ha una sola organizzazione, quella di chi lo ha invitato: prima di ADR-053 ne aveva due (la propria e quella di chi lo ha invitato). corpo: {page}"
+    );
 
     let rented = items
         .iter()
@@ -1264,6 +1950,10 @@ async fn a_revoked_invitation_no_longer_works_and_leaves_no_membership() {
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
 
+    // Serve un account che esiste già a prescindere dal token revocato:
+    // `register_tenant_from_invitation` non ne creerebbe uno da un token non
+    // valido, e non resterebbe nulla su cui verificare «nessuna scrittura
+    // parziale» qui sotto.
     let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
     let (status, body) = app
         .post_auth(
@@ -1309,6 +1999,912 @@ async fn a_second_pending_invitation_for_the_same_email_is_a_conflict() {
         problem["code"], "invitation.already_pending",
         "corpo: {problem}"
     );
+}
+
+/// **Il recupero della password, da capo a fondo**, che è `Z2`.
+///
+/// Prima di questo passo le rotte di autenticazione erano quattro e il primo «non mi
+/// ricordo la password» di un utente vero finiva in una `UPDATE` scritta a mano sul
+/// database di produzione.
+///
+/// Le tre cose che il test fissa sono le tre che si perdono, e nessuna delle tre si
+/// vede guardando la schermata:
+///
+/// 1. **la conferma revoca le sessioni**, comprese quelle aperte prima. Senza,
+///    cambiare la password non butta fuori chi era entrato con quella vecchia — e un
+///    refresh token vive trenta giorni;
+/// 2. **un indirizzo sconosciuto riceve la stessa risposta di uno noto**, e non manda
+///    niente: distinguerli sarebbe un oracolo per sapere chi ha un account;
+/// 3. **un codice già usato non vale due volte.**
+#[tokio::test]
+async fn a_forgotten_password_can_be_recovered_and_the_old_sessions_die() {
+    let app = require_app!();
+    let email = common::unique_email("smemorato");
+    let vecchia = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": invitation_token,
+                "full_name": "Proprietario Test",
+                "password": vecchia,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // La sessione di prima, con il **cookie di refresh**: è ciò che la revoca
+    // uccide, e l'unica cosa che si possa verificare subito. L'access token è un
+    // JWT e resta valido i suoi quindici minuti — vedi l'asserzione più sotto.
+    let (status, _, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("cookie di refresh");
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+
+    let code = match app.mail.sent().last() {
+        Some((
+            recipient,
+            propflow_application::ports::NotificationContent::PasswordReset {
+                code,
+                valid_minutes,
+            },
+        )) => {
+            assert_eq!(recipient, &email);
+            // La durata è nel testo perché chi legge deve sapere quanto ha: un
+            // codice che scade senza dirlo è un codice che scade addosso.
+            assert!(*valid_minutes > 0);
+            code.clone()
+        }
+        other => panic!("il codice di recupero non è partito: {other:?}"),
+    };
+
+    // Una password debole viene rifiutata **prima** di consumare il codice: chi
+    // sbaglia la password non deve doversi rifare mandare il codice.
+    let (status, problem) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": "corta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let nuova = "cavallo batteria graffetta nuova";
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // 1. **La sessione di prima è morta**: il refresh non rinnova più. È la parte
+    //    che si dimentica, ed è quella che rende il recupero una difesa invece di
+    //    una comodità — un refresh token vive trenta giorni.
+    //
+    //    Quello che **non** muore è l'access token già emesso, che è un JWT e non è
+    //    revocabile: chi ce l'ha resta dentro fino alla scadenza, quindici minuti.
+    //    È il baratto di ADR-012 e va saputo, perché «revoca tutte le sessioni» si
+    //    legge come «lo butta fuori adesso» e non è vero.
+    let (status, body, _) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&cookie), None)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "il refresh della vecchia sessione funziona ancora: {body}"
+    );
+
+    // La password nuova funziona, la vecchia no.
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 3. Lo stesso codice non vale due volte, e la risposta non dice perché.
+    let (status, problem) = app
+        .post(
+            "/api/v1/auth/password-reset/confirm",
+            serde_json::json!({ "code": code, "new_password": "un altro cavallo lungo" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {problem}");
+
+    // 2. Un indirizzo che non esiste riceve **la stessa** risposta, e non fa partire
+    //    niente: è la regola di ADR-017 applicata al recupero.
+    let prima = app.mail.sent().len();
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": common::unique_email("mai-registrato") }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+    assert_eq!(
+        app.mail.sent().len(),
+        prima,
+        "un indirizzo sconosciuto ha fatto partire un'email"
+    );
+}
+
+/// **Il limite agli invii è per email**, e rifiuta in silenzio.
+///
+/// Un recupero senza freno è un modo per far arrivare cinquanta email a un indirizzo
+/// altrui. Il rifiuto è silenzioso — `202` come sempre — perché dirlo sarebbe di
+/// nuovo l'oracolo: «troppo presto» conferma che l'account esiste.
+#[tokio::test]
+async fn asking_for_a_second_code_too_soon_sends_nothing_and_says_nothing() {
+    let app = require_app!();
+    let email = common::unique_email("insistente");
+    common::register_and_login_with_email(&app, &email).await;
+
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let dopo_il_primo = app.mail.sent().len();
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/password-reset",
+            serde_json::json!({ "email": email }),
+        )
+        .await;
+    // Stessa risposta del primo, e nessuna seconda email.
+    assert_eq!(status, StatusCode::ACCEPTED, "corpo: {body}");
+    assert_eq!(
+        app.mail.sent().len(),
+        dopo_il_primo,
+        "il limite agli invii non ha fermato il secondo codice"
+    );
+}
+
+/// **L'invito parte per posta**, che è il criterio di fine di `Z1`.
+///
+/// Prima di questo passo il token tornava solo nella risposta HTTP e il
+/// proprietario lo consegnava a mano: era deliberato finché `Notifier` era una porta
+/// senza adattatore, e smette di bastare quando la posta diventa l'unico canale
+/// verso chi è chiuso fuori dal proprio account.
+///
+/// Il test guarda **il contenuto** e non il fatto che qualcosa sia partito: nel corpo
+/// c'è lo stesso codice che la risposta consegna, e c'è il nome dell'organizzazione,
+/// senza cui chi riceve un codice non sa da chi arriva.
+///
+/// **Il token resta anche nella risposta**, ed è la metà che si toglierebbe
+/// «pulendo»: l'invio è best-effort dopo il commit, quindi con il relay fermo quella
+/// è l'unica copia che esiste.
+#[tokio::test]
+async fn inviting_a_tenant_sends_the_code_by_mail() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "invito-per-posta").await;
+    let property = create_property(&app, &owner, "Immobile con posta").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let email = common::unique_email("destinatario");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+
+    let sent = app.mail.sent();
+    assert_eq!(sent.len(), 1, "l'invito non è stato recapitato per posta");
+    let (recipient, content) = &sent[0];
+    assert_eq!(recipient, &email);
+    match content {
+        propflow_application::ports::NotificationContent::TenantInvitation {
+            organization_name,
+            accept_token: sent_token,
+        } => {
+            // Lo **stesso** codice della risposta: se fossero due, uno dei due non
+            // funzionerebbe e nessuno saprebbe quale.
+            assert_eq!(sent_token, &accept_token);
+            assert_eq!(
+                organization_name, "Proprietario Test",
+                "l'email non dice da chi arriva l'invito"
+            );
+        }
+        other => panic!("notifica inattesa: {other:?}"),
+    }
+
+    // La risposta continua a portarlo: con il relay fermo è l'unica copia.
+    assert!(!accept_token.is_empty());
+}
+
+/// **L'inquilino che torna**, che è `R31`: il ciclo di vita normale del prodotto.
+///
+/// Un contratto finisce, con la stessa persona se ne fa un altro. Prima di questo
+/// test la seconda accettazione rispondeva `409 membership.already_exists` — su un
+/// codice che il proprietario aveva appena ricevuto senza un avviso — e siccome
+/// `lease_parties.user_id` lo scrive **solo** l'accettazione, l'inquilino restava
+/// fuori dal contratto nuovo senza nessun modo di rientrare.
+///
+/// **Nessun test poteva trovarlo**, e la ragione va tenuta: ogni altro test
+/// costruisce un inquilino **nuovo**. Il difetto viveva nella *seconda* volta che
+/// qualcosa succede alla stessa persona, che è lo spazio che una suite verde non
+/// attraversa. Questo test è quella seconda volta.
+#[tokio::test]
+async fn a_returning_tenant_can_accept_a_second_invitation() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "inquilino-che-torna").await;
+    let property = create_property(&app, &owner, "Casa con due stagioni").await;
+
+    let (_, first_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera del primo anno", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let first_room = first_room["id"].as_str().expect("id").to_owned();
+    let (_, second_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera del secondo anno", "monthly_rent": "450.00" }),
+        )
+        .await;
+    let second_room = second_room["id"].as_str().expect("id").to_owned();
+
+    // CASO 1 — l'inquilino nuovo. È il lato che non deve rompersi.
+    let first_lease = draft_lease(&app, &owner, &property, Some(&first_room), 0, Some(365)).await;
+    let tenant_email = common::unique_email("torna");
+    let (_, first_token) = invite_tenant(&app, &owner, &first_lease, &tenant_email).await;
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &first_token,
+        "Inquilino Che Torna",
+        "cavallo batteria graffetta",
+    )
+    .await;
+    assert_eq!(visible_leases(&app, &tenant, &owner_org).await.len(), 1);
+
+    // CASO 2 — la stessa persona, un contratto nuovo. Qui rispondeva `409`.
+    let second_lease =
+        draft_lease(&app, &owner, &property, Some(&second_room), 400, Some(730)).await;
+    let (_, second_token) = invite_tenant(&app, &owner, &second_lease, &tenant_email).await;
+
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": second_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["lease_id"], second_lease, "corpo: {accepted}");
+
+    // **Tutti e due**, non l'ultimo: il primo contratto non si perde per strada.
+    let mut visible = visible_leases(&app, &tenant, &owner_org).await;
+    visible.sort();
+    let mut expected = vec![first_lease, second_lease.clone()];
+    expected.sort();
+    assert_eq!(
+        visible, expected,
+        "l'inquilino non vede entrambi i contratti"
+    );
+
+    // La parte contrattuale del secondo è collegata: è ciò che rende visibile il
+    // contratto, e la ragione per cui il `409` era irreparabile.
+    let (_, detail) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{second_lease}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert!(
+        detail["parties"][0]["user_id"].is_string(),
+        "la parte del secondo contratto non è stata collegata: {detail}"
+    );
+
+    // Una sola appartenenza, non due: la membership non è stata reinserita.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let in_owner_org = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .count();
+    assert_eq!(in_owner_org, 1, "appartenenza duplicata: {orgs}");
+}
+
+/// **Il ruolo non si tocca.** Chi è già staff e viene invitato come inquilino
+/// resta staff.
+///
+/// È il caso vero di chi affitta una casa e ne abita un'altra, ed è anche l'assert
+/// che qualcuno toglierebbe «uniformando» il ramo: far coincidere il ruolo con
+/// quello dell'invito retrocederebbe il proprietario a `tenant`
+/// nella **propria** organizzazione.
+#[tokio::test]
+async fn accepting_a_tenant_invitation_does_not_demote_an_existing_member() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-inquilino");
+    // Un proprietario con un'organizzazione propria, non un inquilino al primo
+    // ingresso: è lui il caso che il test prova, quindi passa da
+    // `register_and_login_with_email` (invito da proprietario) e non da
+    // `register_tenant_from_invitation`.
+    let (owner, owner_org, _) = common::register_and_login_with_email(&app, &email).await;
+    let property = create_property(&app, &owner, "Casa dove abita chi la possiede").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &owner,
+            serde_json::json!({ "token": accept_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&owner), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let membership = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .expect("la propria organizzazione");
+    assert_eq!(
+        membership["role"], "owner",
+        "l'invito ha retrocesso il proprietario: {orgs}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Il proprio account e l'uscita da un'organizzazione (sezione 6)
+// ---------------------------------------------------------------------------
+
+/// `/api/v1/me` si legge, si corregge, e **non prende mai un identificatore**.
+///
+/// Tre cose in un giro solo: la lettura non porta il ruolo di piattaforma; il
+/// `PATCH` è parziale, con `null` che azzera; e l'email si riconosce e si rifiuta
+/// con un `422` che nomina il campo — non un `200` con l'indirizzo di prima, che
+/// sarebbe il sintomo muto.
+#[tokio::test]
+async fn the_account_reads_and_corrects_itself_and_the_email_stays_put() {
+    let app = require_app!();
+    let email = common::unique_email("me");
+    let (token, _, _) = common::register_and_login_with_email(&app, &email).await;
+
+    let (status, me) = app.send("GET", "/api/v1/me", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {me}");
+    assert_eq!(me["email"], email);
+    assert_eq!(me["full_name"], "Proprietario Test");
+    assert_eq!(me["locale"], "it-IT");
+    assert!(me.get("phone").is_none(), "corpo: {me}");
+    // Non è affare di chi guarda, e non deve nemmeno comparire a `null`.
+    assert!(me.get("platform_role").is_none(), "corpo: {me}");
+    assert!(me.get("failed_login_count").is_none(), "corpo: {me}");
+
+    // Senza `Authorization` non c'è nessuno da leggere.
+    let (status, _) = app.send("GET", "/api/v1/me", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, updated) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "full_name": "  Maria Rossi ", "phone": "+39 333 1234567" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {updated}");
+    assert_eq!(updated["full_name"], "Maria Rossi");
+    assert_eq!(updated["phone"], "+39 333 1234567");
+
+    // Si ricarica, e il telefono è quello: è il criterio di fine del piano.
+    let (_, again) = app.send("GET", "/api/v1/me", Some(&token), None).await;
+    assert_eq!(again["phone"], "+39 333 1234567");
+
+    // `null` azzera, e un campo non menzionato resta.
+    let (status, cleared) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "phone": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cleared}");
+    assert!(cleared.get("phone").is_none(), "corpo: {cleared}");
+    assert_eq!(cleared["full_name"], "Maria Rossi");
+
+    // Un corpo vuoto non è un errore: risponde con i dati invariati.
+    let (status, _) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Un telefono malformato è un `422` che nomina il campo, non un `409` di
+    // vincolo: la regola del `CHECK` è ripetuta nel dominio apposta.
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "phone": "chiamami" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "phone");
+
+    // **L'email non si cambia, e il tentativo lo dice.**
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            "/api/v1/me",
+            Some(&token),
+            Some(serde_json::json!({ "email": common::unique_email("altra") })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+    assert_eq!(problem["errors"][0]["field"], "email");
+    let (_, me) = app.send("GET", "/api/v1/me", Some(&token), None).await;
+    assert_eq!(me["email"], email, "l'email è cambiata: {me}");
+
+    // **Nessuna rotta proietta un utente per identificatore** (ADR-036): la forma
+    // con l'id nel percorso non esiste, nemmeno per il proprio.
+    let id = me["id"].as_str().expect("id");
+    let (status, _) = app
+        .send("GET", &format!("/api/v1/users/{id}"), Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Cambiare la password da dentro pretende quella vecchia e **chiude tutto**.
+///
+/// Il secondo assert è quello che si scrive sbagliato, ed è l'inciampo della
+/// 5-quater: asserire che la vecchia sessione smetta di *leggere* fallirebbe,
+/// perché l'access token è un JWT e vive i suoi quindici minuti. Ciò che muore
+/// è il **rinnovo**, e il test verifica quello — su **entrambe** le sessioni,
+/// compresa quella da cui si è chiesto il cambio.
+#[tokio::test]
+async fn changing_the_password_needs_the_old_one_and_no_session_renews_anymore() {
+    let app = require_app!();
+    let email = common::unique_email("cambia-password");
+    let vecchia = "cavallo batteria graffetta";
+    let invitation_token = common::issue_owner_invitation(&app, &email).await;
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({ "token": invitation_token, "full_name": "Proprietario Test", "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Due sessioni: quella da cui si cambia e «il telefono».
+    let (status, body, desk_cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+    let desk = body["access_token"].as_str().expect("token").to_owned();
+    let desk_cookie = desk_cookie.expect("cookie di refresh");
+    let (_, _, phone_cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    let phone_cookie = phone_cookie.expect("cookie di refresh");
+
+    let nuova = "cavallo batteria graffetta nuova";
+
+    // La vecchia sbagliata: `401`, e **niente è cambiato** — la vecchia giusta
+    // funziona ancora al login, quindi nessuna scrittura è passata.
+    let (status, problem) = app
+        .post_auth(
+            "/api/v1/me/password",
+            &desk,
+            serde_json::json!({ "current_password": "non è questa, di sicuro", "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {problem}");
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "la vecchia password non vale più dopo un tentativo rifiutato"
+    );
+    // E il rifiuto non ha consumato il rinnovo di nessuno.
+    let (status, _, desk_cookie) = app
+        .post_with_cookie("/api/v1/auth/refresh", Some(&desk_cookie), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let desk_cookie = desk_cookie.expect("cookie ruotato");
+
+    // Una password nuova debole è un `422` che nomina il campo, prima di toccare
+    // qualunque cosa.
+    let (status, problem) = app
+        .post_auth(
+            "/api/v1/me/password",
+            &desk,
+            serde_json::json!({ "current_password": vecchia, "new_password": "corta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let (status, body) = app
+        .post_auth(
+            "/api/v1/me/password",
+            &desk,
+            serde_json::json!({ "current_password": vecchia, "new_password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // **Nessuna sessione rinnova più**, compresa quella da cui si è cambiata: è la
+    // decisione 3 della sezione, uniforme ad ADR-052.
+    for (name, cookie) in [("scrivania", &desk_cookie), ("telefono", &phone_cookie)] {
+        let (status, body, _) = app
+            .post_with_cookie("/api/v1/auth/refresh", Some(cookie), None)
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "la sessione «{name}» rinnova ancora: {body}"
+        );
+    }
+
+    // L'access token già emesso invece **legge ancora**: è un JWT, non è
+    // revocabile, e vive i suoi quindici minuti. È il baratto di ADR-012, e
+    // asserire il contrario è l'errore che questo test esiste per non rifare.
+    let (status, _) = app.send("GET", "/api/v1/me", Some(&desk), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Si rientra con la nuova, non con la vecchia.
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": nuova }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .post(
+            "/api/v1/auth/login",
+            serde_json::json!({ "email": email, "password": vecchia }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Si esce, non si esce con un contratto in essere, e chi è uscito **rientra**.
+///
+/// Il secondo rifiuto arriva dal database e non da un `if`: il test lo prova
+/// due volte, prima dalla rotta — che dà la versione parlante — e poi con
+/// un'`UPDATE` scritta a mano sotto la Row Level Security dell'inquilino, che è
+/// l'unica prova che il confine non sia solo nel service layer.
+///
+/// Il terzo è la porta di servizio di ADR-051, ora percorribile: senza il ramo di
+/// riattivazione l'accettazione morirebbe con `409 membership.already_exists`.
+///
+/// Fra il secondo e il terzo, **da fuori si guarda con il token di prima**: è il
+/// token che chi esce ha davvero in mano per un quarto d'ora, e fino alla `0041`
+/// gli mostrava ancora il contratto (`R46`).
+#[tokio::test]
+async fn a_tenant_leaves_an_organization_unless_a_lease_is_in_force_and_can_come_back() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "casa-da-cui-si-esce").await;
+    let property = create_property(&app, &owner, "Casa da cui si esce").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let tenant_email = common::unique_email("chi-esce");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Che Esce",
+        "cavallo batteria graffetta",
+    )
+    .await;
+
+    // Il contratto entra in essere.
+    let (status, _) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 1. **Con un contratto in essere non si esce**, e la risposta dice perché.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.lease_in_force");
+
+    // La stessa scrittura a mano, sotto la RLS dell'inquilino: **zero righe**, che
+    // è il rifiuto della `WITH CHECK` e non di un `if`.
+    let tenant_id = app.send("GET", "/api/v1/me", Some(&tenant), None).await.1["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let mut tx = app
+        .pools
+        .application()
+        .begin()
+        .await
+        .expect("transazione applicativa");
+    sqlx::query("SELECT app.set_request_context($1, $2, false, NULL, NULL, NULL, 'tenant')")
+        .bind(uuid::Uuid::parse_str(&tenant_id).expect("uuid"))
+        .bind(uuid::Uuid::parse_str(&owner_org).expect("uuid"))
+        .execute(&mut *tx)
+        .await
+        .expect("contesto installato");
+    let error = sqlx::query(
+        "UPDATE app.org_members SET status = 'left' WHERE org_id = $1 AND user_id = $2",
+    )
+    .bind(uuid::Uuid::parse_str(&owner_org).expect("uuid"))
+    .bind(uuid::Uuid::parse_str(&tenant_id).expect("uuid"))
+    .execute(&mut *tx)
+    .await
+    .expect_err("la policy doveva rifiutare l'uscita con un contratto in essere");
+    assert!(
+        error.to_string().contains("row-level security"),
+        "atteso il rifiuto della policy, ottenuto: {error}"
+    );
+    tx.rollback().await.expect("annullata");
+
+    // Il contratto finisce: si disdice.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/terminate"),
+            &owner,
+            serde_json::json!({ "reason": "Trasloco" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    // 2. **Si esce.** La risposta dice da dove e con che ruolo.
+    let (status, left) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {left}");
+    assert_eq!(left["organization_id"], owner_org);
+    assert_eq!(left["role"], "tenant");
+
+    // Da fuori: l'organizzazione non è più fra le proprie, e ciò che era dentro
+    // non si legge più. **Nessuna** organizzazione resta: prima di ADR-053
+    // l'inquilino aveva una propria organizzazione personale vuota e ci
+    // ricadeva uscendo dall'unica che aveva; dopo, un inquilino non ne ha mai
+    // avuta una.
+    let (_, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    let ids: Vec<&str> = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        Vec::<&str>::new(),
+        "un inquilino senza organizzazioni non ne ha più nessuna: prima di ADR-053 gli restava la propria organizzazione personale, qui rappresentata da un id che non esiste più. corpo: {orgs}"
+    );
+
+    // **Con il token vecchio**, e questo è il punto (`R46`). I suoi claim
+    // portano ancora `org_id: owner_org`, e `middleware::context` si fida del
+    // ruolo del token quando l'organizzazione richiesta coincide con quella dei
+    // claim — un access token già emesso non si revoca a metà vita, il baratto
+    // di ADR-012. Fino alla `0041` il ramo dell'inquilino di `can_access_lease`
+    // e `can_access_property` guardava solo `lease_parties`, che l'uscita non
+    // tocca: `GET /leases` rispondeva `200` **con il contratto disdetto nel
+    // corpo**, e una segnalazione si apriva nell'organizzazione lasciata. Il
+    // test faceva un login nuovo per non vederlo. Ora le due funzioni chiedono
+    // anche la membership, e il confine tiene dalla Row Level Security, non dal
+    // token: la risposta è `200` con un elenco che non porta più il contratto.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            "/api/v1/leases",
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let still_visible = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .any(|item| item["id"] == serde_json::Value::String(lease.clone()));
+    assert!(
+        !still_visible,
+        "chi è uscito legge ancora il contratto disdetto con il token vecchio: {page}"
+    );
+
+    // E non scrive: aprire una segnalazione nell'organizzazione lasciata passa da
+    // `tickets_insert`, che consulta `can_access_property`. Il codice è quello che
+    // l'esecuzione mostra, non uno deciso prima.
+    let (status, problem) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/properties/{property}/tickets"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "title": "Da fuori",
+                "description": "Aperta con un token emesso prima dell'uscita",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.not_found", "corpo: {problem}");
+
+    // Due volte no: la riga resta, ed è osservabile.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.already_left");
+
+    // Un'organizzazione di cui non si è mai stati membri: la riga non torna.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{}/leave", uuid::Uuid::now_v7()),
+            &tenant,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.not_found");
+
+    // 3. **Chi è uscito rientra**, accettando un invito nuovo. È la porta di
+    //    servizio di ADR-051: senza la riattivazione, qui risponderebbe `409`.
+    let second_lease = draft_lease(&app, &owner, &property, None, 30, Some(400)).await;
+    let (_, second_token) = invite_tenant(&app, &owner, &second_lease, &tenant_email).await;
+    let (status, accepted) = app
+        .post_auth(
+            "/api/v1/auth/accept-invitation",
+            &tenant,
+            serde_json::json!({ "token": second_token }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    assert_eq!(accepted["organization_id"], owner_org);
+
+    let (_, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&tenant), None)
+        .await;
+    let back = orgs["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter(|item| item["id"] == serde_json::Value::String(owner_org.clone()))
+        .count();
+    assert_eq!(
+        back, 1,
+        "chi è rientrato non compare, o compare due volte: {orgs}"
+    );
+    // E vede il contratto nuovo: la parte è collegata, la membership è attiva.
+    assert!(
+        visible_leases(&app, &tenant, &owner_org)
+            .await
+            .contains(&second_lease),
+        "chi è rientrato non vede il contratto nuovo"
+    );
+}
+
+/// **L'ultimo proprietario non se ne va**, e il ruolo non è scrivibile da chi esce.
+///
+/// La prima metà è l'invariante che lo schema delega al service layer: senza,
+/// uscire dalla propria organizzazione personale la lascerebbe senza nessuno che la
+/// amministri, e `organizations_select` non la mostrerebbe più a nessuno.
+///
+/// La seconda è la colonna che si dimentica: aprire la propria riga senza negare
+/// `role` è dare a chiunque la promozione a `owner`. Il privilegio lo nega **prima**
+/// della policy, quindi anche l'`UPDATE` su una riga inesistente fallisce.
+#[tokio::test]
+async fn the_last_owner_cannot_leave_and_nobody_can_promote_themselves() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "ultimo-proprietario").await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.last_owner");
+
+    // Ed è ancora dentro.
+    let (_, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(&owner), None)
+        .await;
+    assert_eq!(orgs["items"][0]["id"], owner_org, "corpo: {orgs}");
+    assert_eq!(orgs["items"][0]["role"], "owner");
+
+    for denied in [
+        "UPDATE app.org_members SET role = 'owner' WHERE id = $1",
+        "UPDATE app.org_members SET org_id = $1 WHERE id = $1",
+        "UPDATE app.org_members SET user_id = $1 WHERE id = $1",
+        "UPDATE app.org_members SET deleted_at = now() WHERE id = $1",
+    ] {
+        let error = sqlx::query(denied)
+            .bind(uuid::Uuid::now_v7())
+            .execute(app.pools.application())
+            .await
+            .expect_err("l'aggiornamento doveva essere negato");
+        assert!(
+            error.to_string().contains("permission denied"),
+            "atteso un rifiuto per privilegi su `{denied}`, ottenuto: {error}"
+        );
+    }
+}
+
+/// Gli identificatori dei contratti che un utente vede in un'organizzazione.
+async fn visible_leases(app: &TestApp, token: &str, org: &str) -> Vec<String> {
+    let (status, page) = app
+        .send_in_org("GET", "/api/v1/leases", Some(token), Some(org), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .map(str::to_owned)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1509,15 +3105,13 @@ async fn a_tenant_attaches_to_their_own_lease_and_sees_nothing_else() {
 
     let tenant_email = common::unique_email("inquilino-doc");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Documenti",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     // Il proprietario allega un documento al contratto dell'inquilino.
     let (status, by_owner) = app
@@ -1534,8 +3128,8 @@ async fn a_tenant_attaches_to_their_own_lease_and_sees_nothing_else() {
     assert_eq!(status, StatusCode::CREATED, "corpo: {by_owner}");
     let owner_document = by_owner["id"].as_str().expect("id").to_owned();
 
-    // L'inquilino allega il proprio. Serve `X-Org-Id`: la sua organizzazione
-    // predefinita resta quella personale (debito noto in docs/09).
+    // L'inquilino allega il proprio. Serve `X-Org-Id` per la regola 24: sempre,
+    // anche quando quella dichiarata è l'unica organizzazione che ha.
     let (status, by_tenant) = app
         .upload(common::Upload {
             path: &format!("/api/v1/leases/{lease}/documents"),
@@ -1765,18 +3359,16 @@ async fn the_relationship_runs_in_both_directions() {
     // L'inquilino diventa reale.
     let tenant_email = common::unique_email("inquilino-ticket");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Segnalazioni",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
-    // 1. L'inquilino apre la segnalazione sul proprio immobile. Serve `X-Org-Id`:
-    //    la sua organizzazione predefinita resta quella personale (debito noto).
+    // 1. L'inquilino apre la segnalazione sul proprio immobile. Serve `X-Org-Id`
+    //    per la regola 24: sempre, anche quando è l'unica organizzazione che ha.
     let (ticket, reference) = open_ticket(
         &app,
         &tenant,
@@ -1955,13 +3547,31 @@ async fn the_relationship_runs_in_both_directions() {
 
     // 7. Il guasto torna: **l'inquilino** riapre. È la sola transizione che può
     //    eseguire, ed è ciò che rende la segnalazione un rapporto.
-    let (status, reopened) = app
+    //    E **dice perché**: il motivo è obbligatorio da quando un thread chiuso non
+    //    riceve più messaggi, perché riaprire è l'unica via per dire «non è
+    //    risolto». Senza, l'API risponde `422`.
+    let (status, problem) = app
         .send_in_org(
             "POST",
             &format!("/api/v1/tickets/{ticket}/reopen"),
             Some(&tenant),
             Some(&owner_org),
             Some(serde_json::json!({})),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "una riapertura senza motivo non lascia niente che la spieghi: {problem}"
+    );
+
+    let (status, reopened) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/tickets/{ticket}/reopen"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "reason": "Ha ricominciato a perdere due giorni dopo" })),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
@@ -2017,11 +3627,11 @@ async fn a_tenant_can_speak_but_not_drive_the_handling() {
 
     let tenant_email = common::unique_email("inquilino-ruoli");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &tenant_email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Ruoli",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -2113,18 +3723,19 @@ async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
 
     // Due inquilini sullo stesso contratto.
     let mut tokens = Vec::new();
-    for prefix in ["coinquilino-uno", "coinquilino-due"] {
+    for (prefix, name) in [
+        ("coinquilino-uno", "Coinquilino Uno"),
+        ("coinquilino-due", "Coinquilino Due"),
+    ] {
         let email = common::unique_email(prefix);
         let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-        let (token, _, _) = common::register_and_login_with_email(&app, &email).await;
-        let (status, accepted) = app
-            .post_auth(
-                "/api/v1/auth/accept-invitation",
-                &token,
-                serde_json::json!({ "token": accept_token }),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+        let (token, _tenant_id) = common::register_tenant_from_invitation(
+            &app,
+            &accept_token,
+            name,
+            "cavallo batteria graffetta",
+        )
+        .await;
         tokens.push(token);
     }
     let (reporter, cotenant) = (&tokens[0], &tokens[1]);
@@ -2165,23 +3776,229 @@ async fn a_cotenant_sees_the_ticket_but_cannot_reopen_it() {
             &format!("/api/v1/tickets/{ticket}/reopen"),
             Some(cotenant),
             Some(&owner_org),
-            Some(serde_json::json!({})),
+            Some(serde_json::json!({ "reason": "Secondo me non è risolto" })),
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
     assert_eq!(problem["code"], "ticket.not_yours", "corpo: {problem}");
 
-    // Chi ha segnalato invece sì.
+    // Chi ha segnalato invece sì, e il suo motivo finisce nel thread.
     let (status, reopened) = app
         .send_in_org(
             "POST",
             &format!("/api/v1/tickets/{ticket}/reopen"),
             Some(reporter),
             Some(&owner_org),
-            Some(serde_json::json!({})),
+            Some(serde_json::json!({ "reason": "Perde ancora, sotto il lavello" })),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {reopened}");
+
+    let (status, thread) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(cotenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {thread}");
+    let bodies: Vec<&str> = thread["items"]
+        .as_array()
+        .expect("messaggi")
+        .iter()
+        .filter_map(|message| message["body"].as_str())
+        .collect();
+    assert!(
+        bodies.contains(&"Perde ancora, sotto il lavello"),
+        "il motivo della riapertura vive nel thread, che non si riscrive mai: {thread}"
+    );
+
+    // E il thread dice **chi** ha scritto, non solo con che ruolo: in un
+    // co-living i due inquilini sono entrambi `tenant`.
+    let author = thread["items"]
+        .as_array()
+        .expect("messaggi")
+        .iter()
+        .find(|message| message["body"] == "Perde ancora, sotto il lavello")
+        .expect("il messaggio della riapertura");
+    assert_eq!(author["author_kind"], "tenant", "corpo: {thread}");
+    assert!(
+        author["author_name"].is_string(),
+        "il coinquilino legge il nome dell'altro dal ramo `shares_home_with` di          `users_select`, che la 0030 aveva lasciato in piedi: {thread}"
+    );
+}
+
+/// La correzione del testo è una rotta a sé, con **una sola** autorizzazione.
+///
+/// `PATCH /tickets/{id}` resta i costi e resta solo staff; `PATCH
+/// /tickets/{id}/report` è il testo e la casella di visibilità, e vale per lo
+/// staff sempre e per chi ha segnalato finché è aperta. Sono due rotte perché una
+/// sola avrebbe due autorizzazioni secondo i campi presenti nel corpo, che è la
+/// cosa che si sbaglia in silenzio (ADR-048).
+#[tokio::test]
+async fn the_report_is_corrected_from_a_route_of_its_own() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-correzione").await;
+    let property = create_property(&app, &owner, "Casa da correggere").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let email = common::unique_email("inquilino-correzione");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Correzione",
+        "cavallo batteria graffetta",
+    )
+    .await;
+
+    let (ticket, _) = open_ticket(
+        &app,
+        &tenant,
+        Some(&owner_org),
+        &property,
+        Some(&lease),
+        "Il bolier perde",
+    )
+    .await;
+
+    // Chi ha segnalato corregge il refuso e dichiara la segnalazione di interesse
+    // comune, nella stessa richiesta: i tre campi hanno la stessa autorizzazione.
+    let (status, fixed) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}/report"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "title": "Il boiler perde",
+                "visible_to_residents": true
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {fixed}");
+    assert_eq!(fixed["title"], "Il boiler perde");
+    assert_eq!(fixed["visible_to_residents"], true);
+    assert_eq!(
+        fixed["description"], "Descrizione del guasto",
+        "assente = invariato: il campo non nominato non si azzera, {fixed}"
+    );
+
+    // Il `PATCH` dei costi resta solo staff, e non ha imparato a scrivere il testo.
+    let (status, problem) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "actual_cost": "10.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "org.staff_role_required");
+
+    // Preso in carico, il testo passa a chi amministra. L'assegnatario è chi ha
+    // segnalato — l'unico identificatore che questa risposta porta — e basta a
+    // far uscire la segnalazione da `open`, che è ciò che il test misura.
+    let reporter_id = fixed["reported_by"]
+        .as_str()
+        .map(str::to_owned)
+        .expect("chi ha segnalato");
+    let (status, assigned) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/assign"),
+            &owner,
+            serde_json::json!({ "assignee_id": reporter_id }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {assigned}");
+
+    let (status, problem) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}/report"),
+            Some(&tenant),
+            Some(&owner_org),
+            Some(serde_json::json!({ "title": "Troppo tardi" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "org.staff_role_required",
+        "la segnalazione è sua, ma qualcuno ci ha messo mano: {problem}"
+    );
+
+    let (status, corrected) = app
+        .send_in_org(
+            "PATCH",
+            &format!("/api/v1/tickets/{ticket}/report"),
+            Some(&owner),
+            None,
+            Some(serde_json::json!({ "description": "Riformulata da chi amministra" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {corrected}");
+    assert_eq!(corrected["description"], "Riformulata da chi amministra");
+    assert_eq!(
+        corrected["title"], "Il boiler perde",
+        "il titolo non era nel corpo e non doveva cambiare: {corrected}"
+    );
+}
+
+/// Su una segnalazione chiusa il thread **si legge e non si scrive**.
+///
+/// È una regola di dominio e non un controllo di interfaccia: nasconderla nel
+/// client lascerebbe la rotta aperta, e questo test bussa direttamente alla rotta.
+#[tokio::test]
+async fn a_closed_ticket_does_not_take_messages_but_still_gives_them() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "proprietario-thread-chiuso").await;
+    let property = create_property(&app, &owner, "Casa chiusa").await;
+    let (ticket, _) = open_ticket(&app, &owner, None, &property, None, "Guasto risolto").await;
+
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/messages"),
+        &owner,
+        serde_json::json!({ "body": "Passo domani" }),
+    )
+    .await;
+    app.post_auth(
+        &format!("/api/v1/tickets/{ticket}/close"),
+        &owner,
+        serde_json::json!({}),
+    )
+    .await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            &owner,
+            serde_json::json!({ "body": "Un'altra cosa" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "ticket.thread_closed",
+        "codice proprio: non è una transizione rifiutata, e il rimedio è riaprire — {problem}"
+    );
+
+    let (status, thread) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/tickets/{ticket}/messages"),
+            Some(&owner),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {thread}");
+    assert_eq!(
+        thread["items"].as_array().expect("messaggi").len(),
+        1,
+        "leggere resta permesso: {thread}"
+    );
 }
 
 /// Il riferimento riparte da uno in ogni organizzazione, e non dice quante
@@ -2325,12 +4142,14 @@ async fn a_transition_that_is_not_allowed_is_a_conflict() {
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
     assert_eq!(problem["code"], "ticket.invalid_transition");
 
-    // Né si riapre ciò che non è chiuso.
+    // Né si riapre ciò che non è chiuso. Il motivo va mandato lo stesso: la
+    // validazione del corpo viene **prima** dello stato, quindi senza si otterrebbe
+    // un `422` e la transizione rifiutata non si vedrebbe affatto.
     let (status, problem) = app
         .post_auth(
             &format!("/api/v1/tickets/{ticket}/reopen"),
             &owner,
-            serde_json::json!({}),
+            serde_json::json!({ "reason": "Non è mai stata chiusa" }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
@@ -2513,6 +4332,427 @@ async fn register_bill(
     created["id"].as_str().expect("id").to_owned()
 }
 
+/// **I nomi di ciò a cui una risposta porta**, che è `R32` — terza occorrenza dello
+/// stesso difetto dopo `R14` sui contratti e `R21`/`R22` sulle persone.
+///
+/// Tre schede portavano un collegamento etichettato con il nome della *categoria*
+/// — «Immobili», «Contratti» — invece che con quello della cosa. Il test guarda le
+/// tre risposte insieme, perché è insieme che il difetto si vede: chi ne sistemasse
+/// una sola lascerebbe una schermata in cui un nome compare e l'altro no.
+///
+/// Copre anche i due modi in cui un nome **manca**, che sono diversi fra loro: la
+/// stanza assente è il caso normale di un contratto sull'immobile intero, il nome
+/// dell'immobile assente è un immobile archiviato — e sono due assenze che il
+/// client racconta in modo diverso.
+#[tokio::test]
+async fn tickets_charges_and_bills_carry_the_names_of_what_they_point_at() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "i-nomi").await;
+    let property = create_property(&app, &owner, "Villa Aurora").await;
+
+    let (_, room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera azzurra", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let room = room["id"].as_str().expect("id").to_owned();
+    let lease = draft_lease(&app, &owner, &property, Some(&room), -10, Some(355)).await;
+
+    // --- la segnalazione: l'immobile e, quando c'è, la stanza ---
+    let (status, ticket) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/tickets"),
+            &owner,
+            serde_json::json!({
+                "title": "La caldaia perde",
+                "description": "Perde dal raccordo.",
+                "room_id": room,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {ticket}");
+    // **Anche sulla creazione**, non solo in lettura: una risposta che portasse i
+    // nomi a volte sì e a volte no non permetterebbe di distinguere «non
+    // risolto» da «archiviato».
+    assert_eq!(ticket["property_label"], "Villa Aurora", "corpo: {ticket}");
+    assert_eq!(ticket["room_name"], "Camera azzurra", "corpo: {ticket}");
+    let ticket_id = ticket["id"].as_str().expect("id").to_owned();
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["property_label"], "Villa Aurora", "corpo: {detail}");
+
+    let (status, page) = app.send("GET", "/api/v1/tickets", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(ticket_id.clone()))
+        .expect("la segnalazione appena aperta");
+    assert_eq!(listed["property_label"], "Villa Aurora", "corpo: {page}");
+
+    // Una transizione risponde con gli stessi campi: è la ragione per cui i nomi
+    // si risolvono in `view_of` e non nel solo caso d'uso di lettura.
+    let (status, triaged) = app
+        .post_auth(
+            &format!("/api/v1/tickets/{ticket_id}/triage"),
+            &owner,
+            serde_json::json!({ "category": "plumbing", "priority": "high" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {triaged}");
+    assert_eq!(
+        triaged["property_label"], "Villa Aurora",
+        "corpo: {triaged}"
+    );
+    assert_eq!(triaged["room_name"], "Camera azzurra", "corpo: {triaged}");
+
+    // --- l'addebito: il contratto si nomina con la casa e la stanza ---
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "400.00",
+                "due_date": day(5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    assert_eq!(charge["property_label"], "Villa Aurora", "corpo: {charge}");
+    assert_eq!(charge["room_name"], "Camera azzurra", "corpo: {charge}");
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["property_label"], "Villa Aurora", "corpo: {detail}");
+    assert_eq!(detail["room_name"], "Camera azzurra", "corpo: {detail}");
+
+    // --- la bolletta: il **contratto imputato**, e il riaddebito ---
+    let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/N/1").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["property_label"], "Villa Aurora", "corpo: {read}");
+    assert_eq!(read["room_name"], "Camera azzurra", "corpo: {read}");
+
+    // Una bolletta **senza contratto imputato** non ha niente da nominare, e il
+    // campo resta assente invece di prendere il nome dell'immobile della bolletta:
+    // ciò che il collegamento nomina è il contratto, e lì non ce n'è uno.
+    let orphan = register_bill(&app, &owner, &property, None, "2026/N/2").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{orphan}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert!(read.get("property_label").is_none(), "corpo: {read}");
+
+    let (status, validated) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {validated}");
+    assert_eq!(
+        validated["property_label"], "Villa Aurora",
+        "una transizione risponde senza i nomi: {validated}"
+    );
+
+    let (status, recharged) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": lease, "amount": "90.00", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {recharged}");
+    assert_eq!(
+        recharged["charge"]["property_label"], "Villa Aurora",
+        "corpo: {recharged}"
+    );
+    assert_eq!(
+        recharged["utility_bill"]["room_name"], "Camera azzurra",
+        "corpo: {recharged}"
+    );
+}
+
+/// **Quanto resta da riaddebitare**, che è la metà di `R33` che riguarda i numeri.
+///
+/// Riaddebitare una bolletta d'immobile a tre contratti erano tre sottrazioni a
+/// mente. Il test fissa le tre regole che quel numero deve rispettare, e la terza è
+/// quella che si perde: **un addebito annullato non conta**, perché `void` dice «non
+/// doveva essere chiesto» e quella quota torna disponibile.
+///
+/// Fissa anche ciò che **non** cambia: superare il totale resta possibile. È scritto
+/// come deliberato — lo schema non ha il vincolo e uno applicativo cadrebbe fra due
+/// riaddebiti concorrenti — e un test che lo vietasse trasformerebbe un aiuto in un
+/// cancello.
+#[tokio::test]
+async fn a_bill_says_how_much_of_it_has_already_been_recharged() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "quanto-resta").await;
+    let property = create_property(&app, &owner, "Casa da dividere").await;
+
+    let (_, first_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera uno", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let first_room = first_room["id"].as_str().expect("id").to_owned();
+    let (_, second_room) = app
+        .post_auth(
+            &format!("/api/v1/properties/{property}/rooms"),
+            &owner,
+            serde_json::json!({ "name": "Camera due", "monthly_rent": "400.00" }),
+        )
+        .await;
+    let second_room = second_room["id"].as_str().expect("id").to_owned();
+
+    let first = draft_lease(&app, &owner, &property, Some(&first_room), -10, Some(355)).await;
+    let second = draft_lease(&app, &owner, &property, Some(&second_room), -10, Some(355)).await;
+    let email = common::unique_email("intestatario");
+    add_tenant(&app, &owner, &first, "Giulia Neri", Some(&email)).await;
+
+    // **L'intestatario viaggia con i nomi del posto**: è ciò che distingue due
+    // contratti sulla stessa stanza in due anni diversi, e senza di lui una tendina
+    // di contratti resta un elenco di date.
+    let (status, page) = app.send("GET", "/api/v1/leases", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    let listed = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(first.clone()))
+        .expect("il primo contratto");
+    assert_eq!(listed["primary_tenant"], "Giulia Neri", "corpo: {page}");
+    assert_eq!(listed["room_name"], "Camera uno", "corpo: {page}");
+    // Un contratto senza parti non ha un intestatario, e il campo manca.
+    let bare = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .find(|item| item["id"] == serde_json::Value::String(second.clone()))
+        .expect("il secondo contratto");
+    assert!(bare.get("primary_tenant").is_none(), "corpo: {page}");
+
+    // La bolletta è dell'immobile intero: non è imputata a nessun contratto, ed è
+    // il caso in cui il residuo serve davvero.
+    let bill = register_bill(&app, &owner, &property, None, "2026/Q/1").await;
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(read["total_amount"], "184.20", "corpo: {read}");
+    assert_eq!(read["recharged_amount"], "0.00", "mai riaddebitata: {read}");
+
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/validate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, first_recharge) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": first, "amount": "92.10", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {first_recharge}");
+    assert_eq!(
+        first_recharge["utility_bill"]["recharged_amount"], "92.10",
+        "corpo: {first_recharge}"
+    );
+    let first_charge = first_recharge["charge"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    let (status, second_recharge) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": second, "amount": "92.10", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {second_recharge}");
+    assert_eq!(
+        second_recharge["utility_bill"]["recharged_amount"], "184.20",
+        "la somma non torna: {second_recharge}"
+    );
+
+    // Annullare il primo addebito **libera la sua quota**: era una richiesta che non
+    // doveva essere fatta, e il residuo torna a coprirla.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/charges/{first_charge}/void"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, read) = app
+        .send(
+            "GET",
+            &format!("/api/v1/utility-bills/{bill}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert_eq!(
+        read["recharged_amount"], "92.10",
+        "un addebito annullato non deve contare: {read}"
+    );
+
+    // Superare il totale resta ammesso: è scritto come deliberato, e qui il numero
+    // lo dice invece di impedirlo.
+    let (status, over) = app
+        .post_auth(
+            &format!("/api/v1/utility-bills/{bill}/recharge"),
+            &owner,
+            serde_json::json!({ "lease_id": first, "amount": "1000.00", "due_date": day(20) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {over}");
+    assert_eq!(
+        over["utility_bill"]["recharged_amount"], "1092.10",
+        "corpo: {over}"
+    );
+
+    // **Per chi abita, il campo non c'è.** La somma si legge sotto RLS e a lui
+    // tornerebbe parziale: un numero sbagliato che sembra un totale.
+    let tenant_bill = register_bill(&app, &owner, &property, Some(&first), "2026/Q/2").await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{first}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    let (_, accept_token) = invite_tenant(&app, &owner, &first, &email).await;
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Giulia Neri",
+        "cavallo batteria graffetta",
+    )
+    .await;
+
+    let (status, read) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/utility-bills/{tenant_bill}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {read}");
+    assert!(
+        read["recharged_amount"].is_null(),
+        "l'inquilino non deve ricevere una somma parziale: {read}"
+    );
+}
+
+/// **Un immobile archiviato lascia il campo assente, e la riga resta.**
+///
+/// È la trappola che la sezione 3 aveva già pagato con un `LEFT JOIN`: la query dei
+/// nomi filtra `deleted_at IS NULL` come impone la regola 10, quindi con un `INNER`
+/// sparirebbero dall'elenco *tutte* le righe di ogni immobile archiviato. Il campo
+/// manca, e chi legge dice «Immobile archiviato» invece di mostrare uno spazio.
+#[tokio::test]
+async fn an_archived_property_leaves_the_name_out_without_hiding_the_charge() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "immobile-archiviato").await;
+    let property = create_property(&app, &owner, "Casa che sparirà").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "500.00",
+                "due_date": day(5),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    assert_eq!(charge["property_label"], "Casa che sparirà");
+    let charge_id = charge["id"].as_str().expect("id").to_owned();
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    // La riga c'è ancora — è la cosa che l'`INNER JOIN` avrebbe rotto — e il nome
+    // non c'è più.
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    assert_eq!(detail["id"], charge_id, "corpo: {detail}");
+    assert!(
+        detail.get("property_label").is_none(),
+        "il nome di un immobile archiviato non deve tornare: {detail}"
+    );
+}
+
 /// Il mese del proprietario, dal bordo HTTP: registra, corregge, valida,
 /// riaddebita; l'inquilino vede addebito e bolletta con il saldo a zero.
 #[tokio::test]
@@ -2534,15 +4774,13 @@ async fn a_bill_becomes_a_charge_the_tenant_can_read() {
     assert_eq!(status, StatusCode::OK, "corpo: {activated}");
 
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &tenant,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Bollette",
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     let bill = register_bill(&app, &owner, &property, Some(&lease), "2026/H/1").await;
 
@@ -2715,11 +4953,11 @@ async fn a_voided_charge_stays_visible_and_a_voided_bill_frees_its_invoice_numbe
     )
     .await;
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Annulli",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -2943,11 +5181,11 @@ async fn a_tenant_reads_the_accounting_but_never_writes_it() {
     )
     .await;
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino Contabile",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -3270,11 +5508,11 @@ async fn charge_with_a_real_tenant(app: &TestApp, label: &str) -> (String, Strin
     )
     .await;
     let (_, accept_token) = invite_tenant(app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        app,
+        &accept_token,
+        "Inquilino Pagante",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -4027,42 +6265,12 @@ async fn filtering_by_lease_goes_through_the_charge_and_the_nested_route_is_unch
 async fn coliving_tenant(app: &TestApp, owner: &str, lease: &str, label: &str) -> (String, String) {
     let email = common::unique_email(label);
     let (_, accept_token) = invite_tenant(app, owner, lease, &email).await;
-    let (token, _, _) = common::register_and_login_with_email(app, &email).await;
-
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &token,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
-
-    // **Il `user_id` si legge dalle parti del contratto**, e qui la lettura passa
-    // dal proprietario: `POST /auth/accept-invitation` restituisce l'organizzazione
-    // e il ruolo, non l'utente.
-    //
-    // **Questi test usano un contratto unico condiviso dai tre**, che è il caso in
-    // cui questa via basta: `can_access_lease` ammette lo staff oppure chi è parte
-    // di *quel* contratto. Nel co-living **per stanza** — dove ognuno ha il proprio
-    // — non basterebbe, e la via è
-    // `GET /properties/{id}/residents`: la percorre
-    // `a_housemate_finds_the_other_and_adds_them_to_the_group_alone`, dove il
-    // proprietario non passa niente a mano.
-    let (status, detail) = app
-        .send("GET", &format!("/api/v1/leases/{lease}"), Some(owner), None)
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
-    let user_id = detail["parties"]
-        .as_array()
-        .expect("parti del contratto")
-        .iter()
-        .find(|party| party["email"] == email)
-        .and_then(|party| party["user_id"].as_str())
-        .expect("la parte è collegata all'utente dopo l'accettazione")
-        .to_owned();
-
-    (token, user_id)
+    // `register_tenant_from_invitation` restituisce già (access_token, user_id):
+    // prima di ADR-053 l'utente si otteneva registrandosi come proprietario e
+    // poi accettando, e il `user_id` andava riletto dalle parti del contratto
+    // perché `POST /auth/accept-invitation` non lo restituisce.
+    common::register_tenant_from_invitation(app, &accept_token, label, "cavallo batteria graffetta")
+        .await
 }
 
 /// Il giro a mano del modulo, contro il router vero.
@@ -4380,6 +6588,292 @@ async fn a_coliving_group_splits_a_hundred_euros_and_closes_the_account() {
     assert_eq!(status, StatusCode::OK, "un conto chiuso si consulta");
 }
 
+/// Annullare una spesa **fa scendere i saldi**, anche dopo un regolamento.
+///
+/// È il criterio di fine della sezione 7 per il suo unico passo con backend: la
+/// migration `0028` concedeva `deleted_at` «per l'annullamento» e nessuna rotta
+/// lo faceva. Il giro: cento euro divisi in tre, il secondo salda e il primo
+/// conferma, poi la spesa viene annullata — e il saldo del primo scende da
+/// +33,34 a **−33,33**, perché il regolamento resta e la spesa no. Un regolamento
+/// salda un saldo, non una spesa.
+///
+/// Intorno, i tre rifiuti: il terzo coinquilino — che non l'ha registrata né
+/// anticipata — riceve `403 expense.not_yours`; il secondo annullamento trova
+/// `404`, non `409`, perché la riga non si legge più; e la spesa è sparita
+/// dall'elenco.
+#[tokio::test]
+async fn cancelling_an_expense_lowers_the_balances_even_after_a_settlement() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "proprietario-annulla").await;
+    let property = create_property(&app, &owner, "Casa che annulla").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let (first, first_id) = coliving_tenant(&app, &owner, &lease, "annulla-uno").await;
+    let (second, second_id) = coliving_tenant(&app, &owner, &lease, "annulla-due").await;
+    let (third, third_id) = coliving_tenant(&app, &owner, &lease, "annulla-tre").await;
+
+    let (status, group) = app
+        .send_in_org(
+            "POST",
+            "/api/v1/expense-groups",
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "name": "Casa di via Annulla", "property_id": property })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {group}");
+    let group_id = group["id"].as_str().expect("id").to_owned();
+    for user in [&second_id, &third_id] {
+        let (status, added) = app
+            .send_in_org(
+                "POST",
+                &format!("/api/v1/expense-groups/{group_id}/members"),
+                Some(&first),
+                Some(&owner_org),
+                Some(serde_json::json!({ "user_id": user })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "corpo: {added}");
+    }
+
+    let (status, expense) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "description": "Spesa sbagliata",
+                "amount": "100.00",
+                "category": "groceries",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {expense}");
+    let expense_id = expense["id"].as_str().expect("id").to_owned();
+
+    let balance_of = |body: &serde_json::Value, user: &str| -> rust_decimal::Decimal {
+        body["items"]
+            .as_array()
+            .expect("saldi")
+            .iter()
+            .find(|item| item["user_id"] == user)
+            .map(|item| {
+                item["net_balance"]
+                    .as_str()
+                    .expect("saldo")
+                    .parse::<rust_decimal::Decimal>()
+                    .expect("decimale")
+            })
+            .unwrap_or_else(|| panic!("nessun saldo per {user}"))
+    };
+    let balances = |token: &str| {
+        let path = format!("/api/v1/expense-groups/{group_id}/balances");
+        let token = token.to_owned();
+        let owner_org = owner_org.clone();
+        let app = &app;
+        async move {
+            let (status, body) = app
+                .send_in_org("GET", &path, Some(&token), Some(&owner_org), None)
+                .await;
+            assert_eq!(status, StatusCode::OK, "corpo: {body}");
+            body
+        }
+    };
+
+    // Il secondo salda la propria quota e il primo conferma: il saldo del primo
+    // scende da +66,67 a +33,34, e il secondo è in pari.
+    let before = balances(&first).await;
+    let debt = balance_of(&before, &second_id).abs().to_string();
+    let (status, settlement) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/settlements"),
+            Some(&second),
+            Some(&owner_org),
+            Some(serde_json::json!({
+                "to_user_id": first_id,
+                "amount": debt,
+                "method": "bank_transfer",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {settlement}");
+    let settlement_id = settlement["id"].as_str().expect("id").to_owned();
+    let (status, confirmed) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/settlements/{settlement_id}/confirm"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {confirmed}");
+
+    let settled = balances(&first).await;
+    let creditor_before = balance_of(&settled, &first_id);
+    assert!(creditor_before > rust_decimal::Decimal::ZERO);
+    assert_eq!(
+        balance_of(&settled, &second_id),
+        rust_decimal::Decimal::ZERO
+    );
+
+    // **Il terzo non può**: non l'ha registrata né anticipata, e non è staff. Un
+    // `403` con il codice che dice chi può, non un `404`: la spesa lui la vede.
+    let (status, refused) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{expense_id}/cancel"),
+            Some(&third),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {refused}");
+    assert_eq!(refused["code"], "expense.not_yours");
+
+    // Chi l'ha registrata annulla.
+    let (status, cancelled) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{expense_id}/cancel"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {cancelled}");
+    assert_eq!(cancelled["id"], expense_id);
+
+    // **I saldi scendono.** La spesa è uscita e il regolamento è rimasto: il
+    // primo, che ha ricevuto 33,33 per una spesa che non c'è più, è ora in
+    // **debito** di quella cifra verso il secondo, e la somma fa ancora zero.
+    let after = balances(&first).await;
+    let creditor_after = balance_of(&after, &first_id);
+    assert!(
+        creditor_after < creditor_before,
+        "il saldo di chi aveva anticipato deve scendere: prima {creditor_before}, dopo {creditor_after}"
+    );
+    assert!(creditor_after < rust_decimal::Decimal::ZERO);
+    assert_eq!(balance_of(&after, &second_id), -creditor_after);
+    assert_eq!(balance_of(&after, &third_id), rust_decimal::Decimal::ZERO);
+    let sum: rust_decimal::Decimal = after["items"]
+        .as_array()
+        .expect("saldi")
+        .iter()
+        .map(|item| {
+            item["net_balance"]
+                .as_str()
+                .expect("saldo")
+                .parse::<rust_decimal::Decimal>()
+                .expect("decimale")
+        })
+        .sum();
+    assert_eq!(
+        sum,
+        rust_decimal::Decimal::ZERO,
+        "la somma dei saldi fa ancora zero"
+    );
+
+    // La spesa non si legge più: `404` sul dettaglio, sparita dall'elenco, e un
+    // secondo annullamento trova lo stesso `404` — non un `409`. È la forma del
+    // soft delete, e il client la classifica come «era già così».
+    let (status, gone) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expenses/{expense_id}"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {gone}");
+    assert_eq!(gone["code"], "expense.not_found");
+    let (status, again) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{expense_id}/cancel"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {again}");
+    let (status, list) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {list}");
+    assert!(
+        list["items"].as_array().expect("elenco").is_empty(),
+        "una spesa annullata non è in nessun elenco"
+    );
+
+    // Lo staff può, su una spesa che non ha né registrato né anticipato: il
+    // proprietario annulla quella registrata dal terzo.
+    let (status, other) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&third),
+            Some(&owner_org),
+            Some(serde_json::json!({ "description": "Bombola", "amount": "30.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {other}");
+    let other_id = other["id"].as_str().expect("id").to_owned();
+    let (status, by_staff) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{other_id}/cancel"),
+            Some(&owner),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {by_staff}");
+
+    // E su un conto chiuso non si annulla: è una scrittura sul conto.
+    let (status, third_expense) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/expenses"),
+            Some(&first),
+            Some(&owner_org),
+            Some(serde_json::json!({ "description": "Ultima", "amount": "3.00" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {third_expense}");
+    let third_expense_id = third_expense["id"].as_str().expect("id").to_owned();
+    let (status, archived) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expense-groups/{group_id}/archive"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {archived}");
+    let (status, closed) = app
+        .send_in_org(
+            "POST",
+            &format!("/api/v1/expenses/{third_expense_id}/cancel"),
+            Some(&first),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {closed}");
+    assert_eq!(closed["code"], "expense_group.archived");
+}
+
 /// La ripartizione pesata dal bordo HTTP, e il peso che viaggia con le quote.
 #[tokio::test]
 async fn a_weighted_split_carries_the_weight_onto_the_wire() {
@@ -4595,15 +7089,13 @@ async fn resident_of_room(
 
     let email = common::unique_email(label);
     let (_, accept_token) = invite_tenant(app, owner, &lease, &email).await;
-    let (token, _, _) = common::register_and_login_with_email(app, &email).await;
-    let (status, accepted) = app
-        .post_auth(
-            "/api/v1/auth/accept-invitation",
-            &token,
-            serde_json::json!({ "token": accept_token }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "corpo: {accepted}");
+    let (token, _tenant_id) = common::register_tenant_from_invitation(
+        app,
+        &accept_token,
+        label,
+        "cavallo batteria graffetta",
+    )
+    .await;
 
     let (status, activated) = app
         .send(
@@ -5030,11 +7522,11 @@ async fn the_ocr_route_is_staff_only_and_unknown_bills_are_not_found() {
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {activated}");
     let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
-    let (tenant, _, _) = common::register_and_login_with_email(&app, &email).await;
-    app.post_auth(
-        "/api/v1/auth/accept-invitation",
-        &tenant,
-        serde_json::json!({ "token": accept_token }),
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilino OCR",
+        "cavallo batteria graffetta",
     )
     .await;
 
@@ -5245,4 +7737,470 @@ async fn the_dashboard_needs_authentication() {
     let (status, body) = app.send("GET", "/api/v1/dashboard", None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "corpo: {body}");
     assert_eq!(body["code"], "auth.token_missing", "corpo: {body}");
+}
+
+// ---------------------------------------------------------------------------
+// ADR-053: si entra per invito, non da una rotta aperta a chiunque.
+//
+// `POST /auth/register` è sparita (F6): il test più sotto prova il `404`. Le
+// due rotte qui sotto sono quelle su cui il prodotto atterra: un token da
+// proprietario apre un account e un'organizzazione, un token da inquilino
+// apre un account **dentro** l'organizzazione di chi ha invitato.
+// ---------------------------------------------------------------------------
+
+/// `POST /auth/register` non «richiede un token»: **non esiste più**. Un `404`
+/// e non un `405`, per qualunque corpo: la rotta è sparita per ogni verbo, non
+/// solo per `POST` — vedi `unknown_routes_return_problem_details_too` per la
+/// stessa forma su una rotta che non è mai esistita.
+#[tokio::test]
+async fn registering_freely_is_gone() {
+    let app = require_app!();
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register",
+            serde_json::json!({
+                "email": common::unique_email("porta-vecchia"),
+                "full_name": "Tizio",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {body}");
+    assert_eq!(body["code"], "endpoint.not_found", "corpo: {body}");
+}
+
+/// Scrive un invito da proprietario **già scaduto**, retrodatando sia
+/// `created_at` sia `expires_at`: il vincolo `owner_invitations_expiry_ck`
+/// impone `expires_at > created_at`, quindi non basta spostare indietro la
+/// sola scadenza di una riga già inserita da `common::issue_owner_invitation`.
+async fn issue_owner_invitation_expired(app: &TestApp, email: &str) -> String {
+    use propflow_application::ports::OpaqueTokenFactory as _;
+    use propflow_infrastructure::security::OpaqueTokenGenerator;
+
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let created_at = chrono::Utc::now() - chrono::Duration::days(9);
+    let expires_at = chrono::Utc::now() - chrono::Duration::days(2);
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at)
+         VALUES ($1::app.email_address, $2, $3, $4)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(expires_at)
+    .bind(created_at)
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito scaduto inserito");
+    token.plaintext
+}
+
+/// Scrive un invito da proprietario **già revocato**, direttamente in
+/// `INSERT` e non con una `UPDATE` successiva: il runbook revoca con `UPDATE
+/// … SET revoked_at`, ma quella `UPDATE` gira con il ruolo del **migratore**
+/// (`docs/07-operazioni.md`), che i test non hanno — la migration `0040`
+/// concede a `propflow_worker`, il ruolo privilegiato dei test, `INSERT` senza
+/// restrizioni di colonna e `UPDATE` sulle sole `accepted_at`/`accepted_by`.
+/// Una riga che nasce già revocata produce lo stesso stato che il runbook
+/// produrrebbe con una scrittura in più.
+async fn issue_owner_invitation_revoked(app: &TestApp, email: &str) -> String {
+    use propflow_application::ports::OpaqueTokenFactory as _;
+    use propflow_infrastructure::security::OpaqueTokenGenerator;
+
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let now = chrono::Utc::now();
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at, revoked_at)
+         VALUES ($1::app.email_address, $2, $3, $4, $5)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(now + chrono::Duration::days(7))
+    .bind(now)
+    .bind(now)
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito revocato inserito");
+    token.plaintext
+}
+
+#[tokio::test]
+async fn accepting_an_owner_invitation_creates_an_account_and_an_organization() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-invitato");
+    let token = common::issue_owner_invitation(&app, &email).await;
+
+    let (status, body, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": "Proprietario Invitato",
+                "password": "cavallo batteria graffetta",
+                "organization_name": "L'organizzazione di Proprietario Invitato",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+    // Sessione e cookie come il login: nessun secondo giro per entrare.
+    assert!(body["access_token"].as_str().is_some_and(|t| !t.is_empty()));
+    assert_eq!(body["role"], "owner", "corpo: {body}");
+    let org_id = body["organization_id"]
+        .as_str()
+        .expect("organizzazione")
+        .to_owned();
+    assert!(
+        cookie.is_some(),
+        "atteso il cookie di sessione, come il login"
+    );
+    let token = body["access_token"].as_str().expect("access token");
+
+    // L'organizzazione esiste davvero ed è l'unica di questo utente, con il
+    // ruolo `owner` — esattamente ciò che la vecchia registrazione libera dava
+    // oggi a chiunque.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let items = orgs["items"].as_array().expect("elenco organizzazioni");
+    assert_eq!(items.len(), 1, "corpo: {orgs}");
+    assert_eq!(items[0]["id"], org_id, "corpo: {orgs}");
+    assert_eq!(items[0]["role"], "owner", "corpo: {orgs}");
+}
+
+/// I quattro stati non validi di un invito da proprietario rispondono **la
+/// stessa cosa**: token inesistente, scaduto, revocato o già accettato. È il
+/// criterio di fine di F4 e la decisione 6 dell'ADR-053 — distinguerli sarebbe
+/// un oracolo su quali token sono stati emessi.
+#[tokio::test]
+async fn owner_invitation_token_states_respond_identically() {
+    let app = require_app!();
+
+    let nonexistent = "token-mai-emesso-1234567890123456789012345";
+
+    let expired_email = common::unique_email("owner-scaduto");
+    let expired = issue_owner_invitation_expired(&app, &expired_email).await;
+
+    let revoked =
+        issue_owner_invitation_revoked(&app, &common::unique_email("owner-revocato")).await;
+
+    let accepted_email = common::unique_email("owner-accettato");
+    let accepted = common::issue_owner_invitation(&app, &accepted_email).await;
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": accepted,
+                "full_name": "Proprietario Accettato",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+
+    for (label, token) in [
+        ("inesistente", nonexistent.to_owned()),
+        ("scaduto", expired),
+        ("revocato", revoked),
+        ("già accettato", accepted),
+    ] {
+        let (status, body) = app
+            .post(
+                "/api/v1/auth/accept-owner-invitation",
+                serde_json::json!({
+                    "token": token,
+                    "full_name": "Non deve importare",
+                    "password": "cavallo batteria graffetta",
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "caso «{label}», corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.invalid_credentials",
+            "caso «{label}», corpo: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn registering_from_a_tenant_invitation_lands_inside_the_inviters_organization() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "invita-da-zero").await;
+    let property = create_property(&app, &owner, "Immobile per invito diretto").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let tenant_email = common::unique_email("registrato-da-invito");
+    let (_, token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+
+    let (status, body, cookie) = app
+        .post_returning_cookie(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": "Inquilino Diretto",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+    assert_eq!(body["role"], "tenant", "corpo: {body}");
+    assert_eq!(body["organization_id"], owner_org, "corpo: {body}");
+    assert!(
+        cookie.is_some(),
+        "atteso il cookie di sessione, come il login"
+    );
+    let tenant_token = body["access_token"].as_str().expect("access token");
+
+    // Zero organizzazioni proprie: non è passato dalla vecchia registrazione
+    // libera, quindi non esiste un'organizzazione personale da nascondere o da
+    // ripulire.
+    let (status, orgs) = app
+        .send("GET", "/api/v1/organizations", Some(tenant_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {orgs}");
+    let items = orgs["items"].as_array().expect("elenco organizzazioni");
+    assert_eq!(
+        items.len(),
+        1,
+        "un solo elemento, quello di chi ha invitato: {orgs}"
+    );
+    assert_eq!(items[0]["id"], owner_org, "corpo: {orgs}");
+    assert_eq!(items[0]["role"], "tenant", "corpo: {orgs}");
+
+    // La parte contrattuale è collegata: è ciò che rende visibile il contratto.
+    let (status, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {detail}");
+    let party = detail["parties"]
+        .as_array()
+        .expect("parti del contratto")
+        .iter()
+        .find(|party| party["email"] == tenant_email)
+        .expect("la parte esiste");
+    assert!(
+        party.get("user_id").is_some(),
+        "la parte doveva collegarsi all'utente appena registrato: {detail}"
+    );
+
+    // E l'inquilino stesso vede il proprio contratto, con l'header di
+    // organizzazione: la regola 24 non ha eccezioni per chi è appena entrato.
+    let (status, mine) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(tenant_token),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {mine}");
+}
+
+/// I quattro stati non validi di un invito da inquilino rispondono **la
+/// stessa cosa** su questa rotta nuova — identico a `owner_invitation_token_states_respond_identically`,
+/// ma sull'altra tabella: inesistente, scaduto, usato o revocato.
+#[tokio::test]
+async fn register_from_invitation_token_states_respond_identically() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "stati-invito-inquilino").await;
+    let property = create_property(&app, &owner, "Immobile per gli stati").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+
+    let nonexistent = "token-mai-emesso-su-org-invitations-0000000";
+
+    let (expired_id, expired_token) = invite_tenant(
+        &app,
+        &owner,
+        &lease,
+        &common::unique_email("tenant-scaduto"),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE app.org_invitations
+            SET created_at = now() - interval '9 days',
+                expires_at = now() - interval '2 days'
+          WHERE id = $1",
+    )
+    .bind(uuid::Uuid::parse_str(&expired_id).expect("uuid"))
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito retrodatato");
+
+    let (revoked_id, revoked_token) = invite_tenant(
+        &app,
+        &owner,
+        &lease,
+        &common::unique_email("tenant-revocato"),
+    )
+    .await;
+    let (status, _) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/invitations/{revoked_id}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let used_email = common::unique_email("tenant-usato");
+    let (_, used_token) = invite_tenant(&app, &owner, &lease, &used_email).await;
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": used_token,
+                "full_name": "Inquilino Usato",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+
+    for (label, token) in [
+        ("inesistente", nonexistent.to_owned()),
+        ("scaduto", expired_token),
+        ("revocato", revoked_token),
+        ("già usato", used_token),
+    ] {
+        let (status, body) = app
+            .post(
+                "/api/v1/auth/register-from-invitation",
+                serde_json::json!({
+                    "token": token,
+                    "full_name": "Non deve importare",
+                    "password": "cavallo batteria graffetta",
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "caso «{label}», corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.invalid_credentials",
+            "caso «{label}», corpo: {body}"
+        );
+    }
+}
+
+/// Un'email nel corpo non è un campo: si riconosce e si rifiuta con `422`,
+/// come `email` in `PATCH /me` — non si ignora silenziosamente, perché
+/// ignorarla darebbe un account collegato a un indirizzo diverso da quello
+/// scritto nel corpo, senza alcun indizio.
+#[tokio::test]
+async fn register_from_invitation_rejects_an_email_field_in_the_body() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "email-nel-corpo").await;
+    let property = create_property(&app, &owner, "Immobile per il campo email").await;
+    let lease = draft_lease(&app, &owner, &property, None, 0, Some(365)).await;
+    let tenant_email = common::unique_email("email-invito");
+    let (_, token) = invite_tenant(&app, &owner, &lease, &tenant_email).await;
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": "Prova Campo Email",
+                "password": "cavallo batteria graffetta",
+                "email": "un-indirizzo-diverso@example.test",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {body}");
+    assert_eq!(body["code"], "validation.failed", "corpo: {body}");
+    assert_eq!(body["errors"][0]["field"], "email", "corpo: {body}");
+}
+
+/// Il `409` riservato a un token da proprietario: solo un token **valido**
+/// nella tabella dei proprietari lo produce, per non aprire un secondo oracolo
+/// accanto ad `auth.email_taken` (ADR-053, precisazione della sezione 8).
+#[tokio::test]
+async fn a_valid_owner_token_on_the_tenant_route_asks_for_the_organization_name() {
+    let app = require_app!();
+    let email = common::unique_email("proprietario-alla-porta-sbagliata");
+    let owner_token = common::issue_owner_invitation(&app, &email).await;
+
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": owner_token,
+                "full_name": "Proprietario Confuso",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {body}");
+    assert_eq!(body["code"], "invitation.owner_token", "corpo: {body}");
+
+    // Lo stesso token, alla porta giusta, funziona davvero: il `409` sopra non
+    // era un rifiuto del token, ma della rotta.
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/accept-owner-invitation",
+            serde_json::json!({
+                "token": owner_token,
+                "full_name": "Proprietario Confuso",
+                "password": "cavallo batteria graffetta",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {body}");
+}
+
+/// **Solo** un token da proprietario valido dà il `409`. Un token da
+/// proprietario scaduto o revocato, e un token che non esiste in nessuna delle
+/// due tabelle, restano `401` — altrimenti il `409` diventerebbe un secondo
+/// modo di sapere quali token da proprietario esistono.
+#[tokio::test]
+async fn only_a_valid_owner_token_yields_the_409_every_other_case_is_401() {
+    let app = require_app!();
+
+    let expired_email = common::unique_email("owner-scaduto-sulla-rotta-inquilino");
+    let expired_owner_token = issue_owner_invitation_expired(&app, &expired_email).await;
+
+    let revoked_owner_token = issue_owner_invitation_revoked(
+        &app,
+        &common::unique_email("owner-revocato-sulla-rotta-inquilino"),
+    )
+    .await;
+
+    let nonexistent = "nessuna-tabella-conosce-questo-token-1234567";
+
+    for (label, token) in [
+        ("proprietario scaduto", expired_owner_token),
+        ("proprietario revocato", revoked_owner_token),
+        ("inesistente ovunque", nonexistent.to_owned()),
+    ] {
+        let (status, body) = app
+            .post(
+                "/api/v1/auth/register-from-invitation",
+                serde_json::json!({
+                    "token": token,
+                    "full_name": "Non deve importare",
+                    "password": "cavallo batteria graffetta",
+                }),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "caso «{label}», corpo: {body}"
+        );
+        assert_eq!(
+            body["code"], "auth.invalid_credentials",
+            "caso «{label}», corpo: {body}"
+        );
+    }
 }

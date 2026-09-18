@@ -54,6 +54,37 @@ export interface Organization {
   role: OrgRole
 }
 
+/**
+ * Il proprio account, letto da `GET /api/v1/me`.
+ *
+ * **`email` si mostra e non si modifica**: è la credenziale d'accesso, non un dato
+ * anagrafico, e cambiarla richiede la verifica del nuovo indirizzo, che è fuori
+ * perimetro. Il ruolo di piattaforma non c'è, e non è una dimenticanza: non è
+ * affare di chi guarda il proprio profilo.
+ */
+export interface Account {
+  id: Uuid
+  email: string
+  /** Assente finché la verifica dell'email non esiste: il campo c'è già perché il
+   *  client non cambi forma il giorno in cui arriverà. */
+  email_verified_at?: IsoDateTime
+  full_name: string
+  /** Assente quando non c'è un numero, non `null`: l'API lo omette. */
+  phone?: string
+  locale: string
+}
+
+/**
+ * Che cosa resta dopo essere usciti da un'organizzazione.
+ *
+ * Chi esce dall'unica in cui abitava resta con la propria, personale e vuota: il
+ * client lo dice **prima**, non lo lascia scoprire con un riepilogo vuoto.
+ */
+export interface LeftOrganization {
+  organization_id: Uuid
+  role: OrgRole
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
@@ -120,7 +151,17 @@ export interface Property {
   label: string
   code?: string
   property_type: PropertyType
+  /** Lo stato **memorizzato**: un giudizio di chi amministra. */
   status: PropertyStatus
+  /**
+   * Lo stato **alla data odierna**, che tiene conto dei contratti in essere: può
+   * valere `rented` o `partially_rented` mentre `status` resta `draft`.
+   *
+   * Non si filtra — `?stato=rented` risponde `422` — e quando diverge da `status`
+   * si mostrano **entrambi**: un immobile «in manutenzione» che risulta affittato
+   * è un'anomalia da vedere.
+   */
+  effective_status: PropertyStatus
   is_coliving: boolean
   address: Address
   size_sqm: Amount | null
@@ -149,7 +190,15 @@ export interface Room {
   property_id: Uuid
   organization_id: Uuid
   name: string
+  /** Memorizzato: `available`, o `unavailable` se dichiarata fuori uso. */
   status: RoomStatus
+  /**
+   * Derivato dai contratti in essere: `occupied` quando qualcuno ci abita.
+   *
+   * Non lo scrive nessuno, e non potrebbe restare vero: l'occupazione dipende dal
+   * calendario.
+   */
+  effective_status: RoomStatus
   size_sqm: Amount | null
   floor: number | null
   has_private_bathroom: boolean
@@ -206,6 +255,24 @@ export interface Lease {
   deposit_amount: Amount
   utilities_included: boolean
   istat_indexation: boolean
+  /**
+   * Come si chiama l'immobile, per distinguere una riga dall'altra.
+   *
+   * **Assente** sulle risposte a una singola operazione — attivazione, disdetta,
+   * annullamento — dove chi chiama ha già il contratto sotto gli occhi, e quando
+   * l'immobile è archiviato.
+   */
+  property_label?: string
+  /** Assente sui contratti sull'immobile intero. */
+  room_name?: string
+  /**
+   * Il nome dell'**intestatario**, cioè della parte marcata `is_primary`.
+   *
+   * Serve dove *dove* non basta: due contratti sulla stessa stanza in due anni
+   * diversi hanno lo stesso immobile e la stessa stanza, e a distinguerli è chi ci
+   * abita. **Assente** su una bozza a cui non è ancora stato aggiunto nessuno.
+   */
+  primary_tenant?: string
   signed_at: IsoDateTime | null
   terminated_at: IsoDateTime | null
   termination_reason?: string
@@ -222,6 +289,7 @@ export interface LeaseParty {
   role: LeasePartyRole
   full_name: string
   email?: string
+  phone?: string
   share_percent: Amount
   is_primary: boolean
   joined_at: IsoDate | null
@@ -295,9 +363,38 @@ export interface Ticket {
   category: TicketCategory
   priority: TicketPriority
   status: TicketStatus
+  /**
+   * `true` se la leggono anche i **residenti dell'immobile**, oltre a chi la vede
+   * per contratto — e con essa il thread e le fotografie.
+   *
+   * Il confine è `app.can_access_ticket` e non questo campo: qui viaggia perché la
+   * casella si mostra e si corregge. Non concede nessuna scrittura — un residente
+   * non riapre, non annulla, non corregge.
+   */
+  visible_to_residents: boolean
+  /**
+   * Come si chiama l'immobile a cui la segnalazione si riferisce.
+   *
+   * **Assente** quando la riga dell'immobile è archiviata: la segnalazione resta,
+   * il nome no. Si mette l'etichetta neutra dal catalogo, mai l'identificatore.
+   */
+  property_label?: string
+  /** La stanza, quando la segnalazione ne riguarda una. */
+  room_name?: string
   reported_by: Uuid | null
   reported_by_kind: TicketActor
+  /**
+   * Come si chiama chi ha segnalato.
+   *
+   * **Assente non è un errore**: la policy `users_select` non concede a chiunque la
+   * riga di chiunque, e allora si mette un'etichetta neutra dal catalogo — mai
+   * l'identificatore. Va mostrato **accanto** a `reported_by_kind`: il ruolo dice
+   * da che parte del rapporto sta la persona, il nome dice chi è.
+   */
+  reported_by_name?: string
   assigned_to: Uuid | null
+  /** Come si chiama chi ha in carico. Stessa regola sull'assenza. */
+  assigned_to_name?: string
   assigned_at: IsoDateTime | null
   /**
    * **`null` per chi non è staff, anche quando un valore c'è.**
@@ -344,6 +441,14 @@ export interface TicketMessage {
   ticket_id: Uuid
   author_id: Uuid | null
   author_kind: TicketActor
+  /**
+   * Come si chiama chi ha scritto.
+   *
+   * **Il ruolo da solo non basta in un co-living**: due coinquilini sono entrambi
+   * `tenant`, e «me lo dice il proprietario o un coinquilino?» ha già risposta
+   * mentre «quale coinquilino?» non ne ha. I due si mostrano insieme.
+   */
+  author_name?: string
   body: string
   /**
    * Nota interna, visibile al solo staff.
@@ -407,6 +512,27 @@ export interface UtilityBill {
   consumption?: Consumption
   validated_by: Uuid | null
   validated_at: IsoDateTime | null
+  /** Quando è stata dichiarata pagata al fornitore. */
+  paid_at?: IsoDateTime | null
+  /**
+   * Come si chiama l'immobile del **contratto imputato**, non quello della
+   * bolletta: serve a nominare il collegamento, e il nome di un contratto è la
+   * casa più la stanza.
+   *
+   * **Assente** per due ragioni diverse — nessun contratto imputato, o immobile
+   * archiviato — e in entrambi i casi si mette l'etichetta neutra.
+   */
+  property_label?: string
+  /** La stanza del contratto imputato, quando ne nomina una. */
+  room_name?: string
+  /**
+   * Quanto è **già stato riaddebitato**. Il residuo è `total_amount` meno questo,
+   * e si calcola con `@/lib/decimal`, mai con un `-`.
+   *
+   * **`null` per chi non è staff**: la somma si legge sotto RLS e a un inquilino
+   * tornerebbe parziale, cioè un numero sbagliato che sembra un totale.
+   */
+  recharged_amount?: Amount | null
   notes?: string
   created_at: IsoDateTime
   updated_at: IsoDateTime
@@ -516,6 +642,14 @@ export interface Charge {
   due_date: IsoDate
   issued_at: IsoDateTime | null
   utility_bill_id?: Uuid
+  /**
+   * Come si chiama l'immobile del contratto a cui l'addebito è emesso.
+   *
+   * **Assente** quando l'immobile è archiviato: il contratto resta, il nome no.
+   */
+  property_label?: string
+  /** La stanza, quando il contratto ne nomina una. */
+  room_name?: string
   notes?: string
   created_at: IsoDateTime
   updated_at: IsoDateTime
@@ -746,6 +880,13 @@ export interface Expense {
   group_id: Uuid
   /** Chi ha anticipato: è il verso del credito. Sempre un **membro attivo**. */
   paid_by_user_id: Uuid
+  /**
+   * Chi l'ha registrata, che può non essere chi ha anticipato. Serve a offrire
+   * l'annullamento a chi può farlo — chi l'ha registrata, chi l'ha anticipata, o
+   * lo staff — invece di un bottone che risponde `403 expense.not_yours`. Assente
+   * su una riga scritta fuori da un contesto di richiesta.
+   */
+  created_by?: Uuid
   category: ExpenseCategory
   description: string
   amount: Amount

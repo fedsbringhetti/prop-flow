@@ -3,13 +3,28 @@ use std::sync::Arc;
 use propflow_domain::events::{
     DomainEvent, DomainEventPayload, EventMetadata, TicketMessagePosted,
 };
-use propflow_domain::ports::{Clock, TicketMessagePage, TicketMessageQuery, UnitOfWorkFactory};
+use propflow_domain::ports::{Clock, TicketMessageQuery, UnitOfWorkFactory};
 use propflow_domain::shared::{TicketId, TicketMessageId};
 use propflow_domain::ticket::{MessageBody, NewTicketMessage, TicketActor, TicketMessage};
 use propflow_domain::{Denial, Entity, RequestContext};
 
+use super::read::{People, resolve_people};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
+
+/// Una pagina di thread, con i nomi di chi ha scritto.
+///
+/// **Il ruolo era già sul filo e non basta**: `author_kind` distingue il
+/// proprietario dall'inquilino, e in un co-living due coinquilini sono tutti e due
+/// *Inquilino*. Il nome è l'altra metà, e le due si mostrano **insieme** —
+/// *Proprietario · Mario Rossi* — perché dicono cose diverse: da che parte del
+/// rapporto sta chi scrive, e chi è.
+#[derive(Debug)]
+pub struct TicketThreadPage {
+    pub items: Vec<TicketMessage>,
+    pub next_cursor: Option<TicketMessageId>,
+    pub people: People,
+}
 
 #[derive(Debug, Clone)]
 pub struct PostTicketMessageCommand {
@@ -28,6 +43,17 @@ pub struct PostTicketMessageCommand {
 /// `403 auth.denied_by_policy`, che è il codice riservato ai **nostri** difetti:
 /// un inquilino che tenta di scrivere una nota interna non è un nostro difetto, è
 /// una richiesta da rifiutare dicendogli cosa gli manca.
+///
+/// # Su una segnalazione terminata non si scrive
+///
+/// La regola è del **dominio** e non dell'interfaccia — nasconderla nel client
+/// lascerebbe la rotta aperta — e il predicato è
+/// [`Ticket::ensure_open_to_messages`]: si scrive nei sei stati di lavorazione e
+/// in nessun altro. Chi vuole dire «non è risolto» **riapre**, e il motivo della
+/// riapertura diventa il primo messaggio del giro nuovo (ADR-050).
+///
+/// Il rifiuto arriva **dopo** la lettura della segnalazione, come il `404`: chi non
+/// vede la riga non deve scoprire da un `409` che esiste ed è chiusa.
 pub struct PostTicketMessage {
     unit_of_work: Arc<dyn UnitOfWorkFactory>,
     clock: Arc<dyn Clock>,
@@ -63,6 +89,8 @@ impl PostTicketMessage {
             .find_by_id(command.ticket_id)
             .await?
             .ok_or(AppError::not_found(Entity::Ticket))?;
+
+        ticket.ensure_open_to_messages()?;
 
         let message = TicketMessage::post(NewTicketMessage {
             id: TicketMessageId::generate(),
@@ -118,7 +146,7 @@ impl ListTicketMessages {
         &self,
         context: &RequestContext,
         command: ListTicketMessagesCommand,
-    ) -> AppResult<TicketMessagePage> {
+    ) -> AppResult<TicketThreadPage> {
         authorization::ensure_member(context)?;
 
         let limit = command
@@ -144,6 +172,19 @@ impl ListTicketMessages {
                 limit,
             })
             .await?;
-        Ok(page)
+
+        let people = resolve_people(
+            &mut *uow,
+            page.items
+                .iter()
+                .map(propflow_domain::ticket::TicketMessage::author_id),
+        )
+        .await?;
+
+        Ok(TicketThreadPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            people,
+        })
     }
 }

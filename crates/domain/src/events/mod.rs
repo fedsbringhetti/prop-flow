@@ -108,7 +108,10 @@ impl EventMetadata {
 #[serde(untagged)]
 pub enum DomainEventPayload {
     UserRegistered(UserRegistered),
+    UserProfileUpdated(UserProfileUpdated),
+    UserPasswordChanged(UserPasswordChanged),
     OrganizationCreated(OrganizationCreated),
+    OrganizationMemberLeft(OrganizationMemberLeft),
     PropertyCreated(PropertyCreated),
     PropertyUpdated(PropertyUpdated),
     PropertyArchived(PropertyArchived),
@@ -118,7 +121,10 @@ pub enum DomainEventPayload {
     LeaseDrafted(LeaseDrafted),
     LeaseActivated(LeaseActivated),
     LeaseTerminated(LeaseTerminated),
+    LeaseCancelled(LeaseCancelled),
     LeasePartyAdded(LeasePartyAdded),
+    LeasePartyCorrected(LeasePartyCorrected),
+    LeasePartyRemoved(LeasePartyRemoved),
     TenantInvited(TenantInvited),
     InvitationRevoked(InvitationRevoked),
     InvitationAccepted(InvitationAccepted),
@@ -128,6 +134,7 @@ pub enum DomainEventPayload {
     TicketStatusChanged(TicketStatusChanged),
     TicketAssigned(TicketAssigned),
     TicketCostsUpdated(TicketCostsUpdated),
+    TicketReportCorrected(TicketReportCorrected),
     TicketMessagePosted(TicketMessagePosted),
     UtilityBillRegistered(UtilityBillRegistered),
     UtilityBillUpdated(UtilityBillUpdated),
@@ -141,6 +148,7 @@ pub enum DomainEventPayload {
     ExpenseGroupMemberJoined(ExpenseGroupMemberJoined),
     ExpenseGroupMemberLeft(ExpenseGroupMemberLeft),
     ExpenseRecorded(ExpenseRecorded),
+    ExpenseCancelled(ExpenseCancelled),
     SettlementDeclared(SettlementDeclared),
     SettlementConfirmed(SettlementConfirmed),
     SettlementRejected(SettlementRejected),
@@ -152,7 +160,10 @@ impl DomainEventPayload {
     pub const fn event_type(&self) -> &'static str {
         match self {
             Self::UserRegistered(_) => "identity.user.registered",
+            Self::UserProfileUpdated(_) => "identity.user.profile_updated",
+            Self::UserPasswordChanged(_) => "identity.user.password_changed",
             Self::OrganizationCreated(_) => "identity.organization.created",
+            Self::OrganizationMemberLeft(_) => "identity.organization.member_left",
             Self::PropertyCreated(_) => "property.created",
             Self::PropertyUpdated(_) => "property.updated",
             Self::PropertyArchived(_) => "property.archived",
@@ -162,7 +173,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(_) => "lease.drafted",
             Self::LeaseActivated(_) => "lease.activated",
             Self::LeaseTerminated(_) => "lease.terminated",
+            Self::LeaseCancelled(_) => "lease.cancelled",
             Self::LeasePartyAdded(_) => "lease.party.added",
+            Self::LeasePartyCorrected(_) => "lease.party.corrected",
+            Self::LeasePartyRemoved(_) => "lease.party.removed",
             Self::TenantInvited(_) => "identity.invitation.issued",
             Self::InvitationRevoked(_) => "identity.invitation.revoked",
             Self::InvitationAccepted(_) => "identity.invitation.accepted",
@@ -172,6 +186,7 @@ impl DomainEventPayload {
             Self::TicketStatusChanged(_) => "ticket.status_changed",
             Self::TicketAssigned(_) => "ticket.assigned",
             Self::TicketCostsUpdated(_) => "ticket.costs_updated",
+            Self::TicketReportCorrected(_) => "ticket.report_corrected",
             Self::TicketMessagePosted(_) => "ticket.message.posted",
             Self::UtilityBillRegistered(_) => "billing.utility_bill.registered",
             Self::UtilityBillUpdated(_) => "billing.utility_bill.updated",
@@ -185,6 +200,7 @@ impl DomainEventPayload {
             Self::ExpenseGroupMemberJoined(_) => "expense.group.member.joined",
             Self::ExpenseGroupMemberLeft(_) => "expense.group.member.left",
             Self::ExpenseRecorded(_) => "expense.recorded",
+            Self::ExpenseCancelled(_) => "expense.cancelled",
             Self::SettlementDeclared(_) => "expense.settlement.declared",
             Self::SettlementConfirmed(_) => "expense.settlement.confirmed",
             Self::SettlementRejected(_) => "expense.settlement.rejected",
@@ -195,8 +211,12 @@ impl DomainEventPayload {
     #[must_use]
     pub const fn aggregate_type(&self) -> &'static str {
         match self {
-            Self::UserRegistered(_) => "User",
-            Self::OrganizationCreated(_) => "Organization",
+            Self::UserRegistered(_)
+            | Self::UserProfileUpdated(_)
+            | Self::UserPasswordChanged(_) => "User",
+            // L'appartenenza non è un aggregato a sé: chi consuma reagisce
+            // all'organizzazione da cui qualcuno è uscito.
+            Self::OrganizationCreated(_) | Self::OrganizationMemberLeft(_) => "Organization",
             Self::PropertyCreated(_) | Self::PropertyUpdated(_) | Self::PropertyArchived(_) => {
                 "Property"
             }
@@ -206,7 +226,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(_)
             | Self::LeaseActivated(_)
             | Self::LeaseTerminated(_)
-            | Self::LeasePartyAdded(_) => "Lease",
+            | Self::LeaseCancelled(_)
+            | Self::LeasePartyAdded(_)
+            | Self::LeasePartyCorrected(_)
+            | Self::LeasePartyRemoved(_) => "Lease",
             Self::TenantInvited(_) | Self::InvitationRevoked(_) | Self::InvitationAccepted(_) => {
                 "Invitation"
             }
@@ -218,6 +241,7 @@ impl DomainEventPayload {
             | Self::TicketStatusChanged(_)
             | Self::TicketAssigned(_)
             | Self::TicketCostsUpdated(_)
+            | Self::TicketReportCorrected(_)
             | Self::TicketMessagePosted(_) => "Ticket",
             Self::UtilityBillRegistered(_)
             | Self::UtilityBillUpdated(_)
@@ -246,7 +270,7 @@ impl DomainEventPayload {
             // propria riga di audit. Le quote non producono un evento loro —
             // sono la spesa vista dall'altro lato, e nascono nella stessa
             // transazione.
-            Self::ExpenseRecorded(_) => "Expense",
+            Self::ExpenseRecorded(_) | Self::ExpenseCancelled(_) => "Expense",
             // E il regolamento pure, per la stessa ragione del pagamento: ciclo
             // di vita proprio, autorizzazione propria, audit proprio.
             Self::SettlementDeclared(_)
@@ -260,7 +284,10 @@ impl DomainEventPayload {
     pub fn aggregate_id(&self) -> uuid::Uuid {
         match self {
             Self::UserRegistered(event) => event.user_id.as_uuid(),
+            Self::UserProfileUpdated(event) => event.user_id.as_uuid(),
+            Self::UserPasswordChanged(event) => event.user_id.as_uuid(),
             Self::OrganizationCreated(event) => event.org_id.as_uuid(),
+            Self::OrganizationMemberLeft(event) => event.org_id.as_uuid(),
             Self::PropertyCreated(event) => event.property_id.as_uuid(),
             Self::PropertyUpdated(event) => event.property_id.as_uuid(),
             Self::PropertyArchived(event) => event.property_id.as_uuid(),
@@ -270,7 +297,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(event) => event.lease_id.as_uuid(),
             Self::LeaseActivated(event) => event.lease_id.as_uuid(),
             Self::LeaseTerminated(event) => event.lease_id.as_uuid(),
+            Self::LeaseCancelled(event) => event.lease_id.as_uuid(),
             Self::LeasePartyAdded(event) => event.lease_id.as_uuid(),
+            Self::LeasePartyCorrected(event) => event.lease_id.as_uuid(),
+            Self::LeasePartyRemoved(event) => event.lease_id.as_uuid(),
             Self::TenantInvited(event) => event.invitation_id.as_uuid(),
             Self::InvitationRevoked(event) => event.invitation_id.as_uuid(),
             Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
@@ -280,6 +310,7 @@ impl DomainEventPayload {
             Self::TicketStatusChanged(event) => event.ticket_id.as_uuid(),
             Self::TicketAssigned(event) => event.ticket_id.as_uuid(),
             Self::TicketCostsUpdated(event) => event.ticket_id.as_uuid(),
+            Self::TicketReportCorrected(event) => event.ticket_id.as_uuid(),
             Self::TicketMessagePosted(event) => event.ticket_id.as_uuid(),
             Self::UtilityBillRegistered(event) => event.utility_bill_id.as_uuid(),
             Self::UtilityBillUpdated(event) => event.utility_bill_id.as_uuid(),
@@ -293,6 +324,7 @@ impl DomainEventPayload {
             Self::ExpenseGroupMemberJoined(event) => event.group_id.as_uuid(),
             Self::ExpenseGroupMemberLeft(event) => event.group_id.as_uuid(),
             Self::ExpenseRecorded(event) => event.expense_id.as_uuid(),
+            Self::ExpenseCancelled(event) => event.expense_id.as_uuid(),
             Self::SettlementDeclared(event) => event.settlement_id.as_uuid(),
             Self::SettlementConfirmed(event) => event.settlement_id.as_uuid(),
             Self::SettlementRejected(event) => event.settlement_id.as_uuid(),
@@ -303,8 +335,14 @@ impl DomainEventPayload {
     #[must_use]
     pub const fn org_id(&self) -> Option<OrgId> {
         match self {
-            Self::UserRegistered(_) => None,
+            // Nessuna delle tre appartiene a un'organizzazione: `/api/v1/me`
+            // risponde anche a chi non ne ha una attiva, e il proprio account non
+            // è affare di nessuna di esse.
+            Self::UserRegistered(_)
+            | Self::UserProfileUpdated(_)
+            | Self::UserPasswordChanged(_) => None,
             Self::OrganizationCreated(event) => Some(event.org_id),
+            Self::OrganizationMemberLeft(event) => Some(event.org_id),
             Self::PropertyCreated(event) => Some(event.org_id),
             Self::PropertyUpdated(event) => Some(event.org_id),
             Self::PropertyArchived(event) => Some(event.org_id),
@@ -314,7 +352,10 @@ impl DomainEventPayload {
             Self::LeaseDrafted(event) => Some(event.org_id),
             Self::LeaseActivated(event) => Some(event.org_id),
             Self::LeaseTerminated(event) => Some(event.org_id),
+            Self::LeaseCancelled(event) => Some(event.org_id),
             Self::LeasePartyAdded(event) => Some(event.org_id),
+            Self::LeasePartyCorrected(event) => Some(event.org_id),
+            Self::LeasePartyRemoved(event) => Some(event.org_id),
             Self::TenantInvited(event) => Some(event.org_id),
             Self::InvitationRevoked(event) => Some(event.org_id),
             Self::InvitationAccepted(event) => Some(event.org_id),
@@ -324,6 +365,7 @@ impl DomainEventPayload {
             Self::TicketStatusChanged(event) => Some(event.org_id),
             Self::TicketAssigned(event) => Some(event.org_id),
             Self::TicketCostsUpdated(event) => Some(event.org_id),
+            Self::TicketReportCorrected(event) => Some(event.org_id),
             Self::TicketMessagePosted(event) => Some(event.org_id),
             Self::UtilityBillRegistered(event) => Some(event.org_id),
             Self::UtilityBillUpdated(event) => Some(event.org_id),
@@ -337,6 +379,7 @@ impl DomainEventPayload {
             Self::ExpenseGroupMemberJoined(event) => Some(event.org_id),
             Self::ExpenseGroupMemberLeft(event) => Some(event.org_id),
             Self::ExpenseRecorded(event) => Some(event.org_id),
+            Self::ExpenseCancelled(event) => Some(event.org_id),
             Self::SettlementDeclared(event) => Some(event.org_id),
             Self::SettlementConfirmed(event) => Some(event.org_id),
             Self::SettlementRejected(event) => Some(event.org_id),
@@ -351,6 +394,42 @@ pub struct UserRegistered {
     /// Non c'è l'email: un evento pubblicato su un broker è un dato che viaggia e
     /// si conserva. Chi ha bisogno dell'indirizzo lo legge dall'aggregato.
     pub registered_at: DateTime<Utc>,
+}
+
+/// I dati anagrafici corretti, **per nome di campo e non per valore**.
+///
+/// `docs/04-sicurezza.md` vieta i dati personali negli eventi di dominio, e un
+/// nome e un numero di telefono lo sono: un evento pubblicato su un broker è un
+/// dato che viaggia e si conserva. Chi consuma sa **che cosa** invalidare e legge
+/// il valore dall'aggregato, se gli spetta. È la stessa forma di
+/// [`PropertyUpdated`] e [`TicketReportCorrected`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserProfileUpdated {
+    pub user_id: UserId,
+    pub changed_fields: Vec<&'static str>,
+}
+
+/// La password è cambiata **da dentro**, e con essa sono cadute le sessioni.
+///
+/// Nessun valore, nemmeno il numero di sessioni revocate: l'evento dice che il
+/// fatto è avvenuto e quando. `revoked_sessions` sarebbe un numero che si legge
+/// come una misura e che non serve a nessun consumatore.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserPasswordChanged {
+    pub user_id: UserId,
+    pub changed_at: DateTime<Utc>,
+}
+
+/// Qualcuno è uscito da un'organizzazione, **di propria iniziativa**.
+///
+/// `role` è il ruolo che aveva: è ciò che dice a chi consuma se se n'è andato un
+/// inquilino o chi amministrava, e non è un dato personale.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OrganizationMemberLeft {
+    pub org_id: OrgId,
+    pub user_id: UserId,
+    pub role: &'static str,
+    pub left_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -465,6 +544,42 @@ pub struct LeaseTerminated {
     pub org_id: OrgId,
     pub property_id: PropertyId,
     pub terminated_at: DateTime<Utc>,
+}
+
+/// Un contratto annullato prima di entrare in vigore.
+///
+/// **Non porta una data**, a differenza della disdetta, e non è una dimenticanza:
+/// l'aggregato non ne registra una — non c'è stato alcun rapporto da chiudere — e
+/// un campo qui che l'aggregato non ha renderebbe l'evento l'unica fonte di un
+/// fatto che il database non conserva. Quando è successo lo dice `occurred_at`
+/// dell'evento, come per ogni altro.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeaseCancelled {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub property_id: PropertyId,
+}
+
+/// **Nessun campo e nessun valore**, nemmeno quali sono cambiati.
+///
+/// Un evento che dicesse «la quota è passata da 100 a 50» sarebbe comodo e
+/// sbagliato per due ragioni: porterebbe dati di una persona fuori dall'aggregato,
+/// e diventerebbe una seconda fonte di verità sullo storico, che questo progetto
+/// tiene in `audit_log`. Chi consuma rilegge la parte.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeasePartyCorrected {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub party_id: LeasePartyId,
+}
+
+/// Una parte tolta perché inserita per sbaglio. Non è un inquilino che se ne va:
+/// quello ha una data e un evento suo, e non esiste ancora.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeasePartyRemoved {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub party_id: LeasePartyId,
 }
 
 /// Nessun nome né email: identificatori e ruolo bastano a sapere cosa invalidare.
@@ -681,6 +796,25 @@ pub struct TicketAssigned {
 /// ([02 — Architettura](../../../../docs/02-architettura.md)).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TicketCostsUpdated {
+    pub ticket_id: TicketId,
+    pub org_id: OrgId,
+    pub changed_fields: Vec<&'static str>,
+}
+
+/// Correzione di ciò che chi ha segnalato aveva dichiarato.
+///
+/// **Nomi dei campi, non valori**, come [`TicketCostsUpdated`] — e qui la regola
+/// morde più che altrove: i due campi correggibili sono il **titolo** e la
+/// **descrizione**, cioè testo scritto da una persona, che non deve finire su un
+/// broker. È la stessa ragione per cui [`TicketMessagePosted`] non porta il corpo
+/// del messaggio.
+///
+/// `visible_to_residents` è invece un booleano e non racconta niente di nessuno:
+/// compare fra i nomi dei campi come gli altri due, e chi consuma sa che la
+/// visibilità è cambiata senza sapere in che verso — leggere la riga lo dice, e
+/// leggerla passa dalla Row Level Security.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TicketReportCorrected {
     pub ticket_id: TicketId,
     pub org_id: OrgId,
     pub changed_fields: Vec<&'static str>,
@@ -1106,6 +1240,33 @@ impl ExpenseRecorded {
             category: expense.category().as_str(),
             split_method: expense.split_method().as_str(),
             share_count,
+        }
+    }
+}
+
+/// Una spesa è stata annullata, e **i saldi sono cambiati**.
+///
+/// Porta chi aveva anticipato per la stessa ragione di [`ExpenseRecorded`]: è il
+/// credito che sparisce, e chi consuma deve sapere di chi era senza rileggere una
+/// riga che non si legge più. Nessun importo e nessuna descrizione, come là.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExpenseCancelled {
+    pub expense_id: ExpenseId,
+    pub org_id: OrgId,
+    pub group_id: ExpenseGroupId,
+    pub paid_by_user_id: UserId,
+    pub cancelled_by: UserId,
+}
+
+impl ExpenseCancelled {
+    #[must_use]
+    pub const fn new(expense: &Expense, cancelled_by: UserId) -> Self {
+        Self {
+            expense_id: expense.id(),
+            org_id: expense.org_id(),
+            group_id: expense.group_id(),
+            paid_by_user_id: expense.paid_by_user_id(),
+            cancelled_by,
         }
     }
 }

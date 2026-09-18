@@ -13,7 +13,10 @@ use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use chrono::Duration;
 use propflow_api::state::{AppState, Dependencies};
-use propflow_application::ports::{ObjectStorage, StorageError, StoredObject};
+use propflow_application::ports::{
+    Notification, NotificationContent, Notifier, NotifyError, ObjectStorage, OpaqueTokenFactory,
+    StorageError, StoredObject,
+};
 use propflow_infrastructure::db::PoolSettings;
 use propflow_infrastructure::security::{
     Argon2PasswordHasher, EdDsaTokenIssuer, JwtSettings, OpaqueRefreshTokenFactory,
@@ -120,10 +123,46 @@ pub struct Upload<'a> {
     pub kind: Option<&'a str>,
 }
 
+/// Doppio in memoria di [`Notifier`].
+///
+/// **Il raccoglitore locale, dentro il processo.** Il criterio di fine di questo
+/// passo è «un'email di invito arriva davvero, con il token nel corpo»: qui la si
+/// intercetta e la si ispeziona, invece di guardarla con gli occhi in una casella.
+/// Quello che questo doppio **non** prova è lo stesso che un raccoglitore vero non
+/// prova — che il messaggio sarebbe recapitato.
+#[derive(Default)]
+pub struct RecordingNotifier {
+    sent: std::sync::Mutex<Vec<(String, NotificationContent)>>,
+}
+
+impl RecordingNotifier {
+    /// Le notifiche recapitate, come coppie (destinatario, contenuto).
+    pub fn sent(&self) -> Vec<(String, NotificationContent)> {
+        self.sent.lock().expect("mutex").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl Notifier for RecordingNotifier {
+    async fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
+        self.sent.lock().expect("mutex").push((
+            notification.to.as_str().to_owned(),
+            notification.content.clone(),
+        ));
+        Ok(())
+    }
+
+    async fn probe(&self) -> Result<(), NotifyError> {
+        Ok(())
+    }
+}
+
 pub struct TestApp {
     pub router: Router,
     /// Lo stesso storage iniettato nell'app: i test lo ispezionano.
     pub storage: Arc<InMemoryObjectStorage>,
+    /// La posta iniettata nell'app: i test leggono che cosa è partito.
+    pub mail: Arc<RecordingNotifier>,
     /// I due pool, per i test che devono far girare anche il **worker**.
     ///
     /// Il worker non è montato nel router — non è un bordo HTTP — quindi un test
@@ -151,6 +190,7 @@ impl TestApp {
             .expect("connessione al database di test");
 
         let storage = Arc::new(InMemoryObjectStorage::default());
+        let mail = Arc::new(RecordingNotifier::default());
         let dependencies = Dependencies {
             unit_of_work: Arc::new(PgUnitOfWorkFactory::new(pools.clone())),
             hasher: Arc::new(Argon2PasswordHasher::new().expect("Argon2")),
@@ -168,6 +208,7 @@ impl TestApp {
             invitation_tokens: Arc::new(OpaqueTokenGenerator),
             clock: Arc::new(SystemClock),
             object_storage: Arc::clone(&storage) as Arc<dyn ObjectStorage>,
+            notifier: Arc::clone(&mail) as Arc<dyn Notifier>,
             presign_ttl_seconds: PRESIGN_TTL_SECONDS,
             ocr_provider_name: propflow_infrastructure::DeterministicOcrProvider::NAME.to_owned(),
             pools: pools.clone(),
@@ -186,6 +227,7 @@ impl TestApp {
                 std::time::Duration::from_secs(10),
             ),
             storage,
+            mail,
         })
     }
 
@@ -417,8 +459,8 @@ impl TestApp {
 
     /// Come [`TestApp::send`] ma con l'header `X-Org-Id`.
     ///
-    /// Serve all'inquilino: il suo access token porta l'organizzazione personale,
-    /// e per leggere i dati dell'organizzazione del proprietario deve dichiararla.
+    /// Serve all'inquilino: la regola 24 vuole `X-Org-Id` sempre, anche quando è
+    /// l'unica organizzazione che ha — quella di chi lo ospita, dopo ADR-053.
     pub async fn send_in_org(
         &self,
         method: &str,
@@ -475,38 +517,72 @@ pub fn unique_email(prefix: &str) -> String {
     format!("{prefix}-{}@example.test", uuid::Uuid::now_v7().simple())
 }
 
+/// Scrive un invito da proprietario **come farà lo script**
+/// (`ops/dev/issue-owner-invitation.sh`): genera un token opaco con lo stesso
+/// generatore che gli use case usano per gli inviti, ne inserisce lo hash con
+/// il ruolo privilegiato — `propflow_worker` ha `INSERT` su
+/// `app.owner_invitations` proprio per questo, vedi la migration `0040` — e
+/// restituisce il token in chiaro perché il test lo presenti a un'API.
+///
+/// `common` non ha un pool con il ruolo del migratore: `test-integration.sh`
+/// passa a `cargo test` solo `PROPFLOW_TEST_APP_URL` e
+/// `PROPFLOW_TEST_PRIVILEGED_URL`. Il pool privilegiato basta qui perché è
+/// esattamente quello che l'accettazione userà per leggere la riga.
+pub async fn issue_owner_invitation(app: &TestApp, email: &str) -> String {
+    let token = OpaqueTokenGenerator.generate().expect("token generato");
+    let now = chrono::Utc::now();
+    let expires_at = now + Duration::days(7);
+
+    sqlx::query(
+        "INSERT INTO app.owner_invitations (email, token_hash, expires_at, created_at)
+         VALUES ($1::app.email_address, $2, $3, $4)",
+    )
+    .bind(email)
+    .bind(token.hash.as_bytes().as_slice())
+    .bind(expires_at)
+    .bind(now)
+    .execute(app.pools.privileged())
+    .await
+    .expect("invito da proprietario inserito");
+
+    token.plaintext
+}
+
 /// Registra un proprietario e restituisce (access_token, org_id).
 pub async fn register_and_login(app: &TestApp, prefix: &str) -> (String, String) {
     let (token, org, _) = register_and_login_with_email(app, &unique_email(prefix)).await;
     (token, org)
 }
 
-/// Come [`register_and_login`] ma con un'email scelta dal chiamante: serve
-/// all'inquilino, che deve registrarsi con **la stessa** email dell'invito.
+/// Come [`register_and_login`] ma con un'email scelta dal chiamante: serve a chi
+/// ha bisogno di un **proprietario** con un'email nota — ad esempio per farlo
+/// accettare in seguito un invito da inquilino, con la stessa persona.
 /// Restituisce (access_token, org_id, email).
+///
+/// Passa da un invito da proprietario (ADR-053): `POST /auth/register` non
+/// esiste più da `F6`. «Emetti l'invito, accettalo con il token» sostituisce
+/// «registrati, poi accedi» — `AcceptOwnerInvitation` restituisce già una
+/// sessione come il login, quindi non serve un secondo giro.
 pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (String, String, String) {
     let email = email.to_owned();
     let password = "cavallo batteria graffetta";
+    let invitation_token = issue_owner_invitation(app, &email).await;
 
-    let (status, _) = app
+    let (status, body) = app
         .post(
-            "/api/v1/auth/register",
+            "/api/v1/auth/accept-owner-invitation",
             serde_json::json!({
-                "email": email,
+                "token": invitation_token,
                 "full_name": "Proprietario Test",
                 "password": password,
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "registrazione non riuscita");
-
-    let (status, body, _) = app
-        .post_returning_cookie(
-            "/api/v1/auth/login",
-            serde_json::json!({ "email": email, "password": password }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "login non riuscito: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "accettazione dell'invito da proprietario non riuscita: {body}"
+    );
 
     let token = body["access_token"]
         .as_str()
@@ -517,6 +593,51 @@ pub async fn register_and_login_with_email(app: &TestApp, email: &str) -> (Strin
         .expect("organizzazione")
         .to_owned();
     (token, org, email)
+}
+
+/// Registra un inquilino **a partire da un invito da inquilino** (`RegisterTenantFromInvitation`,
+/// ADR-053): niente organizzazione personale, membership dentro quella di chi ha
+/// invitato, in una transazione sola. Restituisce (access_token, user_id).
+///
+/// Sostituisce il vecchio «`register_and_login_with_email` con l'email
+/// dell'invito, poi `POST /auth/accept-invitation`»: quella via faceva nascere
+/// l'inquilino owner della propria organizzazione vuota, che è esattamente il
+/// difetto che l'ADR chiude. Chi ha già un account — l'inquilino che torna, o un
+/// proprietario invitato altrove — continua ad accettare con
+/// `POST /auth/accept-invitation` da autenticato: questo helper è solo per il
+/// primo ingresso.
+pub async fn register_tenant_from_invitation(
+    app: &TestApp,
+    token: &str,
+    full_name: &str,
+    password: &str,
+) -> (String, String) {
+    let (status, body) = app
+        .post(
+            "/api/v1/auth/register-from-invitation",
+            serde_json::json!({
+                "token": token,
+                "full_name": full_name,
+                "password": password,
+            }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "registrazione dall'invito da inquilino non riuscita: {body}"
+    );
+
+    let access_token = body["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_owned();
+    let (status, me) = app
+        .send("GET", "/api/v1/me", Some(&access_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {me}");
+    let user_id = me["id"].as_str().expect("id").to_owned();
+    (access_token, user_id)
 }
 
 /// Chiave dell'advisory lock che serializza i test dell'OCR.

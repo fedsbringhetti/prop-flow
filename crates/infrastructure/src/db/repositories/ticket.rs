@@ -5,7 +5,7 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use propflow_domain::ports::{
-    RepositoryError, RepositoryResult, TicketMessagePage, TicketMessageQuery,
+    RepositoryError, RepositoryResult, TicketLabels, TicketMessagePage, TicketMessageQuery,
     TicketMessageRepository, TicketPage, TicketQuery, TicketRepository,
 };
 use propflow_domain::shared::{
@@ -65,6 +65,7 @@ macro_rules! select_ticket {
            category::text       AS category,
            priority::text       AS priority,
            status::text         AS status,
+           visible_to_residents,
            reported_by,
            reported_by_kind::text AS reported_by_kind,
            assigned_to,
@@ -169,12 +170,14 @@ impl TicketRepository for PgUnitOfWork {
             "INSERT INTO app.tickets (
                  id, org_id, property_id, room_id, lease_id,
                  title, description, category, priority, status,
+                 visible_to_residents,
                  reported_by, reported_by_kind, created_at, updated_at
              ) VALUES (
                  $1, $2, $3, $4, $5,
                  $6, $7, $8::app.ticket_category, $9::app.ticket_priority,
                  $10::app.ticket_status,
-                 $11, $12::app.ticket_actor, $13, $14
+                 $11,
+                 $12, $13::app.ticket_actor, $14, $15
              )",
         )
         .bind(ticket.id().as_uuid())
@@ -187,6 +190,7 @@ impl TicketRepository for PgUnitOfWork {
         .bind(db_enums::ticket_category_to_db(ticket.category()))
         .bind(db_enums::ticket_priority_to_db(ticket.priority()))
         .bind(db_enums::ticket_status_to_db(ticket.status()))
+        .bind(ticket.visible_to_residents())
         .bind(ticket.reported_by().map(UserId::as_uuid))
         .bind(db_enums::ticket_actor_to_db(ticket.reported_by_kind()))
         .bind(ticket.created_at())
@@ -211,11 +215,21 @@ impl TicketRepository for PgUnitOfWork {
         // fallire la scrittura con `permission denied`, e fallisce nei test di
         // integrazione, che girano come `propflow_app`.
         //
-        // `property_id`, `room_id`, `lease_id`, `title`, `description`,
-        // `reported_by` e `reference` non ci sono e non possono esserci: il ruolo
-        // applicativo non ha più il privilegio di scriverle. `resolution_notes`
-        // invece sì, ed è la migration `0021` a concederla. Una segnalazione
-        // aperta sull'immobile sbagliato si annulla e si riapre.
+        // `property_id`, `room_id`, `lease_id`, `reported_by` e `reference` non ci
+        // sono e non possono esserci: il ruolo applicativo non ha più il
+        // privilegio di scriverle. Una segnalazione aperta sull'immobile sbagliato
+        // si annulla e si riapre.
+        //
+        // `resolution_notes` invece sì, ed è la migration `0021` a concederla;
+        // `visible_to_residents` la `0035`; **`title` e `description` la `0036`**,
+        // che revoca su quelle due colonne sole la scelta della `0020` — vedi
+        // ADR-048. Fino a quella migration questa `UPDATE` sarebbe fallita con
+        // `permission denied`.
+        //
+        // Le due colonne di testo compaiono in **questa** `UPDATE` e non in una
+        // sua: la scrittura è una sola per l'aggregato, e ogni transizione le
+        // riscrive con il valore che ha già in mano. Una `UPDATE` a parte per la
+        // correzione sarebbe un secondo posto da tenere allineato ai privilegi.
         //
         // `updated_at` non compare perché la scrive il trigger `set_updated_at`.
         let result = sqlx::query(
@@ -229,7 +243,10 @@ impl TicketRepository for PgUnitOfWork {
                     actual_cost    = $8::app.money_amount,
                     resolved_at    = $9,
                     closed_at      = $10,
-                    resolution_notes = $11
+                    resolution_notes = $11,
+                    title          = $12,
+                    description    = $13,
+                    visible_to_residents = $14
               WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(ticket.id().as_uuid())
@@ -243,6 +260,9 @@ impl TicketRepository for PgUnitOfWork {
         .bind(ticket.resolved_at())
         .bind(ticket.closed_at())
         .bind(ticket.resolution_notes())
+        .bind(ticket.title().as_str())
+        .bind(ticket.description().as_str())
+        .bind(ticket.visible_to_residents())
         .execute(&mut *self.tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -282,6 +302,47 @@ impl TicketRepository for PgUnitOfWork {
         .map_err(map_sqlx_error)?;
 
         rows.into_iter().map(map_status_change).collect()
+    }
+
+    async fn labels(&mut self, ids: &[TicketId]) -> RepositoryResult<Vec<TicketLabels>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **`LEFT JOIN` su entrambi**, come in `LeaseRepository::labels`: con un
+        // `INNER` sparirebbe dall'elenco ogni segnalazione sull'immobile intero —
+        // che non ha stanza — e ogni segnalazione di un immobile archiviato. Due
+        // modi di far scomparire righe che esistono, per andare a prendere un nome.
+        //
+        // `deleted_at IS NULL` sulle righe collegate è la regola 10: un immobile
+        // archiviato lascia il campo assente, e il client dice che cosa è successo
+        // invece di mostrare uno spazio vuoto.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT t.id     AS ticket_id,
+                    p.label  AS property_label,
+                    r.name   AS room_name
+               FROM app.tickets t
+               LEFT JOIN app.properties p
+                      ON p.id = t.property_id AND p.deleted_at IS NULL
+               LEFT JOIN app.rooms r
+                      ON r.id = t.room_id AND r.deleted_at IS NULL
+              WHERE t.id = ANY($1) AND t.deleted_at IS NULL",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let ticket_id: Uuid = try_get(&row, "ticket_id")?;
+                Ok(TicketLabels {
+                    ticket_id: TicketId::from_uuid(ticket_id),
+                    property_label: try_get(&row, "property_label")?,
+                    room_name: try_get(&row, "room_name")?,
+                })
+            })
+            .collect()
     }
 }
 
@@ -409,6 +470,7 @@ fn map_ticket(row: PgRow) -> RepositoryResult<Ticket> {
         category: db_enums::ticket_category_from_db(&category)?,
         priority: db_enums::ticket_priority_from_db(&priority)?,
         status: db_enums::ticket_status_from_db(&status)?,
+        visible_to_residents: try_get(&row, "visible_to_residents")?,
         reported_by: reported_by.map(UserId::from_uuid),
         reported_by_kind: db_enums::ticket_actor_from_db(&reported_by_kind)?,
         assigned_to: assigned_to.map(UserId::from_uuid),

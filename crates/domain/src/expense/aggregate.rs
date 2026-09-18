@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 
 use super::split::{Participant, Share, Split, SplitMethod};
 use super::value_objects::Weight;
-use crate::error::{DomainError, DomainResult};
+use crate::error::{DomainError, DomainResult, Invariant};
 use crate::shared::{
     Currency, ExpenseGroupId, ExpenseId, ExpenseShareId, Money, OrgId, UserId, text,
 };
@@ -110,6 +110,8 @@ pub struct Expense {
     created_by: Option<UserId>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// `deleted_at`: l'annullamento, che qui **è** il soft delete.
+    cancelled_at: Option<DateTime<Utc>>,
 }
 
 impl Expense {
@@ -170,6 +172,7 @@ impl Expense {
             created_by: Some(created_by),
             created_at: now,
             updated_at: now,
+            cancelled_at: None,
         };
 
         let shares = Split::by_method(split_method, amount, participants)?
@@ -178,6 +181,32 @@ impl Expense {
             .collect();
 
         Ok(RecordedExpense { expense, shares })
+    }
+
+    /// Annulla la spesa: `deleted_at = now`, ed **esce dai saldi da sola**.
+    ///
+    /// È l'operazione per cui la migration `0028` concede `deleted_at` — sta
+    /// scritto nel suo commento — e non serve nessuna vista da toccare:
+    /// `app.v_expense_group_balances` filtra già `e.deleted_at IS NULL` sia sul
+    /// lato di chi ha anticipato sia su quello delle quote (migration `0027`).
+    ///
+    /// **Annullare una spesa già regolata cambia i saldi**, ed è giusto: un
+    /// regolamento salda un saldo, non una spesa, e togliere una spesa sbagliata
+    /// dopo un regolamento sposta il saldo esattamente come chi annulla vuole. Il
+    /// trigger `expense_shares_balanced` non entra: le quote restano scritte e
+    /// continuano a sommare all'importo — sono la spesa, e la vista le ignora
+    /// insieme a lei.
+    ///
+    /// Non esiste un ripristino: `expenses_update` ha `deleted_at IS NULL` nella
+    /// `USING`, quindi la riga annullata non è più raggiungibile da un `UPDATE`.
+    /// Una spesa annullata per sbaglio si riscrive.
+    pub fn cancel(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
+        if self.cancelled_at.is_some() {
+            return Err(DomainError::Invariant(Invariant::ExpenseCancelled));
+        }
+        self.cancelled_at = Some(now);
+        self.updated_at = now;
+        Ok(())
     }
 
     #[must_use]
@@ -191,6 +220,10 @@ impl Expense {
     #[must_use]
     pub const fn group_id(&self) -> ExpenseGroupId {
         self.group_id
+    }
+    #[must_use]
+    pub const fn cancelled_at(&self) -> Option<DateTime<Utc>> {
+        self.cancelled_at
     }
     #[must_use]
     pub const fn paid_by_user_id(&self) -> UserId {
@@ -255,6 +288,7 @@ impl Expense {
             created_by,
             created_at,
             updated_at,
+            cancelled_at,
         } = parts;
         Self {
             id,
@@ -271,6 +305,7 @@ impl Expense {
             created_by,
             created_at,
             updated_at,
+            cancelled_at,
         }
     }
 }
@@ -292,6 +327,10 @@ pub struct ExpenseParts {
     pub created_by: Option<UserId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// `deleted_at`. Le query leggono con `deleted_at IS NULL`, quindi una spesa
+    /// riletta lo ha sempre nullo: il campo esiste perché l'aggregato non debba
+    /// fingere di non sapere se è stato annullato.
+    pub cancelled_at: Option<DateTime<Utc>>,
 }
 
 /// Quanto una persona deve di una spesa.
@@ -508,6 +547,26 @@ mod tests {
                 "`{amount}` non è una spesa"
             );
         }
+    }
+
+    /// Annullare è un soft delete, e una volta sola: la seconda volta la spesa
+    /// non è più nemmeno leggibile — il dominio lo dice comunque, per chi
+    /// costruisce l'aggregato a mano.
+    #[test]
+    fn cancelling_an_expense_stamps_it_once() {
+        let mut expense = Expense::record(new_expense(), &three_participants(), Utc::now())
+            .expect("registrata")
+            .expense;
+        let now = Utc::now();
+
+        assert!(expense.cancelled_at().is_none());
+        expense.cancel(now).expect("annullata");
+        assert_eq!(expense.cancelled_at(), Some(now));
+        assert_eq!(expense.updated_at(), now);
+        assert!(
+            expense.cancel(now).is_err(),
+            "annullare due volte non è un'operazione"
+        );
     }
 
     /// Una spesa senza partecipanti non è registrabile: le quote non

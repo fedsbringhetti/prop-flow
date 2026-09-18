@@ -297,6 +297,22 @@ export class SessionStore {
     this.emit()
   }
 
+  /**
+   * Nessuna organizzazione attiva: lo stato in cui si arriva uscendo
+   * dall'unica che si aveva (ADR-053).
+   *
+   * Senza, la sessione resterebbe con l'`X-Org-Id` dell'organizzazione appena
+   * lasciata, e ogni richiesta risponderebbe `403 org.not_a_member` — la stessa
+   * forma del difetto del poscritto della sezione 6, qui per «zero
+   * organizzazioni» invece che «organizzazione sbagliata».
+   */
+  clearOrganization(): void {
+    if (!this.session) return
+    if (this.session.organizationId === null && this.session.role === null) return
+    this.session = { ...this.session, organizationId: null, role: null }
+    this.emit()
+  }
+
   clear(): void {
     if (this.session === null) return
     this.session = null
@@ -365,18 +381,55 @@ export class SessionStore {
     return this.adopt((await response.json()) as SessionResponseBody)
   }
 
-  async register(input: {
-    email: string
+  /**
+   * Accetta un invito da proprietario: crea account e organizzazione dietro un
+   * token di piattaforma (ADR-053), e — a differenza della vecchia
+   * `POST /auth/register`, che rispondeva solo gli identificatori — **installa
+   * già la sessione**, esattamente come {@link login}: chi accetta non deve
+   * rifare un secondo giro.
+   *
+   * Non manda mai `X-Org-Id`, ma non per un flag da passare: questa classe non
+   * ne manda **mai** uno, a differenza di `ApiClient` — non esiste ancora una
+   * sessione da cui leggerlo. È `ApiClient.withoutOrganization` a servire dove
+   * un'organizzazione attiva **potrebbe** esserci ed è quella che romperebbe la
+   * richiesta; qui semplicemente non c'è nulla da dichiarare.
+   */
+  async acceptOwnerInvitation(input: {
+    token: string
     fullName: string
     password: string
     organizationName?: string | undefined
-  }): Promise<void> {
-    await this.post('/auth/register', {
-      email: input.email,
+  }): Promise<Session> {
+    const response = await this.post('/auth/accept-owner-invitation', {
+      token: input.token,
       full_name: input.fullName,
       password: input.password,
       ...(input.organizationName ? { organization_name: input.organizationName } : {}),
     })
+    return this.adopt((await response.json()) as SessionResponseBody)
+  }
+
+  /**
+   * Registra un inquilino a partire da un invito, **dentro l'organizzazione di
+   * chi lo ha invitato** (ADR-053): un solo passo, non più
+   * «registrati, poi accetta». Installa la sessione come {@link login}.
+   *
+   * Se il token è in realtà da **proprietario**, l'API risponde
+   * `409 invitation.owner_token` invece di aprire una sessione: tocca a chi
+   * chiama rimandare lo stesso corpo, più il nome dell'organizzazione, a
+   * {@link acceptOwnerInvitation}.
+   */
+  async registerFromInvitation(input: {
+    token: string
+    fullName: string
+    password: string
+  }): Promise<Session> {
+    const response = await this.post('/auth/register-from-invitation', {
+      token: input.token,
+      full_name: input.fullName,
+      password: input.password,
+    })
+    return this.adopt((await response.json()) as SessionResponseBody)
   }
 
   /**

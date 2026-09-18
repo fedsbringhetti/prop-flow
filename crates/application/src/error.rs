@@ -58,6 +58,20 @@ pub enum Conflict {
     /// vincolo è l'unica difesa.
     #[error("This person is already a member of this expense group")]
     GroupMembershipAlreadyExists,
+    /// Un token da proprietario, pendente e valido, presentato a
+    /// `/auth/register-from-invitation`.
+    ///
+    /// **Solo** un token valido dà questo `409`: il client sa allora di dover
+    /// chiedere il nome dell'organizzazione e rimandare lo stesso corpo a
+    /// `/auth/accept-owner-invitation`. Un token inesistente, scaduto, usato o
+    /// revocato — in **entrambe** le tabelle — resta
+    /// `401 auth.invalid_credentials`, identico in ogni caso: distinguerli
+    /// sarebbe un secondo oracolo su quali token esistono, oltre a
+    /// `auth.email_taken` (ADR-053).
+    #[error(
+        "This token belongs to a pending owner invitation: retry with the organization name against accept-owner-invitation"
+    )]
+    OwnerInvitationToken,
 }
 
 impl Conflict {
@@ -72,6 +86,7 @@ impl Conflict {
             Self::DuplicateUtilityBill => "utility_bill.duplicate",
             Self::PaymentIdempotencyKeyReused => "payment.idempotency_key_reused",
             Self::GroupMembershipAlreadyExists => "expense_group.membership_exists",
+            Self::OwnerInvitationToken => "invitation.owner_token",
         }
     }
 }
@@ -95,6 +110,16 @@ pub enum UnsupportedQuery {
     /// il modo peggiore di dirlo.
     #[error("`overdue` is derived from the due date: filter by `outstanding` instead")]
     ChargeDerivedStatusFilter,
+    /// `?status=rented` o `?status=partially_rented` sugli immobili.
+    ///
+    /// Terza occorrenza della stessa forma, e la ragione non cambia: quei due
+    /// valori discendono dai contratti in essere e **nessuna riga li porta
+    /// memorizzati**, quindi il filtro darebbe sempre zero risultati. Il filtro
+    /// che serve davvero è `occupied`, come `in_force` per i contratti.
+    #[error(
+        "`rented` and `partially_rented` are derived from the leases: filter by `occupied` instead"
+    )]
+    PropertyDerivedStatusFilter,
 }
 
 impl UnsupportedQuery {
@@ -102,6 +127,7 @@ impl UnsupportedQuery {
     pub const fn code(self) -> &'static str {
         match self {
             Self::LeaseDerivedStatusFilter => "lease.derived_status_filter",
+            Self::PropertyDerivedStatusFilter => "property.derived_status_filter",
             Self::ChargeDerivedStatusFilter => "charge.derived_status_filter",
         }
     }
@@ -111,7 +137,9 @@ impl UnsupportedQuery {
     #[must_use]
     pub const fn field(self) -> &'static str {
         match self {
-            Self::LeaseDerivedStatusFilter | Self::ChargeDerivedStatusFilter => "status",
+            Self::LeaseDerivedStatusFilter
+            | Self::ChargeDerivedStatusFilter
+            | Self::PropertyDerivedStatusFilter => "status",
         }
     }
 }
@@ -255,6 +283,7 @@ mod tests {
             Conflict::DuplicateUtilityBill.code(),
             Conflict::PaymentIdempotencyKeyReused.code(),
             Conflict::GroupMembershipAlreadyExists.code(),
+            Conflict::OwnerInvitationToken.code(),
         ];
         let mut unique = codes.to_vec();
         unique.sort_unstable();

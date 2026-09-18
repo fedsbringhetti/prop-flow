@@ -14,10 +14,12 @@
 
 ```bash
 # MinIO è lo storage oggetti dei documenti; `minio-setup` crea il bucket una volta.
-docker compose up -d postgres minio minio-setup
+# `mailpit` è il raccoglitore di posta: l'API non parte senza una configurazione
+# della posta, e i messaggi che manda si leggono su http://localhost:8025.
+docker compose up -d postgres minio minio-setup mailpit
 ./ops/dev/generate-jwt-keys.sh        # crea .secrets/, che è ignorato da git
 cp .env.example .env                  # adattare se serve
-set -a; source .env; set +a           # il file lo carica la shell, non il codice
+set -a; source .env; set +a           # non serve con `just`, che lo carica da sé
 
 # I ruoli si creano una volta per cluster
 docker compose exec -T postgres psql -U postgres -d postgres \
@@ -202,8 +204,10 @@ dell'astrazione **prima** di scrivere il primo adattatore.
 
 `ObjectStorage` è l'esempio completo: porta dichiarata dal primo giorno, adattatore
 scritto molto dopo in `crates/infrastructure/src/storage/`, e nessuna riga della porta
-riscritta per accomodarlo — che è il punto di deciderne la forma prima. `Notifier` è
-ancora dichiarata e senza adattatore: è la prossima.
+riscritta per accomodarlo — che è il punto di deciderne la forma prima. `Notifier` ha
+seguito la stessa strada: dichiarata alla fetta 1, adattatore SMTP scritto molto dopo in
+`crates/infrastructure/src/notify/`, e della porta è cambiata una cosa sola — l'aggiunta
+di `probe`, che serviva a rendere visibile un canale caduto e non ad accomodare lettre.
 
 ### Aggiungere una schermata al client
 
@@ -257,5 +261,5 @@ database e non nel codice deve essere rumoroso, non silenzioso.
 | Il migratore riapplica tutto | Bookkeeping duplicato: controllo 10 delle invarianti, [ADR-009](08-decisioni.md#adr-009) |
 | `expect_used` fallisce in un test | Manca l'`allow` in testa al crate di test |
 | Il test di integrazione si salta | Variabili d'ambiente assenti: usare `./ops/ci/test-integration.sh` |
-| `missing field private_key_path` all'avvio | `.env` non lo carica nessuno: `set -a; source .env; set +a` ([ADR-023](08-decisioni.md#adr-023)) |
+| `missing field private_key_path` all'avvio | `.env` non lo carica il processo: `just api`, oppure `set -a; source .env; set +a` se lanci a mano ([ADR-023](08-decisioni.md#adr-023)) |
 | L'API parte, ma con bind, timeout o TTL diversi da quelli documentati | `config/default.toml` si risolve rispetto alla directory di lavoro: avviarla dalla radice del repository ([ADR-023](08-decisioni.md#adr-023)) |

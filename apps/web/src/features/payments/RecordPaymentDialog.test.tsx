@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SessionProvider } from '@/app/session'
+import { todayIso } from '@/lib/format'
 import type { Charge } from '@/api/types'
 import { RecordPaymentDialog } from './RecordPaymentDialog'
 
@@ -219,6 +220,29 @@ describe('registrare un incasso', () => {
       method: 'bank_transfer',
       payer_user_id: 'utente-inquilino',
     })
+  })
+
+  /**
+   * **La data si mostra e non si manda**, finché resta quella di oggi.
+   *
+   * Gemello del test sulla dichiarazione, e qui pesa di più: un bonifico si vede
+   * sull'estratto conto giorni dopo, quindi cambiarla è il gesto normale — ma
+   * *mandarla* senza che nessuno l'abbia toccata trasformerebbe un incasso
+   * registrato alle 18 in uno delle 00:00.
+   */
+  it('mostra oggi nel campo e non manda `paid_at` finché non si cambia', async () => {
+    const user = userEvent.setup()
+    const attempts = renderDialog([201])
+
+    await user.click(screen.getByRole('button', { name: /registra un incasso/i }))
+    const date = await screen.findByLabelText(/data del movimento/i)
+    expect(date).toHaveValue(todayIso())
+
+    await fillIn(user, '300.00')
+    await user.click(screen.getByRole('button', { name: /^registra un incasso$/i }))
+
+    await waitFor(() => expect(attempts).toHaveLength(1))
+    expect(attempts[0]?.body).not.toHaveProperty('paid_at')
   })
 
   it('manda l’importo come stringa, mai come numero', async () => {

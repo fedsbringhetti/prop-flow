@@ -2,13 +2,18 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use propflow_domain::events::{
-    DomainEvent, DomainEventPayload, EventMetadata, TicketAssigned, TicketStatusChanged,
+    DomainEvent, DomainEventPayload, EventMetadata, TicketAssigned, TicketMessagePosted,
+    TicketStatusChanged,
 };
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
-use propflow_domain::shared::{OrgId, TicketId, UserId};
-use propflow_domain::ticket::{Ticket, TicketCategory, TicketPriority, TicketStatus, WaitingOn};
+use propflow_domain::shared::{OrgId, TicketId, TicketMessageId, UserId};
+use propflow_domain::ticket::{
+    MessageBody, NewTicketMessage, Ticket, TicketActor, TicketCategory, TicketMessage,
+    TicketPriority, TicketStatus, WaitingOn,
+};
 use propflow_domain::{Denial, DomainResult, Entity, RequestContext};
 
+use super::read::{TicketView, view_of};
 use crate::authorization;
 use crate::error::{AppError, AppResult};
 
@@ -22,7 +27,10 @@ use crate::error::{AppError, AppResult};
 /// uno, e la sequenza è precisamente ciò che non deve variare.
 ///
 /// `TicketStatusChanged` lo emette sempre questa funzione: nessuna transizione può
-/// dimenticarlo, che è l'altra metà della ragione per cui esiste.
+/// dimenticarlo, che è l'altra metà della ragione per cui esiste. Vale identico per
+/// `TicketMessagePosted` quando la transizione lascia un messaggio nel thread:
+/// scriverlo senza il suo evento è il modo in cui una copia di questa sequenza si
+/// romperebbe in silenzio.
 async fn run<A, T, E>(
     unit_of_work: &Arc<dyn UnitOfWorkFactory>,
     clock: &Arc<dyn Clock>,
@@ -30,12 +38,12 @@ async fn run<A, T, E>(
     id: TicketId,
     authorize: A,
     apply: T,
-    extra_events: E,
-) -> AppResult<Ticket>
+    aftermath: E,
+) -> AppResult<TicketView>
 where
     A: FnOnce(&RequestContext, &Ticket) -> AppResult<()>,
     T: FnOnce(&mut Ticket, DateTime<Utc>) -> DomainResult<()>,
-    E: FnOnce(&Ticket, OrgId) -> Vec<DomainEventPayload>,
+    E: FnOnce(&Ticket, OrgId, DateTime<Utc>) -> Aftermath,
 {
     let org_id = authorization::ensure_member(context)?;
     let now = clock.now();
@@ -66,7 +74,24 @@ where
             authorization::effective_role(context),
         ),
     )];
-    events.extend(extra_events(&ticket, org_id));
+
+    let Aftermath {
+        events: extra,
+        message,
+    } = aftermath(&ticket, org_id, now);
+    events.extend(extra);
+
+    // Il messaggio si scrive **dopo** l'aggiornamento dello stato, e non è
+    // indifferente: la riapertura è l'unica transizione che ne lascia uno, e lo
+    // lascia su una segnalazione che fino alla riga sopra era `closed`. Con
+    // l'ordine invertito la regola «un thread terminato non riceve messaggi»
+    // colpirebbe proprio il messaggio che esiste per superarla.
+    if let Some(message) = message {
+        uow.ticket_messages().insert(&message).await?;
+        events.push(DomainEventPayload::TicketMessagePosted(
+            TicketMessagePosted::from_message(&message),
+        ));
+    }
 
     for payload in events {
         uow.events()
@@ -77,9 +102,14 @@ where
             ))
             .await?;
     }
+
+    // I nomi si risolvono **prima** del commit, perché dopo l'unità di lavoro non
+    // c'è più. Costa due query corte, ed è ciò che tiene uniforme la risposta: vedi
+    // `TicketView`.
+    let view = view_of(&mut *uow, ticket).await?;
     uow.commit().await?;
 
-    Ok(ticket)
+    Ok(view)
 }
 
 /// Lo staff guida la lavorazione. Vale per triage, assegnazione, avvio,
@@ -111,20 +141,30 @@ fn reporter_or_staff(context: &RequestContext, ticket: &Ticket) -> AppResult<()>
     Err(AppError::Forbidden(Denial::TicketNotYours))
 }
 
-/// Annullare tocca allo staff sempre, a chi ha segnalato **solo finché nessuno ci
-/// ha messo mano**: un inquilino che annullasse una segnalazione già in
-/// lavorazione butterebbe via il lavoro di qualcun altro.
-fn canceller(context: &RequestContext, ticket: &Ticket) -> AppResult<()> {
+/// Lo staff sempre, chi ha segnalato **solo finché nessuno ci ha messo mano**.
+///
+/// **Serve a due operazioni e vive in una funzione sola.** L'annullamento la usa
+/// da sempre — un inquilino che annullasse una segnalazione già in lavorazione
+/// butterebbe via il lavoro di qualcun altro — e la correzione del testo la usa da
+/// [ADR-048](../../../../../docs/08-decisioni.md), che sceglie deliberatamente la
+/// stessa forma. Copiarla darebbe due regole che divergono alla prima modifica di
+/// una delle due, ed è precisamente la cosa che nessuno si accorgerebbe di aver
+/// rotto.
+///
+/// I due codici di rifiuto **non sono intercambiabili**, e la distinzione è tutto
+/// il valore di questa funzione: vedi i commenti dentro.
+pub(super) fn reporter_while_open(context: &RequestContext, ticket: &Ticket) -> AppResult<()> {
     if context.is_staff() {
         return Ok(());
     }
     if !is_reporter(context, ticket) {
+        // Non gli manca un ruolo — nessun ruolo gli darebbe questa operazione —
+        // gli manca l'essere stato lui a segnalare.
         return Err(AppError::Forbidden(Denial::TicketNotYours));
     }
     if !matches!(ticket.status(), TicketStatus::Open) {
-        // Qui il primo codice è invece **vero**: la segnalazione è sua, ma
-        // annullarne una già in lavorazione richiede davvero lo staff, perché
-        // butterebbe via il lavoro di qualcun altro.
+        // Qui il primo codice è invece **vero**: la segnalazione è sua, ma da qui
+        // in poi l'operazione richiede davvero lo staff.
         return Err(AppError::Forbidden(Denial::StaffRoleRequired));
     }
     Ok(())
@@ -134,9 +174,24 @@ fn is_reporter(context: &RequestContext, ticket: &Ticket) -> bool {
     ticket.reported_by().is_some() && ticket.reported_by() == context.user_id()
 }
 
-/// Nessun evento oltre a `TicketStatusChanged`.
-fn no_extra_events(_ticket: &Ticket, _org_id: OrgId) -> Vec<DomainEventPayload> {
-    Vec::new()
+/// Ciò che una transizione lascia dietro di sé oltre al cambio di stato.
+///
+/// Una struct e non due argomenti perché sono la stessa cosa vista da due lati —
+/// che cosa è successo, e che cosa ne resta scritto — e perché `run` ha già sette
+/// parametri: l'ottavo lo renderebbe una funzione che si chiama leggendo la firma.
+#[derive(Default)]
+struct Aftermath {
+    events: Vec<DomainEventPayload>,
+    /// Un messaggio da scrivere nel thread **nella stessa transazione**.
+    ///
+    /// Lo usa la sola riapertura, che porta il motivo. Il suo evento lo emette
+    /// `run`, non chi costruisce il messaggio.
+    message: Option<TicketMessage>,
+}
+
+/// Niente oltre a `TicketStatusChanged`.
+fn nothing_else(_ticket: &Ticket, _org_id: OrgId, _now: DateTime<Utc>) -> Aftermath {
+    Aftermath::default()
 }
 
 macro_rules! transition_use_case {
@@ -179,7 +234,7 @@ impl TriageTicket {
         &self,
         context: &RequestContext,
         command: TriageTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -187,7 +242,7 @@ impl TriageTicket {
             command.id,
             staff_only,
             |ticket, now| ticket.triage(command.category, command.priority, now),
-            no_extra_events,
+            nothing_else,
         )
         .await
     }
@@ -213,7 +268,7 @@ impl AssignTicket {
         &self,
         context: &RequestContext,
         command: AssignTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -221,12 +276,13 @@ impl AssignTicket {
             command.id,
             staff_only,
             |ticket, now| ticket.assign(command.assignee, now),
-            |ticket, org_id| {
-                vec![DomainEventPayload::TicketAssigned(TicketAssigned {
+            |ticket, org_id, _now| Aftermath {
+                events: vec![DomainEventPayload::TicketAssigned(TicketAssigned {
                     ticket_id: ticket.id(),
                     org_id,
                     assignee_id: command.assignee,
-                })]
+                })],
+                message: None,
             },
         )
         .await
@@ -250,7 +306,7 @@ impl StartTicketWork {
         &self,
         context: &RequestContext,
         command: StartTicketWorkCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -258,7 +314,7 @@ impl StartTicketWork {
             command.id,
             staff_only,
             |ticket, now| ticket.start(now),
-            no_extra_events,
+            nothing_else,
         )
         .await
     }
@@ -280,7 +336,7 @@ impl SuspendTicket {
         &self,
         context: &RequestContext,
         command: SuspendTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -288,7 +344,7 @@ impl SuspendTicket {
             command.id,
             staff_only,
             |ticket, now| ticket.wait_for(command.waiting_on, now),
-            no_extra_events,
+            nothing_else,
         )
         .await
     }
@@ -313,7 +369,7 @@ impl CloseTicket {
         &self,
         context: &RequestContext,
         command: CloseTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
@@ -321,25 +377,48 @@ impl CloseTicket {
             command.id,
             staff_only,
             |ticket, now| ticket.close(command.resolution_notes, now),
-            no_extra_events,
+            nothing_else,
         )
         .await
     }
 }
 
 transition_use_case!(
-    /// Riapre una segnalazione chiusa.
+    /// Riapre una segnalazione chiusa, **dicendo perché**.
     ///
     /// È **l'unica transizione che un inquilino può eseguire**, e solo se è chi ha
     /// segnalato. È ciò che rende la segnalazione un rapporto invece di una
     /// casella postale: senza, un guasto ricorrente diventa una segnalazione nuova
     /// ogni volta e lo storico si frantuma proprio dove servirebbe intero.
+    ///
+    /// # Il motivo è obbligatorio, e finisce nel thread
+    ///
+    /// Da quando un thread terminato non riceve più messaggi
+    /// ([`Ticket::ensure_open_to_messages`]), riaprire è **l'unico modo** di dire
+    /// «non è risolto»: il motivo smette di essere un di più ed è l'unica cosa che
+    /// spiega perché la segnalazione è tornata viva. È l'asimmetria con
+    /// `resolution_notes`, che resta facoltativo — la chiusura lascia comunque
+    /// `closed_at` e una riga di storico.
+    ///
+    /// Va nel **thread** e non su una colonna: il thread non si riscrive mai,
+    /// quindi il motivo sopravvive alla chiusura successiva, mentre
+    /// `resolution_notes` viene cancellato dalla riapertura stessa e una colonna
+    /// simmetrica lo sarebbe a sua volta. E una segnalazione si riapre più volte:
+    /// tre riaperture hanno tre motivi, e una colonna ne tiene uno.
+    ///
+    /// Non va in `ticket_status_history.reason`, che è la colonna fatta apposta e
+    /// resta non scritta: la riga la inserisce un trigger `SECURITY DEFINER`, e
+    /// farle arrivare il motivo richiederebbe una `set_config` transazionale che
+    /// una seconda transizione nella stessa richiesta erediterebbe. Vedi ADR-050.
     ReopenTicket
 );
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ReopenTicketCommand {
     pub id: TicketId,
+    /// Perché la segnalazione torna viva. Diventa il primo messaggio del giro
+    /// nuovo, pubblico: chi ha chiuso deve poterlo leggere.
+    pub reason: MessageBody,
 }
 
 impl ReopenTicket {
@@ -347,7 +426,11 @@ impl ReopenTicket {
         &self,
         context: &RequestContext,
         command: ReopenTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
+        let author_kind = TicketActor::from_role(authorization::effective_role(context));
+        let author_id = context.user_id();
+        let reason = command.reason;
+
         run(
             &self.unit_of_work,
             &self.clock,
@@ -355,7 +438,23 @@ impl ReopenTicket {
             command.id,
             reporter_or_staff,
             |ticket, now| ticket.reopen(now),
-            no_extra_events,
+            move |ticket, org_id, now| Aftermath {
+                events: Vec::new(),
+                // Mai `is_internal`: il punto del motivo è che lo legga l'altra
+                // parte. Una nota interna direbbe alla segnalazione perché è
+                // tornata viva senza dirlo a chi l'aveva chiusa — o a chi
+                // l'aveva aperta.
+                message: Some(TicketMessage::post(NewTicketMessage {
+                    id: TicketMessageId::generate(),
+                    org_id,
+                    ticket_id: ticket.id(),
+                    author_id,
+                    author_kind,
+                    body: reason,
+                    is_internal: false,
+                    now,
+                })),
+            },
         )
         .await
     }
@@ -376,15 +475,15 @@ impl CancelTicket {
         &self,
         context: &RequestContext,
         command: CancelTicketCommand,
-    ) -> AppResult<Ticket> {
+    ) -> AppResult<TicketView> {
         run(
             &self.unit_of_work,
             &self.clock,
             context,
             command.id,
-            canceller,
+            reporter_while_open,
             |ticket, now| ticket.cancel(now),
-            no_extra_events,
+            nothing_else,
         )
         .await
     }
@@ -410,6 +509,7 @@ mod tests {
             description: TicketDescription::parse("Perde da ieri").expect("descrizione"),
             category: TicketCategory::Other,
             priority: TicketPriority::Medium,
+            visible_to_residents: false,
             reported_by: reporter,
             reported_by_kind: TicketActor::Tenant,
             now: Utc::now(),
@@ -456,19 +556,19 @@ mod tests {
     fn a_ticket_without_a_reporter_is_not_everyones() {
         let ticket = ticket(None);
         assert!(reporter_or_staff(&tenant(UserId::generate()), &ticket).is_err());
-        assert!(canceller(&tenant(UserId::generate()), &ticket).is_err());
+        assert!(reporter_while_open(&tenant(UserId::generate()), &ticket).is_err());
     }
 
     #[test]
     fn the_reporter_can_only_cancel_before_anyone_touched_it() {
         let reporter = UserId::generate();
         let mut ticket = ticket(Some(reporter));
-        assert!(canceller(&tenant(reporter), &ticket).is_ok());
+        assert!(reporter_while_open(&tenant(reporter), &ticket).is_ok());
 
         ticket
             .assign(UserId::generate(), Utc::now())
             .expect("assegnato");
-        let refused = canceller(&tenant(reporter), &ticket).expect_err(
+        let refused = reporter_while_open(&tenant(reporter), &ticket).expect_err(
             "annullare una segnalazione già in lavorazione butta via il lavoro di un altro",
         );
         assert_eq!(
@@ -477,7 +577,7 @@ mod tests {
             "qui il ruolo serve davvero: la segnalazione è sua, ma è in lavorazione"
         );
         assert!(
-            canceller(&owner(), &ticket).is_ok(),
+            reporter_while_open(&owner(), &ticket).is_ok(),
             "lo staff annulla da qualunque stato di lavorazione"
         );
     }

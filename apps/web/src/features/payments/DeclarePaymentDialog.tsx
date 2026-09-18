@@ -13,7 +13,8 @@ import { keys } from '@/app/query'
 import { useApi } from '@/app/session'
 import { t } from '@/i18n'
 import { isPositive, parseDecimal } from '@/lib/decimal'
-import { formatAmount } from '@/lib/format'
+import { formatAmount, todayIso } from '@/lib/format'
+import { paidAtBody } from './paidAt'
 
 /** L'ordine è quello del menù: il bonifico per primo perché è il caso comune. */
 const METHODS: readonly PaymentMethod[] = [
@@ -94,7 +95,8 @@ export function DeclarePaymentDialog({ charge }: { charge: Charge }) {
         {
           amount: values.amount.trim().replace(',', '.'),
           method: values.method,
-          ...(values.paid_at ? { paid_at: new Date(values.paid_at).toISOString() } : {}),
+          // Mostrata e non mandata finché è quella di oggi: vedi `paidAtBody`.
+          ...paidAtBody(values.paid_at),
           ...(values.reference.trim() ? { reference: values.reference.trim() } : {}),
         },
         intent.current(),
@@ -238,7 +240,11 @@ function emptyValues(charge: Charge): Values {
   return {
     amount: isPositive(outstanding) ? outstanding : '',
     method: 'bank_transfer',
-    paid_at: '',
+    // **Oggi nel campo, non nella richiesta.** Il campo vuoto era corretto sul filo
+    // e illeggibile a schermo: chi dichiarava non vedeva quale giorno stava
+    // dichiarando. Che la data mostrata non venga mandata è ciò che conserva
+    // l'ora vera — `paidAtBody`.
+    paid_at: todayIso(),
     reference: '',
   }
 }

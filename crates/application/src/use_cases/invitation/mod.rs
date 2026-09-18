@@ -8,6 +8,7 @@ mod accept;
 mod invite_tenant;
 mod revoke;
 
+pub(crate) use accept::link_accepted_invitation;
 pub use accept::{AcceptInvitation, AcceptInvitationCommand, AcceptedInvitation};
 pub use invite_tenant::{InviteTenant, InviteTenantCommand, IssuedInvitation};
 pub use revoke::{RevokeInvitation, RevokeInvitationCommand};

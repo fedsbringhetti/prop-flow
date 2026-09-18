@@ -17,14 +17,17 @@ use figment::providers::{Env, Format, Toml};
 /// default qui sotto. Non c'è un avviso perché la configurazione si carica prima
 /// della telemetria: vedi `docs/08-decisioni.md#adr-023`.
 ///
-/// `.env` non lo legge nessuno: lo carica la shell (`set -a; source .env; set +a`),
-/// stesso ADR.
+/// `.env` non lo legge **questo processo**: lo carica chi lo avvia — `just`, che ha
+/// `set dotenv-load`, o la shell con `set -a; source .env; set +a` per chi lancia il
+/// binario a mano. Stesso ADR: resta un file per l'ambiente, non una sorgente di
+/// configurazione.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub auth: AuthConfig,
     pub storage: StorageConfig,
+    pub mail: MailConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
 }
@@ -126,6 +129,58 @@ pub struct StorageConfig {
     pub request_timeout_seconds: u64,
 }
 
+/// Posta in uscita.
+///
+/// **Obbligatoria**, come le credenziali dello storage e per una ragione più
+/// stringente. Da quando esiste il recupero della password la posta è l'**unico
+/// canale** verso una persona chiusa fuori dal proprio account: un `Notifier` che
+/// non facesse niente quando la configurazione manca produrrebbe il difetto
+/// peggiore di tutti — una richiesta di recupero che risponde `202` e non manda
+/// niente, su chi non ha nessun altro modo di rientrare.
+///
+/// Un'impostazione mancante ferma quindi **l'avvio**, che è la lezione già pagata
+/// tre volte con le quattro `PROPFLOW__STORAGE__*`: il fallimento al primo uso
+/// somiglia a un problema di rete invece che a una configurazione incompleta.
+///
+/// La configurazione ferma un relay **mal configurato**, non un relay *caduto*:
+/// quello lo dice il controllo di prontezza, che interroga SMTP apposta.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MailConfig {
+    /// Host del relay. In sviluppo è il raccoglitore del compose.
+    pub host: String,
+    #[serde(default = "default_mail_port")]
+    pub port: u16,
+    /// Utenza e password insieme, o nessuna delle due: il raccoglitore locale non
+    /// autentica nessuno, un relay vero le vuole entrambe. Una sola delle due è
+    /// quasi sempre una variabile dimenticata, e l'adattatore la rifiuta all'avvio.
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Il mittente. Su un dominio senza SPF, DKIM e DMARC la posta parte e finisce
+    /// nello spam, con un sintomo **muto**: nessun errore, il codice non compare.
+    pub from_address: String,
+    #[serde(default = "default_mail_from_name")]
+    pub from_name: String,
+    /// `starttls` (587), `tls` (465) o `none`. L'ultimo **solo** per il
+    /// raccoglitore locale: un relay vero raggiunto in chiaro manda credenziali e
+    /// destinatari sulla rete.
+    #[serde(default = "default_mail_encryption")]
+    pub encryption: MailEncryptionConfig,
+    #[serde(default = "default_mail_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+/// Il valore dell'impostazione, distinto dal tipo dell'infrastruttura: `config.rs`
+/// non conosce `propflow-infrastructure`, e `main.rs` è il solo punto che traduce.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MailEncryptionConfig {
+    StartTls,
+    Tls,
+    None,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TelemetryConfig {
     #[serde(default = "default_service_name")]
@@ -171,8 +226,9 @@ pub enum ConfigError {
     #[error(
         "manca un'impostazione obbligatoria.\n         Le variabili hanno prefisso PROPFLOW__ e il doppio underscore separa i \
          livelli (PROPFLOW__STORAGE__ACCESS_KEY_ID).\n         L'elenco completo, con valori buoni per lo sviluppo locale, è in \
-         .env.example — che nessuno carica da solo: lo fa la shell, con \
-         `set -a; source .env; set +a`.\n         Un .env copiato prima di una fetta che ha aggiunto impostazioni non le \
+         .env.example — che il processo non carica da solo: lo fa `just` (che ha \
+         set dotenv-load), oppure la shell con `set -a; source .env; set +a` se stai \
+         lanciando il binario a mano.\n         Un .env copiato prima di una fetta che ha aggiunto impostazioni non le \
          ha: confrontalo con .env.example."
     )]
     Incomplete {
@@ -218,6 +274,22 @@ impl AppConfig {
     pub const fn request_timeout(&self) -> Duration {
         Duration::from_secs(self.server.request_timeout_seconds)
     }
+}
+
+const fn default_mail_port() -> u16 {
+    587
+}
+
+fn default_mail_from_name() -> String {
+    "PropFlow".to_owned()
+}
+
+const fn default_mail_encryption() -> MailEncryptionConfig {
+    MailEncryptionConfig::StartTls
+}
+
+const fn default_mail_timeout_seconds() -> u64 {
+    10
 }
 
 fn default_bind() -> String {

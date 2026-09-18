@@ -13,23 +13,55 @@ import {
   updateProperty,
   updateRoom,
 } from '@/api/endpoints'
-import type { EnergyClass, Property, Room } from '@/api/types'
+import type { EnergyClass, Property, PropertyStatus, Room, RoomStatus } from '@/api/types'
 import { Async, Empty, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmAction, FormDialog } from '@/components/ui/confirm'
 import { Field, Input, Select } from '@/components/ui/field'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
-import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/components/ui/table'
+import {
+  TableCaption,
+  TableFrame,
+  Td,
+  TdNumeric,
+  TdSelect,
+  Th,
+  ThNumeric,
+  ThSelect,
+  Tr,
+  useSelection,
+} from '@/components/ui/table'
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
+import { compareDecimals, parseDecimal } from '@/lib/decimal'
 import { formatAmount, formatDecimal } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
+import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { RoomStatusBadge } from '../shared/status'
 import { PropertyStatusBadge } from '../shared/status'
 
 const ENERGY_CLASSES: EnergyClass[] = ['A4', 'A3', 'A2', 'A1', 'A', 'B', 'C', 'D', 'E', 'F', 'G']
+
+/**
+ * Gli stati che chi amministra **decide**.
+ *
+ * `rented` e `partially_rented` non ci sono perché non si scelgono: discendono dai
+ * contratti in essere, e offrirli in una tendina chiederebbe a una persona di
+ * ricordarsi di aggiornare a mano qualcosa che il database sa già (ADR-019).
+ * `archived` non c'è perché ha la sua operazione, e il dominio rifiuta di
+ * riceverlo da un `PATCH`.
+ */
+const EDITABLE_STATUSES = ['draft', 'available', 'maintenance'] as const
+
+/** Il verbo delle stanze: **Archivia**, con la frase della scheda e il numero. */
+const ARCHIVE_ROOM: Verb = {
+  label: t.room.archive,
+  confirmOne: t.room.archiveConfirm,
+  confirmMany: t.room.archiveConfirmMany,
+  explain: t.room.archiveExplain,
+}
 
 export function PropertyDetailPage() {
   const { id = '' } = useParams()
@@ -94,10 +126,17 @@ export function PropertyDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{t.property.title}</CardTitle>
-                <PropertyStatusBadge status={data.status} />
+                <PropertyStatusBadge status={data.status} effectiveStatus={data.effective_status} />
               </CardHeader>
               <CardBody>
                 <DescriptionList>
+                  {/* Come per i contratti: il badge dice ciò che i contratti in
+                      essere producono, e lo stato *scelto* resta leggibile qui —
+                      accanto a quello effettivo, e non ripetuto su ogni riga
+                      dell'elenco. */}
+                  <DescriptionItem label={t.property.statusLabel}>
+                    {t.property.statuses[data.status]}
+                  </DescriptionItem>
                   <DescriptionItem label={t.property.type}>
                     {t.property.types[data.property_type]}
                   </DescriptionItem>
@@ -171,6 +210,7 @@ function EditPropertyDialog({ property }: { property: Property }) {
 
   const [values, setValues] = useState({
     label: property.label,
+    status: property.status,
     size_sqm: property.size_sqm ?? '',
     rooms_count: property.rooms_count?.toString() ?? '',
     floor: property.floor?.toString() ?? '',
@@ -182,6 +222,7 @@ function EditPropertyDialog({ property }: { property: Property }) {
     mutationFn: () =>
       updateProperty(client, property.id, {
         label: values.label,
+        status: values.status,
         // `|| null` e non `|| undefined`: svuotare il campo deve azzerare il
         // valore, non lasciarlo com'era.
         size_sqm: values.size_sqm.trim() || null,
@@ -225,6 +266,36 @@ function EditPropertyDialog({ property }: { property: Property }) {
               value={values.label}
               onChange={(event) => setValues((v) => ({ ...v, label: event.target.value }))}
             />
+          )}
+        </Field>
+        {/* Lo stato dichiarato, e solo quello: gli altri due li calcolano i
+            contratti, e la spiegazione lo dice invece di lasciare che qualcuno
+            cerchi «Affittato» nella tendina. */}
+        <Field label={t.property.statusLabel} hint={t.property.statusHint}>
+          {(props) => (
+            <Select
+              {...props}
+              value={
+                EDITABLE_STATUSES.includes(values.status as (typeof EDITABLE_STATUSES)[number])
+                  ? values.status
+                  : ''
+              }
+              onChange={(event) =>
+                setValues((v) => ({ ...v, status: event.target.value as PropertyStatus }))
+              }
+            >
+              {/* Un immobile già affittato mostra lo stato derivato, che non è
+                  fra le scelte: l'opzione vuota evita che la tendina dica una
+                  cosa falsa finché non si sceglie. */}
+              {EDITABLE_STATUSES.includes(values.status as (typeof EDITABLE_STATUSES)[number]) ? null : (
+                <option value="">{t.property.statuses[values.status]}</option>
+              )}
+              {EDITABLE_STATUSES.map((value) => (
+                <option key={value} value={value}>
+                  {t.property.statuses[value]}
+                </option>
+              ))}
+            </Select>
           )}
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -309,9 +380,23 @@ function EditPropertyDialog({ property }: { property: Property }) {
 function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boolean }) {
   const canManage = !archived
   const client = useApi()
+  const queryClient = useQueryClient()
   const rooms = useQuery({
     queryKey: keys.rooms(propertyId),
     queryFn: () => listRooms(client, propertyId),
+  })
+
+  // L'archiviazione in blocco vive qui e non nella modale della stanza: è lo
+  // stesso giro della riga singola, e la modale resta il posto dove si corregge.
+  const selection = useSelection(canManage ? (rooms.data?.items ?? []).map((room) => room.id) : [])
+  const archive = useBulkAction({
+    selection,
+    action: (id) => archiveRoom(client, id),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
+      // Il conteggio dei locali sta sull'immobile: una stanza archiviata lo cambia.
+      await queryClient.invalidateQueries({ queryKey: keys.property(propertyId) })
+    },
   })
 
   return (
@@ -320,16 +405,22 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
         <CardTitle>{t.room.title}</CardTitle>
         {archived ? null : <NewRoomDialog propertyId={propertyId} />}
       </CardHeader>
+      {canManage ? (
+        <BulkBar selection={selection} verb={ARCHIVE_ROOM} bulk={archive} icon={<Archive aria-hidden />} />
+      ) : null}
       <Async
         query={rooms}
         isEmpty={(data) => data.items.length === 0}
-        empty={<Empty title={t.room.empty} />}
+        empty={
+          <Empty title={t.room.empty} {...(canManage ? { hint: t.room.emptyHint } : {})} />
+        }
       >
         {(data) => (
           <TableFrame>
             <TableCaption>{t.room.title}</TableCaption>
             <thead>
               <tr>
+                {canManage ? <ThSelect selection={selection} /> : null}
                 <Th>{t.room.name}</Th>
                 <Th>{t.room.status}</Th>
                 <Th>{t.room.privateBathroom}</Th>
@@ -341,9 +432,17 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
             <tbody>
               {data.items.map((room) => (
                 <Tr key={room.id}>
+                  {canManage ? (
+                    <TdSelect
+                      selection={selection}
+                      id={room.id}
+                      label={room.name}
+                      failure={archive.failureFor(room.id)}
+                    />
+                  ) : null}
                   <Td>{room.name}</Td>
                   <Td>
-                    <RoomStatusBadge status={room.status} />
+                    <RoomStatusBadge status={room.status} effectiveStatus={room.effective_status} />
                   </Td>
                   <Td>{room.has_private_bathroom ? t.common.yes : t.common.no}</Td>
                   <TdNumeric>
@@ -355,8 +454,16 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
                       : t.common.none}
                   </TdNumeric>
                   {canManage ? (
-                    <Td>
-                      <RoomDialog room={room} propertyId={propertyId} />
+                    <Td className="whitespace-nowrap">
+                      <span className="inline-flex gap-1">
+                        <RoomDialog room={room} propertyId={propertyId} />
+                        <VerbButton
+                          verb={ARCHIVE_ROOM}
+                          ids={[room.id]}
+                          run={archive.run}
+                          rowLabel={room.name}
+                        />
+                      </span>
                     </Td>
                   ) : null}
                 </Tr>
@@ -366,6 +473,175 @@ function RoomsCard({ propertyId, archived }: { propertyId: string; archived: boo
         )}
       </Async>
     </Card>
+  )
+}
+
+/** I campi di una stanza come li digita chi scrive: **stringhe**, anche i numeri. */
+interface RoomValues {
+  name: string
+  monthly_rent: string
+  size_sqm: string
+  floor: string
+  bathroom: boolean
+  furnished: boolean
+  utility_share: string
+}
+
+const NEW_ROOM: RoomValues = {
+  name: '',
+  monthly_rent: '',
+  size_sqm: '',
+  floor: '',
+  bathroom: false,
+  furnished: false,
+  utility_share: '',
+}
+
+function roomValuesOf(room: Room): RoomValues {
+  return {
+    name: room.name,
+    monthly_rent: room.monthly_rent ?? '',
+    size_sqm: room.size_sqm ?? '',
+    floor: room.floor?.toString() ?? '',
+    bathroom: room.has_private_bathroom,
+    furnished: room.is_furnished ?? false,
+    utility_share: room.utility_share_percent ?? '',
+  }
+}
+
+/**
+ * Un decimale come lo vuole l'API, da come lo scrive una persona italiana.
+ *
+ * `450,00` digitato in un'interfaccia italiana è un numero, non un errore: senza
+ * questa riga l'API risponde `422` e la schermata dice «controlla i campi
+ * segnalati» senza segnalarne nessuno.
+ */
+function decimalOf(raw: string): string {
+  return raw.trim().replace(',', '.')
+}
+
+/**
+ * La quota è `app.percentage`: 0–100, al più due decimali.
+ *
+ * Si verifica qui perché il rifiuto del server è un `422 validation.failed`, che
+ * nel catalogo dice «controlla i campi segnalati» — vero, ma senza dire quale.
+ * Solo **dopo un tentativo di invio**: un errore che compare a ogni tasto mentre
+ * si scrive `33,33` è rumore, non aiuto.
+ */
+function shareProblem(raw: string, submitted: boolean): string | undefined {
+  if (!submitted) return undefined
+  const value = decimalOf(raw)
+  if (!value) return undefined
+  const parsed = parseDecimal(value)
+  if (!parsed || parsed.scale > 2) return t.validation.percentage
+  if (compareDecimals(value, '0') < 0 || compareDecimals(value, '100') > 0) {
+    return t.validation.percentage
+  }
+  return undefined
+}
+
+/**
+ * I campi di una stanza, scritti **una volta sola** per i due form.
+ *
+ * Erano due elenchi distinti e già divergenti: la creazione ne chiedeva quattro, la
+ * modifica cinque, e il `POST` ne accetta otto. Chi creava una stanza non aveva
+ * modo di sapere che *arredata* esistesse, né la quota delle utenze. Due elenchi
+ * che chiedono le stesse cose divergono alla prima aggiunta, e la seconda finisce
+ * in uno solo dei due — che è esattamente com'è andata.
+ *
+ * **`status` resta fuori da questo elenco condiviso, e non è una dimenticanza.**
+ * La domanda si è chiusa: `occupied` è **derivato** dai contratti in essere e non
+ * lo scrive nessuno (ADR-019), quindi ciò che si dichiara è soltanto se la stanza
+ * sia fuori uso. La tendina a due valori vive perciò nella sola modifica —
+ * `RoomDialog` — e non alla creazione, dove una stanza appena inserita è
+ * disponibile per definizione.
+ *
+ * Quella tendina è anche **il posto in cui lo stato dichiarato di una stanza si
+ * legge**, ora che il badge mostra il fatto e non più la coppia: le stanze non
+ * hanno una scheda propria dove metterlo, e chi lo cerca lo cerca per cambiarlo.
+ */
+function RoomFields({
+  values,
+  onChange,
+  shareError,
+}: {
+  values: RoomValues
+  onChange: (patch: Partial<RoomValues>) => void
+  shareError: string | undefined
+}) {
+  return (
+    <>
+      <Field label={t.room.name} hint={t.room.nameHint} required>
+        {(props) => (
+          <Input
+            {...props}
+            value={values.name}
+            onChange={(event) => onChange({ name: event.target.value })}
+          />
+        )}
+      </Field>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Field label={t.room.monthlyRent}>
+          {(props) => (
+            <Input
+              {...props}
+              inputMode="decimal"
+              placeholder="450.00"
+              value={values.monthly_rent}
+              onChange={(event) => onChange({ monthly_rent: event.target.value })}
+            />
+          )}
+        </Field>
+        <Field label={t.room.surface}>
+          {(props) => (
+            <Input
+              {...props}
+              inputMode="decimal"
+              value={values.size_sqm}
+              onChange={(event) => onChange({ size_sqm: event.target.value })}
+            />
+          )}
+        </Field>
+        <Field label={t.room.floor}>
+          {(props) => (
+            <Input
+              {...props}
+              inputMode="numeric"
+              value={values.floor}
+              onChange={(event) => onChange({ floor: event.target.value })}
+            />
+          )}
+        </Field>
+      </div>
+      <Field label={t.room.utilityShare} hint={t.room.utilityShareHint} error={shareError}>
+        {(props) => (
+          <Input
+            {...props}
+            inputMode="decimal"
+            value={values.utility_share}
+            onChange={(event) => onChange({ utility_share: event.target.value })}
+          />
+        )}
+      </Field>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="size-4"
+          checked={values.bathroom}
+          onChange={(event) => onChange({ bathroom: event.target.checked })}
+        />
+        {t.room.privateBathroom}
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="size-4"
+          checked={values.furnished}
+          onChange={(event) => onChange({ furnished: event.target.checked })}
+        />
+        {t.room.furnished}
+      </label>
+    </>
   )
 }
 
@@ -399,13 +675,15 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
-  const [values, setValues] = useState({
-    name: room.name,
-    monthly_rent: room.monthly_rent ?? '',
-    size_sqm: room.size_sqm ?? '',
-    bathroom: room.has_private_bathroom,
-    furnished: room.is_furnished ?? false,
-  })
+  const [values, setValues] = useState<RoomValues>(roomValuesOf(room))
+  // Lo stato **dichiarato**: `occupied` non è fra le scelte, perché lo dice il
+  // contratto. Sta qui e non nel form di creazione — nessuno crea una stanza già
+  // fuori uso — ed è la ragione per cui la sezione 1 lo aveva lasciato fuori.
+  const [status, setStatus] = useState<RoomStatus>(
+    room.status === 'occupied' ? 'available' : room.status,
+  )
+  const [submitted, setSubmitted] = useState(false)
+  const shareError = shareProblem(values.utility_share, submitted)
 
   async function reread() {
     await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
@@ -419,25 +697,21 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
         name: values.name,
         // `|| null` e non `|| undefined`: svuotare deve azzerare, non lasciare
         // com'era. È la stessa scelta del `PATCH` dell'immobile.
-        monthly_rent: values.monthly_rent.trim() || null,
-        size_sqm: values.size_sqm.trim() || null,
+        status,
+        monthly_rent: decimalOf(values.monthly_rent) || null,
+        size_sqm: decimalOf(values.size_sqm) || null,
+        floor: values.floor.trim() ? Number(values.floor) : null,
         has_private_bathroom: values.bathroom,
         is_furnished: values.furnished,
+        utility_share_percent: decimalOf(values.utility_share) || null,
       }),
     onSuccess: async () => {
       await reread()
       setOpen(false)
       setError(null)
+      setSubmitted(false)
     },
     onError: setError,
-  })
-
-  const archive = useMutation({
-    mutationFn: () => archiveRoom(client, room.id),
-    onSuccess: async () => {
-      await reread()
-      setOpen(false)
-    },
   })
 
   return (
@@ -465,74 +739,30 @@ function RoomDialog({ room, propertyId }: { room: Room; propertyId: string }) {
           className="flex flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault()
+            setSubmitted(true)
+            if (shareProblem(values.utility_share, true)) return
             save.mutate()
           }}
         >
           <InlineError error={error} />
-          <Field label={t.room.name} hint={t.room.nameHint} required>
+          <RoomFields
+            values={values}
+            onChange={(patch) => setValues((v) => ({ ...v, ...patch }))}
+            shareError={shareError}
+          />
+          <Field label={t.room.statusLabel} hint={t.room.statusHint}>
             {(props) => (
-              <Input
+              <Select
                 {...props}
-                value={values.name}
-                onChange={(event) => setValues((v) => ({ ...v, name: event.target.value }))}
-              />
+                value={status}
+                onChange={(event) => setStatus(event.target.value as RoomStatus)}
+              >
+                <option value="available">{t.room.statuses.available}</option>
+                <option value="unavailable">{t.room.statuses.unavailable}</option>
+              </Select>
             )}
           </Field>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label={t.room.monthlyRent}>
-              {(props) => (
-                <Input
-                  {...props}
-                  inputMode="decimal"
-                  value={values.monthly_rent}
-                  onChange={(event) =>
-                    setValues((v) => ({ ...v, monthly_rent: event.target.value }))
-                  }
-                />
-              )}
-            </Field>
-            <Field label={t.room.surface}>
-              {(props) => (
-                <Input
-                  {...props}
-                  inputMode="decimal"
-                  value={values.size_sqm}
-                  onChange={(event) => setValues((v) => ({ ...v, size_sqm: event.target.value }))}
-                />
-              )}
-            </Field>
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={values.bathroom}
-              onChange={(event) => setValues((v) => ({ ...v, bathroom: event.target.checked }))}
-            />
-            {t.room.privateBathroom}
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={values.furnished}
-              onChange={(event) => setValues((v) => ({ ...v, furnished: event.target.checked }))}
-            />
-            {t.room.furnished}
-          </label>
           <div className="flex flex-wrap justify-end gap-2">
-            <ConfirmAction
-              trigger={
-                <Button variant="dangerGhost">
-                  <Archive aria-hidden />
-                  {t.room.archive}
-                </Button>
-              }
-              title={t.room.archiveConfirm}
-              explanation={t.room.archiveExplain}
-              confirmLabel={t.room.archive}
-              onConfirm={() => archive.mutateAsync()}
-            />
             <Button type="submit" variant="primary" disabled={save.isPending}>
               {save.isPending ? t.common.saving : t.common.save}
             </Button>
@@ -557,19 +787,32 @@ function NewRoomDialog({ propertyId }: { propertyId: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
-  const [values, setValues] = useState({ name: '', monthly_rent: '', size_sqm: '', bathroom: false })
+  const [values, setValues] = useState<RoomValues>(NEW_ROOM)
+  const [submitted, setSubmitted] = useState(false)
+  const shareError = shareProblem(values.utility_share, submitted)
 
   const mutation = useMutation({
     mutationFn: () =>
       createRoom(client, propertyId, {
         name: values.name,
-        ...(values.monthly_rent.trim() ? { monthly_rent: values.monthly_rent.trim() } : {}),
-        ...(values.size_sqm.trim() ? { size_sqm: values.size_sqm.trim() } : {}),
+        // Sulla **creazione** un campo vuoto si omette e non si manda `null`: il
+        // `POST` non ha la semantica del `PATCH`, e omettere è dire «non lo so»,
+        // che è ciò che un campo lasciato in bianco significa qui.
+        ...(decimalOf(values.monthly_rent) ? { monthly_rent: decimalOf(values.monthly_rent) } : {}),
+        ...(decimalOf(values.size_sqm) ? { size_sqm: decimalOf(values.size_sqm) } : {}),
+        ...(values.floor.trim() ? { floor: Number(values.floor) } : {}),
         has_private_bathroom: values.bathroom,
+        is_furnished: values.furnished,
+        ...(decimalOf(values.utility_share)
+          ? { utility_share_percent: decimalOf(values.utility_share) }
+          : {}),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: keys.rooms(propertyId) })
-      setValues({ name: '', monthly_rent: '', size_sqm: '', bathroom: false })
+      // Il conteggio dei locali sta sull'immobile, e una stanza in più lo cambia.
+      await queryClient.invalidateQueries({ queryKey: keys.property(propertyId) })
+      setValues(NEW_ROOM)
+      setSubmitted(false)
       setOpen(false)
       setError(null)
     },
@@ -585,10 +828,18 @@ function NewRoomDialog({ propertyId }: { propertyId: string }) {
         </Button>
       }
       title={t.room.newTitle}
+      // **Che si possa correggere dopo va detto qui**, non scoperto dopo: il nome
+      // è l'unico dato che occupa qualcosa — è unico nell'immobile — e sapere che
+      // tutto si sistema poi è ciò che toglie a questo form la solennità che non
+      // deve avere.
+      description={t.room.newExplain}
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (!next) setError(null)
+        if (!next) {
+          setError(null)
+          setSubmitted(false)
+        }
       }}
     >
       <form
@@ -596,51 +847,17 @@ function NewRoomDialog({ propertyId }: { propertyId: string }) {
         className="flex flex-col gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          setSubmitted(true)
+          if (shareProblem(values.utility_share, true)) return
           mutation.mutate()
         }}
       >
         <InlineError error={error} />
-        <Field label={t.room.name} hint={t.room.nameHint} required>
-          {(props) => (
-            <Input
-              {...props}
-              value={values.name}
-              onChange={(event) => setValues((v) => ({ ...v, name: event.target.value }))}
-            />
-          )}
-        </Field>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label={t.room.monthlyRent}>
-            {(props) => (
-              <Input
-                {...props}
-                inputMode="decimal"
-                placeholder="450.00"
-                value={values.monthly_rent}
-                onChange={(event) => setValues((v) => ({ ...v, monthly_rent: event.target.value }))}
-              />
-            )}
-          </Field>
-          <Field label={t.room.surface}>
-            {(props) => (
-              <Input
-                {...props}
-                inputMode="decimal"
-                value={values.size_sqm}
-                onChange={(event) => setValues((v) => ({ ...v, size_sqm: event.target.value }))}
-              />
-            )}
-          </Field>
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={values.bathroom}
-            onChange={(event) => setValues((v) => ({ ...v, bathroom: event.target.checked }))}
-          />
-          {t.room.privateBathroom}
-        </label>
+        <RoomFields
+          values={values}
+          onChange={(patch) => setValues((v) => ({ ...v, ...patch }))}
+          shareError={shareError}
+        />
         <div className="flex justify-end gap-2">
           <Button onClick={() => setOpen(false)}>{t.common.cancel}</Button>
           <Button type="submit" variant="primary" disabled={mutation.isPending}>
@@ -675,7 +892,7 @@ function ResidentsCard({ propertyId }: { propertyId: string }) {
       <Async
         query={residents}
         isEmpty={(data) => data.items.length === 0}
-        empty={<Empty title={t.property.residentsEmpty} />}
+        empty={<Empty title={t.property.residentsEmpty} hint={t.property.residentsEmptyHint} />}
       >
         {(data) => (
           <ul className="divide-y divide-border-subtle">

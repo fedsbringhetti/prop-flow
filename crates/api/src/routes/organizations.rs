@@ -1,7 +1,8 @@
-use axum::extract::State;
-use axum::routing::get;
+use axum::extract::{Path, State};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use propflow_domain::identity::OrganizationMembership;
+use propflow_domain::shared::OrgId;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -15,7 +16,13 @@ use crate::state::AppState;
 /// particolare **non prende `X-Org-Id`**: chiedere quale organizzazione sia attiva
 /// per sapere quali si hanno sarebbe circolare.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/organizations", get(list))
+    Router::new()
+        .route("/api/v1/organizations", get(list))
+        // L'uscita prende l'identificatore nel percorso, al contrario di
+        // `/api/v1/me`: qui non si agisce su di sé, si agisce su un **rapporto**, e
+        // quale sia va detto. Non è quella attiva per definizione — chi ne ha due
+        // può uscire da quella che non sta guardando.
+        .route("/api/v1/organizations/{id}/leave", post(leave))
 }
 
 /// Un'organizzazione dell'elenco.
@@ -84,5 +91,50 @@ async fn list(
             .iter()
             .map(OrganizationResponse::from_domain)
             .collect(),
+    }))
+}
+
+/// Che cosa si è appena lasciato.
+///
+/// Due campi e non un corpo vuoto: l'organizzazione e il ruolo che si avevano
+/// lì, non quella in cui si atterra — con [ADR-053](../../../../../docs/08-decisioni.md)
+/// uscire dall'unica organizzazione che si aveva lascia **senza nessuna
+/// organizzazione**, e il client lo mostra con la schermata dedicata del
+/// guscio invece di indovinare un atterraggio che potrebbe non esistere più.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct LeftOrganizationResponse {
+    pub organization_id: Uuid,
+    /// Il ruolo che si aveva. Serve al messaggio che il client mostra dopo: uscire
+    /// da inquilino e uscire da gestore lasciano due situazioni diverse.
+    #[schema(example = "tenant")]
+    pub role: String,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/organizations/{id}/leave", tag = "organizzazioni",
+    params(("id" = Uuid, Path, description = "L'organizzazione da cui uscire")),
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Usciti. L'appartenenza passa a `left` e **la riga resta**: è ciò che permette di rientrare accettando un invito nuovo", body = LeftOrganizationResponse),
+        (status = 401, description = "Autenticazione richiesta", body = crate::error::ProblemDetails),
+        (status = 404, description = "`membership.not_found`: non si è membri di quella organizzazione, oppure non è visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "`membership.lease_in_force` con un contratto in essere — il rifiuto arriva dalla policy, non da un `if`; `membership.last_owner` se si è l'ultimo proprietario; `membership.already_left` se si era già usciti", body = crate::error::ProblemDetails),
+    )
+)]
+async fn leave(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<LeftOrganizationResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let member = state
+        .leave_organization
+        .execute(&context, OrgId::from_uuid(id))
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(LeftOrganizationResponse {
+        organization_id: member.org_id().as_uuid(),
+        role: member.role().as_str().to_owned(),
     }))
 }

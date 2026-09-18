@@ -1,20 +1,21 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use propflow_application::authorization::discloses_estimated_cost;
 use propflow_application::use_cases::ticket::{
-    AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, ListTicketMessagesCommand,
-    ListTicketsQuery, OpenTicketCommand, PostTicketMessageCommand, ReopenTicketCommand,
-    StartTicketWorkCommand, SuspendTicketCommand, TicketDetail, TriageTicketCommand,
-    UpdateTicketCostsCommand,
+    AssignTicketCommand, CancelTicketCommand, CloseTicketCommand, CorrectTicketReportCommand,
+    ListTicketMessagesCommand, ListTicketsQuery, OpenTicketCommand, People, Places,
+    PostTicketMessageCommand, ReopenTicketCommand, StartTicketWorkCommand, SuspendTicketCommand,
+    TicketDetail, TicketView, TriageTicketCommand, UpdateTicketCostsCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::property::Patch;
 use propflow_domain::shared::{LeaseId, PropertyId, RoomId, TicketId, TicketMessageId, UserId};
 use propflow_domain::ticket::{
-    MessageBody, Ticket, TicketActor, TicketCategory, TicketCosts, TicketDescription,
-    TicketMessage, TicketPriority, TicketStatus, TicketStatusChange, TicketTitle, WaitingOn,
+    MessageBody, Ticket, TicketActor, TicketCategory, TicketCorrection, TicketCosts,
+    TicketDescription, TicketMessage, TicketPriority, TicketStatus, TicketStatusChange,
+    TicketTitle, WaitingOn,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -41,6 +42,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/properties/{property_id}/tickets", post(open))
         .route("/api/v1/tickets", get(list))
         .route("/api/v1/tickets/{id}", get(detail).patch(update_costs))
+        // La correzione del testo è una rotta **a sé** e non un allargamento del
+        // `PATCH` dei costi: quello avrebbe due autorizzazioni diverse secondo i
+        // campi presenti nel JSON — i costi allo staff, il testo a chi ha
+        // segnalato — che è il genere di cosa che si sbaglia in silenzio, perché
+        // dipende da quali chiavi il corpo porta. Qui l'autorizzazione è una sola
+        // per l'intera rotta. Vedi ADR-048.
+        .route("/api/v1/tickets/{id}/report", patch(correct_report))
         .route(
             "/api/v1/tickets/{id}/messages",
             post(post_message).get(list_messages),
@@ -251,6 +259,16 @@ pub struct OpenTicketRequest {
     /// Assente vale `medium`.
     #[serde(default)]
     pub priority: Option<TicketPriorityDto>,
+    /// Dichiara la segnalazione di interesse comune per la casa.
+    ///
+    /// Assente vale `false`, che è il comportamento di sempre: la vedono lo staff,
+    /// chi l'ha aperta, chi ce l'ha in carico e chi è parte del contratto
+    /// indicato. Con `true` la leggono anche i **residenti dell'immobile**, e con
+    /// essa il thread e le fotografie — perché il confine è
+    /// `app.can_access_ticket`, che serve tutte e quattro le policy. Non concede
+    /// nessuna scrittura: un residente non riapre, non annulla e non corregge.
+    #[serde(default)]
+    pub visible_to_residents: Option<bool>,
 }
 
 impl OpenTicketRequest {
@@ -263,6 +281,7 @@ impl OpenTicketRequest {
             description: TicketDescription::parse(&self.description)?,
             category: self.category.map(Into::into),
             priority: self.priority.map(Into::into),
+            visible_to_residents: self.visible_to_residents,
         })
     }
 }
@@ -302,6 +321,49 @@ pub struct UpdateTicketCostsRequest {
     pub actual_cost: Patch<Decimal>,
 }
 
+/// Correzione di ciò che chi ha segnalato aveva dichiarato.
+///
+/// **Non è il `PATCH` dei costi allargato**, ed è una rotta a sé apposta: qui
+/// l'autorizzazione è una sola per l'intera richiesta — lo staff sempre, chi ha
+/// segnalato finché la segnalazione è `open` — mentre un `PATCH` unico dovrebbe
+/// decidere in base a quali chiavi il corpo porta. Vedi ADR-048.
+///
+/// Semantica del `PATCH`, metà: **assente = invariato**. Nessuno dei tre campi è
+/// azzerabile — un titolo vuoto non è un titolo — quindi `null` non ha qui il
+/// significato che ha altrove nel progetto, e mandarlo è un `422`.
+///
+/// **Categoria e priorità non ci sono**: sono il lavoro del triage, e lasciarle
+/// modificabili qui renderebbe `triaged` una dichiarazione non verificabile.
+/// **Immobile, stanza e contratto nemmeno**: non sono scrivibili dal ruolo
+/// applicativo, e una segnalazione aperta sull'immobile sbagliato si annulla e si
+/// riapre ([ADR-026](../../../../../docs/08-decisioni.md)).
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct CorrectTicketReportRequest {
+    #[serde(default)]
+    #[schema(example = "Il boiler perde")]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// La casella «visibile a chi abita qui», che si può cambiare anche dopo
+    /// l'apertura.
+    #[serde(default)]
+    pub visible_to_residents: Option<bool>,
+}
+
+impl CorrectTicketReportRequest {
+    fn into_correction(self) -> Result<TicketCorrection, DomainError> {
+        Ok(TicketCorrection {
+            title: self.title.as_deref().map(TicketTitle::parse).transpose()?,
+            description: self
+                .description
+                .as_deref()
+                .map(TicketDescription::parse)
+                .transpose()?,
+            visible_to_residents: self.visible_to_residents,
+        })
+    }
+}
+
 /// Corpo della chiusura.
 ///
 /// Tutti i campi sono facoltativi, ma il corpo JSON va inviato — anche solo
@@ -316,6 +378,23 @@ pub struct CloseTicketRequest {
     /// parte della chiusura.
     #[serde(default)]
     pub resolution_notes: Option<String>,
+}
+
+/// Corpo della riapertura.
+///
+/// **`reason` è obbligatorio**, ed è l'asimmetria con `resolution_notes`, che è
+/// facoltativo. La ragione: da quando un thread terminato non riceve più messaggi,
+/// riaprire è l'**unico** modo di dire «non è risolto», e una riapertura senza
+/// motivo non lascerebbe niente che spieghi perché la segnalazione è tornata viva
+/// — mentre la chiusura lascia comunque `closed_at` e una riga di storico.
+///
+/// Il motivo **diventa il primo messaggio del thread**, pubblico e di chi ha
+/// riaperto: il thread non si riscrive mai, quindi sopravvive alla chiusura
+/// successiva, e una segnalazione riaperta tre volte ha tre motivi. Vedi ADR-050.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ReopenTicketRequest {
+    #[schema(example = "Ha ricominciato a perdere due giorni dopo")]
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -343,10 +422,41 @@ pub struct TicketResponse {
     pub category: TicketCategoryDto,
     pub priority: TicketPriorityDto,
     pub status: TicketStatusDto,
+    /// `true` se la leggono anche i residenti dell'immobile, oltre a chi la vede
+    /// per contratto. Il confine è `app.can_access_ticket` e non questo campo:
+    /// qui viaggia perché la casella si mostra e si corregge.
+    pub visible_to_residents: bool,
     pub reported_by: Option<Uuid>,
     pub reported_by_kind: TicketActorDto,
+    /// Come si chiama chi ha segnalato.
+    ///
+    /// **Assente non è un errore**: la policy `users_select` non concede a
+    /// chiunque la riga di chiunque, e chi legge mette un'etichetta neutra — mai
+    /// l'identificatore ([ADR-043](../../../../../docs/08-decisioni.md)). Va
+    /// mostrato **accanto** a `reported_by_kind` e non al suo posto: il ruolo dice
+    /// da che parte del rapporto sta la persona, il nome dice chi è.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_by_name: Option<String>,
     pub assigned_to: Option<Uuid>,
+    /// Come si chiama chi ha in carico la lavorazione. Stessa regola del
+    /// precedente sull'assenza.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_to_name: Option<String>,
     pub assigned_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Come si chiama l'immobile a cui la segnalazione si riferisce.
+    ///
+    /// **Assente non è un errore**: la riga dell'immobile può essere archiviata, e
+    /// allora il nome non si legge più mentre la segnalazione resta. Chi legge mette
+    /// un'etichetta neutra — «Immobile archiviato» — e **mai l'identificatore**
+    /// ([ADR-043](../../../../../docs/08-decisioni.md), [ADR-049](../../../../../docs/08-decisioni.md)).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property_label: Option<String>,
+    /// Come si chiama la stanza, quando la segnalazione ne riguarda una.
+    ///
+    /// Assente è il caso **normale**: una segnalazione sull'immobile intero non ha
+    /// una stanza, ed è diverso dall'assenza di `property_label`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_name: Option<String>,
     /// Stringhe decimali, come tutti gli importi dell'API.
     ///
     /// **`estimated_cost` è `null` per chi non è staff**, anche quando un valore
@@ -366,7 +476,17 @@ pub struct TicketResponse {
 impl TicketResponse {
     /// `discloses_estimated_cost` arriva dal service layer, che è dove la regola
     /// è scritta: qui la si applica alla proiezione, non la si decide.
-    fn from_domain(ticket: &Ticket, discloses_estimated_cost: bool) -> Self {
+    ///
+    /// `people` è il modello di lettura dei nomi, risolto dallo stesso caso d'uso
+    /// che ha letto la segnalazione: **ogni** risposta ne porta uno, transizioni
+    /// comprese, così i due campi del nome non ci sono a volte sì e a volte no.
+    fn from_domain(
+        ticket: &Ticket,
+        discloses_estimated_cost: bool,
+        people: &People,
+        places: &Places,
+    ) -> Self {
+        let labels = places.of(ticket.id());
         Self {
             id: ticket.id().as_uuid(),
             organization_id: ticket.org_id().as_uuid(),
@@ -381,10 +501,15 @@ impl TicketResponse {
             category: ticket.category().into(),
             priority: ticket.priority().into(),
             status: ticket.status().into(),
+            visible_to_residents: ticket.visible_to_residents(),
             reported_by: ticket.reported_by().map(|id| id.as_uuid()),
             reported_by_kind: ticket.reported_by_kind().into(),
+            reported_by_name: people.name_of(ticket.reported_by()).map(str::to_owned),
             assigned_to: ticket.assigned_to().map(|id| id.as_uuid()),
+            assigned_to_name: people.name_of(ticket.assigned_to()).map(str::to_owned),
             assigned_at: ticket.assigned_at(),
+            property_label: labels.and_then(|labels| labels.property_label.clone()),
+            room_name: labels.and_then(|labels| labels.room_name.clone()),
             estimated_cost: discloses_estimated_cost
                 .then(|| {
                     ticket
@@ -401,6 +526,20 @@ impl TicketResponse {
             created_at: ticket.created_at(),
             updated_at: ticket.updated_at(),
         }
+    }
+
+    /// La proiezione di ciò che un caso d'uso restituisce, senza scomporlo.
+    ///
+    /// I due modelli di lettura viaggiano **insieme** alla segnalazione apposta
+    /// (vedi `TicketView`): passarli separati a ogni chiamata era il modo di
+    /// dimenticarne uno in una delle dodici.
+    fn from_view(view: &TicketView, discloses_estimated_cost: bool) -> Self {
+        Self::from_domain(
+            &view.ticket,
+            discloses_estimated_cost,
+            &view.people,
+            &view.places,
+        )
     }
 }
 
@@ -458,6 +597,15 @@ pub struct TicketMessageResponse {
     pub ticket_id: Uuid,
     pub author_id: Option<Uuid>,
     pub author_kind: TicketActorDto,
+    /// Come si chiama chi ha scritto.
+    ///
+    /// **Il ruolo da solo non basta in un co-living**: due coinquilini sono tutti
+    /// e due `tenant`, e «me lo dice il proprietario o un coinquilino?» ha già
+    /// risposta mentre «quale coinquilino?» non ne ha. I due si mostrano insieme.
+    /// Assente quando la policy `users_select` non concede quella riga a chi
+    /// legge: allora un'etichetta neutra, mai l'identificatore.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<String>,
     pub body: String,
     /// Le note interne non compaiono affatto a un inquilino: le filtra la policy
     /// `ticket_messages_select`, non questo campo.
@@ -466,12 +614,13 @@ pub struct TicketMessageResponse {
 }
 
 impl TicketMessageResponse {
-    fn from_domain(message: &TicketMessage) -> Self {
+    fn from_domain(message: &TicketMessage, people: &People) -> Self {
         Self {
             id: message.id().as_uuid(),
             ticket_id: message.ticket_id().as_uuid(),
             author_id: message.author_id().map(|id| id.as_uuid()),
             author_kind: message.author_kind().into(),
+            author_name: people.name_of(message.author_id()).map(str::to_owned),
             body: message.body().as_str().to_owned(),
             is_internal: message.is_internal(),
             created_at: message.created_at(),
@@ -539,7 +688,7 @@ async fn open(
                 .with_request_id(request_id.clone())
         })?;
 
-    let ticket = state
+    let view = state
         .open_ticket
         .execute(&context, command)
         .await
@@ -547,8 +696,8 @@ async fn open(
 
     Ok((
         StatusCode::CREATED,
-        Json(TicketResponse::from_domain(
-            &ticket,
+        Json(TicketResponse::from_view(
+            &view,
             discloses_estimated_cost(&context),
         )),
     ))
@@ -586,7 +735,9 @@ async fn list(
         items: page
             .items
             .iter()
-            .map(|ticket| TicketResponse::from_domain(ticket, discloses))
+            .map(|ticket| {
+                TicketResponse::from_domain(ticket, discloses, &page.people, &page.places)
+            })
             .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
@@ -607,14 +758,24 @@ async fn detail(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketDetailResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let TicketDetail { ticket, history } = state
+    let TicketDetail {
+        ticket,
+        history,
+        people,
+        places,
+    } = state
         .get_ticket
         .execute(&context, TicketId::from_uuid(id))
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
     Ok(Json(TicketDetailResponse {
-        ticket: TicketResponse::from_domain(&ticket, discloses_estimated_cost(&context)),
+        ticket: TicketResponse::from_domain(
+            &ticket,
+            discloses_estimated_cost(&context),
+            &people,
+            &places,
+        ),
         history: history
             .iter()
             .map(TicketStatusChangeResponse::from_domain)
@@ -642,7 +803,7 @@ async fn update_costs(
     Json(request): Json<UpdateTicketCostsRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .update_ticket_costs
         .execute(
             &context,
@@ -657,8 +818,51 @@ async fn update_costs(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
+        discloses_estimated_cost(&context),
+    )))
+}
+
+#[utoipa::path(
+    patch, path = "/api/v1/tickets/{id}/report", tag = "segnalazioni",
+    params(("id" = Uuid, Path, description = "Identificatore della segnalazione")),
+    request_body = CorrectTicketReportRequest,
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Segnalazione corretta", body = TicketResponse),
+        (status = 403, description = "Corregge lo staff, o chi ha segnalato finché è aperta", body = crate::error::ProblemDetails),
+        (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
+        (status = 409, description = "Segnalazione annullata", body = crate::error::ProblemDetails),
+        (status = 422, description = "Titolo o descrizione non validi", body = crate::error::ProblemDetails),
+    )
+)]
+async fn correct_report(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+    Json(request): Json<CorrectTicketReportRequest>,
+) -> ApiResult<Json<TicketResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let correction = request.into_correction().map_err(|error| {
+        ApiError::from(propflow_application::AppError::Validation(error))
+            .with_request_id(request_id.clone())
+    })?;
+
+    let view = state
+        .correct_ticket_report
+        .execute(
+            &context,
+            CorrectTicketReportCommand {
+                id: TicketId::from_uuid(id),
+                correction,
+            },
+        )
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -700,9 +904,15 @@ async fn post_message(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
+    // Il nome di chi scrive è **il proprio**, e non serve una query per saperlo:
+    // la risposta torna a chi ha appena scritto. Il campo resta comunque assente
+    // quando non c'è un utente in contesto, che è il caso che il tipo ammette.
     Ok((
         StatusCode::CREATED,
-        Json(TicketMessageResponse::from_domain(&message)),
+        Json(TicketMessageResponse::from_domain(
+            &message,
+            &People::default(),
+        )),
     ))
 }
 
@@ -739,7 +949,7 @@ async fn list_messages(
         items: page
             .items
             .iter()
-            .map(TicketMessageResponse::from_domain)
+            .map(|message| TicketMessageResponse::from_domain(message, &page.people))
             .collect(),
         next_cursor: page.next_cursor.map(|id| id.as_uuid()),
     }))
@@ -764,7 +974,7 @@ async fn triage(
     Json(request): Json<TriageTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .triage_ticket
         .execute(
             &context,
@@ -776,8 +986,8 @@ async fn triage(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -801,7 +1011,7 @@ async fn assign(
     Json(request): Json<AssignTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .assign_ticket
         .execute(
             &context,
@@ -812,8 +1022,8 @@ async fn assign(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -835,7 +1045,7 @@ async fn start(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .start_ticket_work
         .execute(
             &context,
@@ -845,8 +1055,8 @@ async fn start(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -870,7 +1080,7 @@ async fn suspend(
     Json(request): Json<SuspendTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .suspend_ticket
         .execute(
             &context,
@@ -881,8 +1091,8 @@ async fn suspend(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -906,7 +1116,7 @@ async fn close(
     Json(request): Json<CloseTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .close_ticket
         .execute(
             &context,
@@ -917,8 +1127,8 @@ async fn close(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -926,32 +1136,41 @@ async fn close(
 #[utoipa::path(
     post, path = "/api/v1/tickets/{id}/reopen", tag = "segnalazioni",
     params(("id" = Uuid, Path, description = "Identificatore della segnalazione")),
+    request_body = ReopenTicketRequest,
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "Segnalazione riaperta", body = TicketResponse),
+        (status = 200, description = "Segnalazione riaperta, con il motivo scritto nel thread", body = TicketResponse),
         (status = 403, description = "Riapre chi ha segnalato, o lo staff", body = crate::error::ProblemDetails),
         (status = 404, description = "Non trovata o non visibile", body = crate::error::ProblemDetails),
         (status = 409, description = "Solo una segnalazione chiusa si riapre", body = crate::error::ProblemDetails),
+        (status = 422, description = "Motivo assente o vuoto", body = crate::error::ProblemDetails),
     )
 )]
 async fn reopen(
     State(state): State<AppState>,
     Authenticated(context): Authenticated,
     Path(id): Path<Uuid>,
+    Json(request): Json<ReopenTicketRequest>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let reason = MessageBody::parse(&request.reason).map_err(|error| {
+        ApiError::from(propflow_application::AppError::Validation(error))
+            .with_request_id(request_id.clone())
+    })?;
+
+    let view = state
         .reopen_ticket
         .execute(
             &context,
             ReopenTicketCommand {
                 id: TicketId::from_uuid(id),
+                reason,
             },
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }
@@ -973,7 +1192,7 @@ async fn cancel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TicketResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let ticket = state
+    let view = state
         .cancel_ticket
         .execute(
             &context,
@@ -983,8 +1202,8 @@ async fn cancel(
         )
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
-    Ok(Json(TicketResponse::from_domain(
-        &ticket,
+    Ok(Json(TicketResponse::from_view(
+        &view,
         discloses_estimated_cost(&context),
     )))
 }

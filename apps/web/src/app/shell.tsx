@@ -1,7 +1,8 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Building2,
+  BookOpen,
   ChevronDown,
   FileText,
   LayoutDashboard,
@@ -9,6 +10,7 @@ import {
   LogOut,
   Menu,
   TicketCheck,
+  UserCog,
   Banknote,
   Receipt,
   Users,
@@ -16,12 +18,14 @@ import {
   X,
 } from 'lucide-react'
 import { Suspense, useEffect, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 
-import { getOrganizations } from '@/api/endpoints'
-import type { Organization } from '@/api/types'
+import { acceptInvitation, getAccount, getOrganizations } from '@/api/endpoints'
+import type { Items, OrgRole, Organization } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Loading, SkeletonRows } from '@/components/state'
+import { Field, Input } from '@/components/ui/field'
+import { ErrorState, Loading, SkeletonRows } from '@/components/state'
+import { InvitationCodeError } from '@/features/invitations/errors'
 import { t } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { keys } from './query'
@@ -115,13 +119,63 @@ export const TENANT_HOME = '/addebiti'
  * arrivare a ciò che si è venuti a fare.
  */
 export function AppShell() {
-  const { session, restoring } = useSession()
+  const { session, store, restoring } = useSession()
   const isStaff = useIsStaff()
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
+  // Chiamato qui e non solo in `OrganizationMenu`: il terzo stato del guscio,
+  // sotto, decide **prima** di `<Outlet/>`, quindi la regola dei hook lo vuole
+  // ad ogni giro di questo componente e non solo quando serve davvero. Non è
+  // una seconda chiamata di rete: `useQuery` condivide la cache sulla stessa
+  // chiave con quella che `OrganizationMenu` fa più sotto.
+  const { query: organizations, items } = useOrganizations()
 
   if (restoring) return <Loading className="min-h-screen justify-center" />
   if (!session) return null
+
+  /**
+   * Terzo stato del guscio, accanto a «fuori sessione» e «dentro» (`F7`,
+   * ADR-053): nessuna organizzazione attiva. Non è un errore e non è il vuoto
+   * di un elenco — è quello che si è e che cosa aspettarsi, senza navigazione.
+   *
+   * **L'ordine conta.** `session.organizationId === null` è vero sia mentre
+   * l'elenco sta ancora arrivando, sia quando è arrivato vuoto per davvero, sia
+   * quando **non è arrivato affatto** — un errore di rete, un `500` — e i tre
+   * casi non si distinguono guardando solo la sessione. Finché non si sa quale
+   * dei tre sia, **non si rende `<Outlet/>`**: la dashboard o un'altra
+   * schermata di rotta partirebbe senza `X-Org-Id` — la sessione non ne ha uno
+   * da dare — e riceverebbe `403 org.not_selected` per un istante prima che
+   * l'elenco corregga tutto. È la stessa lezione del poscritto della sezione 6:
+   * una richiesta non deve dipendere da uno stato che non è ancora arrivato.
+   * Quando invece `session.organizationId` è già valorizzato — il caso comune,
+   * dal token o dal `localStorage` — non c'è nulla da aspettare: il guscio
+   * rende subito, come faceva prima di questo passo.
+   *
+   * **Il terzo caso — l'errore — non è un `Loading` che dura per sempre**
+   * (regola 23): senza un ramo suo, un `getOrganizations` che fallisse
+   * lascerebbe chi guarda davanti a uno spinner senza via d'uscita, perché il
+   * guscio che offrirebbe la riprova o l'uscita è proprio quello che questo
+   * stato sostituisce.
+   */
+  if (session.organizationId === null) {
+    if (organizations.isError) {
+      return (
+        <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 py-10">
+          <ErrorState error={organizations.error} onRetry={organizations.refetch} />
+          <Button
+            variant="ghost"
+            onClick={() => {
+              void store.logout()
+            }}
+          >
+            {t.auth.logout}
+          </Button>
+        </main>
+      )
+    }
+    if (items && items.length === 0) return <NoOrganizationScreen />
+    return <Loading className="min-h-screen justify-center" />
+  }
 
   // Il ramo sul ruolo, e questo è **uno** dei tre posti in cui compare: qui, la
   // rotta iniziale in `App`, e i bottoni di scrittura delle schermate. Non un
@@ -130,12 +184,18 @@ export function AppShell() {
   const navigation = isStaff ? staffNavigation : tenantNavigation
 
   return (
-    <div className="min-h-screen">
+    <div>
       <a href="#contenuto" className="skip-link">
         {t.app.skipToContent}
       </a>
 
-      <div className="mx-auto flex w-full max-w-[100rem] flex-col lg:flex-row">
+      {/* **L'altezza sta qui, e non sul `<div>` di fuori.** Era il contrario, e
+          il sintomo era una barra laterale che «si vede a metà»: un `min-height`
+          su un genitore **non allunga** un figlio di blocco, quindi il
+          contenitore flex era alto quanto il suo contenuto e la barra — che è
+          `stretch` dentro di esso — finiva dove finiva il contenuto. Su una
+          schermata di poche righe si fermava a metà schermo. */}
+      <div className="mx-auto flex min-h-screen w-full max-w-[100rem] flex-col lg:flex-row">
         {/* Barra superiore su schermo stretto: il menù è a scomparsa, e il
             titolo resta sempre visibile perché è anche il ritorno al riepilogo. */}
         <div className="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface px-4 py-3 lg:hidden">
@@ -155,18 +215,26 @@ export function AppShell() {
           </div>
         </div>
 
+        {/* Da `lg` in su è una colonna alta quanto la finestra e **ancorata**:
+            `h-screen` e non `stretch`, perché su una schermata lunga la barra si
+            allungherebbe quanto il documento e il selettore in fondo finirebbe a
+            quattromila pixel di distanza. Sotto quella soglia è un menù a
+            scomparsa e nulla di tutto questo si applica. */}
         <nav
           id="navigazione-principale"
           aria-label={t.nav.main}
           className={cn(
-            'shrink-0 border-b border-border-subtle bg-surface lg:w-60 lg:border-r lg:border-b-0',
-            menuOpen ? 'block' : 'hidden lg:block',
+            'shrink-0 border-b border-border-subtle bg-surface',
+            'lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-60 lg:flex-col lg:border-r lg:border-b-0',
+            menuOpen ? 'block' : 'hidden',
           )}
         >
           <div className="hidden px-4 py-4 lg:block">
             <span className="text-sm font-semibold">{t.app.name}</span>
           </div>
-          <ul className="flex flex-col gap-0.5 p-2">
+          {/* `min-h-0` non è ornamentale: senza, un figlio flex non scende sotto
+              la propria altezza naturale e `overflow-y-auto` non scorre mai. */}
+          <ul className="flex flex-col gap-0.5 p-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {navigation.map((item) => (
               <li key={item.to}>
                 <NavLink
@@ -195,7 +263,12 @@ export function AppShell() {
               </li>
             ))}
           </ul>
-          <div className="hidden border-t border-border-subtle p-2 lg:block">
+          {/* **In fondo, e solo da `lg`.** `mt-auto` vuol dire «in fondo alla
+              colonna flex», e sotto quella soglia la colonna non c'è: la
+              navigazione è a scomparsa e il selettore sta già nella barra in
+              alto, dove un `mt-auto` incondizionato spingerebbe in basso
+              qualcosa che lì non deve stare. */}
+          <div className="hidden border-t border-border-subtle p-2 lg:mt-auto lg:block">
             <OrganizationMenu />
           </div>
         </nav>
@@ -226,6 +299,153 @@ export function AppShell() {
 }
 
 /**
+ * Il terzo stato del guscio: **nessuna organizzazione**.
+ *
+ * Non un errore e non il vuoto di un elenco — è una schermata con un titolo
+ * suo, a tutto schermo come `AuthFrame`, e **senza navigazione**: né la barra
+ * laterale né `<Outlet/>`. Non c'è ancora niente da amministrare o da
+ * abitare, e mostrarli offrirebbe voci che risponderebbero tutte `403`.
+ *
+ * # Come ci si arriva
+ *
+ * Nessun utente ci nasce (ADR-053, decisione 1): la registrazione — da
+ * proprietario o da inquilino — lega sempre una membership nella stessa
+ * transazione. Ci si arriva **uscendo** dall'unica organizzazione che si
+ * aveva: da inquilino, da gestore, o da proprietario non ultimo — l'ultimo
+ * proprietario non può, `membership.last_owner` lo impedisce finché resta lui
+ * a doverla amministrare. Un invito **non** accettato non c'entra: si revoca
+ * finché è pendente, e chi non l'ha ancora accettato non è mai entrato.
+ *
+ * # Il codice si incolla **qui**, non porta a `/invito`
+ *
+ * `/invito` vive dentro il guscio che questa schermata sostituisce — è una
+ * rotta di `<Outlet/>`, che qui non rende — quindi un link lì sarebbe un
+ * rimando a una pagina che non apparirebbe mai. Il modo di uscire da questo
+ * stato è lo stesso gesto, incollato direttamente qui: la stessa
+ * `acceptInvitation` che usa `AcceptInvitationPage`, con lo stesso esito —
+ * l'organizzazione appena accettata diventa quella attiva e si atterra sulla
+ * pagina del proprio ruolo.
+ */
+function NoOrganizationScreen() {
+  const client = useApi()
+  const { store, selectOrganization } = useSession()
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const [token, setToken] = useState('')
+
+  // I propri dati, per dire **chi si è**: senza, la schermata direbbe solo che
+  // non si appartiene a niente, e non a chi è successo. `getAccount` risponde
+  // senza organizzazione attiva per la stessa ragione di `getOrganizations`.
+  const account = useQuery({ queryKey: keys.account, queryFn: () => getAccount(client) })
+
+  const mutation = useMutation({
+    mutationFn: () => acceptInvitation(client, token.trim()),
+    onSuccess: async (accepted) => {
+      const role = accepted.role as OrgRole
+      // **In cache prima del giro di rete**, come fa `AccountPage` all'uscita
+      // (`OrganizationRow`, che toglie dalla cache prima di rileggerla): senza
+      // questa scrittura, `selectOrganization` da sola farebbe scattare
+      // l'effetto di riallineamento con l'elenco ancora `[]` — quello letto
+      // l'ultima volta, da questa stessa schermata — nella finestra fra
+      // l'`await` di `invalidateQueries` qui sotto e la risposta vera:
+      // l'effetto vedrebbe `[]` e chiamerebbe `clearOrganization()`, e il ramo
+      // `fallback` la riselezionerebbe da capo non appena la rilettura arriva
+      // — due scritture di troppo (e una cancellazione) sul ricordo di questo
+      // browser per un'accettazione sola. Scrivere qui, **prima** di
+      // `selectOrganization` e nello stesso giro sincrono, fa sì che React
+      // veda le due modifiche insieme in un solo giro: l'elenco non sembra mai
+      // vuoto. Nome e slug veri arrivano dalla rilettura sotto.
+      queryClient.setQueryData<Items<Organization>>(keys.organizations, (previous) => {
+        const placeholder: Organization = {
+          id: accepted.organization_id,
+          name: t.org.unknownName,
+          slug: '',
+          role,
+        }
+        const items = previous?.items ?? []
+        if (items.some((item) => item.id === accepted.organization_id)) return previous
+        return { items: [...items, placeholder] }
+      })
+      selectOrganization(accepted.organization_id, role)
+      await queryClient.invalidateQueries({ queryKey: keys.organizations })
+      await navigate(role === 'tenant' ? TENANT_HOME : '/', { replace: true })
+    },
+  })
+
+  return (
+    <main className="flex min-h-screen items-center justify-center px-4 py-10">
+      <div className="w-full max-w-sm">
+        <p className="mb-6 text-sm font-semibold text-accent">{t.app.name}</p>
+        <h1 className="text-xl font-semibold tracking-tight text-ink">{t.org.noneTitle}</h1>
+        {/* Caricamento e errore restano distinti dal caso felice, come ovunque
+            (regola 23): senza, «sto ancora leggendo chi sei» e «non fai parte
+            di nessuna organizzazione» direbbero la stessa frase generica, e
+            un secondo che passa sembrerebbe un salto di contenuto invece che
+            un nome che arriva. L'errore non ha un ripiego suo: questa
+            schermata non deve dipendere da `/me` per il suo scopo vero, che è
+            lasciare incollare un codice. */}
+        <p className="mt-1 text-sm text-ink-muted">
+          {account.isPending
+            ? t.state.loadingTitle
+            : account.data
+              ? t.org.noneBody(account.data.full_name)
+              : t.org.noneBodyFallback}
+        </p>
+        <p className="mt-1 mb-6 text-sm text-ink-muted">{t.org.noneHint}</p>
+        <form
+          noValidate
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            mutation.mutate()
+          }}
+        >
+          <InvitationCodeError error={mutation.error} />
+          <Field label={t.invitation.tokenLabel} hint={t.invitation.acceptCodeHint} required>
+            {(props) => (
+              <Input
+                {...props}
+                value={token}
+                autoFocus
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            )}
+          </Field>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            disabled={mutation.isPending || token.trim() === ''}
+          >
+            {mutation.isPending ? t.common.saving : t.invitation.acceptSubmit}
+          </Button>
+        </form>
+        <Button
+          variant="ghost"
+          size="lg"
+          className="mt-3 w-full"
+          onClick={() => {
+            void store.logout()
+          }}
+        >
+          {t.auth.logout}
+        </Button>
+        {/* Chi aspetta un invito legge, intanto, che cosa lo aspetta: la guida
+            senza ruolo è la versione di chi abita. */}
+        <p className="mt-6 text-center text-sm">
+          <Link to="/guida" className="text-accent underline-offset-4 hover:underline">
+            {t.guide.fromNoOrganization}
+          </Link>
+        </p>
+      </div>
+    </main>
+  )
+}
+
+/**
  * Le organizzazioni di chi guarda, **lette dall'API**.
  *
  * Prima di questo passo l'elenco era ciò che questo browser aveva conosciuto, e
@@ -234,9 +454,9 @@ export function AppShell() {
  * cui indovinare. `GET /organizations` è la sola rotta che dia il **nome** a chi
  * non è staff, ed è la ragione per cui esiste.
  */
-function useOrganizations() {
+export function useOrganizations() {
   const client = useApi()
-  const { session, selectOrganization } = useSession()
+  const { session, selectOrganization, clearOrganization } = useSession()
 
   const query = useQuery({
     queryKey: keys.organizations,
@@ -253,18 +473,25 @@ function useOrganizations() {
   /**
    * L'elenco vero **corregge il ricordo**, e non il contrario.
    *
-   * Due casi reali, e nessuno dei due è teorico. Il primo: l'organizzazione
-   * ricordata non è più fra le proprie — un invito revocato, un'appartenenza
-   * chiusa — e da quel momento **ogni** richiesta porta un `X-Org-Id` che l'API
-   * rifiuta, cioè un'applicazione intera che risponde `403`. Il secondo: non ce
-   * n'è nessuna attiva, e allora gli elenchi rispondono `200` con zero elementi,
-   * che è il modo peggiore di sbagliare perché non somiglia a un errore.
+   * Tre casi, e nessuno dei tre è teorico. Il primo: l'organizzazione ricordata
+   * non è più fra le proprie — un invito revocato, un'appartenenza chiusa — e da
+   * quel momento **ogni** richiesta porta un `X-Org-Id` che l'API rifiuta, cioè
+   * un'applicazione intera che risponde `403`. Il secondo: non ce n'è nessuna
+   * attiva ma ne esistono, e allora gli elenchi rispondono `200` con zero
+   * elementi, che è il modo peggiore di sbagliare perché non somiglia a un
+   * errore. Il terzo, da ADR-053: **non esiste più nessuna organizzazione**, ed
+   * è lo stato che si raggiunge uscendo dall'unica che si aveva — qui non c'è
+   * un ripiego a cui riallinearsi, e l'unico stato coerente è nessuna attiva.
    *
    * Il ruolo si riallinea per la stessa ragione: quello ricordato serve a non far
    * lampeggiare la navigazione al ricaricamento, ma è l'API a dire qual è.
    */
   useEffect(() => {
-    if (!items || items.length === 0) return
+    if (!items) return
+    if (items.length === 0) {
+      if (activeId !== null) clearOrganization()
+      return
+    }
     const active = items.find((organization) => organization.id === activeId)
     if (!active) {
       const fallback = items[0]
@@ -272,7 +499,7 @@ function useOrganizations() {
       return
     }
     if (active.role !== activeRole) selectOrganization(active.id, active.role)
-  }, [items, activeId, activeRole, selectOrganization])
+  }, [items, activeId, activeRole, selectOrganization, clearOrganization])
 
   const active: Organization | undefined = items?.find(
     (organization) => organization.id === activeId,
@@ -355,6 +582,32 @@ function OrganizationMenu() {
           ))}
 
           <DropdownMenu.Separator className="my-1 h-px bg-border-subtle" />
+          {/* **Il proprio account**, e sta qui e non nella navigazione principale
+              per la stessa ragione dell'invito: non è un modulo del prodotto, è una
+              cosa che si fa su di sé, e la si cerca dove si cambia organizzazione e
+              si esce. Vale per staff e inquilini, quindi non passa dal ramo sul
+              ruolo. */}
+          <DropdownMenu.Item asChild>
+            <Link
+              to="/account"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-surface-muted"
+            >
+              <UserCog className="size-4" aria-hidden />
+              {t.nav.account}
+            </Link>
+          </DropdownMenu.Item>
+          {/* La guida, accanto all'account: è dove si cercano le cose che si
+              fanno su di sé, e vale per entrambi i ruoli — la pagina sceglie la
+              versione. */}
+          <DropdownMenu.Item asChild>
+            <Link
+              to="/guida"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-highlighted:bg-surface-muted"
+            >
+              <BookOpen className="size-4" aria-hidden />
+              {t.nav.guide}
+            </Link>
+          </DropdownMenu.Item>
           {/* **Dove si usa un codice d'invito**, e sta qui per una ragione
               precisa: chi ha appena ricevuto un invito arriva in questo menù da
               sé, perché è il posto in cui si va quando ci si accorge di essere

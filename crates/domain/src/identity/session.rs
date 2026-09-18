@@ -3,6 +3,39 @@ use chrono::{DateTime, Utc};
 use crate::error::{Denial, DomainError, DomainResult, Invariant};
 use crate::shared::{SessionId, UserId};
 
+/// Perché una sessione è stata revocata **in blocco**.
+///
+/// La revoca di una sessione sola — rotazione, uscita — resta dov'era: la deduce
+/// `SessionRepository::update` dallo stato della riga, perché lì la ragione è
+/// leggibile dalla riga stessa e un secondo canale sarebbe ridondante.
+///
+/// Finisce in `user_sessions.revoked_reason`, che è una colonna che si legge mesi
+/// dopo per capire che cosa è successo a un account. Un enum e non una stringa
+/// libera perché la stringa libera si era già trasformata in una bugia: ogni
+/// revoca in blocco scriveva «refresh token reuse detected», **anche quella del
+/// recupero della password**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevocationReason {
+    /// Un refresh token già ruotato è stato ripresentato: non si sa quale delle
+    /// due parti sia legittima, quindi cadono tutte.
+    RefreshTokenReuse,
+    /// La password è stata reimpostata da chi controlla la casella di posta.
+    PasswordReset,
+    /// La password è stata cambiata da una sessione autenticata.
+    PasswordChanged,
+}
+
+impl RevocationReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RefreshTokenReuse => "refresh token reuse detected",
+            Self::PasswordReset => "password reset",
+            Self::PasswordChanged => "password changed",
+        }
+    }
+}
+
 /// Hash SHA-256 di un refresh token.
 ///
 /// Il token in chiaro esiste solo nella risposta HTTP che lo consegna: in

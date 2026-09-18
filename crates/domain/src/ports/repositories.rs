@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rust_decimal::Decimal;
 
 use crate::ai::{AiJob, AiTask};
 use crate::billing::{
@@ -11,15 +12,17 @@ use crate::expense::{
     SettlementStatus,
 };
 use crate::identity::{
-    Invitation, OrgMember, Organization, OrganizationMembership, RefreshSession, TokenHash, User,
+    Invitation, OrgMember, Organization, OrganizationMembership, OwnerInvitation,
+    PasswordResetCode, RefreshSession, RevocationReason, TokenHash, User,
 };
 use crate::lease::{Lease, LeaseParty, LeaseStatus};
 use crate::payment::{IdempotencyKey, Payment, PaymentStatus};
 use crate::property::{Property, PropertyResident, PropertyStatus, Room};
 use crate::reporting::OwnerDashboard;
 use crate::shared::{
-    ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, OrgId,
-    PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId, UtilityBillId,
+    ChargeId, DocumentId, Email, ExpenseGroupId, ExpenseId, InvitationId, LeaseId, LeasePartyId,
+    OrgId, PaymentId, PropertyId, RoomId, SettlementId, TicketId, TicketMessageId, UserId,
+    UtilityBillId,
 };
 use crate::ticket::{Ticket, TicketMessage, TicketReference, TicketStatus, TicketStatusChange};
 
@@ -84,7 +87,57 @@ pub trait UserRepository: Send {
     async fn find_by_id(&mut self, id: UserId) -> RepositoryResult<Option<User>>;
     async fn find_by_email(&mut self, email: &Email) -> RepositoryResult<Option<User>>;
     async fn insert(&mut self, user: &User) -> RepositoryResult<()>;
+    /// L'aggiornamento **completo**, e solo dal pool privilegiato.
+    ///
+    /// Nomina tutte le colonne che il dominio muove — `status`, `last_login_at`,
+    /// `failed_login_count`, `locked_until` — che dalla migration `0038` il ruolo
+    /// applicativo non ha più il privilegio di scrivere. Chiamarlo da una
+    /// transazione aperta con `begin` fallisce con `permission denied for table
+    /// users`, ed è la difesa che si vuole: lo usano `Login` e il recupero
+    /// password, che girano su `begin_privileged` perché chi li attraversa non è
+    /// autenticato.
+    ///
+    /// Da una richiesta autenticata si passa da [`UserRepository::update_profile`].
     async fn update(&mut self, user: &User) -> RepositoryResult<()>;
+    /// I dati che una persona corregge di sé, e la propria password.
+    ///
+    /// **Quattro colonne e non l'aggregato**, sulla forma di
+    /// [`ChargeRepository::update_status`]: sono esattamente quelle che la
+    /// migration `0038` riconcede al ruolo applicativo, e le due liste sono la
+    /// stessa lista. Aggiungerne una qui senza aggiungerla là dà `permission
+    /// denied` nei test di integrazione, che girano come `propflow_app`.
+    ///
+    /// `email` non c'è, e non per dimenticanza: è la credenziale d'accesso, non un
+    /// dato anagrafico. Vedi il commento in testa alla `0038`.
+    async fn update_profile(&mut self, user: &User) -> RepositoryResult<()>;
+    /// I nomi di un insieme di persone, per chi ha in mano i loro identificatori.
+    ///
+    /// **Una query e non una per riga**: un thread ne mostra venticinque, e
+    /// risolverli uno alla volta sarebbe il problema `N+1` scritto a mano. È la
+    /// stessa nota che porta [`LeaseRepository::labels`].
+    ///
+    /// **Non restituisce un utente, restituisce un nome.** La distinzione è
+    /// [ADR-036](../../../../docs/08-decisioni.md) e non una sfumatura: nessuna
+    /// rotta proietta un utente per identificatore, e questo modello di lettura
+    /// non è il primo passo verso una — è la proiezione di una colonna sola,
+    /// mostrata dove serve.
+    ///
+    /// **Il confine è la policy `users_select` e non il `WHERE`.** Chi il
+    /// chiamante non può vedere semplicemente non torna, e il nome mancante è un
+    /// caso normale che chi legge deve trattare: mai un identificatore in faccia a
+    /// chi guarda ([ADR-043](../../../../docs/08-decisioni.md)).
+    async fn names(&mut self, ids: &[UserId]) -> RepositoryResult<Vec<PersonName>>;
+}
+
+/// Come si chiama una persona.
+///
+/// Modello di lettura, come [`LeaseLabels`]: non è l'aggregato `User`, che porta
+/// email, telefono e stato dell'account, e che nessuno deve leggere per mostrare
+/// un nome accanto a un messaggio.
+#[derive(Debug, Clone)]
+pub struct PersonName {
+    pub user_id: UserId,
+    pub full_name: String,
 }
 
 #[async_trait]
@@ -113,6 +166,50 @@ pub trait OrgMemberRepository: Send {
         user_id: UserId,
     ) -> RepositoryResult<Vec<OrganizationMembership>>;
     async fn insert(&mut self, member: &OrgMember) -> RepositoryResult<()>;
+    /// Scrive **stato e data d'ingresso**, e nient'altro.
+    ///
+    /// Sono le due colonne che la migration `0039` concede al ruolo applicativo:
+    /// `role` è negata di proposito, perché aprire la scrittura della propria riga
+    /// senza negarla sarebbe dare a chiunque la promozione a `owner` — e una policy
+    /// non può accorgersene, non vedendo la riga vecchia.
+    ///
+    /// La chiave è `(org_id, user_id)` e non un identificatore: è la coppia che
+    /// `org_members_org_user_uk` rende unica, ed è quella che i due chiamanti hanno
+    /// già in mano.
+    async fn update(&mut self, member: &OrgMember) -> RepositoryResult<()>;
+    /// Quanti proprietari **attivi** ha l'organizzazione.
+    ///
+    /// Serve a un'invariante sola, che lo schema dichiara di proposito come
+    /// invariante del **service layer**: «almeno un owner per org». Un trigger
+    /// cross-row sarebbe workflow nel database, e la conta qui costa una riga.
+    async fn count_active_owners(&mut self, org_id: OrgId) -> RepositoryResult<u64>;
+}
+
+/// Codici di recupero della password.
+///
+/// La ricerca è per **hash del codice** e non per utente: chi lo presenta prova di
+/// possederlo, e cercare per email vorrebbe dire fidarsi di chi chiede. È la stessa
+/// forma di [`InvitationRepository::find_by_token_hash`].
+///
+/// **Niente `delete`**: un codice usato o scaduto è inerte e resta, come ogni altra
+/// riga di questo schema ([ADR-003](../../../../docs/08-decisioni.md)). La potatura
+/// è un'operazione del runbook, con il ruolo del migratore.
+#[async_trait]
+pub trait PasswordResetCodeRepository: Send {
+    async fn find_by_code_hash(
+        &mut self,
+        code_hash: &TokenHash,
+    ) -> RepositoryResult<Option<PasswordResetCode>>;
+    /// L'ultimo codice emesso per quell'utente, per il limite agli invii.
+    ///
+    /// Il limite non ha una colonna sua: è il `created_at` della riga più recente, e
+    /// `password_reset_codes_user_ix` lo rende una lettura sola. Una colonna che
+    /// duplicasse quel valore avrebbe due fonti di verità per lo stesso fatto.
+    async fn last_issued(&mut self, user_id: UserId)
+    -> RepositoryResult<Option<PasswordResetCode>>;
+    async fn insert(&mut self, code: &PasswordResetCode) -> RepositoryResult<()>;
+    /// Consuma il codice. L'unica colonna scrivibile è `used_at`.
+    async fn mark_used(&mut self, code: &PasswordResetCode) -> RepositoryResult<()>;
 }
 
 #[async_trait]
@@ -123,10 +220,25 @@ pub trait SessionRepository: Send {
     ) -> RepositoryResult<Option<RefreshSession>>;
     async fn insert(&mut self, session: &RefreshSession) -> RepositoryResult<()>;
     async fn update(&mut self, session: &RefreshSession) -> RepositoryResult<()>;
-    /// Revoca ogni sessione attiva dell'utente. Usata al rilevamento del riuso di
-    /// un refresh token: se un token è stato replicato non si sa quale delle due
-    /// parti sia legittima, quindi cadono tutte.
-    async fn revoke_all_for_user(&mut self, user_id: UserId) -> RepositoryResult<u64>;
+    /// Revoca ogni sessione attiva dell'utente, **dicendo perché**.
+    ///
+    /// Tre percorsi la chiamano e hanno tre ragioni diverse: il riuso di un
+    /// refresh token — se un token è stato replicato non si sa quale delle due
+    /// parti sia legittima, quindi cadono tutte — il recupero della password e il
+    /// cambio da autenticati. Il motivo è un enum e non una stringa perché finisce
+    /// in `user_sessions.revoked_reason`, che si legge mesi dopo per capire perché
+    /// una sessione è caduta: prima di questa firma era il letterale «refresh token
+    /// reuse detected» **anche per il recupero della password**, cioè una riga che
+    /// diceva il falso.
+    ///
+    /// **Non tocca gli access token**, che sono JWT firmati e non sono revocabili
+    /// ([ADR-012](../../../../docs/08-decisioni.md)): chi ne ha uno in mano resta
+    /// dentro fino alla scadenza. Ciò che muore è il **rinnovo**.
+    async fn revoke_all_for_user(
+        &mut self,
+        user_id: UserId,
+        reason: RevocationReason,
+    ) -> RepositoryResult<u64>;
 }
 
 /// Filtro di elenco degli immobili con paginazione keyset.
@@ -136,6 +248,12 @@ pub trait SessionRepository: Send {
 #[derive(Debug, Clone)]
 pub struct PropertyQuery {
     pub status: Option<PropertyStatus>,
+    /// Immobili con almeno un contratto in essere, o senza nessuno.
+    ///
+    /// È il filtro che sostituisce `?status=rented`: quello non può funzionare,
+    /// perché in database quel valore non c'è. Stessa forma di `in_force` sui
+    /// contratti.
+    pub occupied: Option<bool>,
     pub city: Option<String>,
     /// Ultimo identificatore della pagina precedente. Gli id sono UUIDv7, quindi
     /// ordinarli equivale a ordinarli per data di creazione.
@@ -152,6 +270,7 @@ impl Default for PropertyQuery {
     fn default() -> Self {
         Self {
             status: None,
+            occupied: None,
             city: None,
             after: None,
             limit: Self::DEFAULT_LIMIT,
@@ -176,6 +295,15 @@ pub trait PropertyRepository: Send {
     /// portato ad archiviato in un solo statement. Il ruolo applicativo non ha
     /// nemmeno il privilegio `DELETE`.
     async fn soft_delete(&mut self, property: &Property) -> RepositoryResult<()>;
+
+    /// Lo stato che discende dai contratti, per un'intera pagina.
+    ///
+    /// Vale la stessa ragione dell'occupazione delle stanze: `rented` e
+    /// `partially_rented` sono **conseguenze**, e le conseguenze si derivano
+    /// (ADR-019). La derivazione non è pura — dipende dalle stanze e dai
+    /// contratti — quindi non può stare sull'aggregato, dove la firma
+    /// prometterebbe una risposta che l'aggregato non ha.
+    async fn occupancy(&mut self, ids: &[PropertyId]) -> RepositoryResult<Vec<PropertyOccupancy>>;
 
     /// Chi abita l'immobile, **letto da `app.property_residents`**.
     ///
@@ -203,11 +331,41 @@ pub trait PropertyRepository: Send {
 pub trait RoomRepository: Send {
     async fn find_by_id(&mut self, id: RoomId) -> RepositoryResult<Option<Room>>;
     async fn list_for_property(&mut self, property_id: PropertyId) -> RepositoryResult<Vec<Room>>;
+    /// Quali di queste stanze sono **occupate adesso**.
+    ///
+    /// Derivata e non memorizzata: `RoomStatus::Occupied` non lo scrive nessuno, e
+    /// non potrebbe restare vero, perché l'occupazione dipende dal calendario —
+    /// un contratto che comincia domani occupa domani, e nessun trigger scatta al
+    /// passare del tempo (ADR-019). La definizione sta in
+    /// `app.room_is_occupied`, che usa `app.lease_in_force` e non ne inventa una
+    /// seconda.
+    ///
+    /// Una query per l'intero elenco e non una per riga, come `LeaseRepository::labels`.
+    async fn occupancy(&mut self, ids: &[RoomId]) -> RepositoryResult<Vec<RoomOccupancy>>;
     async fn insert(&mut self, room: &Room) -> RepositoryResult<()>;
     async fn update(&mut self, room: &Room) -> RepositoryResult<()>;
     /// Soft delete: la riga resta con `deleted_at` valorizzato, perché i
     /// contratti per stanza continuano a riferirsi a essa.
     async fn soft_delete(&mut self, room: &Room) -> RepositoryResult<()>;
+}
+
+/// Se una stanza è occupata adesso, derivato dai contratti in essere.
+#[derive(Debug, Clone, Copy)]
+pub struct RoomOccupancy {
+    pub room_id: RoomId,
+    pub occupied: bool,
+}
+
+/// Lo stato di un immobile che **discende dai contratti**, quando ce n'è uno.
+///
+/// `None` quando non c'è niente da derivare, ed è la parte che conta: nessuna
+/// stanza occupata **non** significa «disponibile»: potrebbe essere una bozza o un
+/// immobile in manutenzione, che sono giudizi di chi amministra. Chi legge ripiega
+/// sullo stato memorizzato.
+#[derive(Debug, Clone, Copy)]
+pub struct PropertyOccupancy {
+    pub property_id: PropertyId,
+    pub status: Option<PropertyStatus>,
 }
 
 /// Filtro di elenco dei contratti con paginazione keyset.
@@ -253,17 +411,79 @@ pub trait LeaseRepository: Send {
     async fn insert(&mut self, lease: &Lease) -> RepositoryResult<()>;
     async fn update(&mut self, lease: &Lease) -> RepositoryResult<()>;
     async fn soft_delete(&mut self, lease: &Lease) -> RepositoryResult<()>;
+    /// I nomi di ciò che i contratti affittano, per un'intera pagina.
+    ///
+    /// **Una query e non una per riga**: l'elenco ne mostra venticinque, e
+    /// risolverli uno alla volta sarebbe il problema `N+1` scritto a mano. Sta qui
+    /// e non in un `JOIN` dentro `list` perché `list` costruisce l'aggregato, e
+    /// l'aggregato non ha un posto dove mettere un nome che non è suo.
+    async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>>;
+    /// Se la persona sia ancora parte di un contratto **in essere** in quella
+    /// organizzazione, garanti compresi.
+    ///
+    /// Serve a dare un rifiuto **parlante** a chi prova a uscire da
+    /// un'organizzazione in cui ha ancora un contratto. Il confine vero è la
+    /// `WITH CHECK` di `org_members_update_self`, che negherebbe la scrittura
+    /// comunque; senza questa lettura il rifiuto sarebbe `auth.denied_by_policy`,
+    /// che nella tassonomia di ADR-022 significa «difetto nostro» e non «hai
+    /// ancora un contratto».
+    ///
+    /// **Interroga la stessa funzione della policy**, `app.has_lease_in_force`, e
+    /// non una seconda condizione scritta a mano: due definizioni di «in essere»
+    /// divergerebbero, e il sintomo sarebbe una schermata che dice di sì e
+    /// un'`UPDATE` che dice di no.
+    async fn has_in_force_for_user(
+        &mut self,
+        org_id: OrgId,
+        user_id: UserId,
+    ) -> RepositoryResult<bool>;
+}
+
+/// Come si chiama ciò che un contratto affitta.
+///
+/// **Non fa parte dell'aggregato** e non ci deve entrare: il nome di un immobile
+/// appartiene all'immobile, e un contratto che se lo portasse dietro avrebbe due
+/// fonti di verità che divergono alla prima correzione. È un modello di lettura,
+/// come `LeasePage`, e serve a una cosa sola: un elenco in cui le righe si
+/// distinguono.
+///
+/// Entrambi i nomi sono opzionali, e per ragioni diverse. La **stanza** manca sui
+/// contratti sull'immobile intero, che è il caso normale. L'**immobile** manca
+/// quando la sua riga è archiviata: il contratto resta, il nome no.
+#[derive(Debug, Clone)]
+pub struct LeaseLabels {
+    pub lease_id: LeaseId,
+    pub property_label: Option<String>,
+    pub room_name: Option<String>,
+    /// Il nome dell'**intestatario**, cioè della parte marcata `is_primary`.
+    ///
+    /// Assente su un contratto che non ne ha una — una bozza a cui non si è ancora
+    /// aggiunto nessuno — e su uno le cui parti non sono leggibili da chi chiede.
+    /// È lo stesso `full_name` denormalizzato su `lease_parties`, che sopravvive a
+    /// chi se ne va ([ADR-043](../../../../docs/08-decisioni.md)); qui viaggia
+    /// perché *dove* non basta a dire *a chi*: due contratti sulla stessa stanza in
+    /// due anni diversi si distinguono solo così.
+    pub primary_tenant: Option<String>,
 }
 
 /// Parti di un contratto.
 ///
-/// Nessun `find_by_id`: una parte si raggiunge solo attraverso il proprio
-/// contratto, e caricarne una da sola non è un'operazione di dominio.
+/// `find_by_id` esiste perché **correggere una parte è un'operazione su una riga
+/// sola**: chi sistema una quota sbagliata ha in mano l'identificatore di quella
+/// parte, e farlo passare dal contratto vorrebbe dire caricarne l'elenco per
+/// scartarne tutte tranne una.
 #[async_trait]
 pub trait LeasePartyRepository: Send {
+    async fn find_by_id(&mut self, id: LeasePartyId) -> RepositoryResult<Option<LeaseParty>>;
     async fn list_for_lease(&mut self, lease_id: LeaseId) -> RepositoryResult<Vec<LeaseParty>>;
     async fn insert(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
     async fn update(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
+    /// Cancellazione soft di una parte inserita per sbaglio.
+    ///
+    /// Separata da `update` perché quella ha `deleted_at IS NULL` nella `WHERE` e
+    /// non tocca la colonna: sono due operazioni diverse, e scriverne una sola che
+    /// fa entrambe renderebbe possibile cancellare per distrazione.
+    async fn soft_delete(&mut self, party: &LeaseParty) -> RepositoryResult<()>;
 }
 
 /// Inviti a entrare in un'organizzazione.
@@ -280,6 +500,36 @@ pub trait InvitationRepository: Send {
     ) -> RepositoryResult<Option<Invitation>>;
     async fn insert(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
     async fn update(&mut self, invitation: &Invitation) -> RepositoryResult<()>;
+}
+
+/// Inviti da proprietario: un token di piattaforma che l'accettazione consuma
+/// per creare utente e organizzazione insieme (ADR-053).
+///
+/// **Nessun `insert`**: la riga la scrive uno script in `ops/`, con il ruolo del
+/// migratore, che è proprietario della tabella e non passa da questa porta.
+/// L'applicazione la legge e la marca accettata soltanto — dal pool
+/// privilegiato, perché prima della registrazione non esiste un contesto di
+/// sicurezza (regola 27).
+#[async_trait]
+pub trait OwnerInvitationRepository: Send {
+    /// Cerca per hash del token, in **qualunque stato**: accettato, scaduto e
+    /// revocato compresi. È il dominio
+    /// ([`OwnerInvitation::ensure_acceptable`](crate::identity::OwnerInvitation::ensure_acceptable))
+    /// a decidere se la riga è ancora spendibile, con la stessa forma di
+    /// [`InvitationRepository::find_by_token_hash`]: `token_hash` è unico
+    /// (`owner_invitations_token_uk`), quindi la riga — se esiste — è una sola.
+    async fn find_pending_by_hash(
+        &mut self,
+        token_hash: &TokenHash,
+    ) -> RepositoryResult<Option<OwnerInvitation>>;
+
+    /// Marca l'invito accettato.
+    ///
+    /// **Guardata da `accepted_at IS NULL` nella `WHERE`**, come
+    /// [`PasswordResetCodeRepository::mark_used`]: due richieste concorrenti con
+    /// lo stesso token passerebbero entrambe la verifica in memoria, e a
+    /// decidere quale vince è questa riga.
+    async fn mark_accepted(&mut self, invitation: &OwnerInvitation) -> RepositoryResult<()>;
 }
 
 /// Filtro di elenco dei documenti di un owner, con paginazione keyset.
@@ -420,6 +670,26 @@ pub trait TicketRepository: Send {
         &mut self,
         ticket_id: TicketId,
     ) -> RepositoryResult<Vec<TicketStatusChange>>;
+
+    /// I nomi di ciò a cui le segnalazioni si riferiscono, per un'intera pagina.
+    ///
+    /// Stessa forma di [`LeaseRepository::labels`], e per le stesse ragioni: una
+    /// query e non una per riga, e fuori dall'aggregato perché il nome di un
+    /// immobile appartiene all'immobile.
+    async fn labels(&mut self, ids: &[TicketId]) -> RepositoryResult<Vec<TicketLabels>>;
+}
+
+/// Dove sta ciò che una segnalazione riguarda.
+///
+/// L'**immobile** manca quando la sua riga è archiviata — la segnalazione resta, il
+/// nome no — e la **stanza** manca quando la segnalazione riguarda l'immobile
+/// intero, che è il caso normale. Chi legge mette un'etichetta neutra: mai
+/// l'identificatore (ADR-043).
+#[derive(Debug, Clone)]
+pub struct TicketLabels {
+    pub ticket_id: TicketId,
+    pub property_label: Option<String>,
+    pub room_name: Option<String>,
 }
 
 /// Filtro di elenco dei messaggi di una segnalazione, con paginazione keyset.
@@ -532,6 +802,31 @@ pub trait UtilityBillRepository: Send {
     /// L'immutabilità della bolletta è quindi un'invariante di **dominio**
     /// (`UtilityBill::apply` rifiuta da `allocated` in poi) e non un privilegio.
     async fn update(&mut self, bill: &UtilityBill) -> RepositoryResult<()>;
+
+    /// Quanto di ciascuna bolletta è **già stato riaddebitato**.
+    ///
+    /// Non è un campo dell'aggregato e non ci deve entrare: è la somma di righe di
+    /// un altro aggregato — gli addebiti che citano la bolletta — e memorizzarla
+    /// darebbe due fonti di verità che divergono al primo annullamento. Modello di
+    /// lettura, come [`LeaseLabels`], e **una query per pagina**.
+    ///
+    /// Serve a dire quanto **resta**: riaddebitare una bolletta d'immobile a tre
+    /// contratti sono tre sottrazioni a mente, e a mente si sbagliano. Non è un
+    /// vincolo — riaddebitare più del totale resta possibile e voluto
+    /// ([ADR-015](../../../../docs/08-decisioni.md) sul perché un'invariante del
+    /// genere starebbe nel database o da nessuna parte) — è un numero che aiuta.
+    ///
+    /// Gli addebiti **annullati non contano**: `void` dice «non doveva essere
+    /// chiesto», quindi quella quota torna disponibile. Gli **stornati sì**: erano
+    /// dovuti, e rinunciare a incassarli non disfa il riaddebito.
+    async fn recharged(&mut self, ids: &[UtilityBillId]) -> RepositoryResult<Vec<RechargedAmount>>;
+}
+
+/// Quanto di una bolletta è già stato riaddebitato.
+#[derive(Debug, Clone)]
+pub struct RechargedAmount {
+    pub utility_bill_id: UtilityBillId,
+    pub amount: Decimal,
 }
 
 /// I job AI **visti da una richiesta**: si accodano e si leggono, non si toccano.
@@ -985,6 +1280,17 @@ pub trait ExpenseRepository: Send {
 
     /// Le quote di una spesa.
     async fn list_shares(&mut self, expense_id: ExpenseId) -> RepositoryResult<Vec<ExpenseShare>>;
+
+    /// Annulla la spesa: scrive `deleted_at`, e **solo quello**.
+    ///
+    /// Non `updated_at`, che non è fra le colonne concesse dalla migration `0028`
+    /// — la scrive il trigger `set_updated_at`, che è `BEFORE UPDATE` e non è
+    /// soggetto ai privilegi del chiamante. Nominarla qui darebbe `permission
+    /// denied` su un'operazione che il dominio ha appena approvato.
+    ///
+    /// Le quote non si toccano: restano scritte e sommano ancora all'importo, e
+    /// la vista dei saldi le ignora insieme alla spesa.
+    async fn cancel(&mut self, expense: &Expense) -> RepositoryResult<()>;
 }
 
 /// Filtro di elenco dei regolamenti di un gruppo, con paginazione keyset.

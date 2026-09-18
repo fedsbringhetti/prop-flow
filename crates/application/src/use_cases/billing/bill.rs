@@ -14,6 +14,7 @@ use propflow_domain::shared::{LeaseId, PropertyId, RoomId, UtilityBillId};
 use propflow_domain::{DomainResult, Entity, RequestContext};
 use rust_decimal::Decimal;
 
+use super::read::{Placed, placed_bill};
 use super::references::ensure_belong_to_property;
 use crate::authorization;
 use crate::error::{AppError, AppResult, Conflict};
@@ -80,7 +81,7 @@ impl RegisterUtilityBill {
         &self,
         context: &RequestContext,
         command: RegisterUtilityBillCommand,
-    ) -> AppResult<UtilityBill> {
+    ) -> AppResult<Placed<UtilityBill>> {
         let org_id = authorization::ensure_staff(context)?;
         let now = self.clock.now();
 
@@ -136,9 +137,10 @@ impl RegisterUtilityBill {
                 EventMetadata::from_context(context),
             ))
             .await?;
+        let placed = placed_bill(uow.as_mut(), bill).await?;
         uow.commit().await?;
 
-        Ok(bill)
+        Ok(placed)
     }
 }
 
@@ -171,7 +173,7 @@ impl UpdateUtilityBill {
         context: &RequestContext,
         id: UtilityBillId,
         changes: UpdateUtilityBillCommand,
-    ) -> AppResult<UtilityBill> {
+    ) -> AppResult<Placed<UtilityBill>> {
         let org_id = authorization::ensure_staff(context)?;
         let now = self.clock.now();
 
@@ -197,7 +199,7 @@ impl UpdateUtilityBill {
             // Nessuna scrittura, nessun evento, nessuna riga di audit — e
             // soprattutto nessuna validazione disfatta: la stessa proprietà di
             // `Property::apply`.
-            return Ok(bill);
+            return placed_bill(uow.as_mut(), bill).await;
         }
 
         uow.utility_bills()
@@ -223,9 +225,10 @@ impl UpdateUtilityBill {
         }
 
         append_all(uow.as_mut(), context, now, events).await?;
+        let placed = placed_bill(uow.as_mut(), bill).await?;
         uow.commit().await?;
 
-        Ok(bill)
+        Ok(placed)
     }
 }
 
@@ -242,7 +245,7 @@ async fn transition<T>(
     context: &RequestContext,
     id: UtilityBillId,
     apply: T,
-) -> AppResult<UtilityBill>
+) -> AppResult<Placed<UtilityBill>>
 where
     T: FnOnce(&mut UtilityBill, DateTime<Utc>) -> DomainResult<()>,
 {
@@ -276,9 +279,10 @@ where
         )],
     )
     .await?;
+    let placed = placed_bill(uow.as_mut(), bill).await?;
     uow.commit().await?;
 
-    Ok(bill)
+    Ok(placed)
 }
 
 pub(super) async fn append_all(
@@ -318,7 +322,7 @@ impl ValidateUtilityBill {
         &self,
         context: &RequestContext,
         id: UtilityBillId,
-    ) -> AppResult<UtilityBill> {
+    ) -> AppResult<Placed<UtilityBill>> {
         // Chi valida viene dal contesto e non dal comando: `validated_by` deve
         // dire *chi ha controllato*, e accettarlo dal corpo della richiesta
         // permetterebbe di attribuire la validazione a qualcun altro.
@@ -327,6 +331,40 @@ impl ValidateUtilityBill {
         ))?;
         transition(&self.unit_of_work, &self.clock, context, id, |bill, now| {
             bill.validate(validated_by, now)
+        })
+        .await
+    }
+}
+
+/// Dichiara pagata al fornitore una bolletta.
+///
+/// **Non è un pagamento del modulo `app.payments`**, ed è la distinzione che
+/// questa fetta non ha modellato: là c'è il denaro che entra — un addebito che
+/// viene saldato, con chi paga e chi riceve — e un fornitore non è un utente del
+/// sistema. Qui si registra un fatto avvenuto fuori dal prodotto, con la sua data,
+/// perché l'elenco delle bollette non distingueva quelle saldate da quelle da
+/// saldare — che è la sola domanda che ci si fa guardandolo.
+pub struct MarkUtilityBillPaid {
+    unit_of_work: Arc<dyn UnitOfWorkFactory>,
+    clock: Arc<dyn Clock>,
+}
+
+impl MarkUtilityBillPaid {
+    #[must_use]
+    pub const fn new(unit_of_work: Arc<dyn UnitOfWorkFactory>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            unit_of_work,
+            clock,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        context: &RequestContext,
+        id: UtilityBillId,
+    ) -> AppResult<Placed<UtilityBill>> {
+        transition(&self.unit_of_work, &self.clock, context, id, |bill, now| {
+            bill.mark_paid(now)
         })
         .await
     }
@@ -356,7 +394,7 @@ impl VoidUtilityBill {
         &self,
         context: &RequestContext,
         id: UtilityBillId,
-    ) -> AppResult<UtilityBill> {
+    ) -> AppResult<Placed<UtilityBill>> {
         transition(&self.unit_of_work, &self.clock, context, id, |bill, now| {
             bill.void(now)
         })

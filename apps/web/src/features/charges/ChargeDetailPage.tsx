@@ -156,13 +156,20 @@ export function ChargeDetailPage() {
                     <DescriptionItem label={t.charge.dueDate}>
                       {formatDate(data.due_date)}
                     </DescriptionItem>
+                    {/* Il contratto si nomina con **la casa e la stanza**, che è
+                        il modo in cui `R14` lo aveva già risolto nell'elenco dei
+                        contratti: «Contratti» non distingueva una riga dall'altra
+                        e non diceva a chi l'addebito fosse emesso. */}
                     <DescriptionItem label={t.charge.lease}>
                       <Link
                         to={`/contratti/${data.lease_id}`}
                         className="text-accent underline-offset-4 hover:underline"
                       >
-                        {t.lease.title}
+                        {data.property_label ?? t.common.archivedProperty}
                       </Link>
+                      {data.room_name ? (
+                        <span className="block text-xs text-ink-muted">{data.room_name}</span>
+                      ) : null}
                     </DescriptionItem>
                     <DescriptionItem label={t.charge.issuedAt}>
                       {data.issued_at ? formatDate(data.issued_at) : t.common.none}
@@ -185,7 +192,7 @@ export function ChargeDetailPage() {
             </PageSection>
 
             <PageSection>
-              <ChargePayments charge={data} />
+              <ChargePayments charge={data} settled={settled} />
             </PageSection>
 
             <PageSection>
@@ -206,8 +213,16 @@ export function ChargeDetailPage() {
 }
 
 /** I movimenti dell'addebito: quello che è entrato, e quello che aspetta. */
-function ChargePayments({ charge }: { charge: Charge }) {
+function ChargePayments({
+  charge,
+  settled,
+}: {
+  charge: Charge
+  /** Annullato o stornato: non c'è più un gesto da suggerire, e il vuoto lo dice. */
+  settled: boolean
+}) {
   const client = useApi()
+  const isStaff = useIsStaff()
 
   const query = usePagedQuery({
     queryKey: keys.chargePayments(charge.id),
@@ -223,7 +238,18 @@ function ChargePayments({ charge }: { charge: Charge }) {
       <Async
         query={query}
         isEmpty={(items) => items.length === 0}
-        empty={<Empty title={t.payment.empty} />}
+        empty={
+          <Empty
+            title={t.payment.empty}
+            hint={
+              settled
+                ? t.payment.emptySettled
+                : isStaff
+                  ? t.payment.emptyHintStaff
+                  : t.payment.emptyHintTenant
+            }
+          />
+        }
       >
         {(items) => (
           <>

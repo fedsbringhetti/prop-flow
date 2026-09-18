@@ -58,6 +58,23 @@ pub fn discloses_estimated_cost(context: &RequestContext) -> bool {
     context.is_staff()
 }
 
+/// Chi può vedere **quanto di una bolletta è già stato riaddebitato**.
+///
+/// Come [`discloses_estimated_cost`], la regola sta qui e non al bordo HTTP: è
+/// autorizzazione, non presentazione.
+///
+/// A differenza della stima, però, qui la ragione non è solo di contratto: la somma
+/// si legge **sotto Row Level Security**, e `charges_select` mostra all'inquilino le
+/// sole quote sue. Il numero che riceverebbe sarebbe **parziale e indistinguibile
+/// da un totale** — riaddebitato 90 su una bolletta da 184,20 che è stata
+/// riaddebitata per intero a tre coinquilini. Un numero sbagliato è peggio di un
+/// numero assente, e a chi abita quel totale non serve: è il conto di chi
+/// distribuisce.
+#[must_use]
+pub fn discloses_recharged_total(context: &RequestContext) -> bool {
+    context.is_staff()
+}
+
 /// Ruolo effettivo da registrare negli eventi di dominio.
 #[must_use]
 pub fn effective_role(context: &RequestContext) -> OrgRole {

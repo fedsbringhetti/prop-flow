@@ -27,6 +27,20 @@ pub enum PropertyStatus {
     Archived,
 }
 
+impl PropertyStatus {
+    /// Se questo valore **discende dai contratti** invece di essere una decisione.
+    ///
+    /// `rented` e `partially_rented` non li scrive nessuno: si calcolano dalle
+    /// stanze occupate e dai contratti sull'immobile intero, come `expiring` ed
+    /// `expired` si calcolano dalle date (ADR-019). Restano nell'enum perché una
+    /// riga scritta a mano potrebbe contenerli, e un valore sconosciuto in lettura
+    /// deve dare errore invece di ricadere su un default plausibile.
+    #[must_use]
+    pub const fn is_derived(self) -> bool {
+        matches!(self, Self::Rented | Self::PartiallyRented)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnergyClass {
     A4,

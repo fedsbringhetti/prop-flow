@@ -1,17 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send } from 'lucide-react'
+import { RefreshCw, Send } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { getTicket, listTicketMessages, postTicketMessage } from '@/api/endpoints'
-import type { TicketDetail, TicketMessage, TicketStatusChange } from '@/api/types'
+import type { TicketActor, TicketDetail, TicketMessage, TicketStatusChange } from '@/api/types'
 import { Async, Empty, InlineError } from '@/components/state'
 import { Button } from '@/components/ui/button'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, Textarea } from '@/components/ui/field'
 import { DescriptionItem, DescriptionList, PageHeader, PageSection } from '@/components/ui/page'
 import { keys } from '@/app/query'
-import { useApi, useIsStaff } from '@/app/session'
+import { useApi, useIsStaff, useSession } from '@/app/session'
 import { t } from '@/i18n'
 import { formatAmount, formatDateTime } from '@/lib/format'
 import { TicketActions } from './TicketActions'
@@ -83,18 +83,50 @@ export function TicketDetailPage() {
                     {formatDateTime(data.created_at)}
                   </DescriptionItem>
                   <DescriptionItem label={t.ticket.openedBy}>
-                    {t.ticket.actors[data.reported_by_kind]}
+                    <Person kind={data.reported_by_kind} name={data.reported_by_name} />
                   </DescriptionItem>
+                  {/* **Il nome, non la parola «Immobili».** Un collegamento che
+                      porta il nome della categoria invece di quello della cosa è
+                      `R32`, ed è la terza volta che il difetto si presenta —
+                      `R14` sui contratti, `R21`/`R22` sulle persone. Quando
+                      l'immobile è archiviato il nome non torna, e si dice che cosa
+                      è successo invece di mostrare uno spazio o un UUID. */}
                   <DescriptionItem label={t.ticket.property}>
                     <Link
                       to={`/immobili/${data.property_id}`}
                       className="text-accent underline-offset-4 hover:underline"
                     >
-                      {t.property.title}
+                      {data.property_label ?? t.common.archivedProperty}
                     </Link>
+                    {data.room_name ? (
+                      <span className="block text-xs text-ink-muted">{data.room_name}</span>
+                    ) : null}
                   </DescriptionItem>
+                  {/* **Il nome, e poi la data.** Prima c'era solo la data, che
+                      risponde «quando» a una domanda che chiede «chi»: è `R21`. Il
+                      nome può mancare — `users_select` non concede a chiunque la
+                      riga di chiunque — e allora si mette l'etichetta neutra, mai
+                      l'identificatore. */}
                   <DescriptionItem label={t.ticket.assignedTo}>
-                    {data.assigned_to ? formatDateTime(data.assigned_at) : t.ticket.assignedToNobody}
+                    {data.assigned_to ? (
+                      <span className="flex flex-wrap items-baseline gap-x-2">
+                        <span>{data.assigned_to_name ?? t.ticket.personUnknown}</span>
+                        <span className="font-numeric text-xs text-ink-muted">
+                          {formatDateTime(data.assigned_at)}
+                        </span>
+                      </span>
+                    ) : (
+                      t.ticket.assignedToNobody
+                    )}
+                  </DescriptionItem>
+                  {/* La visibilità è una scelta di chi apre, e il default è
+                      «privata»: mostrarla sempre è ciò che rende la casella del
+                      form una promessa verificabile invece di un interruttore che
+                      sparisce dopo l'invio. */}
+                  <DescriptionItem label={t.ticket.visibility}>
+                    {data.visible_to_residents
+                      ? t.ticket.visibilityShared
+                      : t.ticket.visibilityPrivate}
                   </DescriptionItem>
                   <DescriptionItem label={t.ticket.closedAt}>
                     {data.closed_at ? formatDateTime(data.closed_at) : t.common.none}
@@ -145,7 +177,7 @@ export function TicketDetailPage() {
           </PageSection>
 
           <PageSection>
-            <ThreadCard ticketId={id} />
+            <ThreadCard ticket={data} />
           </PageSection>
         </>
       )}
@@ -168,7 +200,7 @@ function HistoryCard({ ticket }: { ticket: TicketDetail }) {
         <CardTitle>{t.ticket.history}</CardTitle>
       </CardHeader>
       {ticket.history.length === 0 ? (
-        <Empty title={t.state.emptyTitle} />
+        <Empty title={t.ticket.historyEmpty} hint={t.ticket.historyEmptyHint} />
       ) : (
         <CardBody>
           <ol className="flex flex-col gap-3">
@@ -217,11 +249,41 @@ function HistoryRow({ change }: { change: TicketStatusChange }) {
  * Il client non ha nulla da nascondere, e la casella per scriverne compare al solo
  * staff perché a un inquilino che chiedesse `is_internal` l'API risponderebbe
  * `403`.
+ *
+ * # I messaggi arrivano quando li si va a prendere
+ *
+ * Niente tempo reale e **nemmeno un intervallo automatico**: un `refetchInterval`
+ * costa poco ma fa richieste che nessuno ha chiesto, per una conversazione che nel
+ * prodotto vero procede a ore di distanza. Un bottone dice la verità. `SSE` è
+ * escluso per una ragione che non è di trasporto ma di sicurezza — `EventSource`
+ * non manda intestazioni, quindi resterebbero il token nell'URL o il cookie del
+ * refresh usato per altro.
+ *
+ * Il thread ha una **chiave propria** (`keys.ticketMessages`), scelta perché
+ * invalidarlo non rilegga anche il dettaglio: il bottone è quindi la sua `refetch`,
+ * e si disabilita mentre lavora — uno che non dà segno di aver fatto qualcosa viene
+ * premuto tre volte.
  */
-function ThreadCard({ ticketId }: { ticketId: string }) {
+function ThreadCard({ ticket }: { ticket: TicketDetail }) {
+  const ticketId = ticket.id
   const client = useApi()
   const isStaff = useIsStaff()
+  const { session } = useSession()
   const queryClient = useQueryClient()
+
+  // **Su una segnalazione terminata non si scrive**, ed è una regola di dominio:
+  // l'API risponde `409 ticket.thread_closed`. Qui non si nasconde un rifiuto, si
+  // evita di offrire ciò che verrebbe negato — e si dice **perché**, con il
+  // rimedio che dipende da chi guarda. `closed`, `cancelled` e `resolved`
+  // insieme, cioè tutto ciò che non è uno dei sei stati di lavorazione.
+  const working =
+    ticket.status === 'open' ||
+    ticket.status === 'triaged' ||
+    ticket.status === 'assigned' ||
+    ticket.status === 'in_progress' ||
+    ticket.status === 'waiting_tenant' ||
+    ticket.status === 'waiting_owner'
+  const isReporter = ticket.reported_by !== null && ticket.reported_by === session?.userId
 
   const [body, setBody] = useState('')
   const [internal, setInternal] = useState(false)
@@ -254,6 +316,15 @@ function ThreadCard({ ticketId }: { ticketId: string }) {
     <Card>
       <CardHeader>
         <CardTitle>{t.ticket.thread}</CardTitle>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void query.refetch()}
+          disabled={query.isFetching}
+        >
+          <RefreshCw aria-hidden className={query.isFetching ? 'animate-spin' : undefined} />
+          {query.isFetching ? t.state.loadingTitle : t.ticket.threadRefresh}
+        </Button>
       </CardHeader>
 
       <Async
@@ -276,56 +347,91 @@ function ThreadCard({ ticketId }: { ticketId: string }) {
         fetchNextPage={() => void query.fetchNextPage()}
       />
 
-      <CardBody className="border-t border-border-subtle">
-        <form
-          noValidate
-          className="flex flex-col gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setSubmitted(true)
-            if (body.trim() === '') return
-            send.mutate()
-          }}
-        >
-          <InlineError error={send.error} />
+      {working ? (
+        <CardBody className="border-t border-border-subtle">
+          <form
+            noValidate
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setSubmitted(true)
+              if (body.trim() === '') return
+              send.mutate()
+            }}
+          >
+            <InlineError error={send.error} />
 
-          <Field label={t.ticket.message} hint={t.ticket.messageIsFinal} error={bodyError} required>
-            {(props) => (
-              <Textarea
-                {...props}
-                rows={3}
-                placeholder={t.ticket.messagePlaceholder}
-                value={body}
-                onChange={(event) => setBody(event.target.value)}
-              />
-            )}
-          </Field>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {isStaff ? (
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="size-4"
-                  checked={internal}
-                  onChange={(event) => setInternal(event.target.checked)}
+            <Field
+              label={t.ticket.message}
+              hint={t.ticket.messageIsFinal}
+              error={bodyError}
+              required
+            >
+              {(props) => (
+                <Textarea
+                  {...props}
+                  rows={3}
+                  placeholder={t.ticket.messagePlaceholder}
+                  value={body}
+                  onChange={(event) => setBody(event.target.value)}
                 />
-                <span>
-                  {t.ticket.internalNote}
-                  <span className="block text-xs text-ink-muted">{t.ticket.internalNoteHint}</span>
-                </span>
-              </label>
-            ) : (
-              <span />
-            )}
-            <Button type="submit" variant="primary" disabled={send.isPending}>
-              <Send aria-hidden />
-              {send.isPending ? t.common.saving : t.ticket.send}
-            </Button>
-          </div>
-        </form>
-      </CardBody>
+              )}
+            </Field>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {isStaff ? (
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4"
+                    checked={internal}
+                    onChange={(event) => setInternal(event.target.checked)}
+                  />
+                  <span>
+                    {t.ticket.internalNote}
+                    <span className="block text-xs text-ink-muted">{t.ticket.internalNoteHint}</span>
+                  </span>
+                </label>
+              ) : (
+                <span />
+              )}
+              <Button type="submit" variant="primary" disabled={send.isPending}>
+                <Send aria-hidden />
+                {send.isPending ? t.common.saving : t.ticket.send}
+              </Button>
+            </div>
+          </form>
+        </CardBody>
+      ) : (
+        <CardBody className="border-t border-border-subtle">
+          <p className="text-sm font-medium text-ink">{t.ticket.threadClosed}</p>
+          <p className="mt-1 text-sm text-ink-muted">
+            {isReporter || isStaff ? t.ticket.threadClosedHintReporter : t.ticket.threadClosedHint}
+          </p>
+        </CardBody>
+      )}
     </Card>
+  )
+}
+
+/**
+ * *Proprietario · Mario Rossi*.
+ *
+ * Il ruolo **e** il nome, non l'uno al posto dell'altro: il ruolo dice da che
+ * parte del rapporto sta chi scrive — «me lo dice il proprietario o un
+ * coinquilino?» — e il nome dice chi è, che in un co-living il ruolo non
+ * distingue, perché due coinquilini sono tutti e due *Inquilino*.
+ *
+ * Il nome può mancare quando `users_select` non concede quella riga a chi guarda:
+ * allora un'etichetta neutra dal catalogo, **mai l'identificatore**.
+ */
+function Person({ kind, name }: { kind: TicketActor; name?: string | undefined }) {
+  return (
+    <>
+      <span className="font-medium text-ink">{t.ticket.actors[kind]}</span>
+      <span aria-hidden>·</span>
+      <span className="text-ink">{name ?? t.ticket.personUnknown}</span>
+    </>
   )
 }
 
@@ -339,7 +445,7 @@ function MessageRow({ message }: { message: TicketMessage }) {
       }
     >
       <p className="flex flex-wrap items-baseline gap-x-2 text-xs text-ink-muted">
-        <span className="font-medium text-ink">{t.ticket.actors[message.author_kind]}</span>
+        <Person kind={message.author_kind} name={message.author_name} />
         <span className="font-numeric">{formatDateTime(message.created_at)}</span>
         {message.is_internal ? (
           <span className="font-medium text-warning">{t.ticket.internalNote}</span>

@@ -16,8 +16,21 @@ pub enum Entity {
     Room,
     #[error("Lease not found")]
     Lease,
+    /// Una parte contrattuale che non esiste, o che chi guarda non vede. Ha un
+    /// codice suo e non quello del contratto: chi corregge una quota sta agendo su
+    /// una riga precisa, e dirgli «contratto non trovato» manderebbe a cercare
+    /// nel posto sbagliato.
+    #[error("Lease party not found")]
+    LeaseParty,
     #[error("Invitation not found")]
     Invitation,
+    /// Un'appartenenza che non esiste: si è chiesto di uscire da
+    /// un'organizzazione di cui non si è membri. Ha un codice suo e non quello
+    /// dell'organizzazione perché a mancare è la **relazione**, non l'ente — e
+    /// l'ente, per [ADR-036](../../docs/08-decisioni.md), non si proietta per
+    /// identificatore a chi non vi appartiene.
+    #[error("Membership not found")]
+    Membership,
     #[error("Document not found")]
     Document,
     #[error("Ticket not found")]
@@ -47,7 +60,9 @@ impl Entity {
             Self::Property => "property.not_found",
             Self::Room => "room.not_found",
             Self::Lease => "lease.not_found",
+            Self::LeaseParty => "lease.party_not_found",
             Self::Invitation => "invitation.not_found",
+            Self::Membership => "membership.not_found",
             Self::Document => "document.not_found",
             Self::Ticket => "ticket.not_found",
             Self::UtilityBill => "utility_bill.not_found",
@@ -117,6 +132,18 @@ pub enum Denial {
     /// aperto. Lo staff può, perché è chi amministra.
     #[error("Only staff can remove someone else from an expense group")]
     GroupMembershipNotYours,
+    /// Una spesa la annulla chi l'ha registrata, chi l'ha anticipata, o lo staff.
+    ///
+    /// **Qui la Row Level Security è più larga**: la `USING` di `expenses_update`
+    /// ammette qualunque membro attivo del gruppo — verificato eseguendo, e non
+    /// «chi l'ha registrata o lo staff» come il piano della sezione 7 diceva.
+    /// Questo è quindi un confine del **contratto dell'API** e non di sicurezza,
+    /// come `LeaveGroup` prima della `0029`: un coinquilino non deve poter far
+    /// sparire dai saldi una spesa che non ha né scritto né anticipato. Chi ha
+    /// anticipato entra perché è il suo credito che la riga afferma, e chi l'ha
+    /// registrata potrebbe essere uscito dal gruppo.
+    #[error("Only whoever recorded or paid an expense, or staff, can cancel it")]
+    ExpenseNotYours,
 
     // Da qui in giù: mai in risposta, solo nei log.
     #[error("The account is not active")]
@@ -147,6 +174,7 @@ impl Denial {
             Self::SettlementNotAddressedToYou => "settlement.not_addressed_to_you",
             Self::SettlementNotDeclaredByYou => "settlement.not_declared_by_you",
             Self::GroupMembershipNotYours => "expense_group.membership_not_yours",
+            Self::ExpenseNotYours => "expense.not_yours",
             Self::AccountInactive => "account.inactive",
             Self::AccountLocked => "account.locked",
             Self::NoLocalCredentials => "account.no_local_credentials",
@@ -182,15 +210,30 @@ pub enum Invariant {
     LeaseNotCancellable,
     #[error("This lease party is already linked to another user")]
     LeasePartyAlreadyLinked,
+    #[error("The email of a party already linked to a user cannot be changed")]
+    LeasePartyEmailLocked,
+    #[error("A party linked to a user cannot be removed, only marked as left")]
+    LeasePartyHasUser,
     #[error("The lease has no tenant among its parties")]
     LeaseWithoutTenantParty,
     #[error("Tenant shares add up to {total} instead of 100")]
     LeaseSharesNotHundred { total: Decimal },
+    #[error("A tenant with a zero share is a leftover row, not a tenant")]
+    LeaseTenantWithoutShare,
+    #[error("Parties can only be added while the lease is a draft or awaiting signature")]
+    LeasePartiesLocked,
 
     #[error("The invitation has already been accepted")]
     InvitationAlreadyAccepted,
     #[error("An invitation that was already accepted cannot be revoked")]
     AcceptedInvitationCannotBeRevoked,
+    /// Un invito da proprietario già accettato. Codice **proprio** e non
+    /// `invitation.already_accepted`: sono due tabelle e due aggregati diversi
+    /// (ADR-053), e il caso d'uso che lo produce lo appiattisce comunque su
+    /// `401 auth.invalid_credentials` insieme a scaduto e revocato — la
+    /// distinzione resta perché il tipo la richiede e perché nei log serve.
+    #[error("The owner invitation has already been accepted")]
+    OwnerInvitationAlreadyAccepted,
 
     #[error("The document is already archived")]
     DocumentArchived,
@@ -211,6 +254,18 @@ pub enum Invariant {
     TicketNotCancellable,
     #[error("A cancelled ticket cannot be modified")]
     TicketCancelled,
+    /// Il thread di una segnalazione terminata non riceve messaggi.
+    ///
+    /// Codice proprio e non `ticket.invalid_transition`, perché **non è una
+    /// transizione rifiutata**: nessuno stava chiedendo di muovere la
+    /// segnalazione. E non è `ticket.cancelled`, che vale solo per l'annullata,
+    /// mentre qui i casi sono tre — `closed`, `cancelled` e `resolved`, che
+    /// l'applicazione non scrive ma una riga può contenere.
+    ///
+    /// Il rimedio è preciso e diverso da entrambi: **riaprire**, che chiede il
+    /// motivo e lo scrive come primo messaggio del giro nuovo (ADR-050).
+    #[error("A ticket that is no longer being handled does not take messages")]
+    TicketThreadClosed,
 
     #[error("Only a draft or a validated bill can be corrected")]
     UtilityBillNotEditable,
@@ -226,6 +281,11 @@ pub enum Invariant {
     UtilityBillNotValidatable,
     #[error("Only a validated or already allocated bill can be recharged")]
     UtilityBillNotAllocatable,
+    /// In bozza o in revisione i numeri non li ha confermati nessuno: dichiarare
+    /// pagato un importo che può ancora cambiare registra un fatto su un dato
+    /// provvisorio.
+    #[error("Only a validated or allocated bill can be declared paid")]
+    UtilityBillNotPayable,
     /// Da `allocated` in poi la bolletta è la base di un addebito già emesso:
     /// farla sparire lascerebbe quell'addebito a citare una riga invisibile.
     #[error("A bill that has already been recharged cannot be voided")]
@@ -247,6 +307,11 @@ pub enum Invariant {
 
     #[error("An archived expense group cannot be modified")]
     ExpenseGroupArchived,
+    /// La spesa è già annullata. In pratica non si raggiunge dall'API — una
+    /// spesa annullata non si legge più, e la seconda richiesta trova `404` —
+    /// ma l'aggregato deve poterlo dire a chi lo costruisce a mano.
+    #[error("The expense is already cancelled")]
+    ExpenseCancelled,
     #[error("This person has already left the group")]
     GroupMemberAlreadyLeft,
     #[error("This person is already an active member of the group")]
@@ -272,6 +337,33 @@ pub enum Invariant {
     #[error("Only a running job can be finished")]
     AiJobNotFinishable,
 
+    /// Si è già usciti da quell'organizzazione.
+    ///
+    /// La riga resta — uscire è uno **stato** e non un soft delete — quindi il
+    /// caso è osservabile e merita un messaggio invece di un secondo `200` muto.
+    #[error("You have already left this organization")]
+    MembershipAlreadyLeft,
+    /// Non si esce da un'organizzazione in cui si ha un contratto in essere.
+    ///
+    /// **La Row Level Security dice la stessa cosa**, dalla migration `0039`: la
+    /// `WITH CHECK` di `org_members_update_self` ammette l'uscita solo se
+    /// `app.has_lease_in_force` è falsa. Questo codice è la versione parlante di un
+    /// rifiuto che la policy darebbe comunque — e serve perché la policy da sola
+    /// risponderebbe `auth.denied_by_policy`, che significa «difetto nostro». È la
+    /// stessa forma di [`Denial::GroupMembershipNotYours`] sulle spese co-living.
+    #[error("You are still party to a lease in force in this organization")]
+    MembershipHasLeaseInForce,
+    /// L'ultimo proprietario non se ne va.
+    ///
+    /// Lo schema dichiara «almeno un owner per org» come invariante **del service
+    /// layer** — un trigger cross-row sarebbe workflow nel database — e questo è
+    /// il posto in cui vive. Senza, uscire dalla propria organizzazione personale
+    /// la lascerebbe senza nessuno che la amministri: gli immobili, i contratti e
+    /// gli addebiti resterebbero in una riga che `organizations_select` non mostra
+    /// più a nessuno, e non c'è nessuna operazione del prodotto per rientrarci.
+    #[error("The last owner of an organization cannot leave it")]
+    LastOwnerCannotLeave,
+
     #[error("Refresh token already rotated: possible reuse, revoke the chain")]
     RefreshTokenReused,
 }
@@ -289,11 +381,16 @@ impl Invariant {
                 "lease.invalid_transition"
             }
             Self::LeasePartyAlreadyLinked => "lease.party_already_linked",
+            Self::LeasePartyEmailLocked => "lease.party_email_locked",
+            Self::LeasePartyHasUser => "lease.party_has_user",
             Self::LeaseWithoutTenantParty => "lease.no_tenant_party",
             Self::LeaseSharesNotHundred { .. } => "lease.shares_not_hundred",
+            Self::LeaseTenantWithoutShare => "lease.tenant_without_share",
+            Self::LeasePartiesLocked => "lease.parties_locked",
             Self::InvitationAlreadyAccepted | Self::AcceptedInvitationCannotBeRevoked => {
                 "invitation.already_accepted"
             }
+            Self::OwnerInvitationAlreadyAccepted => "owner_invitation.already_accepted",
             Self::DocumentArchived => "document.archived",
             // Sette varianti, un codice: il rimedio è lo stesso — rileggere lo
             // stato attuale e chiedere una transizione ammessa — e le tre
@@ -307,6 +404,7 @@ impl Invariant {
             | Self::TicketNotReopenable
             | Self::TicketNotCancellable => "ticket.invalid_transition",
             Self::TicketCancelled => "ticket.cancelled",
+            Self::TicketThreadClosed => "ticket.thread_closed",
             // Stesso trattamento delle transizioni di contratto e di
             // segnalazione: il rimedio è lo stesso — rileggere lo stato attuale e
             // chiedere una transizione ammessa — e i due aggregati restano
@@ -314,6 +412,7 @@ impl Invariant {
             Self::UtilityBillNotEditable
             | Self::UtilityBillNotValidatable
             | Self::UtilityBillNotAllocatable
+            | Self::UtilityBillNotPayable
             | Self::UtilityBillNotVoidable
             | Self::UtilityBillNotReviewable => "utility_bill.invalid_transition",
             Self::ChargeNotVoidable | Self::ChargeNotWriteOffable | Self::ChargeNotPayable => {
@@ -328,6 +427,7 @@ impl Invariant {
                 "payment.invalid_transition"
             }
             Self::ExpenseGroupArchived => "expense_group.archived",
+            Self::ExpenseCancelled => "expense.cancelled",
             // Le due membership condividono un codice: il rimedio è lo stesso,
             // rileggere la composizione del gruppo. Sono varianti distinte perché
             // il messaggio non lo è — «è già uscito» e «c'è già» mandano la
@@ -349,6 +449,12 @@ impl Invariant {
             // che comparisse in una risposta HTTP sarebbe il segnale che qualcuno
             // ha esposto il ciclo del job come se fosse un comando.
             Self::AiJobNotStartable | Self::AiJobNotFinishable => "ai_job.invalid_transition",
+            // Due codici distinti e non uno: «sei già uscito» e «sei l'ultimo
+            // proprietario» mandano a fare due cose opposte — la prima non chiede
+            // niente, la seconda chiede di nominare qualcun altro prima.
+            Self::MembershipAlreadyLeft => "membership.already_left",
+            Self::MembershipHasLeaseInForce => "membership.lease_in_force",
+            Self::LastOwnerCannotLeave => "membership.last_owner",
             Self::RefreshTokenReused => "session.refresh_token_reused",
         }
     }
@@ -441,6 +547,7 @@ mod tests {
             Denial::SettlementNotAddressedToYou.code(),
             Denial::SettlementNotDeclaredByYou.code(),
             Denial::GroupMembershipNotYours.code(),
+            Denial::ExpenseNotYours.code(),
             Denial::AccountInactive.code(),
             Denial::AccountLocked.code(),
             Denial::NoLocalCredentials.code(),
@@ -459,6 +566,7 @@ mod tests {
             }
             .code(),
             Invariant::InvitationAlreadyAccepted.code(),
+            Invariant::OwnerInvitationAlreadyAccepted.code(),
             Invariant::DocumentArchived.code(),
             Invariant::TicketNotTriageable.code(),
             Invariant::TicketNotAssignable.code(),
@@ -468,6 +576,7 @@ mod tests {
             Invariant::TicketNotReopenable.code(),
             Invariant::TicketNotCancellable.code(),
             Invariant::TicketCancelled.code(),
+            Invariant::TicketThreadClosed.code(),
             Invariant::UtilityBillNotEditable.code(),
             Invariant::UtilityBillNotValidatable.code(),
             Invariant::UtilityBillNotAllocatable.code(),
@@ -478,6 +587,7 @@ mod tests {
             Invariant::PaymentNotConfirmable.code(),
             Invariant::PaymentNotRejectable.code(),
             Invariant::ExpenseGroupArchived.code(),
+            Invariant::ExpenseCancelled.code(),
             Invariant::GroupMemberAlreadyLeft.code(),
             Invariant::GroupMemberAlreadyIn.code(),
             Invariant::ExpensePayerNotInGroup.code(),
@@ -522,6 +632,16 @@ mod tests {
         );
     }
 
+    /// L'invito da proprietario ha una tabella e un aggregato suoi: un codice
+    /// condiviso con l'invito da inquilino direbbe che sono la stessa cosa.
+    #[test]
+    fn owner_invitation_already_accepted_has_its_own_code() {
+        assert_ne!(
+            Invariant::OwnerInvitationAlreadyAccepted.code(),
+            Invariant::InvitationAlreadyAccepted.code()
+        );
+    }
+
     /// Le sette transizioni di segnalazione condividono un codice per la stessa
     /// ragione delle tre di contratto: il rimedio non cambia. `TicketCancelled`
     /// invece **non** lo condivide, perché non è una transizione rifiutata ma una
@@ -543,6 +663,17 @@ mod tests {
         assert_ne!(
             Invariant::TicketCancelled.code(),
             Invariant::TicketNotClosable.code()
+        );
+        // Nemmeno il thread chiuso lo condivide, e per una ragione ulteriore: non
+        // è una transizione rifiutata, perché nessuno stava chiedendo di muovere
+        // la segnalazione. Il rimedio è riaprire, e va detto con un codice suo.
+        assert_ne!(
+            Invariant::TicketThreadClosed.code(),
+            Invariant::TicketNotClosable.code()
+        );
+        assert_ne!(
+            Invariant::TicketThreadClosed.code(),
+            Invariant::TicketCancelled.code()
         );
     }
 

@@ -53,8 +53,11 @@ export function ConfirmAction({
           <InlineError error={error} />
           {children}
           <div className="flex justify-end gap-2">
+            {/* «Lascia com'è» e non «Annulla»: il verbo di destra può essere
+                proprio «Annulla», e due bottoni uguali con effetti opposti sono
+                una domanda a cui si risponde a caso. */}
             <Button onClick={() => setOpen(false)} disabled={busy}>
-              {t.common.cancel}
+              {t.common.keep}
             </Button>
             <Button
               variant={variant}

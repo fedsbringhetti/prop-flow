@@ -1,30 +1,35 @@
 use std::sync::Arc;
 
 use propflow_application::ports::{
-    ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
+    Notifier, ObjectStorage, OpaqueTokenFactory, PasswordHasher, RefreshTokenFactory, TokenIssuer,
 };
+use propflow_application::use_cases::account::{ChangeMyPassword, GetMyAccount, UpdateMyProfile};
 use propflow_application::use_cases::ai::GetBillOcrStatus;
-use propflow_application::use_cases::auth::{Login, Logout, RefreshSessionUseCase, RegisterOwner};
+use propflow_application::use_cases::auth::{
+    AcceptOwnerInvitation, ConfirmPasswordReset, Login, Logout, RefreshSessionUseCase,
+    RegisterTenantFromInvitation, RequestPasswordReset,
+};
 use propflow_application::use_cases::billing::{
-    GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, RechargeUtilityBill,
-    RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge, VoidUtilityBill,
-    WriteOffCharge,
+    GetCharge, GetUtilityBill, IssueCharge, ListCharges, ListUtilityBills, MarkUtilityBillPaid,
+    RechargeUtilityBill, RegisterUtilityBill, UpdateUtilityBill, ValidateUtilityBill, VoidCharge,
+    VoidUtilityBill, WriteOffCharge,
 };
 use propflow_application::use_cases::document::{
     ArchiveDocument, DownloadDocument, ListDocuments, UploadDocument,
 };
 use propflow_application::use_cases::expense::{
-    AddGroupMember, ArchiveExpenseGroup, CancelSettlement, ConfirmSettlement, CreateExpenseGroup,
-    DeclareSettlement, GetExpense, GetExpenseGroup, GetGroupBalances, LeaveGroup,
-    ListExpenseGroups, ListExpenses, ListSettlements, RecordExpense, RejectSettlement,
+    AddGroupMember, ArchiveExpenseGroup, CancelExpense, CancelSettlement, ConfirmSettlement,
+    CreateExpenseGroup, DeclareSettlement, GetExpense, GetExpenseGroup, GetGroupBalances,
+    LeaveGroup, ListExpenseGroups, ListExpenses, ListSettlements, RecordExpense, RejectSettlement,
 };
 use propflow_application::use_cases::invitation::{
     AcceptInvitation, InviteTenant, RevokeInvitation,
 };
 use propflow_application::use_cases::lease::{
-    ActivateLease, AddLeaseParty, DraftLease, GetLease, ListLeases, TerminateLease,
+    ActivateLease, AddLeaseParty, CancelLease, CorrectLeaseParty, DraftLease, GetLease, ListLeases,
+    RemoveLeaseParty, TerminateLease,
 };
-use propflow_application::use_cases::organization::ListOrganizations;
+use propflow_application::use_cases::organization::{LeaveOrganization, ListOrganizations};
 use propflow_application::use_cases::payment::{
     ConfirmPayment, DeclarePayment, GetPayment, ListPayments, RecordPayment, RejectPayment,
 };
@@ -35,9 +40,9 @@ use propflow_application::use_cases::property::{
 use propflow_application::use_cases::reporting::GetOwnerDashboard;
 use propflow_application::use_cases::room::{ArchiveRoom, CreateRoom, ListRooms, UpdateRoom};
 use propflow_application::use_cases::ticket::{
-    AssignTicket, CancelTicket, CloseTicket, GetTicket, ListTicketMessages, ListTickets,
-    OpenTicket, PostTicketMessage, ReopenTicket, StartTicketWork, SuspendTicket, TriageTicket,
-    UpdateTicketCosts,
+    AssignTicket, CancelTicket, CloseTicket, CorrectTicketReport, GetTicket, ListTicketMessages,
+    ListTickets, OpenTicket, PostTicketMessage, ReopenTicket, StartTicketWork, SuspendTicket,
+    TriageTicket, UpdateTicketCosts,
 };
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_infrastructure::DatabasePools;
@@ -49,14 +54,34 @@ use propflow_infrastructure::DatabasePools;
 /// di aggirare il service layer e la Row Level Security.
 #[derive(Clone)]
 pub struct AppState {
-    pub register_owner: Arc<RegisterOwner>,
+    /// Le due rotte da invito di ADR-053: `F6` ha chiuso `POST /auth/register`,
+    /// quindi sono l'unico modo di registrarsi che resta.
+    pub accept_owner_invitation: Arc<AcceptOwnerInvitation>,
+    pub register_tenant_from_invitation: Arc<RegisterTenantFromInvitation>,
     pub login: Arc<Login>,
     pub refresh_session: Arc<RefreshSessionUseCase>,
     pub logout: Arc<Logout>,
+    /// Le due rotte del recupero della password: girano sul pool privilegiato,
+    /// perché chi ha dimenticato la password non è autenticato (ADR-052).
+    pub request_password_reset: Arc<RequestPasswordReset>,
+    pub confirm_password_reset: Arc<ConfirmPasswordReset>,
 
-    /// L'unica rotta che risponde **senza un'organizzazione attiva**: dire quali
-    /// si hanno non appartiene a nessuna di esse.
+    /// Le tre rotte che rispondono **senza un'organizzazione attiva**: dire quali
+    /// si hanno, e leggere o correggere i propri dati, non appartiene a nessuna di
+    /// esse. Pretendere `X-Org-Id` romperebbe proprio il caso in cui servono — chi
+    /// è appena uscito dall'unica in cui abitava.
     pub list_organizations: Arc<ListOrganizations>,
+    /// **Nessuna delle tre prende un identificatore di utente**, ed è la forma che
+    /// tiene chiusa la domanda di ADR-036: chi si legge viene dal token.
+    pub get_my_account: Arc<GetMyAccount>,
+    pub update_my_profile: Arc<UpdateMyProfile>,
+    /// Pretende la password corrente e revoca **tutte** le sessioni, per
+    /// uniformità con il recupero (ADR-052): due regole diverse per due percorsi
+    /// che una persona non distingue divergono alla prima modifica.
+    pub change_my_password: Arc<ChangeMyPassword>,
+    /// Uscire da un'organizzazione. `status = 'left'` e non un soft delete: la
+    /// riga resta, ed è ciò che permette di rientrare accettando un invito nuovo.
+    pub leave_organization: Arc<LeaveOrganization>,
 
     /// La sola lettura che attraversa tutti i moduli insieme, ed è per questo la
     /// prima superficie in cui si vedrebbe un errore di integrazione fra le fette.
@@ -80,6 +105,9 @@ pub struct AppState {
     pub add_lease_party: Arc<AddLeaseParty>,
     pub activate_lease: Arc<ActivateLease>,
     pub terminate_lease: Arc<TerminateLease>,
+    pub cancel_lease: Arc<CancelLease>,
+    pub correct_lease_party: Arc<CorrectLeaseParty>,
+    pub remove_lease_party: Arc<RemoveLeaseParty>,
 
     pub upload_document: Arc<UploadDocument>,
     pub list_documents: Arc<ListDocuments>,
@@ -90,6 +118,11 @@ pub struct AppState {
     pub get_ticket: Arc<GetTicket>,
     pub list_tickets: Arc<ListTickets>,
     pub update_ticket_costs: Arc<UpdateTicketCosts>,
+    /// La correzione del testo è **un caso d'uso a sé** e non un ramo di
+    /// `UpdateTicketCosts`: le due hanno autorizzazioni diverse — i costi allo
+    /// staff, il testo anche a chi ha segnalato finché è aperta — e un'unica rotta
+    /// che scegliesse in base ai campi presenti nel corpo sbaglierebbe in silenzio.
+    pub correct_ticket_report: Arc<CorrectTicketReport>,
     pub post_ticket_message: Arc<PostTicketMessage>,
     pub list_ticket_messages: Arc<ListTicketMessages>,
     /// Una transizione per caso d'uso: ognuna autorizza in modo proprio — la
@@ -110,6 +143,7 @@ pub struct AppState {
     pub update_utility_bill: Arc<UpdateUtilityBill>,
     pub validate_utility_bill: Arc<ValidateUtilityBill>,
     pub void_utility_bill: Arc<VoidUtilityBill>,
+    pub mark_utility_bill_paid: Arc<MarkUtilityBillPaid>,
     /// Il riaddebito è l'**unica** via per cui una bolletta e un addebito si
     /// legano: `POST /leases/{id}/charges` non accetta `utility_bill_id`.
     pub recharge_utility_bill: Arc<RechargeUtilityBill>,
@@ -153,6 +187,9 @@ pub struct AppState {
     pub record_expense: Arc<RecordExpense>,
     pub get_expense: Arc<GetExpense>,
     pub list_expenses: Arc<ListExpenses>,
+    /// L'annullamento è il soft delete, ed **esce dai saldi da sola**: la `0028`
+    /// concede `deleted_at` per questo, e la vista lo filtra dalla `0027`.
+    pub cancel_expense: Arc<CancelExpense>,
     /// I saldi si **leggono** dalla vista e non si ricalcolano: due definizioni
     /// dello stesso numero si contraddicono al primo caso limite.
     pub get_group_balances: Arc<GetGroupBalances>,
@@ -180,8 +217,13 @@ pub struct AppState {
     /// Serve al middleware per risolvere il ruolo quando il client cambia
     /// organizzazione con l'header `X-Org-Id`.
     pub unit_of_work: Arc<dyn UnitOfWorkFactory>,
-    /// Usato solo dall'endpoint di prontezza.
+    /// Usati dall'endpoint di prontezza.
+    ///
+    /// Il canale di posta ci sta accanto al database e non per completezza: l'invio
+    /// è best-effort dopo il commit, quindi un relay caduto è **muto** — e la posta
+    /// è l'unica via verso chi non riesce più a entrare. Vedi `Notifier::probe`.
     pub pools: DatabasePools,
+    pub notifier: Arc<dyn Notifier>,
     /// Se il cookie del refresh token debba dichiarare `Secure`.
     ///
     /// Vive nello stato e non nella firma di `router()` perché a leggerlo sono gli
@@ -200,6 +242,11 @@ pub struct Dependencies {
     pub invitation_tokens: Arc<dyn OpaqueTokenFactory>,
     pub clock: Arc<dyn propflow_domain::ports::Clock>,
     pub object_storage: Arc<dyn ObjectStorage>,
+    /// Il canale verso l'esterno. **Obbligatorio**, non facoltativo: da quando
+    /// esiste il recupero della password è l'unica via verso chi è chiuso fuori dal
+    /// proprio account, e un `Notifier` assente produrrebbe una richiesta che
+    /// risponde `202` senza mandare niente.
+    pub notifier: Arc<dyn Notifier>,
     /// Vita dell'URL di download pre-firmato. Vive qui e non dentro l'adattatore
     /// perché è una decisione applicativa — quanto a lungo vale un permesso — e non
     /// un dettaglio del fornitore.
@@ -231,6 +278,7 @@ impl AppState {
             invitation_tokens,
             clock,
             object_storage,
+            notifier,
             presign_ttl_seconds,
             ocr_provider_name,
             pools,
@@ -238,14 +286,25 @@ impl AppState {
         } = dependencies;
 
         Self {
-            register_owner: Arc::new(RegisterOwner::new(
+            accept_owner_invitation: Arc::new(AcceptOwnerInvitation::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&hasher),
+                Arc::clone(&tokens),
+                Arc::clone(&refresh_tokens),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&clock),
+            )),
+            register_tenant_from_invitation: Arc::new(RegisterTenantFromInvitation::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&hasher),
+                Arc::clone(&tokens),
+                Arc::clone(&refresh_tokens),
+                Arc::clone(&invitation_tokens),
                 Arc::clone(&clock),
             )),
             login: Arc::new(Login::new(
                 Arc::clone(&unit_of_work),
-                hasher,
+                Arc::clone(&hasher),
                 Arc::clone(&tokens),
                 Arc::clone(&refresh_tokens),
                 Arc::clone(&clock),
@@ -262,6 +321,20 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             list_organizations: Arc::new(ListOrganizations::new(Arc::clone(&unit_of_work))),
+            get_my_account: Arc::new(GetMyAccount::new(Arc::clone(&unit_of_work))),
+            update_my_profile: Arc::new(UpdateMyProfile::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            change_my_password: Arc::new(ChangeMyPassword::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&hasher),
+                Arc::clone(&clock),
+            )),
+            leave_organization: Arc::new(LeaveOrganization::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
             owner_dashboard: Arc::new(GetOwnerDashboard::new(Arc::clone(&unit_of_work))),
             create_property: Arc::new(CreateProperty::new(
                 Arc::clone(&unit_of_work),
@@ -314,6 +387,18 @@ impl AppState {
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
+            cancel_lease: Arc::new(CancelLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            correct_lease_party: Arc::new(CorrectLeaseParty::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            remove_lease_party: Arc::new(RemoveLeaseParty::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
             upload_document: Arc::new(UploadDocument::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&object_storage),
@@ -337,6 +422,10 @@ impl AppState {
             get_ticket: Arc::new(GetTicket::new(Arc::clone(&unit_of_work))),
             list_tickets: Arc::new(ListTickets::new(Arc::clone(&unit_of_work))),
             update_ticket_costs: Arc::new(UpdateTicketCosts::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            correct_ticket_report: Arc::new(CorrectTicketReport::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
@@ -388,6 +477,10 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             void_utility_bill: Arc::new(VoidUtilityBill::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
+            mark_utility_bill_paid: Arc::new(MarkUtilityBillPaid::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
             )),
@@ -452,6 +545,10 @@ impl AppState {
             )),
             get_expense: Arc::new(GetExpense::new(Arc::clone(&unit_of_work))),
             list_expenses: Arc::new(ListExpenses::new(Arc::clone(&unit_of_work))),
+            cancel_expense: Arc::new(CancelExpense::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&clock),
+            )),
             get_group_balances: Arc::new(GetGroupBalances::new(Arc::clone(&unit_of_work))),
             declare_settlement: Arc::new(DeclareSettlement::new(
                 Arc::clone(&unit_of_work),
@@ -470,10 +567,23 @@ impl AppState {
                 Arc::clone(&clock),
             )),
             list_settlements: Arc::new(ListSettlements::new(Arc::clone(&unit_of_work))),
+            request_password_reset: Arc::new(RequestPasswordReset::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&notifier),
+                Arc::clone(&clock),
+            )),
+            confirm_password_reset: Arc::new(ConfirmPasswordReset::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&hasher),
+                Arc::clone(&clock),
+            )),
             invite_tenant: Arc::new(InviteTenant::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&invitation_tokens),
                 Arc::clone(&clock),
+                Arc::clone(&notifier),
             )),
             revoke_invitation: Arc::new(RevokeInvitation::new(
                 Arc::clone(&unit_of_work),
@@ -487,6 +597,7 @@ impl AppState {
             tokens,
             clock,
             unit_of_work,
+            notifier,
             pools,
             secure_cookies,
         }

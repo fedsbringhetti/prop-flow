@@ -128,13 +128,29 @@ SELECT 'bookkeeping-migration-duplicato', format('%s._sqlx_migrations', n.nspnam
 --     scrittura a un non membro, e il `WITH CHECK` vincola solo le colonne che
 --     nomina: se `org_id` o `lease_id` tornassero scrivibili, un invito potrebbe
 --     essere ripuntato altrove. Vedi migrations/0019 e ADR-021.
+--
+--     Per l'**utente** il confine non è l'organizzazione, è più largo:
+--     `platform_role` decide se `app.is_platform_admin()` sia vera, e quella
+--     funzione rende `is_org_member` e `is_org_staff` vere su **ogni**
+--     organizzazione. `status` decide se l'account possa autenticarsi. Sono le due
+--     colonne che dicono *che cosa si vede*, e `users_update_self` ha una
+--     `WITH CHECK` che nomina la sola identità della riga. Vedi migrations/0038.
+--
+--     `role` di `org_members` sta qui per la stessa ragione vista da vicino: dalla
+--     migration `0039` un membro può scrivere la **propria** riga per uscire, e una
+--     policy non può confrontare la riga vecchia con la nuova — senza il privilegio,
+--     uscire e promuoversi a `owner` sarebbero la stessa `UPDATE`. `org_id` e
+--     `user_id` sono l'identità della riga, come nella `0029`.
 INSERT INTO invariant_violations
 SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
   FROM (
     VALUES ('org_invitations', 'org_id'),   ('org_invitations', 'email'),
            ('org_invitations', 'role'),     ('org_invitations', 'token_hash'),
            ('org_invitations', 'lease_id'), ('org_invitations', 'expires_at'),
-           ('lease_parties',   'org_id'),   ('lease_parties',   'lease_id')
+           ('lease_parties',   'org_id'),   ('lease_parties',   'lease_id'),
+           ('users',           'platform_role'), ('users', 'status'),
+           ('org_members',     'org_id'),   ('org_members', 'user_id'),
+           ('org_members',     'role')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');
@@ -167,6 +183,14 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     solo `org_id`. Una segnalazione aperta sull'immobile sbagliato si annulla e
 --     si riapre, non si sposta.
 --
+--     **`title` e `description` erano in questo elenco e non ci sono più**, ed è
+--     una revoca deliberata e non una riga persa: la migration `0036` le
+--     riconcede perché correggere un refuso è un motivo legittimo di cambiare, e
+--     ADR-048 emenda ADR-026 su quelle due colonne sole. Il criterio non è
+--     cambiato — «una colonna che non ha un motivo legittimo di cambiare» — è
+--     cambiato il fatto. Le altre sei restano, e per loro «si annulla e si
+--     riapre» è ancora l'unica via.
+--
 --     Per gli **addebiti**: la `WITH CHECK` di `charges_update` ha lo stesso
 --     difetto, e qui l'elenco è quasi la tabella intera perché un addebito è una
 --     **pretesa verso una persona** — riscriverne l'importo dopo averlo comunicato
@@ -185,16 +209,41 @@ SELECT 'colonna-di-confine-scrivibile', format('%s.%s', t.tbl, t.col)
 --     `payments_idempotency_uk`, e liberarla apre a un secondo inserimento, cioè
 --     a un saldo che scende due volte. Vedi migrations/0025 e ADR-033.
 --
---     Un nome solo per quattro tabelle, e non un controllo per ciascuna: il
---     criterio è quello di ADR-026 in tutti i casi, e inventargli un nome nuovo
---     renderebbe illeggibile la ragione comune.
+--     Per l'**utente** l'elenco è ciò che una richiesta autenticata non ha motivo
+--     di scrivere di sé. `email` è la più cara e la meno ovvia: non è un dato
+--     anagrafico, è **la credenziale d'accesso** e la chiave con cui tre cose si
+--     ritrovano — `app.has_pending_invitation` unisce per email, quattro policy
+--     della `0018` poggiano su `app.current_user_email()`, e `lease_parties.email`
+--     è come l'accettazione trova la propria riga. Cambiarla senza verificare il
+--     nuovo indirizzo rompe tutte e tre **in silenzio**. Seguono
+--     `failed_login_count` e `locked_until`, che *sono* la difesa dal blocco dopo
+--     dieci tentativi: azzerarli a ogni tentativo rende la soglia irraggiungibile.
+--     `last_login_at` ed `email_verified_at` sono fatti registrati e non scelte, e
+--     `deleted_at` è la disattivazione dell'account. Le scrive tutte il pool
+--     privilegiato, che è dove quei flussi vivono. Vedi migrations/0038.
+--
+--     Per la **membership di un'organizzazione** `joined_at` resta invece
+--     **concessa**, come nella `0029` e per la stessa ragione: il rientro la
+--     riscrive, e lasciare la data vecchia direbbe che la persona è
+--     nell'organizzazione da prima di esserci tornata. Vedi migrations/0039.
+--
+--     Per gli **inviti da proprietario**: la tabella è di piattaforma e non ha un
+--     confine di organizzazione da difendere (il controllo 11 non la riguarda),
+--     ma le stesse cinque colonne di `org_invitations` — meno `org_id`, `role` e
+--     `lease_id`, che qui non esistono — non hanno un motivo legittimo di cambiare
+--     una volta emesso l'invito. Restano concesse solo `accepted_at` e
+--     `accepted_by`, che sono ciò che l'accettazione scrive. Vedi migrations/0040
+--     e ADR-053.
+--
+--     Un nome solo per otto tabelle, e non un controllo per ciascuna: il criterio è
+--     quello di ADR-026 in tutti i casi, e inventargli un nome nuovo renderebbe
+--     illeggibile la ragione comune.
 INSERT INTO invariant_violations
 SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
   FROM (
     VALUES ('tickets', 'property_id'), ('tickets', 'room_id'),
            ('tickets', 'lease_id'),    ('tickets', 'reported_by'),
            ('tickets', 'reported_by_kind'),
-           ('tickets', 'title'),       ('tickets', 'description'),
            ('tickets', 'reference'),   ('tickets', 'currency'),
            ('charges', 'lease_id'),        ('charges', 'charge_type'),
            ('charges', 'amount'),          ('charges', 'currency'),
@@ -216,7 +265,14 @@ SELECT 'colonna-strutturale-scrivibile', format('%s.%s', t.tbl, t.col)
            ('expenses', 'utility_bill_id'), ('expenses', 'document_id'),
            ('expense_group_members', 'org_id'),
            ('expense_group_members', 'group_id'),
-           ('expense_group_members', 'user_id')
+           ('expense_group_members', 'user_id'),
+           ('users', 'email'),              ('users', 'email_verified_at'),
+           ('users', 'last_login_at'),      ('users', 'failed_login_count'),
+           ('users', 'locked_until'),       ('users', 'deleted_at'),
+           ('org_members', 'invited_by'),   ('org_members', 'deleted_at'),
+           ('owner_invitations', 'email'),        ('owner_invitations', 'token_hash'),
+           ('owner_invitations', 'expires_at'),   ('owner_invitations', 'revoked_at'),
+           ('owner_invitations', 'created_at')
   ) AS t(tbl, col)
  WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'propflow_app')
    AND has_column_privilege('propflow_app', format('app.%I', t.tbl), t.col, 'UPDATE');

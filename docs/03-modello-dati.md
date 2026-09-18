@@ -127,6 +127,23 @@ un'organizzazione di cui l'utente non è membro e si aspetta zero righe.
 migration `0030` l'ha sostituita in `users_select`. Resta perché rimuoverla è un
 cambiamento a sé.
 
+`app.can_access_lease` e `app.can_access_property` chiedono, dalla migration `0041`,
+che l'inquilino sia **ancora membro** dell'organizzazione (`app.is_org_member`) oltre che
+parte del contratto. Uscire da un'organizzazione (`0039`) tocca `org_members` e non
+`lease_parties`, quindi senza quel termine chi è uscito continuava a leggere il
+contratto e l'immobile — e ad aprirvi segnalazioni, perché `tickets_insert` passa da
+`can_access_property` — per i quindici minuti del suo access token, che `middleware::context`
+non rilegge quando `X-Org-Id` coincide con l'organizzazione dei claim (ADR-012). Lo
+staff passava già da `member_role`; il ramo dell'inquilino era l'unico a non guardarla.
+
+`app.can_access_ticket` ha **cinque** rami dalla migration `0035`: al quarto — chi è
+parte del contratto indicato — se ne aggiunge uno per le segnalazioni dichiarate di
+interesse comune, che risponde a chi risulta residente dell'immobile secondo
+`app.property_residents`. Sta nella **funzione** e non in `tickets_select` perché quella
+funzione la consultano quattro policy — la riga, il thread, lo storico e gli allegati — e
+allargarne una sola darebbe una segnalazione che si apre e non si legge
+([ADR-047](08-decisioni.md#adr-047)).
+
 Sono `SECURITY DEFINER` per una ragione precisa: una policy che interroghi in linea
 una tabella a sua volta protetta da RLS ricorre su se stessa. Leggendo come
 *definer* — che è il proprietario delle tabelle, ed è esente dalle policy — la
@@ -276,6 +293,29 @@ risultato ha `left_at IS NULL`, cioè si può reintegrare qualcuno e non lo si p
 togliere. La `USING` resta larga, e deve restarlo — stringerla romperebbe il rientro, che
 è un `UPDATE` sulla riga di un altro.
 
+Su `users` le concesse sono quattro — `full_name`, `phone`, `locale`,
+`password_hash` — e sono esattamente ciò che una **richiesta autenticata** scrive di
+sé. La negata più cara è `platform_role`, e la catena vale la pena scriverla perché da
+una riga sola non si vede: `Login` la mette nei claim, il contesto installa
+`app.platform_admin = 'on'`, `app.is_platform_admin()` diventa vera, e con essa
+`is_org_member` e `is_org_staff` su **ogni** organizzazione. Seguono `status`, con cui
+ci si toglie una sospensione, e `failed_login_count` con `locked_until`, che *sono* la
+difesa dal blocco dopo dieci tentativi. `email` è negata benché il prodotto un giorno
+la cambierà: non è un dato anagrafico, è la credenziale d'accesso e la chiave con cui
+inviti pendenti, policy della `0018` e parti contrattuali si ritrovano.
+
+`users_update_self` esiste dalla `0014` con una `WITH CHECK` che nomina la **sola
+identità della riga**, quindi tutto il resto era libero. Non era sfruttabile
+dall'API — nessuna rotta scriveva quelle colonne — ed è la ragione per cui la
+migration `0038` arriva insieme a `/api/v1/me`, che è la **prima rotta che scrive
+`app.users` dal pool applicativo**.
+
+Su `org_members` le concesse sono due, `status` e `joined_at`, e la negata che conta è
+`role`: dalla `0039` un membro può scrivere la **propria** riga per uscire, e senza il
+privilegio uscire e promuoversi a `owner` sarebbero la stessa `UPDATE`. `joined_at` è
+concessa per la stessa ragione della `0029`: **il rientro la riscrive**, e lasciare la
+data vecchia direbbe che la persona è nell'organizzazione da prima di esserci tornata.
+
 **Su `utility_bills` lo strumento non si usa**, ed è la prima volta che il criterio di
 ADR-026 dà «no»: una bolletta si digita, dodici campi alla volta, e la `GRANT` dovrebbe
 nominare quasi ogni colonna. Un elenco che contiene quasi tutto non difende niente.
@@ -291,6 +331,13 @@ Le due ragioni per cui lo si usa sono però diverse, e i due ADR le tengono dist
 sulle prime due tabelle la colonna non concessa **è il confine** dell'organizzazione;
 su `tickets` non c'è un confine da difendere, ma una coerenza strutturale
 (`room_id`, `lease_id` e `property_id`) che nessun vincolo dello schema impone.
+
+**Su `tickets` l'elenco si è accorciato di due colonne**, ed è una revoca deliberata:
+`title` e `description` sono tornate scrivibili con la migration `0036`, perché
+correggere un refuso è un motivo legittimo di cambiare e annullare-e-riaprire costerebbe
+il riferimento già comunicato. Il criterio di [ADR-026](08-decisioni.md#adr-026) non
+cambia — cambia il fatto — e il limite «finché nessuno ci ha messo mano» è applicativo,
+perché una policy non può esprimerlo. Vedi [ADR-048](08-decisioni.md#adr-048).
 
 Ne segue un onere: l'elenco concesso e le colonne che compaiono in una `UPDATE` sono
 la stessa lista, e allungare l'una richiede di allungare l'altra. È voluto — è il
@@ -331,6 +378,40 @@ l'aggiornamento non trova righe. La riempie `app.tg_ticket_reference`, che è
 È la forma da riusare per ogni contatore futuro: leggibile per essere ispezionabile,
 non scrivibile perché riportarlo indietro farebbe collidere il prossimo valore con uno
 già emesso. Vedi [ADR-027](08-decisioni.md#adr-027).
+
+### Una tabella che il ruolo applicativo non vede mai: `owner_invitations`
+
+`app.owner_invitations` è l'invito da cui nasce un proprietario ([ADR-053](08-decisioni.md#adr-053)):
+`email`, `token_hash` (hash SHA-256, mai il token in chiaro, come
+`org_invitations` e `password_reset_codes`), `expires_at`, `accepted_at`,
+`accepted_by`, `revoked_at`, `created_at`.
+
+**Nessun `org_id`**: a differenza di `org_invitations`, che appartiene
+all'organizzazione che invita, questo invito **precede** l'organizzazione — la crea
+l'accettazione, che è l'unico posto in cui nasce un'organizzazione personale. È una
+tabella di piattaforma, non di business. **Nessun `deleted_at` né `updated_at`**,
+per la stessa ragione di `password_reset_codes` (migration `0037`): non è
+un'entità che si corregge nel tempo, è una credenziale a scadenza breve.
+
+**La RLS è attiva con un'unica policy, `USING (false)`**: nega ogni riga, per ogni
+comando, a chi è soggetto alla Row Level Security. Non è un'omissione — è la
+policy più stretta che soddisfi il controllo 2 delle invarianti (RLS attiva senza
+policy nega tutto a tutti, ed è un errore) — ed è l'unica scelta coerente: un
+invito da proprietario non appartiene a nessuno finché non è accettato, e chi lo
+accetta non ha ancora un `current_user_id()` da confrontare, perché accettarlo
+*è* la registrazione. Non c'è una policy «la riga è tua» possibile.
+
+Ne segue che **due ruoli soli toccano questa tabella, e nessuno dei due passa
+dalla RLS**: lo script in `ops/` che emette l'invito si connette come
+`propflow_migrator`, proprietario della tabella; l'accettazione legge e scrive
+`accepted_at`/`accepted_by` dal pool **privilegiato** (`propflow_worker`, che ha
+`BYPASSRLS`) perché verifica un token prima che un contesto di sicurezza possa
+esistere (regola 27). `propflow_worker` ha comunque bisogno di una `GRANT`
+esplicita — `BYPASSRLS` ignora le policy, non i privilegi di tabella, e una
+tabella nuova non eredita nulla dal `GRANT` generale della `0015` — così come
+`propflow_app`, a cui la migration concede `SELECT, UPDATE (accepted_at,
+accepted_by)` in una forma innocua sotto `USING (false)` ma dichiarata, per il
+controllo 12 e per coerenza con `password_reset_codes_own`. Vedi migration `0040`.
 
 ## Soft delete
 

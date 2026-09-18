@@ -2,11 +2,24 @@ use std::sync::Arc;
 
 use propflow_domain::ports::UnitOfWorkFactory;
 use propflow_domain::property::Room;
-use propflow_domain::shared::PropertyId;
+use propflow_domain::shared::{PropertyId, RoomId};
 use propflow_domain::{Entity, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
+
+/// Una stanza con l'occupazione **derivata** accanto allo stato memorizzato.
+///
+/// Due campi e non uno, ed è deliberato: `status` è ciò che qualcuno ha deciso —
+/// una stanza in ristrutturazione è `unavailable` — e `occupied` è ciò che
+/// discende dai contratti. Un campo solo, con il derivato che copre il
+/// memorizzato, nasconderebbe proprio il caso che chi amministra deve vedere: una
+/// stanza dichiarata non disponibile **mentre** ci abita una persona.
+#[derive(Debug, Clone)]
+pub struct RoomView {
+    pub room: Room,
+    pub occupied: bool,
+}
 
 /// Elenca le stanze di un immobile.
 ///
@@ -27,7 +40,7 @@ impl ListRooms {
         &self,
         context: &RequestContext,
         property_id: PropertyId,
-    ) -> AppResult<Vec<Room>> {
+    ) -> AppResult<Vec<RoomView>> {
         authorization::ensure_member(context)?;
 
         let mut uow = self.unit_of_work.begin(context).await?;
@@ -39,6 +52,20 @@ impl ListRooms {
             .await?
             .ok_or(AppError::not_found(Entity::Property))?;
         let rooms = uow.rooms().list_for_property(property_id).await?;
-        Ok(rooms)
+
+        // Una query per l'elenco intero, non una per stanza.
+        let ids: Vec<RoomId> = rooms.iter().map(Room::id).collect();
+        let occupancy = uow.rooms().occupancy(&ids).await?;
+
+        Ok(rooms
+            .into_iter()
+            .map(|room| {
+                let occupied = occupancy
+                    .iter()
+                    .find(|entry| entry.room_id == room.id())
+                    .is_some_and(|entry| entry.occupied);
+                RoomView { room, occupied }
+            })
+            .collect())
     }
 }

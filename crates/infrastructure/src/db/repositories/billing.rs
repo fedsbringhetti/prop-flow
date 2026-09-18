@@ -10,8 +10,8 @@ use propflow_domain::billing::{
     SupplierVat, UtilityBill, UtilityBillParts,
 };
 use propflow_domain::ports::{
-    ChargeBalancePage, ChargeQuery, ChargeRepository, RepositoryError, RepositoryResult,
-    UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
+    ChargeBalancePage, ChargeQuery, ChargeRepository, RechargedAmount, RepositoryError,
+    RepositoryResult, UtilityBillPage, UtilityBillQuery, UtilityBillRepository,
 };
 use propflow_domain::shared::{
     AiJobId, ChargeId, Currency, LeaseId, Money, OrgId, PropertyId, RoomId, UserId, UtilityBillId,
@@ -78,6 +78,7 @@ macro_rules! select_bill {
            consumption_unit,
            validated_by,
            validated_at,
+           paid_at,
            notes,
            ai_job_id,
            ocr_confidence::numeric AS ocr_confidence,
@@ -237,7 +238,7 @@ impl UtilityBillRepository for PgUnitOfWork {
                  issue_date, due_date, period_start, period_end,
                  total_amount, taxable_amount, vat_amount,
                  consumption, consumption_unit,
-                 validated_by, validated_at,
+                 validated_by, validated_at, paid_at,
                  notes, created_at, updated_at
              ) VALUES (
                  $1, $2, $3, $4, $5,
@@ -245,9 +246,9 @@ impl UtilityBillRepository for PgUnitOfWork {
                  $8, $9, $10,
                  $11, $12, $13, $14,
                  $15::app.money_amount, $16::app.money_amount, $17::app.money_amount,
-                 $18, $19,
-                 $20, $21,
-                 $22, $23, $24
+                 $18, $19, $20,
+                 $21, $22,
+                 $23, $24, $25
              )",
         )
         .bind(bill.id().as_uuid())
@@ -274,6 +275,7 @@ impl UtilityBillRepository for PgUnitOfWork {
         )
         .bind(bill.validated_by().map(UserId::as_uuid))
         .bind(bill.validated_at())
+        .bind(bill.paid_at())
         .bind(bill.notes())
         .bind(bill.created_at())
         .bind(bill.updated_at())
@@ -326,11 +328,12 @@ impl UtilityBillRepository for PgUnitOfWork {
                     consumption_unit = $17,
                     validated_by     = $18,
                     validated_at     = $19,
-                    notes            = $20,
-                    deleted_at       = $21,
-                    ai_job_id        = $22,
-                    ocr_confidence   = $23::app.confidence,
-                    ocr_extracted    = $24
+                    paid_at          = $20,
+                    notes            = $21,
+                    deleted_at       = $22,
+                    ai_job_id        = $23,
+                    ocr_confidence   = $24::app.confidence,
+                    ocr_extracted    = $25
               WHERE id = $1",
         )
         .bind(bill.id().as_uuid())
@@ -355,6 +358,7 @@ impl UtilityBillRepository for PgUnitOfWork {
         )
         .bind(bill.validated_by().map(UserId::as_uuid))
         .bind(bill.validated_at())
+        .bind(bill.paid_at())
         .bind(bill.notes())
         .bind(bill.deleted_at())
         // Le tre colonne dell'OCR passano da qui e non da un `UPDATE` a parte:
@@ -380,6 +384,47 @@ impl UtilityBillRepository for PgUnitOfWork {
             return Err(RepositoryError::RowLevelSecurity);
         }
         Ok(())
+    }
+
+    async fn recharged(&mut self, ids: &[UtilityBillId]) -> RepositoryResult<Vec<RechargedAmount>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // **Sotto la RLS del chiamante**, come ogni altra lettura: `charges_select`
+        // chiede `can_access_lease`, quindi uno staff vede tutte le quote della
+        // propria organizzazione e un inquilino solo le proprie. È la ragione per
+        // cui il campo che ne nasce viaggia **solo verso lo staff**: un numero
+        // parziale mostrato come totale sarebbe peggio di nessun numero. Il bordo
+        // HTTP applica quella regola, il database questo confine.
+        //
+        // `status <> 'void'` e non un elenco di stati ammessi: gli stati degli
+        // addebiti cambiano, e un elenco positivo andrebbe aggiornato a ogni
+        // aggiunta dimenticandolo. L'unico che **non** conta è l'annullato — «non
+        // doveva essere chiesto», quindi la quota torna disponibile.
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            "SELECT c.utility_bill_id AS utility_bill_id,
+                    sum(c.amount)     AS recharged
+               FROM app.charges c
+              WHERE c.utility_bill_id = ANY($1)
+                AND c.deleted_at IS NULL
+                AND c.status <> 'void'
+              GROUP BY c.utility_bill_id",
+        )
+        .bind(&uuids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let utility_bill_id: Uuid = try_get(&row, "utility_bill_id")?;
+                Ok(RechargedAmount {
+                    utility_bill_id: UtilityBillId::from_uuid(utility_bill_id),
+                    amount: try_get(&row, "recharged")?,
+                })
+            })
+            .collect()
     }
 }
 
@@ -727,6 +772,7 @@ fn map_bill(row: PgRow) -> RepositoryResult<UtilityBill> {
         consumption,
         validated_by: validated_by.map(UserId::from_uuid),
         validated_at: try_get::<Option<DateTime<Utc>>>(&row, "validated_at")?,
+        paid_at: try_get::<Option<DateTime<Utc>>>(&row, "paid_at")?,
         notes: try_get(&row, "notes")?,
         ai_job_id: try_get::<Option<Uuid>>(&row, "ai_job_id")?.map(AiJobId::from_uuid),
         ocr_confidence: try_get::<Option<Decimal>>(&row, "ocr_confidence")?

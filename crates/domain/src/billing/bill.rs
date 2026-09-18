@@ -316,6 +316,8 @@ pub struct UtilityBill {
     consumption: Option<Consumption>,
     validated_by: Option<UserId>,
     validated_at: Option<DateTime<Utc>>,
+    /// Quando è stata pagata **al fornitore**, dichiarato da chi amministra.
+    paid_at: Option<DateTime<Utc>>,
     notes: Option<String>,
     /// Il job che ha prodotto la proposta, se una macchina ha letto la bolletta.
     ai_job_id: Option<AiJobId>,
@@ -399,6 +401,7 @@ impl UtilityBill {
             consumption,
             validated_by: None,
             validated_at: None,
+            paid_at: None,
             notes: text::optional("notes", notes, 4000)?,
             ai_job_id: None,
             ocr_confidence: None,
@@ -617,6 +620,42 @@ impl UtilityBill {
         Ok(())
     }
 
+    /// Dichiara la bolletta pagata al fornitore.
+    ///
+    /// # Perché solo da `validated` e `allocated`
+    ///
+    /// Una bolletta in bozza o in revisione non è ancora una bolletta: i numeri
+    /// non li ha confermati nessuno, e dichiarare pagato un importo che potrebbe
+    /// cambiare al primo controllo registrerebbe un fatto su un dato provvisorio.
+    /// Da `allocated` invece sì, ed è il caso normale: **il fornitore non aspetta
+    /// il riaddebito**, e chi paga il 10 riaddebita il 15.
+    ///
+    /// # Che cosa questa transizione non è
+    ///
+    /// Non è un pagamento del modulo `app.payments`, che modella il denaro in
+    /// entrata — un addebito che viene saldato. Questo è denaro che esce, non è
+    /// modellato, ed è registrato da tre fette fra ciò che resta fuori: qui si
+    /// dichiara un fatto avvenuto altrove.
+    ///
+    /// # Non si disfa
+    ///
+    /// Una bolletta pagata resta pagata: se il pagamento non è mai partito, il
+    /// fatto da correggere è la dichiarazione, e correggere una dichiarazione è
+    /// un'operazione che questo modulo non ha — come non ha la contestazione.
+    /// Meglio non offrirla che offrirla a metà.
+    pub fn mark_paid(&mut self, now: DateTime<Utc>) -> DomainResult<()> {
+        if !matches!(self.status, BillStatus::Validated | BillStatus::Allocated) {
+            return Err(DomainError::Invariant(Invariant::UtilityBillNotPayable));
+        }
+        self.status = BillStatus::Paid;
+        // Obbligatoria a schema quando lo stato è `paid`
+        // (`utility_bills_paid_ck`): uno stato senza la data del fatto non dice
+        // quando è successo, e per una bolletta «quando» è metà della domanda.
+        self.paid_at = Some(now);
+        self.updated_at = now;
+        Ok(())
+    }
+
     /// Annulla la bolletta, che **sparisce**: `status = 'void'` *e*
     /// `deleted_at = now`.
     ///
@@ -763,6 +802,10 @@ impl UtilityBill {
         self.validated_by
     }
     #[must_use]
+    pub const fn paid_at(&self) -> Option<DateTime<Utc>> {
+        self.paid_at
+    }
+    #[must_use]
     pub const fn validated_at(&self) -> Option<DateTime<Utc>> {
         self.validated_at
     }
@@ -822,6 +865,7 @@ impl UtilityBill {
             consumption,
             validated_by,
             validated_at,
+            paid_at,
             notes,
             ai_job_id,
             ocr_confidence,
@@ -852,6 +896,7 @@ impl UtilityBill {
             consumption,
             validated_by,
             validated_at,
+            paid_at,
             notes,
             ai_job_id,
             ocr_confidence,
@@ -887,6 +932,7 @@ pub struct UtilityBillParts {
     pub consumption: Option<Consumption>,
     pub validated_by: Option<UserId>,
     pub validated_at: Option<DateTime<Utc>>,
+    pub paid_at: Option<DateTime<Utc>>,
     pub notes: Option<String>,
     pub ai_job_id: Option<AiJobId>,
     pub ocr_confidence: Option<Confidence>,

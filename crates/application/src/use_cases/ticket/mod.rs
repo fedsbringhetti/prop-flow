@@ -12,17 +12,23 @@
 //!
 //! Il perimetro della fetta è in `docs/09-stato-e-roadmap.md`.
 
+mod correct;
 mod costs;
 mod open;
 mod read;
 mod thread;
 mod transition;
 
+pub use correct::{CorrectTicketReport, CorrectTicketReportCommand};
 pub use costs::{UpdateTicketCosts, UpdateTicketCostsCommand};
 pub use open::{OpenTicket, OpenTicketCommand};
-pub use read::{GetTicket, ListTickets, ListTicketsQuery, TicketDetail};
+pub use read::{
+    GetTicket, ListTickets, ListTicketsQuery, People, Places, TicketDetail, TicketListPage,
+    TicketView,
+};
 pub use thread::{
     ListTicketMessages, ListTicketMessagesCommand, PostTicketMessage, PostTicketMessageCommand,
+    TicketThreadPage,
 };
 pub use transition::{
     AssignTicket, AssignTicketCommand, CancelTicket, CancelTicketCommand, CloseTicket,
