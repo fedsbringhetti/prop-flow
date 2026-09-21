@@ -1,6 +1,6 @@
 # 09 — Stato e roadmap
 
-Stato al **18 settembre 2026**. Riscritto per intero in questa data: la forma precedente,
+Stato al **22 settembre 2026**. Riscritto per intero in questa data: la forma precedente,
 cresciuta per stratificazione dal 3 al 17 settembre fino a tenere tre piani uno sopra
 l'altro, è archiviata com'era in
 [11 — Piani conclusi](11-piani-conclusi.md#archivio-09-al-18-settembre-2026).
@@ -78,21 +78,36 @@ una persona esterna, dal telefono.
 
 <a id="prossimo-passo-suggerito"></a>
 
-### Adesso: il merge e il primo deploy
+### Adesso: chiudere tutto il segnalato, poi il deploy e il collaudo
 
-Non è una sezione di prodotto e non ha un piano da scrivere qui: **il runbook è il
-piano**, ed è scritto in [07](07-operazioni.md#il-primo-deploy--runbook). Nell'ordine:
+**Deciso il 22 settembre 2026, da chi possiede il progetto**, e cambia l'ordine che
+valeva dal 18: **le voci aperte di [12](12-da-fare.md) si chiudono tutte prima del
+collaudo**, salvo una. Il criterio precedente — *niente prima del mese con un proprietario
+vero* — poggiava su un'idea giusta, che l'ordine fra le voci lo decida una misura e non un
+ragionamento; la ragione per metterlo da parte è altrettanto semplice: il collaudo di
+[13](13-collaudo.md) si percorre **una volta**, sulla macchina vera, e percorrerlo con
+sedici difetti noti dentro misurerebbe i difetti e non il prodotto. Le voci si chiudono
+per **sezioni**, una per conversazione, com'è la regola, e sono la tabella
+[qui sotto](#le-sezioni): dalla 11 alla 16.
+
+**L'unica che resta aperta è `R40`**, cambiare la propria email: porta con sé la verifica
+dell'email, che cambia il percorso di registrazione che ogni collaudo attraversa e ha
+bisogno del relay vero per essere provata — cioè del deploy. Si fa dopo, con la ragione
+scritta nella sua riga.
+
+Poi, nell'ordine:
 
 | | Passo | Chi | Stato |
 |---|---|---|---|
-| 1 | La CI verde sulla PR che porta le sezioni 1-10 in `dev` (#57) | automatico | in corso |
-| 2 | L'Invio nel campo del codice su `/invito`, con una tastiera vera | a mano | in sospeso dal poscritto della 8: il browser pilotato manda eventi non fidati |
-| 3 | Il merge della #57 in `dev`, **senza squash**: è la base di una storia lunga, e riscriverla toglie la ragione dei commit a chi la rileggerà | chi possiede il progetto | — |
-| 4 | I mezzi: VPS, dominio, relay SMTP con SPF, DKIM e DMARC, credenziali | chi possiede il progetto | **il blocco reale**, dal 10 settembre |
-| 5 | **Il ripristino provato una volta**, mentre dentro non ci sono i dati di nessuno | runbook | mai eseguito |
-| 6 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G* |
-| 7 | L'esito del deploy in [11](11-piani-conclusi.md), **mentre lo si percorre**: che cosa ha retto, che cosa no, il giro dal telefono riga per riga | chi lo esegue | è la mancanza che la 5-bis dichiara di sé, e non si ripete |
-| 8 | **Il mese con un proprietario vero** | esterno | la misura che decide tutto ciò che viene dopo |
+| 1 | **Le sezioni 11-16**, una per conversazione, ognuna con il piano in questo file prima e l'esito in [11](11-piani-conclusi.md) dopo | chi sviluppa | la 11 è [pianificata](#piano-in-corso) |
+| 2 | I mezzi: VPS, dominio, relay SMTP con SPF, DKIM e DMARC, credenziali | chi possiede il progetto | **il blocco reale**, dal 10 settembre; si procurano in parallelo alle sezioni |
+| 3 | **Il ripristino provato una volta**, mentre dentro non ci sono i dati di nessuno | runbook | mai eseguito |
+| 4 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G* |
+| 5 | **Il collaudo di [13](13-collaudo.md)**, per intero, dal telefono — compreso l'Invio su `/invito` con una tastiera vera (B2), in sospeso dal poscritto della 8 | a mano, meglio se da chi non ha scritto il codice | l'esito in [11](11-piani-conclusi.md), **mentre lo si percorre** |
+| 6 | **Il mese con un proprietario vero** | esterno | la misura che decide tutto ciò che viene dopo |
+
+*Fatto, e non si ripete:* la CI verde e il merge della PR #57 in `dev` (`fafc2bd`, merge
+commit, non squash) il 18 settembre; il collaudo scritto e mergiato (#58, `822d4f9`) il 22.
 
 *Perché il deploy adesso, con i mezzi che ci sono.* Deciso con l'esito della 9. I mezzi
 vanno procurati, non costruiti: nessuna sezione li fa arrivare. Nel frattempo ogni sezione
@@ -100,10 +115,12 @@ ha reso meno della precedente, e le ultime tre sono state rifinitura su schermat
 nessun estraneo ha visto. Il criterio di fine del runbook è l'unica prova che il progetto
 non può darsi da solo.
 
-*Che cosa ha preceduto il deploy, e che cosa no.* Sei voci di [12](12-da-fare.md) erano
-candidate; la [sezione 10](11-piani-conclusi.md#esito-sezione-10) ne ha prese tre — `R50`,
+*Che cosa la sezione 10 aveva lasciato fuori, e perché.* Sei voci erano candidate a
+precedere il deploy; la [10](11-piani-conclusi.md#esito-sezione-10) ne ha prese tre — `R50`,
 `R51`, `R46` — per un criterio solo, *ciò che il primo deploy incontra da sé nel primo
-mese*, e ha lasciato le altre con la ragione, che resta qui perché `11` e `12` la citano:
+mese*, e ha lasciato le altre con queste ragioni, che restano perché `11` e `12` le citano
+e perché dicono che cosa si è scelto di **non** fare di fretta. **Dal 22 settembre le
+quattro entrano nelle sezioni 11 e 15**, con il tempo che chiedevano:
 
 - **`R48` dopo**: chi ha già un account e nessuna organizzazione non può diventare
   proprietario. Nel primo mese c'è un proprietario, che è chi possiede il progetto, e i
@@ -145,7 +162,13 @@ sezione**.
 | ~~**8**~~ | ~~Il perimetro dei ruoli~~ — **conclusa** il 16 settembre 2026 | `R9` | ADR, poi migration + backend + client + `ops/` | [Piano](11-piani-conclusi.md#piano-sezione-8) · [esito](11-piani-conclusi.md#esito-sezione-8). [ADR-053](08-decisioni.md#adr-053) prima del codice: l'inquilino entra per invito senza un'organizzazione propria, il proprietario con un token di piattaforma emesso da un runbook, `POST /auth/register` non esiste più. **La prima sezione eseguita con agenti separati, e l'ultima**: l'esito riporta le misure e la ragione del ritiro |
 | ~~**9**~~ | ~~Spiegare come si usa il sito~~ — **conclusa** il 17 settembre 2026 | `R8` | client | [Piano](11-piani-conclusi.md#piano-sezione-9) · [esito](11-piani-conclusi.md#esito-sezione-9). Era ultima **apposta**, e la scelta di *dove* — gli stati vuoti spiegano, una pagina sola raccoglie, il riepilogo vuoto è il primo accesso — è nel piano con le alternative scartate. Due premesse sbagliate, nessuna decisione cambiata |
 | ~~**10**~~ | ~~Tre chiusure prima del primo deploy~~ — **conclusa** il 18 settembre 2026 | `R50` `R51` `R46` | due rotte di API, un ramo nel client, una migration | [Piano](11-piani-conclusi.md#piano-sezione-10) · [esito](11-piani-conclusi.md#esito-sezione-10). Ciò che il primo deploy incontra da sé nel primo mese. Una premessa incompleta, trovata dal giro a mano prima del codice: `R51` era un `502` del proxy, non un errore di rete, e il ramo copre entrambi. Ne è uscita `R52`, che non precede il deploy |
-| **11** | **Il primo deploy** — [runbook](07-operazioni.md#il-primo-deploy--runbook) | — | a mano, su una macchina | **Deciso con la 9**: si fa con i mezzi che ci sono; la 10 è verde dal 18 settembre 2026, e prima viene il merge in `dev` della PR che porta le sezioni 1-10. Servono una VPS, un dominio, un relay SMTP con SPF, DKIM e DMARC e delle credenziali. Gli artefatti sono scritti e validati per quello che si può validare senza — `docker compose config`, `bash -n` — e non sono mai stati eseguiti. Il criterio di fine è il punto 4 del runbook: **aprire il prodotto dal telefono, in 4G**. Prima del deploy va provato il **ripristino**, una volta, mentre dentro non ci sono ancora i dati di nessuno. L'esito si scrive in [11](11-piani-conclusi.md) come quello di una sezione, **mentre** lo si percorre |
+| **11** | **Il client dice il vero** — [piano](#piano-in-corso) | `R36` `R26` `R49` `R52` `R41` `R27` | client + docs | Le sei voci senza decisioni da prendere: un badge, due filtri, un `X-Org-Id` morto, il rinnovo su `5xx`, una riga dopo l'uscita, il primo avvio. Prima perché libera il campo, e perché ognuna è una cosa che un collaudo vedrebbe al primo giro |
+| **12** | **L'immobile, con un contratto in essere** | `R44` `R45` `R29` | dominio + client, una migration probabile | Tre regole del service layer che le voci hanno già mezze decise: in bozza non si affitta, con un contratto in essere non si archivia, e il residuo che chi abita legge non mente. Una sezione perché sono la stessa domanda — *che cosa vieta un contratto in essere* — posta su tre righe |
+| **13** | **Il subentro** | `R28` | dominio + rotta + client | La transizione «esce X, entra Y, con queste quote», che scrive `left_at`. Da sola: è il pezzo di dominio più grande, e tocca l'invariante delle quote che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso |
+| **14** | **Le persone, l'altra direzione** | `R43` `R39` | ADR ×2, poi backend + client | Chi abita vede chi contattare; chi amministra può togliere qualcuno. Entrambe usano `has_lease_in_force`, che esiste; entrambe sono un ADR prima del codice perché una comunica un dato personale a un destinatario nuovo e l'altra decide che ne è dei contratti di chi viene tolto |
+| **15** | **La sessione** | `R42` `R48` | ADR, poi backend + client | «Ricordami» con la rotazione che non scorre, e l'invito da proprietario da un account che esiste già. Insieme perché sono le due cose che restano dell'autenticazione, e `R42` cambia una proprietà che [04](04-sicurezza.md) descrive |
+| **16** | **Cancellare una persona** | `R37` | ADR, migration, runbook | La cancellazione vera contro la regola 7 — `DELETE` vietato — e contro `audit_log`, che nomina le righe: che cosa significhi il verbo e che cosa resti quando la persona non c'è più. Ultima perché tocca tutto ciò che le altre costruiscono |
+| **17** | **Il primo deploy e il collaudo** — [runbook](07-operazioni.md#il-primo-deploy--runbook), [collaudo](13-collaudo.md) | — | a mano, su una macchina | Dopo la 16. Servono i mezzi. Il criterio di fine è il punto 4 del runbook, e il collaudo di 13 si percorre per intero dal telefono, con l'esito in [11](11-piani-conclusi.md) mentre lo si fa |
 
 **Le sezioni 6-9 aspettavano una prova che non è arrivata.** Avevano un obiettivo
 dichiarato — *un proprietario vero, che non ha scritto il codice, usa il prodotto per un
@@ -162,14 +185,12 @@ state rinviate finché a provare era chi costruisce, poi fatte nella 5-quater qu
 diventato chiaro che senza posta una persona esterna non può nemmeno cominciare. Il
 criterio si applica a ciò che **compra soltanto** quel valore, non a ciò che è scomodo.
 
-In [12](12-da-fare.md) restano **sedici voci aperte**, nessuna bloccante. Quelle che il
-primo mese incontrerà più probabilmente: `R48` (un account senza organizzazione che vuole
-diventare proprietario), `R43` (l'inquilino non sa come contattare chi gli affitta casa),
-`R39` (togliere qualcuno dall'organizzazione), `R41` (chiedere di rientrare), `R42` (la
-durata della sessione, ADR prima del codice), `R52`. Le altre sono rifiniture (`R26`,
-`R36`, `R44`, `R45`), il subentro (`R28`), i dati personali (`R37`, `R40`) e la
-documentazione del primo avvio (`R27`). **Nessuna si prende in mano prima del mese**: il
-criterio d'ordine finora è stato un ragionamento, e il mese è la prima misura.
+Dal 22 settembre il criterio ha un'eccezione dichiarata: le sedici voci aperte in
+[12](12-da-fare.md) si chiudono **prima** del collaudo, nelle sezioni 11-16, per la ragione
+scritta [sopra](#prossimo-passo-suggerito). Dopo il collaudo e il mese resta **`R40`** —
+l'email come credenziale, con la verifica che le va insieme — più ciò che il collaudo e il
+mese troveranno, che è la parte per cui il criterio esiste: quelle voci nuove si ordinano
+con la misura, non con un ragionamento.
 
 ### Ciò che dipende da dove si esercisce
 
@@ -225,10 +246,180 @@ Sono la stessa conversazione, e vale la pena affrontarle insieme.
 
 ## Piano in corso
 
-**Nessuno.** La [sezione 10](11-piani-conclusi.md#piano-sezione-10) è l'ultima
-pianificata ed è conclusa; il passo dopo è il [cammino](#il-cammino) qui sopra, e il suo
-piano è il runbook. Il prossimo piano scritto qui sarà quello che il mese con un
-proprietario vero deciderà.
+<a id="piano-sezione-11"></a>
+
+### Piano — Sezione 11: il client dice il vero
+
+Pianificata il **22 settembre 2026**, con la decisione di chiudere tutto il segnalato prima
+del collaudo. Chiude `R36`, `R26`, `R49`, `R52`, `R41`, `R27`: le sei voci di
+[12](12-da-fare.md) che **non chiedono una decisione** — o la chiedono piccola e la si
+prende qui — e che un collaudo vedrebbe al primo giro. Solo client e documentazione;
+**nessuna migration, nessuna rotta nuova**. È la sezione che libera il campo alle cinque
+che seguono, tutte con un ADR davanti.
+
+**Si esegue in una sola conversazione**, senza agenti, come dalla 9. Ogni test nuovo
+provato al contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito.
+
+#### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| `ChargeStatusBadge` mostra la coppia «derivato (memorizzato)» ogni volta che i due stati differiscono | vero: `apps/web/src/features/shared/status.tsx:231`, `if (status === effectiveStatus)` una sola volta, poi il derivato con il memorizzato fra parentesi. Il memorizzato può essere solo `issued` o `partially_paid` quando differisce (`Charge::effective_status` diverge solo da `is_outstanding()`) |
+| Il filtro degli immobili offre `archived`, che non può corrispondere a niente | vero: `PropertiesPage.tsx:40`, `STATUSES = ['draft', 'available', 'maintenance', 'archived']`, con il commento che lo dichiara come «il terzo di `R26` che questa sezione non chiude». Archiviare scrive `deleted_at` e `list`/`find_by_id` filtrano `deleted_at IS NULL` (`repositories/property.rs:59,76`); la conferma di archiviazione **promette** che sparisca dagli elenchi (`property.archiveExplain`) |
+| Il filtro delle bollette offre `paid`, che nessuno scrive | vero: `BillsPage.tsx:42`, `STATUSES` include `'paid'`; `BillStatus::Paid` e `Disputed` in `crates/domain/src/billing/bill.rs:80-83` portano «mai scritto dall'applicazione». La sezione 4 ha dato alla bolletta `paid_at`, non lo stato |
+| Il ricordo dell'organizzazione si applica **prima** che l'elenco risponda, e la sessione non sa da dove venga l'organizzazione attiva | vero: `session.tsx:202`, l'effetto chiama `store.selectOrganization(stored.active, …)` appena c'è `userId`; `Session` (`api/session.ts:14`) ha `organizationId` e `role`, nessuna origine. Il guscio aspetta l'elenco solo se `organizationId === null` (`shell.tsx:160`) e corregge il ricordo quando l'elenco arriva (`shell.tsx:474-501`) |
+| `sendRefresh` cancella la sessione su **ogni** risposta non `ok` | vero: `api/session.ts:372`, `if (!response.ok) { this.clear(); throw … }`; il ramo del `catch` di rete (`:369`) invece non cancella. `ApiClient.request` (`api/client.ts:75`) fa `await this.session.refresh()` su un `401` di sessione e lascia propagare l'errore |
+| Chi è uscito e riprova riceve `membership.already_left` senza la via | vero: `it.ts:1709`, «Eri già uscito da questa organizzazione.»; l'avviso **prima** dell'uscita (`it.ts:304`) dice già «Se qualcuno ti reinvita potrai rientrare» |
+| `README.md` e `06` insegnano il primo avvio a mano, e `just setup` fa la stessa cosa | vero: `README.md:18-32` e `06-sviluppo.md:20-31` elencano chiavi, `docker compose`, i `cargo run`; `justfile:40`, `setup: keys env up db install`, e `api`/`worker`/`web` avviano. `06:264` già consiglia `just api` per un errore comune |
+| I test sono 479 Rust e 141 del client | vero, esito della 10 e `just ci` su `dev` dopo il merge |
+
+#### Decomposizione
+
+##### `S1` — `R36`: il badge di un addebito dice due fatti, non un fatto e un giudizio
+
+In `status.tsx`, `ChargeStatusBadge` diventa asimmetrico: se il memorizzato è
+`partially_paid` e il derivato differisce, **due badge** accanto — «Scaduto» e
+«Parzialmente pagato» — perché sono due fatti veri insieme e nessuno dei due si
+ricostruisce dall'altro; se il memorizzato è `issued`, **solo il derivato**, perché
+«(Emesso)» accanto a «Scaduto» è esattamente `R30`. Niente parentesi: la parentesi era la
+forma di «giudizio che il fatto smentisce», e qui non c'è un giudizio.
+
+Alternativa scartata: un testo composto («Scaduto, parzialmente pagato»). È una stringa
+nuova per ogni coppia, e la coppia possibile è una sola; due badge riusano ciò che c'è e
+si leggono anche a colori spenti.
+
+**Criterio di fine:** i test dei badge in `status.test.tsx` — quelli della 5-ter — con due
+casi nuovi: `overdue`+`partially_paid` rende due badge e nessuna parentesi;
+`overdue`+`issued` rende un badge solo. Al contrario, rimettendo la parentesi: il primo
+cade su «expected not to contain "("», il secondo su un secondo elemento trovato.
+
+##### `S2` — `R26`: un filtro offre solo ciò che può comparire
+
+`archived` esce da `STATUSES` degli immobili, `paid` da quello delle bollette, e il
+commento di `PropertiesPage` smette di dire che il terzo di `R26` è aperto. Il `<Select>`
+degli immobili resta con tre valori — bozza, disponibile, in manutenzione — e la domanda
+«gli affittati» resta al filtro dell'occupazione accanto, com'è già.
+
+**Non** si aggiunge un «includi archiviati»: la conferma di archiviazione promette che
+l'immobile *sparisce dagli elenchi*, e la traccia resta nelle righe che lo citano come
+«Immobile archiviato». Rivederlo è una capacità nuova — un elenco degli archiviati con la
+sua rotta, perché `list` filtra `deleted_at` — e non un filtro da sistemare; se un giorno
+qualcuno la chiede, è una voce in `12`, non questa.
+
+**Criterio di fine:** un test per elenco che le opzioni del filtro siano esattamente
+quelle e nessun'altra — è un test sul catalogo delle opzioni, non sulla rete. Al contrario:
+`archived` rimesso, l'assert `toEqual([...])` cade con l'elemento in più.
+
+##### `S3` — `R49`: il ricordo non vale finché l'elenco non lo conferma
+
+La sessione impara **da dove** viene l'organizzazione attiva. In `session.tsx` il
+contesto espone `organizationRemembered: boolean`: vero da quando l'effetto applica il
+ricordo del `localStorage` a quando l'elenco lo conferma o lo corregge; falso quando
+l'organizzazione è quella del token o è stata scelta a mano (il selettore, l'accettazione
+di un invito). È stato del **provider**, non dello store: lo store non sa che cosa sia il
+`localStorage`, e non deve saperlo.
+
+In `shell.tsx`, il gate su `<Outlet/>` si allarga: oggi aspetta l'elenco se
+`organizationId === null`; ora aspetta anche se `organizationRemembered && organizations.isPending`.
+È **la stessa attesa**, estesa al caso in cui l'organizzazione è ricordata — e la
+correzione che il guscio fa già quando l'elenco arriva (`:474-501`) resta com'è, e mette
+`organizationRemembered` a falso perché passa da `selectOrganization`/`clearOrganization`.
+
+Trappola: l'effetto che applica il ricordo gira **prima** del render del guscio, quindi
+la prima richiesta della schermata partirebbe con l'`X-Org-Id` ricordato **nello stesso
+giro** in cui il gate non l'ha ancora visto; il gate deve leggere il flag dal contesto,
+non da uno stato locale del guscio aggiornato in un effetto — altrimenti è un giro in
+ritardo, che è tutto il difetto.
+
+**Criterio di fine:** in `shell.test.tsx`, il token porta `A`, il `localStorage` ricorda
+`B` (lasciata da un altro browser), l'elenco è tenuto in volo: **nessuna richiesta con
+`x-org-id: B` parte**; poi l'elenco risponde senza `B`, e il guscio corregge su `A`. È la
+stessa forma del test «l'elenco vero corregge il ricordo», con l'asserzione in più sulle
+richieste **prima** dell'elenco. Al contrario, senza il gate allargato: `orgHeaders`
+contiene `B`.
+
+##### `S4` — `R52`: un `5xx` al rinnovo non è un rifiuto
+
+In `api/session.ts`, `sendRefresh` fa `this.clear()` **solo su `401`**: è la risposta
+«questa sessione non vale più», ed è l'unica. Ogni altro `!response.ok` — `502` dal proxy,
+`503` per timeout, `500` — lancia `apiErrorFrom(response)` **senza** cancellare: la
+sessione in memoria resta, il cookie anche, e la richiesta che aveva chiesto il rinnovo
+fallisce con quell'errore. È la schermata a mostrare «Riprova» (i suoi tre stati lo fanno
+già), non il guscio a uscire.
+
+Simmetrico a ciò che la 10 ha fatto al ripristino: là il `5xx` è diventato uno stato
+d'errore invece di «nessuna sessione»; qui diventa un errore della richiesta invece di un
+logout. `ApiClient.request` non cambia: lascia già propagare l'errore del rinnovo.
+
+Da decidere eseguendo, e da scrivere nell'esito: che cosa fare del `403` e del `429` al
+rinnovo. La forma proposta è che **solo il `401`** cancelli — un `429` è «riprova fra
+poco», e un `403` sul refresh non ha oggi nessuna via che lo produca.
+
+**Criterio di fine:** in `session.test.ts`, accanto al singolo volo: un rinnovo che
+risponde `502` lancia, la sessione **resta**, e un rinnovo successivo riesce senza un nuovo
+login. Al contrario, con `clear()` su ogni `!ok`: `store.current` è `null` dopo il `502`.
+
+##### `S5` — `R41`: chi è uscito e ci ripensa legge la via
+
+Il minimo è una stringa: `membership.already_left` dice anche la via — «Eri già uscito da
+questa organizzazione. Per rientrare serve un nuovo invito da chi la amministra.» — perché
+è l'unico messaggio che chi ci ripensa incontra. Il secondo posto va deciso **guardando la
+schermata** con lo stack in piedi, com'è scritto nella voce: la schermata «nessuna
+organizzazione» offre già la guida e «Ho un codice d'invito», e la guida di chi abita ha
+una sezione sull'uscita dove una frase sul rientro potrebbe stare. La decisione — quale
+dei due, o entrambi — si prende nell'esecuzione e si scrive nell'esito.
+
+**Criterio di fine:** il test della stringa non ha senso da solo; conta il test della
+guida che esiste già (le sezioni si chiamano come la navigazione), che deve restare verde
+se la frase entra là.
+
+##### `S6` — `R27`: il primo avvio si insegna con un comando
+
+`just setup` diventa **la via raccomandata** in `README.md` (in inglese) e in
+[06](06-sviluppo.md): un comando per preparare — chiavi, `.env`, container, ruoli,
+migration, `npm ci` — e `just api`, `just worker`, `just web` per avviare. La sequenza a
+mano **resta**, in `06`, sotto un titolo che dice che cosa `just setup` fa, per chi non ha
+`just` o vuole capire; e `CLAUDE.md` §4 non si tocca, perché è il riferimento e non un
+tutorial. È la decisione che la voce lasciava aperta, e la ragione è quella della voce: la
+pagina che un estraneo legge per prima dev'essere la più corta da sbagliare.
+
+Trappola: `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
+`AppConfig` e le cerca in `07`, non in `06` né nel README; ma un comando citato nel README
+che non esiste nel `justfile` non lo trova nessun test. Verificare a mano che ogni ricetta
+nominata esista (`just --list`).
+
+**Criterio di fine:** non c'è un test; c'è un giro: da un clone pulito, `just setup` e i
+tre avvii, seguendo il README e basta.
+
+#### Trappole
+
+**Un badge in più che «semplifica» `S1`.** La coppia `overdue`+`partially_paid` è la
+ragione per cui la 5-ter non ha accorpato `R36` a `R30`: chi vede due badge e ne toglie
+uno per ordine reintroduce «Scaduto» che nasconde «parzialmente pagato». I due test di
+`S1` esistono per questo.
+
+**Sistemare `R49` nello store invece che nel provider.** Lo store è puro: sessione, token,
+rinnovo. Il `localStorage` è del provider, e l'origine dell'organizzazione anche. Metterla
+nello store porterebbe il browser dentro un oggetto che i test costruiscono senza browser.
+
+**Il gate di `R49` letto in ritardo.** Vedi `S3`: il flag va dal contesto al gate nello
+stesso render, non attraverso un effetto.
+
+**Cancellare la sessione «per sicurezza» su un `5xx` (`S4`).** Sembra prudente e non lo
+è: la sessione è nel cookie, non in memoria; cancellare la memoria non revoca niente e
+manda al login chi ha un cookie buono. La prudenza vera è il `401`, che è l'unico
+messaggio del server sul valore della sessione.
+
+**Decidere la frase di `R41` senza guardare.** La voce lo dice e vale ancora: una
+stringa che descrive l'interfaccia è verificabile solo guardandola (la 9 ne ha trovata
+una falsa così).
+
+#### Che cosa **non** entra
+
+- un elenco degli immobili archiviati: capacità nuova, vedi `S2`;
+- il `403`/`429` al rinnovo oltre la forma proposta in `S4`: si decide eseguendo;
+- `CLAUDE.md` §4: resta il riferimento dei comandi, non cambia con `S6`;
+- qualunque cosa delle sezioni 12-16.
 
 ## Implementato
 
