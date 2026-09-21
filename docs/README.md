@@ -18,6 +18,7 @@ motivazioni.
 | [10 — Rilasci](10-rilasci.md) | Versionamento, changelog, flusso di rilascio, hotfix, rollback |
 | [11 — Piani conclusi](11-piani-conclusi.md) | Archivio dei piani già eseguiti, con i loro esiti. Append-only |
 | [12 — Da fare](12-da-fare.md) | La raccolta di ciò che resta da sistemare e da costruire, con un identificatore stabile per voce. **Non è un piano** |
+| [13 — Collaudo](13-collaudo.md) | Le procedure da percorrere **a mano** quando il prodotto gira su una macchina vera: undici parti, dal deploy al telefono. Non è una suite automatica e non la sostituisce |
 
 ## Come leggere questa documentazione
 
