@@ -29,10 +29,15 @@ pub struct ListPaymentsQuery {
 /// **Ne segue una conseguenza da dire ad alta voce**: un inquilino vede i propri
 /// pagamenti e **non** quelli che lo staff ha registrato senza attribuirglieli.
 /// Non è un difetto dell'elenco, è `payer_user_id` lasciato vuoto — vedi il campo
-/// omonimo di
-/// [`RecordPaymentCommand`](super::RecordPaymentCommand). Il totale incassato
-/// resta comunque visibile a tutti nel `paid_amount` del saldo, che viene dalla
-/// vista e non da questo elenco.
+/// omonimo di [`RecordPaymentCommand`](super::RecordPaymentCommand).
+///
+/// **E non si ferma all'elenco.** `app.v_charge_balances` è `security_invoker`,
+/// quindi somma i pagamenti sotto la Row Level Security di chi legge: un incasso
+/// non attribuito non entra nemmeno nel `paid_amount` del saldo, e sulla stessa
+/// riga l'inquilino legge uno stato `partially_paid` con il residuo pieno. Qui
+/// c'era scritto il contrario — «il totale incassato resta comunque visibile a
+/// tutti» — ed era falso: è la voce `R29`, e la frase è stata corretta prima del
+/// rimedio perché era ciò che faceva concludere che il difetto non esistesse.
 ///
 /// # Due forme, e la prima non è cambiata
 ///

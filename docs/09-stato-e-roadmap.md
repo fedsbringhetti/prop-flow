@@ -167,7 +167,7 @@ sezione**.
 | **12** | **L'immobile, con un contratto in essere** — [piano](#piano-in-corso) | `R44` `R45` `R29` | dominio + client, una migration, ADR-055 | Tre regole del service layer che le voci hanno già mezze decise: in bozza non si affitta, con un contratto in essere non si archivia, e il residuo che chi abita legge non mente. Una sezione perché sono la stessa domanda — *che cosa vieta un contratto in essere* — posta su tre righe |
 | **13** | **Il subentro** | `R28` | dominio + rotta + client | La transizione «esce X, entra Y, con queste quote», che scrive `left_at`. Da sola: è il pezzo di dominio più grande, e tocca l'invariante delle quote che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso |
 | **14** | **Le persone, l'altra direzione** | `R43` `R39` | ADR ×2, poi backend + client | Chi abita vede chi contattare; chi amministra può togliere qualcuno. Entrambe usano `has_lease_in_force`, che esiste; entrambe sono un ADR prima del codice perché una comunica un dato personale a un destinatario nuovo e l'altra decide che ne è dei contratti di chi viene tolto |
-| **15** | **La sessione** | `R42` `R48` | ADR, poi backend + client | «Ricordami» con la rotazione che non scorre, e l'invito da proprietario da un account che esiste già. Insieme perché sono le due cose che restano dell'autenticazione, e `R42` cambia una proprietà che [04](04-sicurezza.md) descrive |
+| **15** | **La sessione, e l'organizzazione attiva** | `R42` `R48` `R53` | ADR, poi backend + client | «Ricordami» con la rotazione che non scorre, l'invito da proprietario da un account che esiste già, e la cache che non si svuota cambiando organizzazione. Le prime due sono ciò che resta dell'autenticazione, e `R42` cambia una proprietà che [04](04-sicurezza.md) descrive; `R53` è qui dal 22 settembre 2026, deciso con l'esito della 11 che l'ha trovata — si tocca lo stesso guscio, e una delle sue due vie è una riga in `QueryProvider`. Nella 12 sarebbe stata un corpo estraneo: quella sezione risponde a *che cosa vieta un contratto in essere* |
 | **16** | **Cancellare una persona** | `R37` | ADR, migration, runbook | La cancellazione vera contro la regola 7 — `DELETE` vietato — e contro `audit_log`, che nomina le righe: che cosa significhi il verbo e che cosa resti quando la persona non c'è più. Ultima perché tocca tutto ciò che le altre costruiscono |
 | **17** | **Il primo deploy e il collaudo** — [runbook](07-operazioni.md#il-primo-deploy--runbook), [collaudo](13-collaudo.md) | — | a mano, su una macchina | Dopo la 16. Servono i mezzi. Il criterio di fine è il punto 4 del runbook, e il collaudo di 13 si percorre per intero dal telefono, con l'esito in [11](11-piani-conclusi.md) mentre lo si fa |
 
@@ -186,12 +186,16 @@ state rinviate finché a provare era chi costruisce, poi fatte nella 5-quater qu
 diventato chiaro che senza posta una persona esterna non può nemmeno cominciare. Il
 criterio si applica a ciò che **compra soltanto** quel valore, non a ciò che è scomodo.
 
-Dal 22 settembre il criterio ha un'eccezione dichiarata: le sedici voci aperte in
+Dal 22 settembre il criterio ha un'eccezione dichiarata: le voci aperte in
 [12](12-da-fare.md) si chiudono **prima** del collaudo, nelle sezioni 11-16, per la ragione
-scritta [sopra](#prossimo-passo-suggerito). Dopo il collaudo e il mese resta **`R40`** —
-l'email come credenziale, con la verifica che le va insieme — più ciò che il collaudo e il
-mese troveranno, che è la parte per cui il criterio esiste: quelle voci nuove si ordinano
-con la misura, non con un ragionamento.
+scritta [sopra](#prossimo-passo-suggerito). Erano sedici quando la decisione è stata presa;
+con la [11](11-piani-conclusi.md#esito-sezione-11) conclusa restano **undici**, di cui
+**dieci da chiudere** nelle sezioni 12-16. Vale anche per ciò che entra **dopo** la
+decisione e che una sezione incontra da sé: `R53`, nata eseguendo la 11, è andata nella
+15 invece di aspettare. Dopo il collaudo e il mese resta **`R40`** — l'email come
+credenziale, con la verifica che le va insieme — più ciò che il collaudo e il mese
+troveranno, che è la parte per cui il criterio esiste: quelle voci nuove si ordinano con
+la misura, non con un ragionamento.
 
 ### Ciò che dipende da dove si esercisce
 
@@ -471,6 +475,8 @@ Non si fa, e la ragione è scritta nelle decisioni.
 
 - il subentro (`R28`): è la 13, e tocca l'invariante delle quote;
 - togliere qualcuno (`R39`) e i contatti (`R43`): la 14, con i loro ADR;
+- la cache che non si svuota cambiando organizzazione (`R53`): è la 15, decisa il 22
+  settembre 2026 — vedi la [tabella](#le-sezioni);
 - un «archivia e disdici»: verbo nuovo, con la sua conferma, se qualcuno lo chiede;
 - uno stato `unavailable` di stanza che blocchi l'attivazione: non è nelle voci, e la
   stanza ha già la sua regola d'occupazione (`app.room_is_occupied`);
