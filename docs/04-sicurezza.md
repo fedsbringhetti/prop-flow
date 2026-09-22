@@ -373,6 +373,35 @@ vengono. Con la via alternativa — allargare `lease_parties_select` e `leases_s
 la riga sarebbe uscita **intera**, e con essa `leases.rent_amount`: il canone dei
 coinquilini. Una policy è per riga e non per colonna.
 
+### Il saldo di un addebito si somma oltre la policy, e proietta un numero
+
+`app.v_charge_balances` resta `security_invoker`: **quali righe** un chiamante legga non
+cambia, e chi non vede un addebito non ne vede il saldo. Dalla `0042` il solo
+`paid_amount` passa però da `app.charge_paid_amount(charge_id)`, `SECURITY DEFINER`, che
+somma i pagamenti dell'addebito **senza** la Row Level Security di chi chiama.
+
+**Il difetto che lo ha richiesto, misurato.** `payments_select` mostra un pagamento a tre
+soggetti — staff, `payer_user_id`, `payee_user_id` — quindi un incasso registrato senza
+attribuzione è invisibile all'inquilino; e la somma, fatta sotto la sua policy, scendeva
+con essa. Su un addebito da `420,00` con `150,00` incassati e non attribuiti, l'inquilino
+leggeva sulla stessa riga `status: partially_paid`, `paid_amount: 0.00` e
+`outstanding_amount: 420.00`. Avrebbe pagato due volte. Ragioni e alternative scartate in
+[ADR-055](08-decisioni.md#adr-055).
+
+**Che cosa rivela, e a chi.** Un aggregato — quanto è stato incassato su un addebito — a
+chi può già vedere quell'addebito, cioè a una parte del suo contratto o allo staff
+(`charges_select`, via `app.can_access_lease`). **Non** chi ha pagato, non quando, non
+quante righe, non il metodo: la funzione riceve un `charge_id` e restituisce un `numeric`.
+`payments_select` non è stata toccata, e l'elenco dei pagamenti continua a mostrare a un
+inquilino i soli suoi. È la stessa forma della proiezione dei residenti, con un numero al
+posto di tre colonne.
+
+**Il perimetro è delimitato da chi può eseguirla**: `REVOKE ALL ... FROM PUBLIC` e poi
+`GRANT EXECUTE` ai soli ruoli dell'applicazione. È la prima funzione del progetto a
+toglierlo per esplicito, e la ragione per cui vale la pena dirlo qui: l'invariante 6 dello
+schema ferma un `SECURITY DEFINER` senza `search_path` fissato, ma non si accorge di uno
+eseguibile da chiunque abbia una connessione.
+
 - **Cifratura applicativa** per i campi sensibili: `fiscal_code_encrypted`,
   `mfa_secret_encrypted`. Il database vede solo il testo cifrato e un riferimento
   logico alla chiave (`encryption_key_ref`, es. `kms:v3`), mai il materiale

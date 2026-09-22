@@ -183,11 +183,30 @@ dice «`u` è staff di un'organizzazione a cui io appartengo» e serve all'inqui
 per leggere il nome del proprio proprietario, altrimenti `properties.owner_id`
 punterebbe a una riga illeggibile.
 
+### Una funzione che somma oltre la policy, e proietta un numero
+
+`app.charge_paid_amount(charge_id)` → `app.money_amount`, `SECURITY DEFINER` dalla
+`0042`. Somma i pagamenti `succeeded` e `partially_refunded` di un addebito — lo
+stesso predicato che la `LATERAL` della `0024` usava, invariato — senza la Row Level
+Security di chi chiama.
+
+**Proietta un aggregato e nient'altro**: non chi ha pagato, non quando, non quante
+righe, non il metodo. Il controllo di accesso resta su `charges_select`, che decide
+se quell'addebito sia leggibile, e `payments_select` **non si tocca**: l'elenco dei
+pagamenti continua a mostrare a un inquilino i soli suoi. È la stessa forma di
+`app.property_residents` qui sotto, con un numero al posto di tre colonne.
+
+A differenza di `app.property_residents`, ha anche `REVOKE ALL ... FROM PUBLIC` prima
+dei `GRANT`: una funzione che legge oltre la RLS ed è eseguibile da chiunque abbia
+una connessione è ciò che il `DEFINER` doveva evitare, e l'invariante 6 dello schema
+— che ferma un `SECURITY DEFINER` senza `search_path` fissato — non se ne
+accorgerebbe.
+
 ### Una funzione che restituisce righe, e non una policy allargata
 
 `app.property_residents(property_id)` → `(user_id, full_name, room_name)` è
 l'unica funzione `SECURITY DEFINER` del progetto a restituire un **insieme** invece
-di un booleano, e la differenza è il motivo per cui esiste.
+di un valore singolo, e la differenza è il motivo per cui esiste.
 
 Il perimetro della casa **non si poteva ottenere allargando una policy**. Con
 `lease_parties_select` estesa all'immobile, la query che l'endpoint deve fare —
@@ -513,9 +532,19 @@ verrà aggiunto.
 Tutte con `security_invoker = true`, quindi applicano la RLS del chiamante.
 Contengono solo aggregazioni derivabili, nessuna regola di business.
 
+**Un'eccezione, dalla `0042`, ed è dichiarata**: il `paid_amount` di
+`v_charge_balances` non si somma più in linea ma passa da
+`app.charge_paid_amount(charge_id)`, che è `SECURITY DEFINER`. Quali **righe** si
+leggano non cambia — la vista resta `security_invoker` — cambia che una colonna di
+ciascuna è sommata oltre la policy. Il perché sta in
+[ADR-055](08-decisioni.md#adr-055) ed è in due righe: `payments_select` nasconde a un
+inquilino gli incassi registrati senza attribuirglieli, e sommarli sotto la sua Row
+Level Security gli faceva leggere un residuo più alto del vero sulla riga che intanto
+si dichiarava pagata in parte.
+
 | Vista | Contenuto |
 |---|---|
-| `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto. **Residuo azzerato e mai scaduto** per `void` e `written_off` |
+| `v_charge_balances` | Addebito con pagato e residuo, e se è scaduto. **Residuo azzerato e mai scaduto** per `void` e `written_off`; il pagato viene da `app.charge_paid_amount`, che somma **oltre la RLS** (`0042`) |
 | `v_expense_group_balances` | Saldo netto per membro di un gruppo co-living. **Comprende chi è uscito** finché il suo netto è diverso da zero |
 | `v_property_occupancy` | Stanze totali e occupate, percentuale, contratti in essere e loro canone |
 | `v_owner_dashboard` | Riepilogo per organizzazione: immobili, contratti in essere, canone atteso, insoluto, scaduti, ticket aperti, contratti in scadenza a 90 giorni, bollette da rivedere, e — dalla `0032` — le **perdite**, cioè il residuo degli addebiti stornati |

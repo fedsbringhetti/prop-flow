@@ -5532,6 +5532,130 @@ async fn charge_with_a_real_tenant(app: &TestApp, label: &str) -> (String, Strin
     (owner, owner_org, tenant, charge_id)
 }
 
+/// **Un incasso non attribuito non fa più leggere un residuo falso.**
+///
+/// `R29`, misurata: il proprietario registra `150,00` su un addebito da `420,00`
+/// **senza** `payer_user_id` — il bonifico da un conto che non si sa a chi
+/// ricondurre, che è deliberato — e prima della `0042` l'inquilino leggeva sulla
+/// stessa riga `status: partially_paid` con `paid_amount: 0.00` e
+/// `outstanding_amount: 420.00`. Pagherebbe due volte.
+///
+/// La causa è a due piani: `payments_select` nasconde il pagamento non
+/// attribuito, e `v_charge_balances` è `security_invoker`, quindi la somma
+/// scendeva con la Row Level Security di chi legge. `app.charge_paid_amount`
+/// somma oltre la policy e proietta il **solo totale** (ADR-055): l'elenco dei
+/// pagamenti continua a non mostrargli quella riga, e il saldo dice il vero.
+#[tokio::test]
+async fn an_unattributed_payment_still_counts_in_the_balance_the_tenant_reads() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "incasso-anonimo").await;
+    let property = create_property(&app, &owner, "Immobile con bonifico anonimo").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email("incasso-anonimo-inquilino");
+    add_tenant(&app, &owner, &lease, "Inquilina Pagante", Some(&email)).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilina Pagante",
+        "cavallo batteria graffetta",
+    )
+    .await;
+
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "420.00",
+                "due_date": day(15),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    let charge = charge["id"].as_str().expect("id").to_owned();
+
+    // **Senza `payer_user_id`**: è la premessa del caso, non una dimenticanza.
+    let (status, payment) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some(&idempotency_key("bonifico-anonimo")),
+            serde_json::json!({ "amount": "150.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {payment}");
+
+    let (status, seen) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {seen}");
+    assert_eq!(seen["amount"], "420.00");
+    assert_eq!(
+        seen["paid_amount"], "150.00",
+        "il totale incassato si somma oltre la RLS di chi legge: {seen}"
+    );
+    assert_eq!(
+        seen["outstanding_amount"], "270.00",
+        "il residuo che chi abita legge non deve mentire: {seen}"
+    );
+    assert_eq!(
+        seen["status"], "partially_paid",
+        "lo stato e il saldo devono dire la stessa cosa: {seen}"
+    );
+
+    // **E il perimetro non si è allargato.** La funzione proietta un aggregato:
+    // l'elenco dei pagamenti continua a non mostrargli la riga che non è sua, e
+    // chi ha pagato resta ignoto.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge}/payments"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    assert_eq!(
+        page["items"].as_array().expect("items").len(),
+        0,
+        "`payments_select` non si tocca: il pagamento non attribuito resta \
+         invisibile a chi non lo ha fatto — {page}"
+    );
+
+    // Il proprietario, che le righe le vede tutte, legge lo stesso saldo: la
+    // funzione somma lo stesso denaro per entrambi.
+    let (status, owner_view) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {owner_view}");
+    assert_eq!(owner_view["paid_amount"], "150.00");
+    assert_eq!(owner_view["outstanding_amount"], "270.00");
+}
+
 fn idempotency_key(label: &str) -> String {
     format!("{label}-{}", uuid::Uuid::now_v7())
 }
