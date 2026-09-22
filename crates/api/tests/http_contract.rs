@@ -886,6 +886,162 @@ async fn a_draft_property_refuses_to_be_let_until_someone_declares_it_available(
     assert_eq!(activated["status"], "active");
 }
 
+/// **Con un contratto in essere non si torna in bozza**, e `maintenance` sì.
+///
+/// `R44`, la porta di servizio: la regola dell'attivazione non basta da sola. Se
+/// un `PATCH` accettasse `status: draft` su un immobile affittato, «Affittato
+/// (Bozza)» rientrerebbe dall'altra parte. `maintenance` resta ammesso di
+/// proposito: «In manutenzione (Affittato)» è un'anomalia vera, che il doppio
+/// badge della 5-ter esiste per mostrare.
+#[tokio::test]
+async fn a_property_with_a_lease_in_force_cannot_go_back_to_draft_but_can_go_to_maintenance() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "porta-di-servizio").await;
+    let property = create_property(&app, &token, "Immobile affittato").await;
+
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &lease, "Inquilina Presente", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "draft" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.lease_in_force");
+
+    // `maintenance` passa: la domanda si fa **solo** quando si chiede la bozza.
+    let (status, updated) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "maintenance" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {updated}");
+    assert_eq!(updated["status"], "maintenance");
+
+    // E un `PATCH` che non tocca lo stato nemmeno: non c'è nessuna domanda da
+    // fare, e farla renderebbe immodificabile un immobile affittato.
+    let (status, renamed) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "label": "Immobile affittato, rinominato" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {renamed}");
+    assert_eq!(renamed["label"], "Immobile affittato, rinominato");
+}
+
+/// **Con un contratto in essere non si archivia**, e disdire è la via d'uscita.
+///
+/// `R45`: archiviare è un soft delete, e prima della sezione 12 portava via
+/// l'immobile lasciando il contratto attaccato a una riga che le risposte chiamano
+/// «Immobile archiviato» — con gli addebiti che continuavano a maturare e
+/// l'inquilino che non vedeva nulla di strano. Si rifiuta, **non si disdice**: un
+/// atto con una data e delle conseguenze non si nasconde dentro un'archiviazione.
+#[tokio::test]
+async fn a_property_with_a_lease_in_force_is_archived_only_after_the_lease_is_terminated() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "archivia-affittato").await;
+    let property = create_property(&app, &token, "Immobile da archiviare").await;
+
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &lease, "Inquilino Residente", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (status, problem) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.lease_in_force");
+
+    // L'immobile è ancora là: il rifiuto non ha archiviato a metà.
+    let (status, still_there) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {still_there}");
+
+    // E il contratto **non** è stato disdetto dall'archiviazione rifiutata.
+    let (status, lease_now) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {lease_now}");
+    assert_eq!(
+        lease_now["status"], "active",
+        "archiviare non disdice, nemmeno quando fallisce"
+    );
+
+    // Disdetto il contratto, la stessa chiamata archivia.
+    let (status, terminated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/terminate"),
+            &token,
+            serde_json::json!({ "reason": "Fine del rapporto" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {terminated}");
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // E fuori dall'elenco, che è ciò che archiviare significa.
+    let (status, page) = app
+        .send("GET", "/api/v1/properties", Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let visible: Vec<&str> = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert!(!visible.contains(&property.as_str()), "corpo: {page}");
+}
+
 /// L'immobile si legge **prima** delle parti, e il messaggio è la ragione.
 ///
 /// Un contratto senza inquilino su un immobile in bozza è sbagliato due volte. Se

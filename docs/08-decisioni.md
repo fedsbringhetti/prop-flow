@@ -327,6 +327,29 @@ workflow. Il saldo si legge da `v_charge_balances`, lo stato lo scrive il servic
 layer. Anche "almeno un owner per organizzazione" resta applicativo, perché
 richiederebbe un trigger cross-row.
 
+**Nota del 22 settembre 2026 — tre regole in più, dallo stesso lato del criterio.**
+La sezione 12 ha aggiunto ciò che un contratto in essere vieta su un immobile, e
+tutte e tre stanno nel service layer per la ragione di «almeno un owner»: il legame
+è **cross-row** — il vincolo vive su `app.leases` e la scrittura avviene su
+`app.properties` — e un trigger che lo esprimesse dovrebbe interrogare un'altra
+tabella a ogni `UPDATE`.
+
+- **in bozza non si affitta**: `ActivateLease` rilegge l'immobile e rifiuta su
+  `draft` con `Invariant::PropertyNotLettable` → `property.not_lettable`;
+- **con un contratto in essere non si torna in bozza**: `UpdateProperty` rifiuta
+  `status: draft` con `Invariant::PropertyHasLeaseInForce` →
+  `property.lease_in_force`;
+- **con un contratto in essere non si archivia**: `ArchiveProperty` rifiuta con lo
+  stesso invariante.
+
+Come per «almeno un owner», il rifiuto è **parlante** e non una policy che nega: la
+domanda passa da `LeaseRepository::has_in_force_for_property`, che interroga
+`app.lease_in_force` — la stessa funzione delle viste e dell'elenco, perché due
+definizioni di «in essere» farebbero rispondere l'archiviazione e la dashboard in
+modo diverso sullo stesso contratto. Che non ci sia una rete nel database è una
+conseguenza accettata: una `UPDATE` scritta a mano su `app.properties` aggira le
+tre regole, come aggirerebbe «almeno un owner».
+
 ---
 
 <a id="adr-016"></a>

@@ -469,8 +469,13 @@ export const it = {
     archiveConfirm: 'Archiviare questo immobile?',
     /** In blocco cambia il numero, non la frase: la conseguenza è la stessa. */
     archiveConfirmMany: 'Archiviare {count} immobili?',
+    /** La seconda frase è la condizione della voce `R45`: la conferma deve dire che
+     *  un contratto in essere ferma l’archiviazione, e che la via d’uscita è
+     *  disdire. Archiviare non disdice — sarebbe un atto con le sue conseguenze
+     *  nascosto dentro un soft delete (ADR-015) — e scoprirlo dal `409` dopo aver
+     *  confermato significa scoprirlo troppo tardi. */
     archiveExplain:
-      'Non viene cancellato: sparisce dagli elenchi e non è più modificabile. La traccia resta.',
+      'Non viene cancellato: sparisce dagli elenchi e non è più modificabile. La traccia resta. Se ha un contratto in essere, va prima disdetto.',
     archived: 'Immobile archiviato.',
     created: 'Immobile registrato.',
     updated: 'Immobile aggiornato.',
@@ -1655,10 +1660,15 @@ export const it = {
     'property.not_found': 'Immobile non trovato.',
     'property.archived': 'L’immobile è archiviato e non è modificabile.',
     /** Dice **che cosa fare**, non solo che cosa non si può: il rifiuto arriva
-     *  sull'attivazione di un contratto, e chi lo legge è a un campo di distanza
+     *  sull’attivazione di un contratto, e chi lo legge è a un campo di distanza
      *  dal rimedio. */
     'property.not_lettable':
       'L’immobile è in bozza: dichiaralo disponibile prima di attivare il contratto.',
+    /** Lo stesso invariante per due operazioni — tornare in bozza e archiviare —
+     *  e quindi una frase che vale per entrambe, con la via d’uscita: si disdice il
+     *  contratto, non lo si archivia di nascosto (ADR-015). */
+    'property.lease_in_force':
+      'L’immobile ha un contratto in essere: disdicilo prima di cambiarne lo stato o archiviarlo.',
     'room.not_found': 'Stanza non trovata.',
     'room.name_taken': 'Questo nome è già usato nell’immobile.',
     'room.archived': 'La stanza è archiviata e non è modificabile.',
