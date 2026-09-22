@@ -1,9 +1,9 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Undici voci aperte**, una delle quali rinviata con la sua ragione (`R40`), con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Nove voci aperte**, una delle quali rinviata con la sua ragione (`R40`), con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
-Ventinove sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
+Trentadue sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
 [sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
 la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
@@ -15,7 +15,8 @@ e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter); `R7`, 
 [sezione 8](11-piani-conclusi.md#esito-sezione-8); `R8` con la
 [sezione 9](11-piani-conclusi.md#esito-sezione-9); `R50`, `R51` e `R46` con la
 [sezione 10](11-piani-conclusi.md#esito-sezione-10); `R36`, `R26`, `R49`, `R52`, `R41` e
-`R27` con la [sezione 11](11-piani-conclusi.md#esito-sezione-11). Sono entrate
+`R27` con la [sezione 11](11-piani-conclusi.md#esito-sezione-11); `R44`, `R45` e `R29`
+con la [sezione 12](11-piani-conclusi.md#esito-sezione-12). Sono entrate
 `R26`, `R27`, `R28` e `R29`, poi `R30`–`R35` dal collaudo, e infine `R36` **eseguendo** la
 5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
 le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
@@ -30,7 +31,8 @@ il metodo è stato [ritirato](11-piani-conclusi.md#piano-sezione-8)
 per il costo, e ciò che vedeva lo si cerca da sé; `R50` e `R51` dal **giro a mano della
 8**, fatto come primo passo della 9 ([poscritto](11-piani-conclusi.md#poscritto-sezione-8));
 `R52` **eseguendo** la 10 e `R53` **eseguendo** la 11, entrambe viste di fianco a ciò che
-si stava sistemando.
+si stava sistemando; `R54` dal **giro a mano della 12**, che è tornato a essere il modo in
+cui si trovano le cose — l'ha scoperta l'ora in cui il giro è stato fatto.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -108,7 +110,7 @@ ogni fetta. Qui restano le voci, con il loro stato. Com'era, con le ragioni dell
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R44 | aperta | **Un immobile nasce in «Bozza» e ci resta**, e in bozza si può affittare lo stesso | Trovata **usando il prodotto**, al primo immobile creato. Tre cose si sommano. `draft` è il default alla creazione (`Property::create`) e nessuna transizione lo muove; il form di creazione **non offre lo stato**, quindi si atterra sempre in bozza; e lo stato si cambia solo dentro il dialogo «Modifica» della scheda, che non è dove uno cerca uno stato. La tendina offre tre valori su sei ed è giusto così: `rented` e `partially_rented` sono **derivati** dai contratti (ADR-019) e `archived` ha l'operazione sua. Il sintomo che lo fa sembrare rotto è il doppio badge della 5-ter: `draft` è classificato come *giudizio*, quindi un immobile affittato senza essere mai stato dichiarato disponibile mostra **«Affittato (Bozza)» per sempre** — corretto per costruzione, e insopportabile da guardare. **Due decisioni prese, una da fare.** *Presa:* il form di creazione **offre lo stato**, con «Disponibile» proposto e «Bozza» ancora scegliibile per chi sta compilando; il dominio non cambia default. *Presa:* **in bozza non si affitta** — oggi `draft` non blocca nulla (verificato: nessun caso d'uso lo guarda), e deve invece rifiutare. È una regola del service layer come «almeno un owner»: il legame contratto→immobile è cross-row, quindi non è un trigger. *Da fare:* **dove** rifiutare. «Affittare» nel modello derivato è **l'attivazione** — `rented` discende da `app.lease_in_force`, cioè da un contratto attivo — quindi la lettura naturale è che `ActivateLease` rifiuti su un immobile in bozza, con un codice suo (`property.not_lettable` o simile, `409`), e che una bozza di contratto su una bozza di immobile resti possibile perché sono due cose che si preparano insieme. L'alternativa — rifiutare già `DraftLease` — obbliga a un ordine di compilazione. **La trappola è la porta di servizio**: se `PATCH /properties/{id}` accetta `status = draft` su un immobile con un contratto in essere, l'anomalia rientra dall'altra parte. La regola va quindi scritta in **due** posti — non si attiva su una bozza, e non si riporta in bozza ciò che è affittato — oppure il badge «Affittato (Bozza)» resta raggiungibile. Chiude per costruzione quel doppio badge: se la regola regge, `draft` smette di essere un giudizio che il fatto può smentire, e `propertyJudgements` in `status.tsx` va rivisto di conseguenza |
+| R54 | aperta | **«Oggi» del prodotto è il giorno UTC, e per due ore ogni notte non è il giorno italiano** | Trovata **eseguendo la sezione 12**, facendo il giro a mano all'una di notte: un contratto attivo dal 23 settembre, creato il 23 settembre alle 01:00, **non risultava in essere** — e l'immobile si archiviava senza il rifiuto appena costruito. Non è un difetto della sezione: è `app.lease_in_force` (`0017`) che confronta con `CURRENT_DATE`, valutato nel fuso **della sessione**, e la connessione di `sqlx` nasce con `TimeZone = UTC`. Alle 01:00 di Roma in UTC è ancora il giorno prima. Verificato: nella stessa transazione, `SET TimeZone='UTC'` fa rispondere `false` a `app.lease_in_force('active','2026-09-23','2027-09-22')` e `Europe/Rome` `true`. **I due livelli sono coerenti fra loro**, ed è la cosa buona: il dominio usa `clock.now().date_naive()`, cioè `Utc::now()`, quindi `Lease::is_in_force` e la funzione SQL dicono la stessa cosa. Il prodotto ha «oggi» in UTC, e basta. **Non tocca solo i contratti**: `is_past_due` degli addebiti (`0024`) confronta `due_date < CURRENT_DATE`, e `v_property_occupancy` passa da `lease_in_force`; per due ore ogni notte (una d'inverno) un addebito scaduto oggi non risulta scaduto e un contratto che comincia oggi non è in essere. **Due vie, e nessuna è ovvia.** Fissare il fuso della sessione applicativa a `Europe/Rome` allinea il prodotto a chi lo usa, ma lo lega a un fuso solo — e la V3 multi-tenant non lo è; oppure si dichiara che le date sono UTC e lo si scrive dove si vede, che è coerente ma sposta il problema su chi legge. **Da decidere anche se valga la pena**: la finestra è di due ore di notte, e il danno osservato è che un'archiviazione passa quando non dovrebbe |
 
 ### Stati che nessuno aggiorna
 
@@ -164,7 +166,6 @@ sezione è il primo client che legge un nome da `app.users`
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R29 | aperta | **A chi abita, un incasso non attribuito fa vedere un residuo più alto del vero** — e la riga si contraddice da sola | Trovato seminando i dati del collaudo, e **misurato**: il proprietario registra 150,00 su un addebito da 420,00 con `POST /charges/{id}/payments` senza `payer_user_id`, e sulla **stessa riga** l'inquilino legge `status: partially_paid` con `paid_amount: 0.00` e `outstanding_amount: 420.00`. Pagherebbe due volte. La causa è a due piani: `payments_select` mostra la riga a staff, `payer_user_id` e `payee_user_id`, quindi un incasso non attribuito è invisibile a chi lo ha fatto — e questo è **documentato e voluto** (`submit.rs`: «un bonifico da un conto che non si sa a chi ricondurre esiste»); ma `app.v_charge_balances` è `security_invoker = true`, quindi **somma i pagamenti sotto la Row Level Security di chi legge**, e il totale scende con essa. Il commento di `RecordPaymentRequest` promette il contrario — «il totale incassato gli resta comunque visibile in `paid_amount` sul saldo dell'addebito» — ed è **falso**: quella frase è la cosa da correggere per prima, perché è ciò che farebbe concludere a chi passa di lì che il difetto non esiste. Da decidere il rimedio, e sono tre strade diverse: rendere `payer_user_id` obbligatorio quando l'addebito ha un contratto con un solo inquilino registrato; oppure far sommare i pagamenti a una funzione `SECURITY DEFINER` che proietta il solo totale, come `app.property_residents` proietta tre colonne ([ADR-036](08-decisioni.md#adr-036)); oppure accettare che il totale sia parziale e **non mostrarlo affatto** a chi non vede tutte le righe, che è preferibile a mostrarne uno falso. La prima è la più piccola e non chiude il caso del bonifico anonimo; la seconda lo chiude e tocca una vista contabile; la terza è la sola che non richiede di scegliere adesso |
 
 ### Dal collaudo, traccia A e B — la prima mezza giornata di giro vero
 
@@ -203,7 +204,6 @@ sezione è il primo client che legge un nome da `app.users`
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
 | R28 | aperta | **Il subentro: cambiare la composizione di un contratto attivo** | Nato dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3), che ha chiuso la porta da cui si entrava per sbaglio: aggiungere una parte a un contratto attivo era ammesso e faceva smettere le quote di sommare a 100, quindi ora si rifiuta con `lease.parties_locked` ([ADR-046](08-decisioni.md#adr-046)). Il caso legittimo dietro resta: **un coinquilino che subentra a metà contratto**. Non è un'aggiunta — è un cambio di composizione che deve tenere la somma a 100, cioè **due righe che cambiano insieme**, e nessuna richiesta lo permette: `PATCH /lease-parties/{id}` ne tocca una sola, e in mezzo si passa da uno stato che l'attivazione rifiuterebbe. Da decidere la forma: una richiesta che porta **tutte** le parti insieme e le sostituisce, oppure una transizione dedicata («esce X, entra Y, con queste quote»). La seconda dice anche *quando*, che è ciò che serve agli addebiti. Legata a `left_at`, che il modello ha e nessuno scrive |
-| R45 | aperta | **Un immobile con un contratto in essere si archivia senza che nulla protesti** | Trovata **usando il prodotto**, archiviando due immobili in blocco nella [sezione 7](11-piani-conclusi.md#esito-sezione-7): uno aveva un contratto attivo, ed è uscito dagli elenchi come l'altro. `ArchiveProperty` (`crates/application/src/use_cases/property/archive.rs`) rilegge l'immobile e non guarda i contratti; lo schema non ha un vincolo che lo impedisca, e non deve averlo — un trigger cross-row sarebbe workflow nel database, come per «almeno un owner». Il contratto resta, con `property_id` che punta a una riga che le risposte chiamano «Immobile archiviato» ([ADR-043](08-decisioni.md#adr-043)), gli addebiti continuano a maturare, e l'inquilino non vede nulla di strano. È la stessa domanda di `R16` — *si può uscire con un contratto in essere?* — posta sull'immobile invece che sulla persona, e la risposta là è stata **no**, con `app.has_lease_in_force` che esiste già e si applica per persona: qui servirebbe la stessa domanda per immobile (`app.lease_in_force` c'è dalla `0017`). Da decidere se rifiutare, o se archiviare debba disdire, e in entrambi i casi la conferma della sezione 7 deve dirlo. **Non toccare l'archiviazione in blocco**: il `409` che ne uscirebbe è già un esito per riga |
 
 ### Il perimetro dei ruoli
 
