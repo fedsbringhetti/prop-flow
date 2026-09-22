@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, LeaseActivated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
+use propflow_domain::property::PropertyStatus;
 use propflow_domain::shared::LeaseId;
-use propflow_domain::{Entity, RequestContext};
+use propflow_domain::{DomainError, Entity, Invariant, RequestContext};
 
 use super::LeaseView;
 use crate::authorization;
@@ -52,6 +53,22 @@ impl ActivateLease {
             .find_by_id(command.id)
             .await?
             .ok_or(AppError::not_found(Entity::Lease))?;
+
+        // **L'immobile prima delle parti, e l'ordine è il messaggio.** Per il
+        // database non cambia niente — è tutto in una transazione — ma dire «le
+        // quote non coprono il canone» su un contratto che comunque non si potrebbe
+        // attivare manda a sistemare la cosa sbagliata. Un immobile in bozza non si
+        // affitta: ADR-015, regola del service layer perché il legame è cross-row.
+        let property = uow
+            .properties()
+            .find_by_id(lease.property_id())
+            .await?
+            .ok_or(AppError::not_found(Entity::Property))?;
+        if matches!(property.status(), PropertyStatus::Draft) {
+            return Err(AppError::Validation(DomainError::Invariant(
+                Invariant::PropertyNotLettable,
+            )));
+        }
 
         // Le parti servono all'invariante: un contratto attivo senza inquilino, o
         // con quote che non coprono il canone, non sarebbe addebitabile.

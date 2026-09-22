@@ -1654,6 +1654,11 @@ export const it = {
     'validation.failed': 'Controlla i campi segnalati.',
     'property.not_found': 'Immobile non trovato.',
     'property.archived': 'L’immobile è archiviato e non è modificabile.',
+    /** Dice **che cosa fare**, non solo che cosa non si può: il rifiuto arriva
+     *  sull'attivazione di un contratto, e chi lo legge è a un campo di distanza
+     *  dal rimedio. */
+    'property.not_lettable':
+      'L’immobile è in bozza: dichiaralo disponibile prima di attivare il contratto.',
     'room.not_found': 'Stanza non trovata.',
     'room.name_taken': 'Questo nome è già usato nell’immobile.',
     'room.archived': 'La stanza è archiviata e non è modificabile.',

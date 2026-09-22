@@ -123,7 +123,8 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `code` | Stato | Condizione |
 |---|---|---|
 | `property.archived` | 409 | immobile archiviato, non modificabile |
-| `property.archive_requires_dedicated_operation` | 409 | archiviare non si fa con un `PATCH` di stato |
+| `property.archive_requires_dedicated_operation` | 409 | archiviare non si fa con un `PATCH` di stato, né chiedendolo alla creazione |
+| `property.not_lettable` | 409 | l'immobile è in bozza: non ci si attiva un contratto. Il rifiuto è sull'attivazione e non sulla bozza del contratto, che resta possibile |
 | `room.archived` | 409 | stanza archiviata, non modificabile |
 | `lease.invalid_transition` | 409 | attivazione, disdetta o annullamento non ammessi nello stato attuale |
 | `lease.party_already_linked` | 409 | la parte è già collegata a un altro utente |
@@ -787,7 +788,7 @@ la forma `{ "items": [ … ] }` senza `next_cursor`.
 | GET | `/api/v1/leases` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `in_force` |
 | GET | `/api/v1/leases/{id}` | membro | `200` con le parti contrattuali, o `404` |
 | POST | `/api/v1/leases/{id}/parties` | staff | `201`. `409` se esiste già un intestatario principale |
-| POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete |
+| POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete, e `409 property.not_lettable` su un immobile in bozza — che è il primo rifiuto valutato, prima delle parti |
 | POST | `/api/v1/leases/{id}/terminate` | staff | `200`. `409` se il contratto non è attivo |
 
 L'inquilino vede il **proprio** contratto con `GET`, non gli altri della stessa

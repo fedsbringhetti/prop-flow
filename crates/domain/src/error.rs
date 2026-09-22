@@ -199,6 +199,15 @@ pub enum Invariant {
     PropertyArchived,
     #[error("Archiving requires the dedicated operation, not a status update")]
     PropertyArchiveRequiresDedicatedOperation,
+    /// Un immobile in bozza non si affitta.
+    ///
+    /// Il rifiuto è **all'attivazione** e non alla bozza del contratto: nel modello
+    /// derivato «affittato» comincia con `app.lease_in_force` (ADR-019), e una
+    /// bozza di contratto su una bozza di immobile sono due cose che si preparano
+    /// insieme. Regola del service layer per la ragione di ADR-015: il legame è
+    /// cross-row.
+    #[error("A draft property cannot be let")]
+    PropertyNotLettable,
     #[error("An archived room cannot be modified")]
     RoomArchived,
 
@@ -376,6 +385,7 @@ impl Invariant {
             Self::PropertyArchiveRequiresDedicatedOperation => {
                 "property.archive_requires_dedicated_operation"
             }
+            Self::PropertyNotLettable => "property.not_lettable",
             Self::RoomArchived => "room.archived",
             Self::LeaseNotActivatable | Self::LeaseNotTerminable | Self::LeaseNotCancellable => {
                 "lease.invalid_transition"
@@ -557,6 +567,7 @@ mod tests {
             Denial::InvitationExpired.code(),
             Invariant::PropertyArchived.code(),
             Invariant::PropertyArchiveRequiresDedicatedOperation.code(),
+            Invariant::PropertyNotLettable.code(),
             Invariant::RoomArchived.code(),
             Invariant::LeaseNotActivatable.code(),
             Invariant::LeasePartyAlreadyLinked.code(),

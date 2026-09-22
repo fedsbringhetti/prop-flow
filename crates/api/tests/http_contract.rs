@@ -819,6 +819,118 @@ async fn a_property_can_be_born_available_and_stays_a_draft_when_nobody_says_oth
     );
 }
 
+/// **In bozza non si affitta**, e il rifiuto è all'attivazione.
+///
+/// `R44`: un immobile nasce in bozza e ci resta, e fino alla sezione 12 nessuna
+/// regola lo guardava — si poteva attivare un contratto su un immobile che nessuno
+/// aveva mai dichiarato disponibile, e il doppio badge mostrava «Affittato (Bozza)»
+/// per sempre. Il rifiuto sta su `ActivateLease` e non su `DraftLease`: una bozza
+/// di contratto su una bozza di immobile sono due cose che si preparano insieme
+/// (ADR-015).
+#[tokio::test]
+async fn a_draft_property_refuses_to_be_let_until_someone_declares_it_available() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "bozza-non-si-affitta").await;
+
+    // Creato senza passare dall'helper: qui la bozza è la premessa, non un caso.
+    let (status, created) = app
+        .post_auth(
+            "/api/v1/properties",
+            &token,
+            serde_json::json!({
+                "label": "Immobile mai dichiarato",
+                "property_type": "apartment",
+                "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["status"], "draft", "il default non cambia");
+    let property = created["id"].as_str().expect("id").to_owned();
+
+    // La bozza di contratto resta possibile: è l'ordine di compilazione che non si
+    // vuole imporre.
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &lease, "Inquilina Pronta", None).await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.not_lettable");
+
+    // Dichiarato disponibile, la stessa chiamata passa: è l'unica cosa che
+    // mancava.
+    let (status, updated) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "available" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {updated}");
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    assert_eq!(activated["status"], "active");
+}
+
+/// L'immobile si legge **prima** delle parti, e il messaggio è la ragione.
+///
+/// Un contratto senza inquilino su un immobile in bozza è sbagliato due volte. Se
+/// rispondesse `lease.without_tenant_party`, chi lo legge aggiungerebbe una parte
+/// per poi ricevere `property.not_lettable` al secondo tentativo: due giri per
+/// arrivare alla cosa da fare. Per il database l'ordine non conta — è tutto in una
+/// transazione — per chi legge la risposta sì.
+#[tokio::test]
+async fn a_draft_property_is_refused_before_the_parties_are_even_looked_at() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "ordine-dei-rifiuti").await;
+
+    let (status, created) = app
+        .post_auth(
+            "/api/v1/properties",
+            &token,
+            serde_json::json!({
+                "label": "Immobile in bozza",
+                "property_type": "apartment",
+                "address": { "street": "Via Roma 2", "city": "Milano", "province": "MI" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    let property = created["id"].as_str().expect("id").to_owned();
+
+    // Nessuna parte: senza la lettura dell'immobile il rifiuto sarebbe quello
+    // dell'inquilino mancante.
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "property.not_lettable",
+        "l'immobile va letto prima delle parti, o il rifiuto manda a sistemare \
+         la cosa sbagliata"
+    );
+}
+
 #[tokio::test]
 async fn full_lease_lifecycle() {
     let app = require_app!();
