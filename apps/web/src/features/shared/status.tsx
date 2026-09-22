@@ -213,13 +213,18 @@ const chargeTone: Record<ChargeStatus, BadgeTone> = {
 /**
  * `overdue` è derivato e non è mai memorizzato, come `expired` sui contratti.
  *
- * **La coppia resta**, e non per dimenticanza: `Charge::effective_status` diverge
- * solo da uno stato `is_outstanding()`, cioè da `issued` **o da
- * `partially_paid`** — e «parzialmente pagato» non si ricostruisce da «scaduto».
- * La regola di `isAnomaly` qui non si applica pari pari: sugli altri tre il
- * dichiarato è un giudizio o un default, qui è un fatto contabile che il derivato
- * nasconderebbe. Con `issued` la parentesi è invece lo stesso rumore che `R30`
- * descrive, e sistemarla è una voce a sé in `docs/12-da-fare.md`.
+ * **Il rimedio è asimmetrico**, e non per dimenticanza: `Charge::effective_status`
+ * diverge solo da uno stato `is_outstanding()`, cioè da `issued` **o da
+ * `partially_paid`**. Con `issued` vale la regola di `R30`: «(Emesso)» accanto a
+ * «Scaduto» è un default che il fatto smentisce, e si tace. Con `partially_paid`
+ * no: «parzialmente pagato» è un fatto contabile che non si ricostruisce da
+ * «scaduto», e il derivato da solo lo nasconderebbe. Sono **due fatti veri
+ * insieme**, quindi due badge e non una parentesi: la parentesi era la forma di
+ * «giudizio che il fatto smentisce», e qui non c'è un giudizio.
+ *
+ * Chi vede due badge e ne toglie uno per ordine reintroduce «Scaduto» che nasconde
+ * «parzialmente pagato»: è la ragione per cui la 5-ter non aveva accorpato `R36` a
+ * `R30`, e i due test in `status.test.tsx` esistono per questo.
  */
 export function ChargeStatusBadge({
   status,
@@ -228,13 +233,12 @@ export function ChargeStatusBadge({
   status: ChargeStatus
   effectiveStatus: ChargeStatus
 }) {
-  if (status === effectiveStatus) {
-    return <Badge tone={chargeTone[status]}>{t.charge.statuses[status]}</Badge>
-  }
+  const derived = <Badge tone={chargeTone[effectiveStatus]}>{t.charge.statuses[effectiveStatus]}</Badge>
+  if (status === effectiveStatus || status !== 'partially_paid') return derived
   return (
-    <span className="inline-flex items-center gap-1">
-      <Badge tone={chargeTone[effectiveStatus]}>{t.charge.statuses[effectiveStatus]}</Badge>
-      <span className="text-xs text-ink-muted">({t.charge.statuses[status]})</span>
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {derived}
+      <Badge tone={chargeTone[status]}>{t.charge.statuses[status]}</Badge>
     </span>
   )
 }

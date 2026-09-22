@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { LeaseStatusBadge, PropertyStatusBadge, RoomStatusBadge } from './status'
+import { ChargeStatusBadge, LeaseStatusBadge, PropertyStatusBadge, RoomStatusBadge } from './status'
 
 /**
  * **Il caso che regredisce è l'anomalia, non la norma.**
@@ -63,5 +63,29 @@ describe('lo stato dichiarato accanto al derivato', () => {
     render(<RoomStatusBadge status="unavailable" />)
     expect(screen.getByText('Non disponibile')).toBeInTheDocument()
     expect(screen.queryByText('(Non disponibile)')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * Gli addebiti sono l'**asimmetria** di `R36`: il derivato diverge da `issued` o da
+ * `partially_paid`, e solo il secondo è un fatto che «Scaduto» nasconderebbe. Il
+ * primo test è quello che regredisce se qualcuno «semplifica» a un badge solo; il
+ * secondo è `R30` applicata agli addebiti.
+ */
+describe('un addebito scaduto dice due fatti, non un fatto e un giudizio', () => {
+  it('scaduto e parzialmente pagato rende due badge, senza parentesi', () => {
+    const { container } = render(
+      <ChargeStatusBadge status="partially_paid" effectiveStatus="overdue" />,
+    )
+    expect(screen.getByText('Scaduto')).toBeInTheDocument()
+    expect(screen.getByText('Parzialmente pagato')).toBeInTheDocument()
+    expect(container.textContent).not.toContain('(')
+  })
+
+  it('scaduto ed emesso rende un badge solo', () => {
+    const { container } = render(<ChargeStatusBadge status="issued" effectiveStatus="overdue" />)
+    expect(screen.getByText('Scaduto')).toBeInTheDocument()
+    expect(screen.queryByText(/Emesso/)).not.toBeInTheDocument()
+    expect(container.querySelectorAll('span')).toHaveLength(1)
   })
 })
