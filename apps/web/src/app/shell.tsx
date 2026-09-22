@@ -401,7 +401,8 @@ function NoOrganizationScreen() {
               ? t.org.noneBody(account.data.full_name)
               : t.org.noneBodyFallback}
         </p>
-        <p className="mt-1 mb-6 text-sm text-ink-muted">{t.org.noneHint}</p>
+        <p className="mt-1 text-sm text-ink-muted">{t.org.noneHint}</p>
+        <p className="mt-1 mb-6 text-sm text-ink-muted">{t.org.noneAfterLeaving}</p>
         <form
           noValidate
           className="flex flex-col gap-4"
