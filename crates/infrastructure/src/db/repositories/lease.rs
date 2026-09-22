@@ -237,6 +237,34 @@ impl LeaseRepository for PgUnitOfWork {
         Ok(row.0)
     }
 
+    async fn has_in_force_for_property(
+        &mut self,
+        property_id: PropertyId,
+    ) -> RepositoryResult<bool> {
+        // **`app.lease_in_force`, la stessa funzione di `list` e delle viste.** Le
+        // date sono metà della definizione: una condizione riscritta come
+        // `status = 'active'` risponderebbe vero su un contratto attivo e scaduto
+        // ieri, e l'archiviazione rifiuterebbe ciò che la dashboard non conta più.
+        //
+        // `security_invoker` non c'entra: qui si legge `app.leases` sotto la RLS di
+        // chi chiama, ed è giusto — le tre regole che usano questa domanda passano
+        // tutte da `ensure_staff`, e uno staff vede i contratti della sua
+        // organizzazione.
+        let row: (bool,) = sqlx::query_as(
+            "SELECT EXISTS (
+                 SELECT 1 FROM app.leases
+                  WHERE property_id = $1
+                    AND deleted_at IS NULL
+                    AND app.lease_in_force(status, start_date, end_date)
+             )",
+        )
+        .bind(property_id.as_uuid())
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(row.0)
+    }
+
     async fn labels(&mut self, ids: &[LeaseId]) -> RepositoryResult<Vec<LeaseLabels>> {
         if ids.is_empty() {
             return Ok(Vec::new());

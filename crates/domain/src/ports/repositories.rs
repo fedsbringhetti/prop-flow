@@ -437,6 +437,23 @@ pub trait LeaseRepository: Send {
         org_id: OrgId,
         user_id: UserId,
     ) -> RepositoryResult<bool>;
+
+    /// Se l'immobile abbia almeno un contratto **in essere**.
+    ///
+    /// È la stessa domanda di [`has_in_force_for_user`](Self::has_in_force_for_user)
+    /// posta sull'immobile invece che sulla persona, e serve alle tre regole che un
+    /// contratto in essere impone: non si attiva un contratto su una bozza, e un
+    /// immobile affittato non torna in bozza né si archivia (ADR-015).
+    ///
+    /// **Interroga `app.lease_in_force`**, la stessa funzione delle viste e
+    /// dell'elenco, e non una condizione riscritta: due definizioni di «in essere»
+    /// farebbero rispondere l'archiviazione e la dashboard in modo diverso sullo
+    /// stesso contratto. Un metodo e non `list(LeaseQuery { in_force, .. })` con un
+    /// limite di uno, che funzionerebbe e non direbbe che cosa chiede.
+    async fn has_in_force_for_property(
+        &mut self,
+        property_id: PropertyId,
+    ) -> RepositoryResult<bool>;
 }
 
 /// Come si chiama ciò che un contratto affitta.
