@@ -32,14 +32,16 @@ import { BillStatusBadge } from '../shared/status'
 /**
  * Gli stati che una bolletta può davvero avere.
  *
- * **`disputed` non c'è**, e non è una dimenticanza: nessuna transizione lo scrive,
- * quindi quell'opzione non poteva corrispondere a niente — è la forma di `R26`.
- * Contestare una bolletta non è uno stato ma un processo, con una ragione, una
- * data e un esito, e offrirlo come etichetta darebbe meno di quanto chi lo usa si
- * aspetta. `void` resta fuori per un'altra ragione: una bolletta annullata
- * sparisce dagli elenchi.
+ * **`disputed` e `paid` non ci sono**, e non è una dimenticanza: nessuna
+ * transizione li scrive (`BillStatus` nel dominio li porta come «mai scritto
+ * dall'applicazione»), quindi quelle opzioni non potevano corrispondere a niente —
+ * è la forma di `R26`. Contestare una bolletta non è uno stato ma un processo, con
+ * una ragione, una data e un esito, e offrirlo come etichetta darebbe meno di
+ * quanto chi lo usa si aspetta; «pagata» è una **data**, `paid_at`, che la sezione 4
+ * ha dato alla bolletta al posto dello stato. `void` resta fuori per un'altra
+ * ragione: una bolletta annullata sparisce dagli elenchi.
  */
-const STATUSES: BillStatus[] = ['draft', 'pending_review', 'validated', 'allocated', 'paid']
+const STATUSES: BillStatus[] = ['draft', 'pending_review', 'validated', 'allocated']
 
 const TYPES: UtilityType[] = [
   'electricity',

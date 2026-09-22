@@ -272,6 +272,37 @@ describe('il refresh a singolo volo', () => {
     await expect(session.refresh()).rejects.toMatchObject({ status: 0 })
     expect(session.current).not.toBeNull()
   })
+
+  /**
+   * **Un `5xx` al rinnovo non è un rifiuto** (`R52`). Un `401` che arriva a una
+   * richiesta mentre l'API si riavvia, seguito dal rinnovo che riceve un `502`
+   * dal proxy, buttava via la sessione in memoria con il cookie di refresh
+   * intatto. Il `401` è l'unico messaggio del server sul valore della sessione;
+   * un `502` dice che il server non c'era, che è un'altra cosa.
+   */
+  it('un 5xx al rinnovo lascia la sessione com’è, e il rinnovo dopo riesce', async () => {
+    let ended = 0
+    let outage = false
+    const api = new RotatingApi()
+    const session = new SessionStore({
+      fetch: async (input, init) => (outage ? problem(502, 'proxy.bad_gateway') : api.fetch(input, init)),
+      onSessionEnded: () => {
+        ended += 1
+      },
+    })
+    await session.refresh()
+    expect(session.current).not.toBeNull()
+
+    outage = true
+    await expect(session.refresh()).rejects.toMatchObject({ status: 502 })
+    expect(session.current).not.toBeNull()
+    expect(ended).toBe(0)
+
+    // L'API è tornata: il cookie è ancora buono, e nessuno deve rifare il login.
+    outage = false
+    await expect(session.refresh()).resolves.toMatchObject({ userId: expect.any(String) })
+    expect(session.current).not.toBeNull()
+  })
 })
 
 /**

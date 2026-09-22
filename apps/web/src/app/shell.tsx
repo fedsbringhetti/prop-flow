@@ -119,7 +119,7 @@ export const TENANT_HOME = '/addebiti'
  * arrivare a ciò che si è venuti a fare.
  */
 export function AppShell() {
-  const { session, store, restoring } = useSession()
+  const { session, store, restoring, organizationRemembered } = useSession()
   const isStaff = useIsStaff()
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
@@ -147,17 +147,27 @@ export function AppShell() {
    * da dare — e riceverebbe `403 org.not_selected` per un istante prima che
    * l'elenco corregga tutto. È la stessa lezione del poscritto della sezione 6:
    * una richiesta non deve dipendere da uno stato che non è ancora arrivato.
-   * Quando invece `session.organizationId` è già valorizzato — il caso comune,
-   * dal token o dal `localStorage` — non c'è nulla da aspettare: il guscio
-   * rende subito, come faceva prima di questo passo.
+   * Quando invece `session.organizationId` viene **dal token** — il caso
+   * comune — non c'è nulla da aspettare: il guscio rende subito.
+   *
+   * **La stessa attesa vale quando l'organizzazione è ricordata** (`R49`). Il
+   * ricordo di questo browser si applica prima che l'elenco risponda — vedi
+   * `session.tsx` — e può essere un'organizzazione lasciata da un altro browser:
+   * finché l'elenco non l'ha confermata, una schermata partirebbe con un
+   * `X-Org-Id` che l'API rifiuta. Il flag si legge **dal contesto, in questo
+   * stesso render**: uno stato locale aggiornato in un effetto sarebbe un giro in
+   * ritardo, che è tutto il difetto. Quando l'elenco arriva, l'effetto di
+   * riallineamento in `useOrganizations` conferma o corregge, e il flag cade.
    *
    * **Il terzo caso — l'errore — non è un `Loading` che dura per sempre**
    * (regola 23): senza un ramo suo, un `getOrganizations` che fallisse
    * lascerebbe chi guarda davanti a uno spinner senza via d'uscita, perché il
    * guscio che offrirebbe la riprova o l'uscita è proprio quello che questo
-   * stato sostituisce.
+   * stato sostituisce. Per il ricordo l'errore non ha un ramo a parte: l'elenco
+   * che fallisce lascia `isPending` falso, e il guscio rende con l'organizzazione
+   * ricordata come faceva prima — l'errore lo mostra la schermata.
    */
-  if (session.organizationId === null) {
+  if (session.organizationId === null || (organizationRemembered && organizations.isPending)) {
     if (organizations.isError) {
       return (
         <main className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 py-10">
@@ -391,7 +401,8 @@ function NoOrganizationScreen() {
               ? t.org.noneBody(account.data.full_name)
               : t.org.noneBodyFallback}
         </p>
-        <p className="mt-1 mb-6 text-sm text-ink-muted">{t.org.noneHint}</p>
+        <p className="mt-1 text-sm text-ink-muted">{t.org.noneHint}</p>
+        <p className="mt-1 mb-6 text-sm text-ink-muted">{t.org.noneAfterLeaving}</p>
         <form
           noValidate
           className="flex flex-col gap-4"
@@ -456,7 +467,7 @@ function NoOrganizationScreen() {
  */
 export function useOrganizations() {
   const client = useApi()
-  const { session, selectOrganization, clearOrganization } = useSession()
+  const { session, selectOrganization, clearOrganization, organizationRemembered } = useSession()
 
   const query = useQuery({
     queryKey: keys.organizations,
@@ -485,6 +496,11 @@ export function useOrganizations() {
    *
    * Il ruolo si riallinea per la stessa ragione: quello ricordato serve a non far
    * lampeggiare la navigazione al ricaricamento, ma è l'API a dire qual è.
+   *
+   * **Anche la conferma passa da `selectOrganization`** quando l'organizzazione
+   * era ricordata (`R49`): è ciò che dice al provider che l'elenco ha parlato, e
+   * apre il gate del guscio. Selezionare ciò che l'elenco conferma riscrive lo
+   * stesso ricordo, una volta.
    */
   useEffect(() => {
     if (!items) return
@@ -498,8 +514,10 @@ export function useOrganizations() {
       if (fallback) selectOrganization(fallback.id, fallback.role)
       return
     }
-    if (active.role !== activeRole) selectOrganization(active.id, active.role)
-  }, [items, activeId, activeRole, selectOrganization, clearOrganization])
+    if (active.role !== activeRole || organizationRemembered) {
+      selectOrganization(active.id, active.role)
+    }
+  }, [items, activeId, activeRole, organizationRemembered, selectOrganization, clearOrganization])
 
   const active: Organization | undefined = items?.find(
     (organization) => organization.id === activeId,

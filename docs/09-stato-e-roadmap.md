@@ -49,7 +49,7 @@ tre partizioni di `audit_log`, 35 enum, 6 domini, 163 indici, 69 policy RLS, 50 
 viste, 37 funzioni. **479 test Rust** — 221 di dominio, 16 applicativi, 27 di
 infrastruttura, 11 unitari del bordo HTTP, 85 di integrazione sulla persistenza, 3
 sull'adattatore S3, 113 di contratto HTTP, 3 di guardia sulla documentazione della
-configurazione — e **141 del client** in 23 file. `just ci` è il comando che li esegue
+configurazione — e **147 del client** in 25 file. `just ci` è il comando che li esegue
 tutti, con lo schema verificato dalle sue invarianti.
 
 **Com'è arrivato qui.** Dal 3 all'8 settembre 2026 le fette — le «fetta 1» dei moduli, poi
@@ -58,9 +58,10 @@ A, B, B-bis e C — hanno costruito le capacità; il 9 e 10 settembre il
 volta che il prodotto veniva usato per intero, e ha prodotto la maggior parte di
 [12](12-da-fare.md); dall'8 al 18 settembre le **dieci sezioni** hanno chiuso ciò che il
 collaudo ha trovato, tolto la registrazione aperta, spiegato il prodotto da dentro e
-sistemato le tre cose che il primo deploy avrebbe incontrato da sé. Ogni sezione ha il suo
-piano e il suo esito in [11](11-piani-conclusi.md), e la [tabella](#le-sezioni) qui sotto
-le elenca.
+sistemato le tre cose che il primo deploy avrebbe incontrato da sé; il 22 settembre la
+[11](11-piani-conclusi.md#esito-sezione-11) ha aperto la serie che chiude tutto il
+segnalato prima del collaudo. Ogni sezione ha il suo piano e il suo esito in
+[11](11-piani-conclusi.md), e la [tabella](#le-sezioni) qui sotto le elenca.
 
 **Che cosa blocca.** Dal 10 settembre il deploy aspetta **mezzi e non codice**: una VPS, un
 dominio, un relay SMTP con SPF, DKIM e DMARC, delle credenziali. Gli artefatti — il
@@ -99,7 +100,7 @@ Poi, nell'ordine:
 
 | | Passo | Chi | Stato |
 |---|---|---|---|
-| 1 | **Le sezioni 11-16**, una per conversazione, ognuna con il piano in questo file prima e l'esito in [11](11-piani-conclusi.md) dopo | chi sviluppa | la 11 è [pianificata](#piano-in-corso) |
+| 1 | **Le sezioni 11-16**, una per conversazione, ognuna con il piano in questo file prima e l'esito in [11](11-piani-conclusi.md) dopo | chi sviluppa | la 11 è [conclusa](11-piani-conclusi.md#esito-sezione-11), la 12 è [pianificata](#piano-in-corso) |
 | 2 | I mezzi: VPS, dominio, relay SMTP con SPF, DKIM e DMARC, credenziali | chi possiede il progetto | **il blocco reale**, dal 10 settembre; si procurano in parallelo alle sezioni |
 | 3 | **Il ripristino provato una volta**, mentre dentro non ci sono i dati di nessuno | runbook | mai eseguito |
 | 4 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G* |
@@ -162,8 +163,8 @@ sezione**.
 | ~~**8**~~ | ~~Il perimetro dei ruoli~~ — **conclusa** il 16 settembre 2026 | `R9` | ADR, poi migration + backend + client + `ops/` | [Piano](11-piani-conclusi.md#piano-sezione-8) · [esito](11-piani-conclusi.md#esito-sezione-8). [ADR-053](08-decisioni.md#adr-053) prima del codice: l'inquilino entra per invito senza un'organizzazione propria, il proprietario con un token di piattaforma emesso da un runbook, `POST /auth/register` non esiste più. **La prima sezione eseguita con agenti separati, e l'ultima**: l'esito riporta le misure e la ragione del ritiro |
 | ~~**9**~~ | ~~Spiegare come si usa il sito~~ — **conclusa** il 17 settembre 2026 | `R8` | client | [Piano](11-piani-conclusi.md#piano-sezione-9) · [esito](11-piani-conclusi.md#esito-sezione-9). Era ultima **apposta**, e la scelta di *dove* — gli stati vuoti spiegano, una pagina sola raccoglie, il riepilogo vuoto è il primo accesso — è nel piano con le alternative scartate. Due premesse sbagliate, nessuna decisione cambiata |
 | ~~**10**~~ | ~~Tre chiusure prima del primo deploy~~ — **conclusa** il 18 settembre 2026 | `R50` `R51` `R46` | due rotte di API, un ramo nel client, una migration | [Piano](11-piani-conclusi.md#piano-sezione-10) · [esito](11-piani-conclusi.md#esito-sezione-10). Ciò che il primo deploy incontra da sé nel primo mese. Una premessa incompleta, trovata dal giro a mano prima del codice: `R51` era un `502` del proxy, non un errore di rete, e il ramo copre entrambi. Ne è uscita `R52`, che non precede il deploy |
-| **11** | **Il client dice il vero** — [piano](#piano-in-corso) | `R36` `R26` `R49` `R52` `R41` `R27` | client + docs | Le sei voci senza decisioni da prendere: un badge, due filtri, un `X-Org-Id` morto, il rinnovo su `5xx`, una riga dopo l'uscita, il primo avvio. Prima perché libera il campo, e perché ognuna è una cosa che un collaudo vedrebbe al primo giro |
-| **12** | **L'immobile, con un contratto in essere** | `R44` `R45` `R29` | dominio + client, una migration probabile | Tre regole del service layer che le voci hanno già mezze decise: in bozza non si affitta, con un contratto in essere non si archivia, e il residuo che chi abita legge non mente. Una sezione perché sono la stessa domanda — *che cosa vieta un contratto in essere* — posta su tre righe |
+| ~~**11**~~ | ~~Il client dice il vero~~ — **conclusa** il 22 settembre 2026 | `R36` `R26` `R49` `R52` `R41` `R27` | client + docs | [Piano](11-piani-conclusi.md#piano-sezione-11) · [esito](11-piani-conclusi.md#esito-sezione-11). Nessuna migration, nessuna rotta, nessun ADR, com'era scritto. Il piano aveva **una trappola giusta per la ragione sbagliata** — il flag di `R49` come `useState` è stato scartato per un giro doppio di React che, verificato, non esiste; lo ferma il lint — e un test che passava **senza** il rimedio, perché il probe non era `lazy` come le rotte vere. `R41` è entrata in tre posti guardando la schermata. Ha trovato `R53`: cambiare organizzazione non svuota la cache |
+| **12** | **L'immobile, con un contratto in essere** — [piano](#piano-in-corso) | `R44` `R45` `R29` | dominio + client, una migration, ADR-055 | Tre regole del service layer che le voci hanno già mezze decise: in bozza non si affitta, con un contratto in essere non si archivia, e il residuo che chi abita legge non mente. Una sezione perché sono la stessa domanda — *che cosa vieta un contratto in essere* — posta su tre righe |
 | **13** | **Il subentro** | `R28` | dominio + rotta + client | La transizione «esce X, entra Y, con queste quote», che scrive `left_at`. Da sola: è il pezzo di dominio più grande, e tocca l'invariante delle quote che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso |
 | **14** | **Le persone, l'altra direzione** | `R43` `R39` | ADR ×2, poi backend + client | Chi abita vede chi contattare; chi amministra può togliere qualcuno. Entrambe usano `has_lease_in_force`, che esiste; entrambe sono un ADR prima del codice perché una comunica un dato personale a un destinatario nuovo e l'altra decide che ne è dei contratti di chi viene tolto |
 | **15** | **La sessione** | `R42` `R48` | ADR, poi backend + client | «Ricordami» con la rotazione che non scorre, e l'invito da proprietario da un account che esiste già. Insieme perché sono le due cose che restano dell'autenticazione, e `R42` cambia una proprietà che [04](04-sicurezza.md) descrive |
@@ -246,180 +247,234 @@ Sono la stessa conversazione, e vale la pena affrontarle insieme.
 
 ## Piano in corso
 
-<a id="piano-sezione-11"></a>
+<a id="piano-sezione-12"></a>
 
-### Piano — Sezione 11: il client dice il vero
+### Piano — Sezione 12: l'immobile, con un contratto in essere
 
-Pianificata il **22 settembre 2026**, con la decisione di chiudere tutto il segnalato prima
-del collaudo. Chiude `R36`, `R26`, `R49`, `R52`, `R41`, `R27`: le sei voci di
-[12](12-da-fare.md) che **non chiedono una decisione** — o la chiedono piccola e la si
-prende qui — e che un collaudo vedrebbe al primo giro. Solo client e documentazione;
-**nessuna migration, nessuna rotta nuova**. È la sezione che libera il campo alle cinque
-che seguono, tutte con un ADR davanti.
+Pianificata il **22 settembre 2026**, nello stesso giro dell'esito della
+[11](11-piani-conclusi.md#esito-sezione-11), com'è la regola. Chiude `R44`, `R45` e
+`R29`: tre regole del service layer che le voci hanno già mezze decise — **in bozza non
+si affitta, con un contratto in essere non si archivia né si torna in bozza, e il residuo
+che chi abita legge non mente**. Sono la stessa domanda — *che cosa vieta, o che cosa
+deve dire, un contratto in essere* — posta su tre righe, ed è la ragione per cui stanno
+in una sezione sola. **Una migration** (la `0042`, per `R29`), **nessuna rotta nuova**,
+un ADR prima del codice di `R29` e una nota a un ADR esistente per le altre due.
 
-**Si esegue in una sola conversazione**, senza agenti, come dalla 9. Ogni test nuovo
-provato al contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito.
+**Si esegue in una sola conversazione**, senza agenti. Ogni test nuovo provato al
+contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito. I test con
+il database solo con `./ops/ci/test-integration.sh`, che non ha un filtro: le prove al
+contrario si combinano in un giro.
 
 #### Che cosa esiste davvero, verificato e non dedotto
 
 | Premessa | Verifica |
 |---|---|
-| `ChargeStatusBadge` mostra la coppia «derivato (memorizzato)» ogni volta che i due stati differiscono | vero: `apps/web/src/features/shared/status.tsx:231`, `if (status === effectiveStatus)` una sola volta, poi il derivato con il memorizzato fra parentesi. Il memorizzato può essere solo `issued` o `partially_paid` quando differisce (`Charge::effective_status` diverge solo da `is_outstanding()`) |
-| Il filtro degli immobili offre `archived`, che non può corrispondere a niente | vero: `PropertiesPage.tsx:40`, `STATUSES = ['draft', 'available', 'maintenance', 'archived']`, con il commento che lo dichiara come «il terzo di `R26` che questa sezione non chiude». Archiviare scrive `deleted_at` e `list`/`find_by_id` filtrano `deleted_at IS NULL` (`repositories/property.rs:59,76`); la conferma di archiviazione **promette** che sparisca dagli elenchi (`property.archiveExplain`) |
-| Il filtro delle bollette offre `paid`, che nessuno scrive | vero: `BillsPage.tsx:42`, `STATUSES` include `'paid'`; `BillStatus::Paid` e `Disputed` in `crates/domain/src/billing/bill.rs:80-83` portano «mai scritto dall'applicazione». La sezione 4 ha dato alla bolletta `paid_at`, non lo stato |
-| Il ricordo dell'organizzazione si applica **prima** che l'elenco risponda, e la sessione non sa da dove venga l'organizzazione attiva | vero: `session.tsx:202`, l'effetto chiama `store.selectOrganization(stored.active, …)` appena c'è `userId`; `Session` (`api/session.ts:14`) ha `organizationId` e `role`, nessuna origine. Il guscio aspetta l'elenco solo se `organizationId === null` (`shell.tsx:160`) e corregge il ricordo quando l'elenco arriva (`shell.tsx:474-501`) |
-| `sendRefresh` cancella la sessione su **ogni** risposta non `ok` | vero: `api/session.ts:372`, `if (!response.ok) { this.clear(); throw … }`; il ramo del `catch` di rete (`:369`) invece non cancella. `ApiClient.request` (`api/client.ts:75`) fa `await this.session.refresh()` su un `401` di sessione e lascia propagare l'errore |
-| Chi è uscito e riprova riceve `membership.already_left` senza la via | vero: `it.ts:1709`, «Eri già uscito da questa organizzazione.»; l'avviso **prima** dell'uscita (`it.ts:304`) dice già «Se qualcuno ti reinvita potrai rientrare» |
-| `README.md` e `06` insegnano il primo avvio a mano, e `just setup` fa la stessa cosa | vero: `README.md:18-32` e `06-sviluppo.md:20-31` elencano chiavi, `docker compose`, i `cargo run`; `justfile:40`, `setup: keys env up db install`, e `api`/`worker`/`web` avviano. `06:264` già consiglia `just api` per un errore comune |
-| I test sono 479 Rust e 141 del client | vero, esito della 10 e `just ci` su `dev` dopo il merge |
+| Un immobile nasce in `draft` e nessuna regola lo guarda | vero: `crates/domain/src/property/aggregate.rs:200`, `status: PropertyStatus::Draft` in `create`; `set_status` (`:291`) rifiuta solo `archived`; nessun caso d'uso in `crates/application/src/use_cases/{lease,property}/` legge lo stato dell'immobile per decidere |
+| Il form di creazione non offre lo stato; il dialogo «Modifica» sì | vero: `CreatePropertyRequest` (`crates/api/src/routes/properties.rs:220`) non ha `status`, `UpdatePropertyRequest` (`:240`) sì; `NewPropertyPage.tsx` non nomina `status`, `PropertyDetailPage.tsx:280-297` ha il `<Select>` con `EDITABLE_STATUSES` |
+| `ActivateLease` non legge l'immobile | vero: `crates/application/src/use_cases/lease/activate.rs:41-58` rilegge il contratto e le parti, poi `lease.activate(&parties, now)`; `property_id` compare solo nell'evento |
+| `ArchiveProperty` non guarda i contratti | vero: `crates/application/src/use_cases/property/archive.rs:46-51`, `find_by_id`, `property.archive(now)`, `soft_delete` |
+| «In essere» ha già una definizione sola, e un modo di chiederla per persona | vero: `app.lease_in_force(status, start_date, end_date)` dalla `0017`, usata da `LeaseRepository::list` con `LeaseQuery { property_id, in_force }` (`repositories/lease.rs:65-81`); `has_in_force_for_user` (`:224-231`) interroga `app.has_lease_in_force` per la sezione 6. **Non esiste** la forma per immobile |
+| Una regola cross-aggregato si esprime come `Invariant` sollevato dal caso d'uso, e risponde `409` | vero: `LeaveOrganization` (`use_cases/organization/leave.rs:105-109`) solleva `Invariant::MembershipHasLeaseInForce`, `crates/domain/src/error.rs:456` gli dà il codice `membership.lease_in_force`, `crates/api/src/error.rs:161` traduce ogni `Invariant` in `409 invariant`. È la forma di [ADR-015](08-decisioni.md#adr-015): «almeno un owner» resta applicativo perché richiederebbe un trigger cross-row |
+| Il saldo si somma sotto la RLS di chi legge, e i pagamenti non attribuiti sono invisibili a chi abita | vero: `app.v_charge_balances` è `security_invoker = true` (`0015:10`, `0024:71`), `payments_select` è staff **o** `payer_user_id` **o** `payee_user_id` (`0014:299-302`). Chi vede un addebito è una parte del suo contratto o staff (`charges_select`, `0014:291`, via `can_access_lease`) |
+| Il commento che promette il contrario è in **due** posti | vero: `use_cases/payment/read.rs:33-35` («il totale incassato resta comunque visibile a tutti nel `paid_amount` del saldo») e `routes/payments.rs:161-163` su `RecordPaymentRequest.payer_user_id` |
+| Esiste il precedente di una funzione `SECURITY DEFINER` che proietta poco | vero: `app.property_residents` (`0030:64`), `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = app, pg_temp`, con `REVOKE`/`GRANT` per ruolo (`0030:121-130`); l'invariante 6 di `ops/sql/checks/schema_invariants.sql:77-83` **fallisce** su un DEFINER senza `search_path` |
+| `propertyJudgements` in `status.tsx` include `draft`, e un test lo difende | vero: `features/shared/status.tsx:70`, e `status.test.tsx:45` «una bozza che risulta affittata è comunque un'anomalia da vedere» |
+| I test sono 479 Rust e 147 del client | vero, esito della 11 e `just ci` |
+
+#### Decisioni prese, con il perché
+
+- **`R29`: il totale incassato si somma sotto `SECURITY DEFINER`, e il resto del saldo
+  resta com'è.** Delle tre vie della voce, la prima — `payer_user_id` obbligatorio con un
+  solo inquilino — non chiude il bonifico anonimo, che `submit.rs` dichiara voluto; la
+  terza — non mostrare il totale a chi non vede tutte le righe — toglie a chi abita
+  l'unico numero per cui apre la prima schermata, «quanto resta da pagare». La seconda lo
+  chiude e costa una funzione: `app.charge_paid_amount(p_charge_id uuid) RETURNS
+  app.money_amount`, `SECURITY DEFINER`, che somma i pagamenti nei **due stati che la
+  vista già conta** (il predicato della `LATERAL` in `0024:86-95`, da riusare tale e
+  quale) senza la RLS di chi chiama; `v_charge_balances` la usa al posto della `LATERAL`.
+  **Che cosa rivela**: un aggregato — quanto è stato incassato su un addebito — a chi può
+  vedere quell'addebito, cioè a una parte del contratto o allo staff; **non** chi ha
+  pagato, né quando. È la stessa forma di [ADR-036](08-decisioni.md#adr-036), che proietta
+  tre colonne dei residenti, e va scritta come **ADR-055** prima della migration, perché
+  cambia una proprietà che [04](04-sicurezza.md) descrive: una vista contabile che
+  legge oltre la policy;
+- **`R44`: si rifiuta all'attivazione, non alla bozza del contratto.** Nel modello
+  derivato «affittato» è `app.lease_in_force`, che comincia con l'attivazione: una bozza
+  di contratto su una bozza di immobile sono due cose che si preparano insieme, e
+  rifiutare `DraftLease` obbligherebbe a un ordine di compilazione. `ActivateLease`
+  rilegge l'immobile e rifiuta con `Invariant::PropertyNotLettable` →
+  `property.not_lettable`, `409`;
+- **`R44`, la porta di servizio: non si torna in bozza con un contratto in essere.**
+  `UpdateProperty` con `status: draft` su un immobile che ha un contratto in essere
+  rifiuta con `Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. Senza,
+  «Affittato (Bozza)» rientra dall'altra parte. `maintenance` resta ammesso: la 5-ter ha
+  tenuto apposta «In manutenzione (Affittato)», che è un'anomalia vera da vedere;
+- **`R45`: si rifiuta, non si disdice.** Archiviare è un soft delete; disdire un contratto
+  è un atto con una data e delle conseguenze — gli addebiti che smettono di maturare, la
+  persona che può uscire — e farlo *di nascosto* dentro un'archiviazione sarebbe
+  esattamente il genere di effetto che nessuno cerca dove succede. Chi amministra
+  disdice, poi archivia. Stesso `Invariant::PropertyHasLeaseInForce` di sopra: è la stessa
+  regola, «un immobile con un contratto in essere non cambia natura»;
+- **la domanda per immobile è un metodo della porta, non una query di elenco.**
+  `LeaseRepository::has_in_force_for_property(property_id)` accanto a
+  `has_in_force_for_user`, con `SELECT EXISTS (… WHERE property_id = $1 AND deleted_at IS
+  NULL AND app.lease_in_force(status, start_date, end_date))`: **la stessa funzione**
+  delle viste e dell'elenco, perché due definizioni di «in essere» farebbero rispondere
+  l'archiviazione e la dashboard in modo diverso sullo stesso contratto. L'alternativa —
+  `list(LeaseQuery { property_id, in_force: Some(true), limit: 1 })` — funziona e non
+  dice che cosa chiede;
+- **il form di creazione offre lo stato, con «Disponibile» proposto**, e il dominio non
+  cambia default: `CreatePropertyRequest.status` opzionale (`draft`, `available`,
+  `maintenance`; `archived` lo rifiuta già `set_status`), `CreatePropertyCommand.status`,
+  e il caso d'uso lo applica dopo `Property::create` — leggendo `aggregate.rs:221`
+  (`apply(PropertyChanges)`) si decide se passare da lì o da un parametro di `create`.
+  `draft` resta scegliibile per chi sta compilando;
+- **`propertyJudgements` non cambia, e nemmeno il suo test.** Se la regola regge,
+  `rented`+`draft` non nasce più; ma le righe **già** in quello stato — il database del
+  giro ne ha — restano, e il badge che le mostra come anomalia dice il vero. Nessun
+  backfill nella migration: quale stato mettere a una bozza affittata è una decisione di
+  chi amministra, che la prende dal dialogo «Modifica», dove `available` è ammesso.
+  L'alternativa — togliere `draft` dai giudizi — farebbe sparire un'anomalia vera;
+- **le regole vanno in [ADR-015](08-decisioni.md#adr-015) come nota**, non in un ADR
+  nuovo: sono tre righe in più di «non nel database», con la stessa ragione di «almeno
+  un owner».
 
 #### Decomposizione
 
-##### `S1` — `R36`: il badge di un addebito dice due fatti, non un fatto e un giudizio
+##### `D0` — il commento falso, per primo
 
-In `status.tsx`, `ChargeStatusBadge` diventa asimmetrico: se il memorizzato è
-`partially_paid` e il derivato differisce, **due badge** accanto — «Scaduto» e
-«Parzialmente pagato» — perché sono due fatti veri insieme e nessuno dei due si
-ricostruisce dall'altro; se il memorizzato è `issued`, **solo il derivato**, perché
-«(Emesso)» accanto a «Scaduto» è esattamente `R30`. Niente parentesi: la parentesi era la
-forma di «giudizio che il fatto smentisce», e qui non c'è un giudizio.
+`use_cases/payment/read.rs:33-35` e `routes/payments.rs:161-163` smettono di promettere
+che il totale «resta comunque visibile»: dicono che lo è **dalla `0042`**, per via della
+funzione, e prima non lo era. È la cosa da correggere per prima perché è ciò che farebbe
+concludere a chi passa di lì che il difetto non esiste — e va scritta anche se `D1`
+dovesse slittare.
 
-Alternativa scartata: un testo composto («Scaduto, parzialmente pagato»). È una stringa
-nuova per ogni coppia, e la coppia possibile è una sola; due badge riusano ciò che c'è e
-si leggono anche a colori spenti.
+##### `D1` — `R29`: ADR-055, poi la `0042`
 
-**Criterio di fine:** i test dei badge in `status.test.tsx` — quelli della 5-ter — con due
-casi nuovi: `overdue`+`partially_paid` rende due badge e nessuna parentesi;
-`overdue`+`issued` rende un badge solo. Al contrario, rimettendo la parentesi: il primo
-cade su «expected not to contain "("», il secondo su un secondo elemento trovato.
+ADR-055 in [08](08-decisioni.md), con il perimetro di ciò che la funzione rivela e a chi.
+Poi `migrations/0042_charge_paid_amount_reads_past_rls.sql`: la funzione, `REVOKE ALL ON
+FUNCTION … FROM PUBLIC`, `GRANT EXECUTE` ai tre ruoli con lo stesso `DO $$ … EXECUTE
+format(…)` della `0030`; `CREATE OR REPLACE VIEW app.v_charge_balances` con le **stesse
+colonne nello stesso ordine** e `paid_amount` dalla funzione. [03](03-modello-dati.md) e
+[04](04-sicurezza.md) descrivono lo stato nuovo.
 
-##### `S2` — `R26`: un filtro offre solo ciò che può comparire
+**Criterio di fine:** un test di contratto HTTP in `crates/api/tests/http_contract.rs`,
+dalla forma di `R29`: il proprietario registra `150.00` su un addebito da `420.00`
+**senza** `payer_user_id`; l'inquilino legge lo stesso addebito e trova `paid_amount:
+"150.00"`, `outstanding_amount: "270.00"`, e `status` che non contraddice più la riga.
+Al contrario, con la `0042` tolta: `paid_amount: "0.00"` e `outstanding_amount:
+"420.00"`, che è la voce.
 
-`archived` esce da `STATUSES` degli immobili, `paid` da quello delle bollette, e il
-commento di `PropertiesPage` smette di dire che il terzo di `R26` è aperto. Il `<Select>`
-degli immobili resta con tre valori — bozza, disponibile, in manutenzione — e la domanda
-«gli affittati» resta al filtro dell'occupazione accanto, com'è già.
+##### `D2` — la domanda per immobile
 
-**Non** si aggiunge un «includi archiviati»: la conferma di archiviazione promette che
-l'immobile *sparisce dagli elenchi*, e la traccia resta nelle righe che lo citano come
-«Immobile archiviato». Rivederlo è una capacità nuova — un elenco degli archiviati con la
-sua rotta, perché `list` filtra `deleted_at` — e non un filtro da sistemare; se un giorno
-qualcuno la chiede, è una voce in `12`, non questa.
+`has_in_force_for_property` sulla porta (`crates/domain/src/ports/repositories.rs`, accanto
+a `:431`), l'implementazione in `repositories/lease.rs`, e il finto repository dei test
+applicativi che la conosce. Nessuna migration: `app.lease_in_force` c'è.
 
-**Criterio di fine:** un test per elenco che le opzioni del filtro siano esattamente
-quelle e nessun'altra — è un test sul catalogo delle opzioni, non sulla rete. Al contrario:
-`archived` rimesso, l'assert `toEqual([...])` cade con l'elemento in più.
+**Criterio di fine:** un test di persistenza in `crates/infrastructure/tests/`: un
+contratto attivo con le date di oggi risponde vero; disdetto, o attivo con `end_date`
+ieri, risponde falso — le date sono la metà della definizione, e un test che provasse
+solo lo stato passerebbe anche con `status = 'active'` scritto a mano.
 
-##### `S3` — `R49`: il ricordo non vale finché l'elenco non lo conferma
+##### `D3` — `R44`: non si attiva su una bozza
 
-La sessione impara **da dove** viene l'organizzazione attiva. In `session.tsx` il
-contesto espone `organizationRemembered: boolean`: vero da quando l'effetto applica il
-ricordo del `localStorage` a quando l'elenco lo conferma o lo corregge; falso quando
-l'organizzazione è quella del token o è stata scelta a mano (il selettore, l'accettazione
-di un invito). È stato del **provider**, non dello store: lo store non sa che cosa sia il
-`localStorage`, e non deve saperlo.
+`Invariant::PropertyNotLettable` con il codice `property.not_lettable` e il suo test
+sul catalogo dei codici (`error::tests` in `crates/api/src/error.rs`). `ActivateLease`
+rilegge l'immobile con `uow.properties().find_by_id(lease.property_id())` — se manca è
+`not_found`, come per ogni riferimento — e rifiuta su `Draft` **prima** di
+`lease.activate`. Nel client: la stringa in `errors` di `it.ts`, e la scheda del contratto
+la mostra dove mostra già gli altri rifiuti dell'attivazione. [05](05-api.md) elenca il
+codice sulla rotta.
 
-In `shell.tsx`, il gate su `<Outlet/>` si allarga: oggi aspetta l'elenco se
-`organizationId === null`; ora aspetta anche se `organizationRemembered && organizations.isPending`.
-È **la stessa attesa**, estesa al caso in cui l'organizzazione è ricordata — e la
-correzione che il guscio fa già quando l'elenco arriva (`:474-501`) resta com'è, e mette
-`organizationRemembered` a falso perché passa da `selectOrganization`/`clearOrganization`.
+**Criterio di fine:** un test HTTP: contratto in bozza con le parti giuste su un immobile
+in bozza, `POST /leases/{id}/activate` → `409 property.not_lettable`; l'immobile messo
+`available` con `PATCH`, la stessa chiamata → `200`. Al contrario, senza la lettura
+dell'immobile: `200` al primo tentativo.
 
-Trappola: l'effetto che applica il ricordo gira **prima** del render del guscio, quindi
-la prima richiesta della schermata partirebbe con l'`X-Org-Id` ricordato **nello stesso
-giro** in cui il gate non l'ha ancora visto; il gate deve leggere il flag dal contesto,
-non da uno stato locale del guscio aggiornato in un effetto — altrimenti è un giro in
-ritardo, che è tutto il difetto.
+##### `D4` — `R44` e `R45`: con un contratto in essere non si cambia natura
 
-**Criterio di fine:** in `shell.test.tsx`, il token porta `A`, il `localStorage` ricorda
-`B` (lasciata da un altro browser), l'elenco è tenuto in volo: **nessuna richiesta con
-`x-org-id: B` parte**; poi l'elenco risponde senza `B`, e il guscio corregge su `A`. È la
-stessa forma del test «l'elenco vero corregge il ricordo», con l'asserzione in più sulle
-richieste **prima** dell'elenco. Al contrario, senza il gate allargato: `orgHeaders`
-contiene `B`.
+`Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. `UpdateProperty`
+rifiuta quando `changes.status == Some(Draft)` e `has_in_force_for_property` è vero — e
+**solo** allora: un `PATCH` che non tocca lo stato, o lo mette in `maintenance`, non fa
+la domanda. `ArchiveProperty` rifiuta quando è vero, prima di `property.archive(now)`.
+Nel client: la stringa in `errors`; `property.archiveExplain` dice che con un contratto
+in essere non si archivia e che prima si disdice, perché la conferma deve dirlo (era la
+condizione della voce); l'archiviazione in blocco **non cambia**, il `409` è già un esito
+per riga dalla sezione 7.
 
-##### `S4` — `R52`: un `5xx` al rinnovo non è un rifiuto
+**Criterio di fine:** due test HTTP. `PATCH /properties/{id}` con `status: draft` su un
+immobile con un contratto attivo → `409 property.lease_in_force`, e con `status:
+maintenance` → `200`. `DELETE /properties/{id}` — che è l'archiviazione, `204` — sullo stesso → `409`; il
+contratto disdetto, la stessa chiamata → `204` e l'immobile fuori dall'elenco. Al contrario, senza i
+due rami: `200` e `204` al primo colpo — che è come è oggi.
 
-In `api/session.ts`, `sendRefresh` fa `this.clear()` **solo su `401`**: è la risposta
-«questa sessione non vale più», ed è l'unica. Ogni altro `!response.ok` — `502` dal proxy,
-`503` per timeout, `500` — lancia `apiErrorFrom(response)` **senza** cancellare: la
-sessione in memoria resta, il cookie anche, e la richiesta che aveva chiesto il rinnovo
-fallisce con quell'errore. È la schermata a mostrare «Riprova» (i suoi tre stati lo fanno
-già), non il guscio a uscire.
+##### `D5` — il form di creazione offre lo stato
 
-Simmetrico a ciò che la 10 ha fatto al ripristino: là il `5xx` è diventato uno stato
-d'errore invece di «nessuna sessione»; qui diventa un errore della richiesta invece di un
-logout. `ApiClient.request` non cambia: lascia già propagare l'errore del rinnovo.
+`CreatePropertyRequest.status` e `CreatePropertyCommand.status`, il caso d'uso che lo
+applica; `NewPropertyPage.tsx` con il `<Select>` — gli stessi tre valori di
+`EDITABLE_STATUSES`, che diventa condivisa — e `available` preselezionato. Una stringa
+di aiuto sotto il campo, in `it.ts`, che dice che «Bozza» è per chi sta ancora
+compilando.
 
-Da decidere eseguendo, e da scrivere nell'esito: che cosa fare del `403` e del `429` al
-rinnovo. La forma proposta è che **solo il `401`** cancelli — un `429` è «riprova fra
-poco», e un `403` sul refresh non ha oggi nessuna via che lo produca.
+**Criterio di fine:** un test HTTP: `POST /properties` senza `status` risponde `draft`
+(il default non cambia), con `status: available` risponde `available`, con `status:
+archived` risponde `409 property.archive_requires_dedicated_operation`. Un test del
+client sul catalogo delle opzioni, come quelli della 11.
 
-**Criterio di fine:** in `session.test.ts`, accanto al singolo volo: un rinnovo che
-risponde `502` lancia, la sessione **resta**, e un rinnovo successivo riesce senza un nuovo
-login. Al contrario, con `clear()` su ogni `!ok`: `store.current` è `null` dopo il `502`.
+##### `D6` — documentazione
 
-##### `S5` — `R41`: chi è uscito e ci ripensa legge la via
-
-Il minimo è una stringa: `membership.already_left` dice anche la via — «Eri già uscito da
-questa organizzazione. Per rientrare serve un nuovo invito da chi la amministra.» — perché
-è l'unico messaggio che chi ci ripensa incontra. Il secondo posto va deciso **guardando la
-schermata** con lo stack in piedi, com'è scritto nella voce: la schermata «nessuna
-organizzazione» offre già la guida e «Ho un codice d'invito», e la guida di chi abita ha
-una sezione sull'uscita dove una frase sul rientro potrebbe stare. La decisione — quale
-dei due, o entrambi — si prende nell'esecuzione e si scrive nell'esito.
-
-**Criterio di fine:** il test della stringa non ha senso da solo; conta il test della
-guida che esiste già (le sezioni si chiamano come la navigazione), che deve restare verde
-se la frase entra là.
-
-##### `S6` — `R27`: il primo avvio si insegna con un comando
-
-`just setup` diventa **la via raccomandata** in `README.md` (in inglese) e in
-[06](06-sviluppo.md): un comando per preparare — chiavi, `.env`, container, ruoli,
-migration, `npm ci` — e `just api`, `just worker`, `just web` per avviare. La sequenza a
-mano **resta**, in `06`, sotto un titolo che dice che cosa `just setup` fa, per chi non ha
-`just` o vuole capire; e `CLAUDE.md` §4 non si tocca, perché è il riferimento e non un
-tutorial. È la decisione che la voce lasciava aperta, e la ragione è quella della voce: la
-pagina che un estraneo legge per prima dev'essere la più corta da sbagliare.
-
-Trappola: `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
-`AppConfig` e le cerca in `07`, non in `06` né nel README; ma un comando citato nel README
-che non esiste nel `justfile` non lo trova nessun test. Verificare a mano che ogni ricetta
-nominata esista (`just --list`).
-
-**Criterio di fine:** non c'è un test; c'è un giro: da un clone pulito, `just setup` e i
-tre avvii, seguendo il README e basta.
+La nota ad ADR-015; [03](03-modello-dati.md) sulla `0042` e sulla vista; [04](04-sicurezza.md)
+sulla funzione e su ciò che rivela; [05](05-api.md) con i due codici nuovi sulle rotte che
+li producono e `status` in `POST /properties`; le voci fuori da [12](12-da-fare.md).
 
 #### Trappole
 
-**Un badge in più che «semplifica» `S1`.** La coppia `overdue`+`partially_paid` è la
-ragione per cui la 5-ter non ha accorpato `R36` a `R30`: chi vede due badge e ne toglie
-uno per ordine reintroduce «Scaduto» che nasconde «parzialmente pagato». I due test di
-`S1` esistono per questo.
+**Cercare «affittato» nello stato memorizzato.** `rented` non è mai in database
+([ADR-019](08-decisioni.md#adr-019)): `status = 'rented'` è sempre falso, e una regola
+scritta così non rifiuterebbe mai niente e passerebbe ogni test che non attivi davvero un
+contratto. La domanda è `app.lease_in_force`, e i test di `D2` esistono per questo.
 
-**Sistemare `R49` nello store invece che nel provider.** Lo store è puro: sessione, token,
-rinnovo. Il `localStorage` è del provider, e l'origine dell'organizzazione anche. Metterla
-nello store porterebbe il browser dentro un oggetto che i test costruiscono senza browser.
+**`CREATE OR REPLACE VIEW` cambia solo il corpo.** Le colonne devono restare le stesse,
+nello stesso ordine e con lo stesso tipo, o PostgreSQL rifiuta; aggiungere o riordinare
+significherebbe `DROP` e ricreare, e perdere i `GRANT` sulla vista — e `v_owner_dashboard`
+legge da `v_charge_balances`.
 
-**Il gate di `R49` letto in ritardo.** Vedi `S3`: il flag va dal contesto al gate nello
-stesso render, non attraverso un effetto.
+**Un DEFINER senza `search_path` fissato non arriva alla CI.** L'invariante 6 dello
+schema lo ferma prima; ma un DEFINER con `search_path` e senza `REVOKE … FROM PUBLIC`
+passa, ed è eseguibile da chiunque abbia una connessione. La `0030` è il modello, con la
+`DO $$` che concede ai soli tre ruoli.
 
-**Cancellare la sessione «per sicurezza» su un `5xx` (`S4`).** Sembra prudente e non lo
-è: la sessione è nel cookie, non in memoria; cancellare la memoria non revoca niente e
-manda al login chi ha un cookie buono. La prudenza vera è il `401`, che è l'unico
-messaggio del server sul valore della sessione.
+**Rifiutare `DraftLease` invece di `ActivateLease`.** Sembra più prudente e obbliga a un
+ordine: prima l'immobile disponibile, poi il contratto. La voce lo scarta, e il piano lo
+conferma.
 
-**Decidere la frase di `R41` senza guardare.** La voce lo dice e vale ancora: una
-stringa che descrive l'interfaccia è verificabile solo guardandola (la 9 ne ha trovata
-una falsa così).
+**Disdire dentro l'archiviazione.** Vedi la decisione: un effetto in un posto dove nessuno
+lo cerca. Se un giorno servirà un «archivia e disdici», sarà un verbo con la sua
+conferma.
+
+**Leggere lo stato dell'immobile dopo `lease.activate`.** L'ordine conta poco per il
+database, che è in transazione, e molto per il messaggio: l'invariante delle parti e delle
+quote deve restare il primo rifiuto che chi attiva incontra solo se è quello vero;
+leggere l'immobile prima evita di dire «le quote non coprono il canone» su un contratto
+che comunque non si potrebbe attivare.
+
+**Il finto repository dei test applicativi.** `has_in_force_for_property` va aggiunto
+anche là, o il crate non compila; e il suo valore di default deve essere `false`, non
+`true`, altrimenti i test esistenti di `ArchiveProperty` — che archiviano senza contratti
+— cadono per una ragione che non è loro.
+
+**Il backfill che sembra dovuto.** Una migration che portasse ad `available` le bozze
+affittate deciderebbe al posto di chi amministra e nasconderebbe il badge che glielo dice.
+Non si fa, e la ragione è scritta nelle decisioni.
 
 #### Che cosa **non** entra
 
-- un elenco degli immobili archiviati: capacità nuova, vedi `S2`;
-- il `403`/`429` al rinnovo oltre la forma proposta in `S4`: si decide eseguendo;
-- `CLAUDE.md` §4: resta il riferimento dei comandi, non cambia con `S6`;
-- qualunque cosa delle sezioni 12-16.
+- il subentro (`R28`): è la 13, e tocca l'invariante delle quote;
+- togliere qualcuno (`R39`) e i contatti (`R43`): la 14, con i loro ADR;
+- un «archivia e disdici»: verbo nuovo, con la sua conferma, se qualcuno lo chiede;
+- uno stato `unavailable` di stanza che blocchi l'attivazione: non è nelle voci, e la
+  stanza ha già la sua regola d'occupazione (`app.room_is_occupied`);
+- il backfill delle bozze affittate, con la ragione sopra.
 
 ## Implementato
 
@@ -490,8 +545,8 @@ dietro un reverse proxy.
 | Aritmetica decimale su interi: `parseFloat` non compare | completo |
 | Client dell'API con il **refresh a singolo volo** e la traduzione di `ProblemDetails` | completo |
 | Guscio: ingresso da invito (i due generi, il codice prima del form), accesso, uscita, organizzazione attiva, **stato senza organizzazione**, navigazione | completo |
-| **Il ripristino della sessione distingue la rete dal rifiuto**: un `refresh` che non arriva al server, o che riceve un `5xx` dal proxy, è uno stato d'errore con «Riprova» e non «nessuna sessione» — chi ricarica in galleria o durante un deploy non finisce al login con il cookie ancora buono | completo |
-| **Il selettore delle organizzazioni letto dall'API**, con i nomi al posto degli UUID; il `localStorage` ridotto a ricordare *quale* era attiva | completo |
+| **Il ripristino della sessione distingue la rete dal rifiuto**: un `refresh` che non arriva al server, o che riceve un `5xx` dal proxy, è uno stato d'errore con «Riprova» e non «nessuna sessione» — chi ricarica in galleria o durante un deploy non finisce al login con il cookie ancora buono. **Lo stesso vale per il rinnovo dentro la sessione** dalla 11: solo il `401` chiude la sessione, un `5xx` fa fallire la richiesta che aveva chiesto il rinnovo e la schermata mostra «Riprova» | completo |
+| **Il selettore delle organizzazioni letto dall'API**, con i nomi al posto degli UUID; il `localStorage` ridotto a ricordare *quale* era attiva — e dalla 11 **il ricordo non vale finché l'elenco non lo conferma**: il guscio aspetta l'elenco anche quando l'organizzazione è ricordata, così un secondo browser con in memoria un'organizzazione lasciata altrove non parte con quell'`X-Org-Id` | completo |
 | **La navigazione e la rotta iniziale sono funzioni del ruolo**: `useIsStaff()` in un posto solo, e le azioni di scrittura non si offrono a chi riceverebbe `403` | completo |
 | Segnalazioni: apertura sull'immobile, elenco con `?open=true`, dettaglio con lo storico, thread paginato a parte, le **sette** transizioni e il `PATCH` dei soli costi | completo |
 | **Dichiarazione di pagamento** dell'inquilino, con la chiave di idempotenza della fetta A riusata e non riscritta | completo |

@@ -9,35 +9,69 @@
 | Docker | recente | per il PostgreSQL di sviluppo e di test |
 | OpenSSL | 3.x | per generare le chiavi Ed25519. Su macOS `brew install openssl@3`: l'`openssl` di sistema è LibreSSL e non conosce Ed25519 |
 | `psql` | opzionale | gli script usano il client dell'immagine `postgres:16-alpine` se non lo trovano |
+| `just` | recente | `brew install just` o `cargo install just`. È la via raccomandata per il primo avvio; senza, la sequenza a mano sta [qui sotto](#che-cosa-fa-just-setup) |
 
 ## Primo avvio
 
 ```bash
-# MinIO è lo storage oggetti dei documenti; `minio-setup` crea il bucket una volta.
-# `mailpit` è il raccoglitore di posta: l'API non parte senza una configurazione
-# della posta, e i messaggi che manda si leggono su http://localhost:8025.
-docker compose up -d postgres minio minio-setup mailpit
-./ops/dev/generate-jwt-keys.sh        # crea .secrets/, che è ignorato da git
-cp .env.example .env                  # adattare se serve
-set -a; source .env; set +a           # non serve con `just`, che lo carica da sé
-
-# I ruoli si creano una volta per cluster
-docker compose exec -T postgres psql -U postgres -d postgres \
-  -v db_name=propflow \
-  -v migrator_password=migrator -v app_password=app -v worker_password=worker \
-  -f /dev/stdin < ops/sql/roles.sql
-
-cargo run -p propflow-migrator        # applica lo schema
-cargo run -p propflow-api             # http://localhost:8080/docs
+just setup      # chiavi, .env, container, ruoli, migration, dipendenze del client
 ```
 
-Il client, in un altro terminale:
+Poi, in tre terminali:
 
 ```bash
-cd apps/web
-npm ci
-npm run dev                           # http://localhost:5173
+just api        # http://localhost:8080/docs
+just worker     # dispatcher dell'outbox, che legge anche le bollette
+just web        # http://localhost:5173
 ```
+
+`just` da solo elenca le ricette. È la via raccomandata dal 22 settembre 2026
+(`R27`), e la ragione è che la pagina che un estraneo legge per prima dev'essere la
+più corta da sbagliare: la sequenza a mano che stava qui aveva sei passi, e il
+README ne aveva una copia che nel frattempo aveva perso `mailpit` — chi la seguiva
+si fermava all'avvio dell'API, che senza posta non parte. `CLAUDE.md` §4 resta il
+riferimento dei comandi e non cambia.
+
+La posta che parte si legge su `http://localhost:8025` (mailpit): accetta tutto e
+non recapita niente.
+
+<a id="che-cosa-fa-just-setup"></a>
+
+### Che cosa fa `just setup`
+
+`setup: keys env up db install`, nell'ordine. È la stessa sequenza a mano, per chi
+non ha `just` o vuole capire che cosa succede:
+
+```bash
+# 1. `keys`: le chiavi di firma EdDSA, in .secrets/, che è ignorato da git.
+./ops/dev/generate-jwt-keys.sh
+
+# 2. `env`: .env da .env.example, senza sovrascrivere. Con un .env già presente
+#    confronta le chiavi e **fallisce** se ne manca qualcuna, invece di lasciare
+#    che l'errore compaia tre passi dopo come un'autenticazione fallita.
+cp .env.example .env
+
+# 3. `up`: PostgreSQL, MinIO (lo storage dei documenti) e mailpit (la posta: l'API
+#    non parte senza una configurazione della posta), con `--wait` perché su un
+#    volume nuovo PostgreSQL è in `initdb` quando la porta si apre; poi il one-shot
+#    che crea il bucket, fuori dall'attesa perché termina e `--wait` lo leggerebbe
+#    come un guasto.
+docker compose up -d --wait postgres minio mailpit
+docker compose up -d minio-setup
+
+# 4. `db`: database, i tre ruoli e le migration, con lo stesso script della CI —
+#    due procedure di preparazione divergono al primo cambiamento. I default
+#    combaciano con gli URL di .env.example.
+./ops/ci/prepare-database.sh
+
+# 5. `install`: le dipendenze del client, esattamente dal lockfile.
+cd apps/web && npm ci
+```
+
+E gli avvii, a mano: i binari **non leggono `.env`** da soli — lo carica `just`
+([ADR-023](08-decisioni.md#adr-023)) — quindi prima `set -a; source .env; set +a`
+nella shell, poi `cargo run -p propflow-api`, `cargo run -p propflow-worker`, e
+`npm run dev` da `apps/web/`.
 
 Il proxy di Vite inoltra `/api/v1` all'API, quindi il browser vede **una sola
 origine**: è lo stesso contratto che in produzione realizza un reverse proxy, ed è

@@ -29,21 +29,26 @@ import { LoadMore, usePagedQuery } from '../shared/pagination'
 import { PropertyStatusBadge } from '../shared/status'
 
 /**
- * Gli stati **memorizzati**, che sono gli unici filtrabili.
+ * Gli stati **memorizzati che possono comparire**, che sono gli unici filtrabili.
  *
  * `rented` e `partially_rented` discendono dai contratti in essere e non sono in
  * database: filtrarli risponde `422` con `property.derived_status_filter`, e per
- * quella domanda c'è il filtro dell'occupazione qui accanto. `archived` resta
- * un'opzione che non può corrispondere a niente — archiviare mette `deleted_at` e
- * la riga esce da ogni elenco — ed è il terzo di `R26` che questa sezione non
- * chiude.
+ * quella domanda c'è il filtro dell'occupazione qui accanto. `archived` **è
+ * memorizzato e non c'è lo stesso**: archiviare scrive `status = 'archived'` e
+ * `deleted_at` nello stesso `UPDATE`, e `list` filtra `deleted_at IS NULL`, quindi
+ * quell'opzione non poteva corrispondere a niente — è `R26`. Un filtro offre solo
+ * ciò che può comparire; rivedere gli archiviati sarebbe un elenco a sé, con la sua
+ * rotta, non un'opzione qui.
  */
-const STATUSES = ['draft', 'available', 'maintenance', 'archived'] as const
+const STATUSES = ['draft', 'available', 'maintenance'] as const
 
 /**
  * Il verbo di questa tabella è **Archivia**, e la conferma è quella della scheda
- * con il numero al posto di «questo». Nessun «Elimina»: un immobile archiviato
- * resta leggibile con la sua storia, e il bottone deve dirlo.
+ * con il numero al posto di «questo». Nessun «Elimina»: la riga non viene
+ * cancellata, e le righe che la citano — contratti, stanze — continuano a
+ * nominarla come «Immobile archiviato». È ciò che `archiveExplain` promette, e
+ * non di più: la scheda stessa non si riapre, perché `find_by_id` filtra
+ * `deleted_at` come l'elenco.
  */
 const ARCHIVE: Verb = {
   label: t.property.archive,

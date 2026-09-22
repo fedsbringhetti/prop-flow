@@ -369,10 +369,22 @@ export class SessionStore {
       throw offlineError()
     }
 
-    if (!response.ok) {
+    // **Solo il `401` chiude la sessione**: è la risposta «questa sessione non
+    // vale più», ed è l'unica. Un `502` dal proxy con l'API che si riavvia, un
+    // `503` per timeout, un `500`: la sessione è nel cookie, non in memoria, e
+    // cancellare la memoria non revocherebbe niente — manderebbe al login chi
+    // ha un cookie buono (`R52`). L'errore si propaga alla richiesta che aveva
+    // chiesto il rinnovo, ed è la schermata a mostrare «Riprova», non il guscio
+    // a uscire. Simmetrico a ciò che il ripristino fa dalla sezione 10.
+    //
+    // Un `429` è «riprova fra poco», non un rifiuto; un `403` sul rinnovo non ha
+    // oggi nessuna via che lo produca. Nessuno dei due è un giudizio sul valore
+    // della sessione, quindi nessuno dei due la cancella.
+    if (response.status === 401) {
       this.clear()
       throw await apiErrorFrom(response)
     }
+    if (!response.ok) throw await apiErrorFrom(response)
     return this.adopt((await response.json()) as SessionResponseBody)
   }
 

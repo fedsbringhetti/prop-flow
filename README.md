@@ -12,33 +12,26 @@ same origin behind a reverse proxy.
 
 ## Quick start
 
-```bash
-# MinIO backs document storage; `minio-setup` creates the bucket once.
-docker compose up -d postgres minio minio-setup
-./ops/dev/generate-jwt-keys.sh          # requires OpenSSL 3
-
-# The process never reads .env: `just` loads it (set dotenv-load), and the shell
-# does it for you when you run a binary by hand.
-cp .env.example .env
-set -a; source .env; set +a
-
-# Database roles, once per cluster
-docker compose exec -T postgres psql -U postgres -d postgres \
-  -v db_name=propflow \
-  -v migrator_password=migrator -v app_password=app -v worker_password=worker \
-  -f /dev/stdin < ops/sql/roles.sql
-
-cargo run -p propflow-migrator          # applies the schema
-cargo run -p propflow-api               # http://localhost:8080/docs
-```
-
-The web client, in another terminal:
+Requirements: Rust (`rust-toolchain.toml` pins the version, rustup installs it), Node
+24, Docker, OpenSSL 3 and [`just`](https://github.com/casey/just) (`brew install just`
+or `cargo install just`).
 
 ```bash
-cd apps/web
-npm ci
-npm run dev                             # http://localhost:5173
+just setup                              # keys, .env, containers, roles, migrations, npm ci
 ```
+
+Then, in three terminals:
+
+```bash
+just api                                # http://localhost:8080/docs
+just worker                             # outbox dispatcher, also reads the bills
+just web                                # http://localhost:5173
+```
+
+`just` (alone) lists every recipe. What `setup` does step by step, and how to do it
+by hand without `just`, is in [`docs/06-sviluppo.md`](docs/06-sviluppo.md#primo-avvio).
+Outgoing mail lands in mailpit at `http://localhost:8025`: it accepts everything
+and delivers nothing.
 
 Vite forwards `/api/v1` to the API, so the browser sees a **single origin** — the
 same contract a reverse proxy provides in production, and the reason there is no

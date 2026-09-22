@@ -12606,6 +12606,359 @@ dal poscritto della 8.
   (timeout della richiesta) porta un Problem Details con il suo codice, e passa da lì.
 
 
+<a id="piano-sezione-11"></a>
+
+## Piano — Sezione 11: il client dice il vero
+
+Pianificata il **22 settembre 2026**, con la decisione di chiudere tutto il segnalato prima
+del collaudo, ed **eseguita lo stesso giorno**. Il piano resta sotto com'è stato scritto;
+ciò che l'esecuzione ha confermato, cambiato e trovato è in
+[Esito](#esito-sezione-11). Chiude `R36`, `R26`, `R49`, `R52`, `R41`, `R27`: le sei voci di
+[12](12-da-fare.md) che **non chiedono una decisione** — o la chiedono piccola e la si
+prende qui — e che un collaudo vedrebbe al primo giro. Solo client e documentazione;
+**nessuna migration, nessuna rotta nuova**. È la sezione che libera il campo alle cinque
+che seguono, tutte con un ADR davanti.
+
+**Si esegue in una sola conversazione**, senza agenti, come dalla 9. Ogni test nuovo
+provato al contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| `ChargeStatusBadge` mostra la coppia «derivato (memorizzato)» ogni volta che i due stati differiscono | vero: `apps/web/src/features/shared/status.tsx:231`, `if (status === effectiveStatus)` una sola volta, poi il derivato con il memorizzato fra parentesi. Il memorizzato può essere solo `issued` o `partially_paid` quando differisce (`Charge::effective_status` diverge solo da `is_outstanding()`) |
+| Il filtro degli immobili offre `archived`, che non può corrispondere a niente | vero: `PropertiesPage.tsx:40`, `STATUSES = ['draft', 'available', 'maintenance', 'archived']`, con il commento che lo dichiara come «il terzo di `R26` che questa sezione non chiude». Archiviare scrive `deleted_at` e `list`/`find_by_id` filtrano `deleted_at IS NULL` (`repositories/property.rs:59,76`); la conferma di archiviazione **promette** che sparisca dagli elenchi (`property.archiveExplain`) |
+| Il filtro delle bollette offre `paid`, che nessuno scrive | vero: `BillsPage.tsx:42`, `STATUSES` include `'paid'`; `BillStatus::Paid` e `Disputed` in `crates/domain/src/billing/bill.rs:80-83` portano «mai scritto dall'applicazione». La sezione 4 ha dato alla bolletta `paid_at`, non lo stato |
+| Il ricordo dell'organizzazione si applica **prima** che l'elenco risponda, e la sessione non sa da dove venga l'organizzazione attiva | vero: `session.tsx:202`, l'effetto chiama `store.selectOrganization(stored.active, …)` appena c'è `userId`; `Session` (`api/session.ts:14`) ha `organizationId` e `role`, nessuna origine. Il guscio aspetta l'elenco solo se `organizationId === null` (`shell.tsx:160`) e corregge il ricordo quando l'elenco arriva (`shell.tsx:474-501`) |
+| `sendRefresh` cancella la sessione su **ogni** risposta non `ok` | vero: `api/session.ts:372`, `if (!response.ok) { this.clear(); throw … }`; il ramo del `catch` di rete (`:369`) invece non cancella. `ApiClient.request` (`api/client.ts:75`) fa `await this.session.refresh()` su un `401` di sessione e lascia propagare l'errore |
+| Chi è uscito e riprova riceve `membership.already_left` senza la via | vero: `it.ts:1709`, «Eri già uscito da questa organizzazione.»; l'avviso **prima** dell'uscita (`it.ts:304`) dice già «Se qualcuno ti reinvita potrai rientrare» |
+| `README.md` e `06` insegnano il primo avvio a mano, e `just setup` fa la stessa cosa | vero: `README.md:18-32` e `06-sviluppo.md:20-31` elencano chiavi, `docker compose`, i `cargo run`; `justfile:40`, `setup: keys env up db install`, e `api`/`worker`/`web` avviano. `06:264` già consiglia `just api` per un errore comune |
+| I test sono 479 Rust e 141 del client | vero, esito della 10 e `just ci` su `dev` dopo il merge |
+
+### Decomposizione
+
+#### `S1` — `R36`: il badge di un addebito dice due fatti, non un fatto e un giudizio
+
+In `status.tsx`, `ChargeStatusBadge` diventa asimmetrico: se il memorizzato è
+`partially_paid` e il derivato differisce, **due badge** accanto — «Scaduto» e
+«Parzialmente pagato» — perché sono due fatti veri insieme e nessuno dei due si
+ricostruisce dall'altro; se il memorizzato è `issued`, **solo il derivato**, perché
+«(Emesso)» accanto a «Scaduto» è esattamente `R30`. Niente parentesi: la parentesi era la
+forma di «giudizio che il fatto smentisce», e qui non c'è un giudizio.
+
+Alternativa scartata: un testo composto («Scaduto, parzialmente pagato»). È una stringa
+nuova per ogni coppia, e la coppia possibile è una sola; due badge riusano ciò che c'è e
+si leggono anche a colori spenti.
+
+**Criterio di fine:** i test dei badge in `status.test.tsx` — quelli della 5-ter — con due
+casi nuovi: `overdue`+`partially_paid` rende due badge e nessuna parentesi;
+`overdue`+`issued` rende un badge solo. Al contrario, rimettendo la parentesi: il primo
+cade su «expected not to contain "("», il secondo su un secondo elemento trovato.
+
+#### `S2` — `R26`: un filtro offre solo ciò che può comparire
+
+`archived` esce da `STATUSES` degli immobili, `paid` da quello delle bollette, e il
+commento di `PropertiesPage` smette di dire che il terzo di `R26` è aperto. Il `<Select>`
+degli immobili resta con tre valori — bozza, disponibile, in manutenzione — e la domanda
+«gli affittati» resta al filtro dell'occupazione accanto, com'è già.
+
+**Non** si aggiunge un «includi archiviati»: la conferma di archiviazione promette che
+l'immobile *sparisce dagli elenchi*, e la traccia resta nelle righe che lo citano come
+«Immobile archiviato». Rivederlo è una capacità nuova — un elenco degli archiviati con la
+sua rotta, perché `list` filtra `deleted_at` — e non un filtro da sistemare; se un giorno
+qualcuno la chiede, è una voce in `12`, non questa.
+
+**Criterio di fine:** un test per elenco che le opzioni del filtro siano esattamente
+quelle e nessun'altra — è un test sul catalogo delle opzioni, non sulla rete. Al contrario:
+`archived` rimesso, l'assert `toEqual([...])` cade con l'elemento in più.
+
+#### `S3` — `R49`: il ricordo non vale finché l'elenco non lo conferma
+
+La sessione impara **da dove** viene l'organizzazione attiva. In `session.tsx` il
+contesto espone `organizationRemembered: boolean`: vero da quando l'effetto applica il
+ricordo del `localStorage` a quando l'elenco lo conferma o lo corregge; falso quando
+l'organizzazione è quella del token o è stata scelta a mano (il selettore, l'accettazione
+di un invito). È stato del **provider**, non dello store: lo store non sa che cosa sia il
+`localStorage`, e non deve saperlo.
+
+In `shell.tsx`, il gate su `<Outlet/>` si allarga: oggi aspetta l'elenco se
+`organizationId === null`; ora aspetta anche se `organizationRemembered && organizations.isPending`.
+È **la stessa attesa**, estesa al caso in cui l'organizzazione è ricordata — e la
+correzione che il guscio fa già quando l'elenco arriva (`:474-501`) resta com'è, e mette
+`organizationRemembered` a falso perché passa da `selectOrganization`/`clearOrganization`.
+
+Trappola: l'effetto che applica il ricordo gira **prima** del render del guscio, quindi
+la prima richiesta della schermata partirebbe con l'`X-Org-Id` ricordato **nello stesso
+giro** in cui il gate non l'ha ancora visto; il gate deve leggere il flag dal contesto,
+non da uno stato locale del guscio aggiornato in un effetto — altrimenti è un giro in
+ritardo, che è tutto il difetto.
+
+**Criterio di fine:** in `shell.test.tsx`, il token porta `A`, il `localStorage` ricorda
+`B` (lasciata da un altro browser), l'elenco è tenuto in volo: **nessuna richiesta con
+`x-org-id: B` parte**; poi l'elenco risponde senza `B`, e il guscio corregge su `A`. È la
+stessa forma del test «l'elenco vero corregge il ricordo», con l'asserzione in più sulle
+richieste **prima** dell'elenco. Al contrario, senza il gate allargato: `orgHeaders`
+contiene `B`.
+
+#### `S4` — `R52`: un `5xx` al rinnovo non è un rifiuto
+
+In `api/session.ts`, `sendRefresh` fa `this.clear()` **solo su `401`**: è la risposta
+«questa sessione non vale più», ed è l'unica. Ogni altro `!response.ok` — `502` dal proxy,
+`503` per timeout, `500` — lancia `apiErrorFrom(response)` **senza** cancellare: la
+sessione in memoria resta, il cookie anche, e la richiesta che aveva chiesto il rinnovo
+fallisce con quell'errore. È la schermata a mostrare «Riprova» (i suoi tre stati lo fanno
+già), non il guscio a uscire.
+
+Simmetrico a ciò che la 10 ha fatto al ripristino: là il `5xx` è diventato uno stato
+d'errore invece di «nessuna sessione»; qui diventa un errore della richiesta invece di un
+logout. `ApiClient.request` non cambia: lascia già propagare l'errore del rinnovo.
+
+Da decidere eseguendo, e da scrivere nell'esito: che cosa fare del `403` e del `429` al
+rinnovo. La forma proposta è che **solo il `401`** cancelli — un `429` è «riprova fra
+poco», e un `403` sul refresh non ha oggi nessuna via che lo produca.
+
+**Criterio di fine:** in `session.test.ts`, accanto al singolo volo: un rinnovo che
+risponde `502` lancia, la sessione **resta**, e un rinnovo successivo riesce senza un nuovo
+login. Al contrario, con `clear()` su ogni `!ok`: `store.current` è `null` dopo il `502`.
+
+#### `S5` — `R41`: chi è uscito e ci ripensa legge la via
+
+Il minimo è una stringa: `membership.already_left` dice anche la via — «Eri già uscito da
+questa organizzazione. Per rientrare serve un nuovo invito da chi la amministra.» — perché
+è l'unico messaggio che chi ci ripensa incontra. Il secondo posto va deciso **guardando la
+schermata** con lo stack in piedi, com'è scritto nella voce: la schermata «nessuna
+organizzazione» offre già la guida e «Ho un codice d'invito», e la guida di chi abita ha
+una sezione sull'uscita dove una frase sul rientro potrebbe stare. La decisione — quale
+dei due, o entrambi — si prende nell'esecuzione e si scrive nell'esito.
+
+**Criterio di fine:** il test della stringa non ha senso da solo; conta il test della
+guida che esiste già (le sezioni si chiamano come la navigazione), che deve restare verde
+se la frase entra là.
+
+#### `S6` — `R27`: il primo avvio si insegna con un comando
+
+`just setup` diventa **la via raccomandata** in `README.md` (in inglese) e in
+[06](06-sviluppo.md): un comando per preparare — chiavi, `.env`, container, ruoli,
+migration, `npm ci` — e `just api`, `just worker`, `just web` per avviare. La sequenza a
+mano **resta**, in `06`, sotto un titolo che dice che cosa `just setup` fa, per chi non ha
+`just` o vuole capire; e `CLAUDE.md` §4 non si tocca, perché è il riferimento e non un
+tutorial. È la decisione che la voce lasciava aperta, e la ragione è quella della voce: la
+pagina che un estraneo legge per prima dev'essere la più corta da sbagliare.
+
+Trappola: `crates/api/tests/docs_config_reference.rs` deriva le impostazioni da
+`AppConfig` e le cerca in `07`, non in `06` né nel README; ma un comando citato nel README
+che non esiste nel `justfile` non lo trova nessun test. Verificare a mano che ogni ricetta
+nominata esista (`just --list`).
+
+**Criterio di fine:** non c'è un test; c'è un giro: da un clone pulito, `just setup` e i
+tre avvii, seguendo il README e basta.
+
+### Trappole
+
+**Un badge in più che «semplifica» `S1`.** La coppia `overdue`+`partially_paid` è la
+ragione per cui la 5-ter non ha accorpato `R36` a `R30`: chi vede due badge e ne toglie
+uno per ordine reintroduce «Scaduto» che nasconde «parzialmente pagato». I due test di
+`S1` esistono per questo.
+
+**Sistemare `R49` nello store invece che nel provider.** Lo store è puro: sessione, token,
+rinnovo. Il `localStorage` è del provider, e l'origine dell'organizzazione anche. Metterla
+nello store porterebbe il browser dentro un oggetto che i test costruiscono senza browser.
+
+**Il gate di `R49` letto in ritardo.** Vedi `S3`: il flag va dal contesto al gate nello
+stesso render, non attraverso un effetto.
+
+**Cancellare la sessione «per sicurezza» su un `5xx` (`S4`).** Sembra prudente e non lo
+è: la sessione è nel cookie, non in memoria; cancellare la memoria non revoca niente e
+manda al login chi ha un cookie buono. La prudenza vera è il `401`, che è l'unico
+messaggio del server sul valore della sessione.
+
+**Decidere la frase di `R41` senza guardare.** La voce lo dice e vale ancora: una
+stringa che descrive l'interfaccia è verificabile solo guardandola (la 9 ne ha trovata
+una falsa così).
+
+### Che cosa **non** entra
+
+- un elenco degli immobili archiviati: capacità nuova, vedi `S2`;
+- il `403`/`429` al rinnovo oltre la forma proposta in `S4`: si decide eseguendo;
+- `CLAUDE.md` §4: resta il riferimento dei comandi, non cambia con `S6`;
+- qualunque cosa delle sezioni 12-16.
+
+
+<a id="esito-sezione-11"></a>
+
+## Esito — Sezione 11: il client dice il vero
+
+Eseguita il **22 settembre 2026**, in una conversazione sola e senza agenti, com'era
+scritto. Chiude `R36`, `R26`, `R49`, `R52`, `R41` e `R27`. I test Rust restano **479** —
+nessuna riga di backend è cambiata — quelli del client passano da 141 a **147**, in 25
+file. `just ci` verde, zero `SALTATO`. **Nessuna migration, nessuna rotta nuova**, nessun
+ADR: le decisioni erano tutte piccole, e stanno qui.
+
+### Che cosa è entrato
+
+- **`S1` — il badge asimmetrico** (`R36`): `ChargeStatusBadge` rende il derivato da solo
+  quando il memorizzato è `issued`, e **due badge** — «Scaduto» e «Parzialmente pagato» —
+  quando è `partially_paid`. Niente parentesi. Il commento in `status.tsx` dice perché la
+  coppia non si «semplifica», e i due test in `status.test.tsx` esistono per quello;
+- **`S2` — i due filtri** (`R26`): `archived` fuori da `STATUSES` degli immobili, `paid`
+  da quello delle bollette. Un test per pagina, `PropertiesPage.test.tsx` e
+  `BillsPage.test.tsx`, che legge le `<option>` del `<Select>` e pretende con `toEqual`
+  che siano **esattamente** quelle: cade per un'opzione in più come per una in meno.
+  Nessun «includi archiviati», con la ragione del piano. **Il commento del verbo
+  `ARCHIVE` era falso per la stessa causa**: diceva che un immobile archiviato «resta
+  leggibile con la sua storia», e `find_by_id` filtra `deleted_at` come l'elenco — la
+  scheda risponde `404`. Riscritto: la traccia resta nelle righe che lo citano, e non di
+  più;
+- **`S3` — il ricordo non vale finché l'elenco non lo conferma** (`R49`): `SessionProvider`
+  espone `organizationRemembered`; il gate del guscio aspetta l'elenco anche quando
+  `organizationRemembered && organizations.isPending`; l'effetto di riallineamento in
+  `useOrganizations` **conferma passando da `selectOrganization`** quando l'organizzazione
+  era ricordata, ed è ciò che fa cadere il flag. Un test in `shell.test.tsx`, con un probe
+  `lazy` come le rotte vere — vedi sotto perché;
+- **`S4` — `clear()` solo su `401`** (`R52`): in `sendRefresh` il `401` è l'unica risposta
+  che chiude la sessione; ogni altro `!response.ok` lancia `apiErrorFrom(response)` con la
+  sessione e il cookie intatti, e la richiesta chiamante fallisce con quell'errore. Un test
+  in `session.test.ts`: un `502` al rinnovo lascia `store.current`, non chiama
+  `onSessionEnded`, e il rinnovo dopo riesce senza login. **Il `403` e il `429`
+  cancellano? No**, ed è la forma proposta dal piano, confermata: un `429` è «riprova fra
+  poco», e un `403` sul rinnovo non ha oggi nessuna via che lo produca — nessuno dei due è
+  un giudizio sul valore della sessione. Scritto nel commento del ramo. **Nessun
+  documento descrittivo cambia**: né la 10 né questa hanno messo in un ADR il
+  comportamento del rinnovo su `5xx`; l'esito è il registro;
+- **`S5` — la via del rientro, in tre posti** (`R41`), decisi **guardando**:
+  `membership.already_left` dice la via; la schermata «Nessuna organizzazione» ha una riga
+  in più, `org.noneAfterLeaving`; la sezione «Il mio account» della guida di chi abita
+  dice che uscire spende il codice. Perché tre e non uno, sotto;
+- **`S6` — `just setup` è la via raccomandata** (`R27`): il README (in inglese) e il primo
+  avvio di [06](06-sviluppo.md#primo-avvio) sono `just setup` più `just api`, `just
+  worker`, `just web`; `just` entra fra i requisiti di 06. La sequenza a mano resta in 06
+  sotto «Che cosa fa `just setup`», passo per passo con le ragioni di `--wait` e del
+  one-shot fuori dall'attesa, per chi non ha `just` o vuole capire. `CLAUDE.md` §4 non
+  cambia. **Il README aveva un errore in più della voce**: avviava `postgres minio
+  minio-setup` senza `mailpit`, e l'API senza posta non parte — chi lo seguiva si fermava
+  al primo `cargo run`. `just up` include `mailpit`, e il README ora non elenca più i
+  container.
+
+### Le premesse, riga per riga
+
+Tutte vere, e due con un'aggravante che il piano non aveva visto: il commento di
+`ARCHIVE` in `PropertiesPage.tsx` e il `mailpit` mancante nel README, entrambi chiusi
+dentro i passi previsti. Il conteggio dei test Rust — 479 — è stato confermato da
+`just ci` alla chiusura, non prima: contarli richiede il database.
+
+### Il piano aveva una trappola sbagliata, e l'esecuzione l'ha corretta
+
+**La trappola di `S3` diceva la cosa giusta per la ragione sbagliata.** «Il gate deve
+leggere il flag dal contesto, nello stesso render, non da uno stato locale del guscio
+aggiornato in un effetto» è vero; ma la prima forma provata — `organizationRemembered`
+come `useState` del provider, scritto nello stesso effetto di `store.selectOrganization`
+— era stata scartata per una ragione che si è rivelata falsa: che React rendesse in due
+giri l'aggiornamento dello store (`useSyncExternalStore`, corsia sincrona) e il
+`setState` (corsia di default). **Verificato con un test a parte, dentro e fuori `act`,
+con React 19.2: li rende insieme.** La forma con `useState` non va per un'altra ragione,
+che il lint dice da sé: `react/set-state-in-effect`, la stessa regola che la 10 aveva
+incontrato con `restoring`. E un `useRef` letto nel render — la seconda forma provata —
+cade sotto `react/refs`.
+
+**La forma entrata**: `RememberedOrganization`, un valore con `subscribe`/`snapshot`/`set`
+che il provider costruisce con `useMemo` e legge con `useSyncExternalStore`, come la
+sessione stessa. L'effetto che applica il ricordo scrive **due sistemi esterni** nello
+stesso giro — lo store e questo — e non tocca lo stato di React, che è precisamente ciò
+che il suo commento prometteva già. È stato del provider, non dello store, come voleva il
+piano: lo store non sa che cosa sia il `localStorage` e continua a non saperlo.
+
+**Il test di `S3` è passato senza il gate, la prima volta.** Il probe della rotta figlia
+— copiato da quello della 8 — chiamava `/properties` in un `useEffect` **sincrono**, che
+è figlio del provider e quindi gira **prima** dell'effetto che applica il ricordo: partiva
+con l'organizzazione del token, cioè con quella giusta, e descriveva un'applicazione che
+non esiste. Le rotte vere sono `lazy` in `App`: la schermata arriva da un chunk, dopo, e
+trova il ricordo già applicato. Il probe è diventato `lazy(() => Promise.resolve(…))`, e
+il test aspetta **il tempo di un chunk** (`act` con un `setTimeout` di 100 ms) prima di
+asserire — un'attesa a tempo, perché quando il gate tiene non c'è nessun evento da
+aspettare. Con quel probe il test ha riprodotto il difetto — la seconda richiesta portava
+l'organizzazione lasciata — e poi il gate l'ha chiuso.
+
+**La conferma passa da `selectOrganization`, e il piano diceva che l'effetto restava
+com'era.** Il piano descriveva il flag come vero «a quando l'elenco lo conferma o lo
+corregge», e la correzione passava già da `selectOrganization`/`clearOrganization`; la
+conferma — l'organizzazione ricordata **è** fra le proprie, con lo stesso ruolo — non
+passava da niente, e il flag sarebbe restato vero per tutta la sessione. Innocuo per il
+gate, che guarda anche `isPending`, ma falso di nome. L'effetto di riallineamento chiama
+`selectOrganization(active.id, active.role)` anche quando `organizationRemembered` è
+vero: riscrive lo stesso ricordo una volta, e il flag cade. Emendato nel commento.
+
+### Decisioni prese eseguendo
+
+- **`R41` in tre posti, non due.** Da ADR-053 alla schermata «Nessuna organizzazione» si
+  arriva **solo uscendo** — chi entra da un invito è già dentro, chi diventa proprietario
+  nasce con la sua — quindi chi la guarda è esattamente chi ci ripensa, e la schermata
+  diceva «si entra da un invito» senza dire che il codice di allora è speso. La riga è
+  condizionale, «se sei uscito», perché varrà anche per chi verrà tolto (`R39`). La guida
+  è dove la regola si legge **prima** di uscire; `membership.already_left` è ciò che una
+  scheda vecchia incontra. Nessuna stringa descrive l'interfaccia: nessuna delle tre può
+  invecchiare come quella che la 9 aveva trovato;
+- **la riga in più della guida non cambia i titoli**, quindi il test che allinea le
+  sezioni alla navigazione resta verde senza toccarlo;
+- **`S2` tocca solo i cataloghi**: `EDITABLE_STATUSES` del dialogo «Modifica» non cambia,
+  perché là `archived` non c'era già.
+
+### Verificato al contrario
+
+Ogni test nuovo rimesso sul difetto e guardato cadere:
+
+- `S1`, la parentesi rimessa: il primo test cade a `status.test.tsx:81`,
+  `getByText('Parzialmente pagato')` — `Unable to find an element with the text` — perché
+  la parentesi spezza il testo in tre nodi, `(`, il nome, `)`: **un assert prima** di
+  quello previsto dal piano (`not.toContain('(')`). Il secondo cade a `:89`,
+  `toHaveLength(1)` con tre `span`;
+- `S2`, `archived` e `paid` rimessi: i due `toEqual` cadono con `+ "Archiviato"` e
+  `+ "Pagata"` come elemento in più;
+- `S3`, il gate stretto a `session.organizationId === null` com'era:
+  `expected [ null, …(1) ] to not include '00000000-0000-4000-8000-0000000000ee'` —
+  la seconda richiesta porta l'organizzazione lasciata altrove;
+- `S4`, `clear()` su ogni `!ok` com'era: `expected null not to be null` a
+  `session.test.ts:298`, `store.current` dopo il `502`.
+
+### Che cosa è stato provato a mano
+
+Su porte a parte — Postgres su `55432` (il database del giro della 10, quarantuno
+migration), API su `8090`, client su `5174`. Per `S5` serviva un account **uscito** dalla
+sua unica organizzazione: `carla.giro@example.it`, lasciata da un giro precedente con
+stato `left` e password ignota — reimpostata con «Password dimenticata», leggendo il
+codice da mailpit, cioè con il prodotto e non con una `UPDATE`. Il login l'ha fatto chi
+possiede il progetto nel pannello del browser, non l'assistente. Visti con gli occhi: la
+schermata «Nessuna organizzazione» prima e dopo la riga nuova, e la guida dal suo link.
+Con `curl` e il token di Carla: un secondo `POST /organizations/{id}/leave` risponde
+`409 membership.already_left`, che è la stringa cambiata.
+
+Per `S6`, **da un clone pulito** nello scratchpad, seguendo il README e basta:
+`just --list`, poi `just keys`, `just env`, `just db` e `just install` — il database
+`propflow_s11` creato sul cluster del giro con le quarantuno migration applicate dal
+migratore compilato nel clone, `npm ci` a buon fine. **`just up` non è stato eseguito
+dal clone**: le porte di `docker-compose.yml` sono fisse, e un secondo progetto compose
+avrebbe conteso `9000`, `1025` e `8025` ai container del giro. I tre avvii non sono stati
+provati dal clone per la stessa ragione; lo sono stati dal repository, che è ciò che il
+giro di `S5` ha usato.
+
+**Non provato con gli occhi**: `S1`, `S2` e `S3`. Il database del giro non ha un addebito
+scaduto e parzialmente pagato, e un secondo browser con un ricordo morto richiede due
+profili; li provano i test, con le loro asserzioni cadute.
+
+### Trovato eseguendo, e non chiuso
+
+**`R53` — cambiare organizzazione dal selettore non svuota la cache delle query.**
+Letto in `app/query.tsx` cercando dove il ricordo di `R49` incontrasse la cache: le chiavi
+non portano l'organizzazione, e `QueryProvider` svuota solo al logout. Chi ha due
+organizzazioni sceglie la seconda e la schermata resta sui dati della prima. In
+[12](12-da-fare.md), con le due vie possibili.
+
+### Che cosa resta aperto
+
+- l'Invio nel campo del codice su `/invito` con una tastiera vera, dal poscritto della 8:
+  ancora in sospeso, e resta nel passo 5 del cammino;
+- `R53`, sopra: una voce nuova, non una mezza cosa lasciata a questa sezione.
+
+
 <a id="archivio-09-al-18-settembre-2026"></a>
 
 ## Archivio — «09 — Stato e roadmap» com'era prima della riscrittura del 18 settembre 2026

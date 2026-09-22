@@ -252,6 +252,12 @@ export const it = {
     /** Finché `/me` non è arrivata: dice la stessa cosa senza il nome. */
     noneBodyFallback: 'Non fai parte di nessuna organizzazione: su PropFlow si entra da un invito.',
     noneHint: 'Se hai un codice, incollalo qui: ti mette dentro l’organizzazione di chi te lo ha mandato.',
+    /** `R41`: da ADR-053 a questa schermata si arriva **uscendo**, e chi ci
+     *  ripensa la guarda senza sapere che il codice di allora è speso e che il
+     *  rientro passa da chi amministra. Condizionale perché la stessa riga
+     *  vale per chi verrà tolto (`R39`), che qui atterrerà allo stesso modo. */
+    noneAfterLeaving:
+      'Se sei uscito da un’organizzazione, il codice di allora non vale più: per rientrare serve un invito nuovo da chi la amministra.',
   },
 
   /**
@@ -399,7 +405,7 @@ export const it = {
         },
         {
           title: nav.account,
-          body: 'Dal menù dell’organizzazione — in fondo alla barra laterale, o in alto dal telefono: i tuoi dati, la password, l’informativa sulla privacy, e l’uscita dall’organizzazione — che non è possibile finché il tuo contratto è in vigore. Se ricevi un altro codice d’invito, «Ho un codice d’invito» sta nello stesso menù.',
+          body: 'Dal menù dell’organizzazione — in fondo alla barra laterale, o in alto dal telefono: i tuoi dati, la password, l’informativa sulla privacy, e l’uscita dall’organizzazione — che non è possibile finché il tuo contratto è in vigore. Uscire spende il codice con cui eri entrato: se ci ripensi, per rientrare serve un invito nuovo da chi amministra. Se ricevi un altro codice d’invito, «Ho un codice d’invito» sta nello stesso menù.',
         },
       ],
     },
@@ -1706,7 +1712,8 @@ export const it = {
       'Hai un contratto in essere in questa organizzazione: non puoi uscirne finché è attivo.',
     'membership.last_owner':
       'Sei l’unico proprietario di questa organizzazione e non puoi uscirne: è la tua organizzazione personale.',
-    'membership.already_left': 'Eri già uscito da questa organizzazione.',
+    'membership.already_left':
+      'Eri già uscito da questa organizzazione. Per rientrare serve un nuovo invito da chi la amministra.',
     'document.not_found': 'Documento non trovato.',
     'request.payload_too_large': 'Il file è troppo grande.',
     'endpoint.not_found': 'Questa pagina non esiste.',
