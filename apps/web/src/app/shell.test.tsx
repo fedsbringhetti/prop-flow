@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useEffect } from 'react'
+import { lazy, useEffect } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -228,6 +228,138 @@ describe('il selettore delle organizzazioni', () => {
     // precisamente ciò che la faceva rifiutare — con l'elenco irraggiungibile, la
     // correzione non partiva mai. Vedi il poscritto dell'esito della sezione 6.
     expect(orgHeaders.every((header) => header !== orphan)).toBe(true)
+  })
+})
+
+/**
+ * `R49`: **il ricordo non vale finché l'elenco non lo conferma.**
+ *
+ * Un secondo browser con in `localStorage` un'organizzazione lasciata altrove
+ * partiva con quell'`X-Org-Id`: il ricordo si applica alla sessione **prima** che
+ * `GET /organizations` risponda — apposta, vedi `session.tsx` — e la prima
+ * schermata partiva nello stesso giro, con un identificatore che l'API rifiuta.
+ * L'elenco poi correggeva, ma la richiesta era già partita.
+ *
+ * È la stessa forma di «l'elenco vero corregge il ricordo», con l'asserzione in
+ * più che conta: **prima** dell'elenco nessuna richiesta porta l'organizzazione
+ * ricordata, perché il guscio non rende `<Outlet/>` finché non sa se il ricordo
+ * regge. È la stessa attesa che fa già quando l'organizzazione è nulla, estesa
+ * al caso in cui è ricordata.
+ */
+describe('il ricordo di un altro browser non parte prima dell’elenco', () => {
+  /** Lasciata da un altro browser: il token non la porta, l'elenco non la contiene. */
+  const LEFT_ORG = '00000000-0000-4000-8000-0000000000ee'
+
+  function Probe() {
+    const client = useApi()
+    useEffect(() => {
+      void client.get('/properties')
+    }, [client])
+    return <p>contenuto</p>
+  }
+
+  /**
+   * **`lazy`, come le rotte vere in `App`.** Un probe sincrono monterebbe nello
+   * stesso giro del guscio, e il suo effetto — figlio, quindi prima di quello
+   * del provider — partirebbe con l'organizzazione del token, cioè prima che il
+   * ricordo venga applicato: descriverebbe un'applicazione che non esiste, e il
+   * test passerebbe senza il gate. Una schermata vera arriva da un chunk, dopo,
+   * e trova il ricordo già applicato.
+   */
+  const RouteProbe = lazy(() => Promise.resolve({ default: Probe }))
+
+  function renderRememberingShell() {
+    const requests: { url: string; orgHeader: string | null }[] = []
+    let pending: (() => void) | null = null
+
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/auth/refresh')) {
+        return new Response(
+          JSON.stringify({
+            access_token: 'token',
+            token_type: 'Bearer',
+            expires_in: 900,
+            user_id: 'utente-1',
+            organization_id: TENANT_ORG,
+            role: 'owner',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      requests.push({ url, orgHeader: new Headers(init?.headers).get('x-org-id') })
+      if (url.endsWith('/organizations')) {
+        // Tenuto in volo finché il test non lo rilascia: la finestra di `R49` è
+        // tutta qui dentro.
+        await new Promise<void>((resolve) => {
+          pending = resolve
+        })
+        return new Response(JSON.stringify({ items: [organizations[0]] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/addebiti']}>
+        <SessionProvider>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="/addebiti" element={<RouteProbe />} />
+              </Route>
+            </Routes>
+          </QueryClientProvider>
+        </SessionProvider>
+      </MemoryRouter>,
+    )
+
+    return { requests, release: () => pending?.() }
+  }
+
+  it('non manda mai l’organizzazione ricordata, e dopo l’elenco riparte da quella vera', async () => {
+    localStorage.setItem(
+      'propflow.active-org.v1:utente-1',
+      JSON.stringify({ active: LEFT_ORG, role: 'tenant' }),
+    )
+    const { requests, release } = renderRememberingShell()
+
+    // L'elenco è partito ed è in volo. Poi **il tempo di un chunk che arriva**:
+    // senza il gate, il ricordo è già applicato quando la schermata monta, e
+    // «contenuto» comparirebbe qui con la sua richiesta. È la finestra in cui il
+    // difetto viveva, e un'attesa a tempo è l'unico modo di dire «non è
+    // successo niente»: non c'è un evento da aspettare quando il gate tiene.
+    await waitFor(() =>
+      expect(requests.some((request) => request.url.endsWith('/organizations'))).toBe(true),
+    )
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)))
+
+    // **Le righe per cui questo test esiste**: nessuna richiesta ha portato
+    // l'organizzazione lasciata altrove, e la rotta figlia non è montata.
+    expect(requests.map((request) => request.orgHeader)).not.toContain(LEFT_ORG)
+    expect(screen.queryByText('contenuto')).not.toBeInTheDocument()
+
+    release()
+
+    // L'elenco non la contiene: il guscio corregge su quella vera, e da lì la
+    // schermata parte con l'identificatore giusto.
+    expect(await screen.findByText('contenuto')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(requests.some((request) => request.url.endsWith('/properties'))).toBe(true),
+    )
+    expect(requests.map((request) => request.orgHeader)).not.toContain(LEFT_ORG)
+    expect(
+      requests.find((request) => request.url.endsWith('/properties'))?.orgHeader,
+    ).toBe(TENANT_ORG)
   })
 })
 

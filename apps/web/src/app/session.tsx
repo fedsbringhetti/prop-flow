@@ -32,6 +32,19 @@ interface SessionContextValue {
    * un'organizzazione che non c'è più (ADR-053, guscio a zero organizzazioni).
    */
   clearOrganization: () => void
+  /**
+   * L'organizzazione attiva viene **dal ricordo di questo browser**, e l'elenco
+   * non l'ha ancora confermata né corretta.
+   *
+   * Vero da quando l'effetto applica il ricordo a quando il guscio, con l'elenco
+   * davanti, passa da `selectOrganization` o `clearOrganization`; falso quando
+   * l'organizzazione è quella del token o è stata scelta a mano. È stato del
+   * provider e non dello store, perché è il provider a sapere che cosa sia il
+   * `localStorage` (`R49`): senza, un secondo browser con in memoria
+   * un'organizzazione lasciata altrove partiva con quell'`X-Org-Id`, e la prima
+   * schermata riceveva un `403` prima che l'elenco correggesse.
+   */
+  organizationRemembered: boolean
   /** Vero finché il tentativo di ripristino dal cookie è in corso. */
   restoring: boolean
   /**
@@ -102,6 +115,40 @@ function clearStored(userId: string): void {
     localStorage.removeItem(`${STORAGE_KEY}:${userId}`)
   } catch {
     // Vedi sopra: un `localStorage` non disponibile non è un errore qui.
+  }
+}
+
+/**
+ * L'organizzazione applicata dal ricordo, finché nessuno la sceglie o la
+ * corregge: **un sistema esterno accanto allo store**, e non uno stato di React.
+ *
+ * L'effetto che applica il ricordo scrive lo store e questo valore nello stesso
+ * giro, e React li rende insieme: è ciò che `R49` richiede, perché un render in
+ * cui la sessione dice già l'organizzazione ricordata e il guscio non lo sa
+ * ancora è esattamente il giro in cui una schermata parte con l'`X-Org-Id`
+ * sbagliato. Le due forme più ovvie non vanno: un `setState` dentro quell'effetto
+ * è ciò che il lint vieta (`set-state-in-effect`), un ref letto nel render anche
+ * (`refs`). Un valore letto con `useSyncExternalStore`, come la sessione stessa,
+ * è la forma che dice il vero: l'effetto sincronizza React con due sistemi
+ * esterni, non con il proprio stato.
+ */
+class RememberedOrganization {
+  private value: string | null = null
+  private readonly listeners = new Set<() => void>()
+
+  readonly snapshot = (): string | null => this.value
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  set(value: string | null): void {
+    if (value === this.value) return
+    this.value = value
+    for (const listener of this.listeners) listener()
   }
 }
 
@@ -183,12 +230,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const userId = session?.userId ?? null
   const sessionOrg = session?.organizationId ?? null
 
+  const remembered = useMemo(() => new RememberedOrganization(), [])
+  const rememberedOrg = useSyncExternalStore(
+    remembered.subscribe,
+    remembered.snapshot,
+    remembered.snapshot,
+  )
+
   /**
    * Ripristina l'organizzazione scelta prima del ricaricamento.
    *
-   * Questo effetto **non tocca lo stato di React**: parla con due sistemi esterni,
-   * lo store della sessione e il `localStorage`. È il caso per cui un effetto
-   * esiste.
+   * Questo effetto **non tocca lo stato di React**: parla con tre sistemi esterni
+   * — lo store della sessione, il `localStorage` e `RememberedOrganization`. È il
+   * caso per cui un effetto esiste.
    *
    * Il ripristino avviene **prima** e non dopo `GET /organizations`: fra il
    * caricamento e la risposta di quella query passano richieste — la prima
@@ -200,28 +254,46 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!userId) return
     const stored = readStored(userId)
     if (stored.active && stored.role && stored.active !== sessionOrg) {
+      remembered.set(stored.active)
       store.selectOrganization(stored.active, stored.role)
     }
-  }, [userId, sessionOrg, store])
+  }, [userId, sessionOrg, store, remembered])
+
+  // Derivato e non memorizzato: se la sessione cade o cambia organizzazione per
+  // un'altra via, il ricordo non conta più senza che nessuno debba azzerarlo.
+  const organizationRemembered = sessionOrg !== null && rememberedOrg === sessionOrg
 
   const value = useMemo<SessionContextValue>(
     () => ({
       session,
       store,
       client,
+      organizationRemembered,
       restoring,
       restoreError,
       retryRestore,
       selectOrganization: (organizationId, role) => {
+        remembered.set(null)
         if (userId) writeStored(userId, { active: organizationId, role })
         store.selectOrganization(organizationId, role)
       },
       clearOrganization: () => {
+        remembered.set(null)
         if (userId) clearStored(userId)
         store.clearOrganization()
       },
     }),
-    [session, store, client, restoring, restoreError, retryRestore, userId],
+    [
+      session,
+      store,
+      client,
+      remembered,
+      organizationRemembered,
+      restoring,
+      restoreError,
+      retryRestore,
+      userId,
+    ],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
