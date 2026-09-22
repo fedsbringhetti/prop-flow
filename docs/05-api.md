@@ -700,7 +700,7 @@ Nessuna migration: la vista esiste dalla `0015`.
 
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
-| POST | `/api/v1/properties` | staff | `201`, stato iniziale `draft` |
+| POST | `/api/v1/properties` | staff | `201`. `status` opzionale (`draft`, `available`, `maintenance`); assente significa `draft`, che resta il default. `409 property.archive_requires_dedicated_operation` su `archived` |
 | GET | `/api/v1/properties` | membro | `200`, pagina keyset. Filtri `status`, `city` |
 | GET | `/api/v1/properties/{id}` | membro | `200` o `404` |
 | PATCH | `/api/v1/properties/{id}` | staff | `200`. `409` se archiviato |

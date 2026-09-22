@@ -40,20 +40,10 @@ import { formatAmount, formatDecimal } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
 import { BulkBar, useBulkAction, VerbButton, type Verb } from '../shared/bulk'
 import { RoomStatusBadge } from '../shared/status'
-import { PropertyStatusBadge } from '../shared/status'
+import { EDITABLE_PROPERTY_STATUSES, PropertyStatusBadge } from '../shared/status'
 
 const ENERGY_CLASSES: EnergyClass[] = ['A4', 'A3', 'A2', 'A1', 'A', 'B', 'C', 'D', 'E', 'F', 'G']
 
-/**
- * Gli stati che chi amministra **decide**.
- *
- * `rented` e `partially_rented` non ci sono perché non si scelgono: discendono dai
- * contratti in essere, e offrirli in una tendina chiederebbe a una persona di
- * ricordarsi di aggiornare a mano qualcosa che il database sa già (ADR-019).
- * `archived` non c'è perché ha la sua operazione, e il dominio rifiuta di
- * riceverlo da un `PATCH`.
- */
-const EDITABLE_STATUSES = ['draft', 'available', 'maintenance'] as const
 
 /** Il verbo delle stanze: **Archivia**, con la frase della scheda e il numero. */
 const ARCHIVE_ROOM: Verb = {
@@ -276,7 +266,7 @@ function EditPropertyDialog({ property }: { property: Property }) {
             <Select
               {...props}
               value={
-                EDITABLE_STATUSES.includes(values.status as (typeof EDITABLE_STATUSES)[number])
+                EDITABLE_PROPERTY_STATUSES.includes(values.status as (typeof EDITABLE_PROPERTY_STATUSES)[number])
                   ? values.status
                   : ''
               }
@@ -287,10 +277,10 @@ function EditPropertyDialog({ property }: { property: Property }) {
               {/* Un immobile già affittato mostra lo stato derivato, che non è
                   fra le scelte: l'opzione vuota evita che la tendina dica una
                   cosa falsa finché non si sceglie. */}
-              {EDITABLE_STATUSES.includes(values.status as (typeof EDITABLE_STATUSES)[number]) ? null : (
+              {EDITABLE_PROPERTY_STATUSES.includes(values.status as (typeof EDITABLE_PROPERTY_STATUSES)[number]) ? null : (
                 <option value="">{t.property.statuses[values.status]}</option>
               )}
-              {EDITABLE_STATUSES.map((value) => (
+              {EDITABLE_PROPERTY_STATUSES.map((value) => (
                 <option key={value} value={value}>
                   {t.property.statuses[value]}
                 </option>

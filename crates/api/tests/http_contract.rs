@@ -574,7 +574,12 @@ async fn openapi_document_is_served() {
     );
 }
 
-/// Crea un immobile e restituisce il suo id.
+/// Crea un immobile **disponibile** e restituisce il suo id.
+///
+/// Disponibile e non in bozza perché la gran parte di chi lo chiama ci attiva poi
+/// un contratto, e dalla sezione 12 un immobile in bozza lo rifiuta
+/// (`property.not_lettable`, ADR-015). Che il default resti `draft` lo verifica
+/// `full_property_lifecycle`, che crea senza passare da qui.
 async fn create_property(app: &TestApp, token: &str, label: &str) -> String {
     let (status, created) = app
         .post_auth(
@@ -583,6 +588,7 @@ async fn create_property(app: &TestApp, token: &str, label: &str) -> String {
             serde_json::json!({
                 "label": label,
                 "property_type": "apartment",
+                "status": "available",
                 "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
             }),
         )
@@ -759,6 +765,58 @@ async fn add_tenant(app: &TestApp, token: &str, lease: &str, name: &str, email: 
         .post_auth(&format!("/api/v1/leases/{lease}/parties"), token, body)
         .await;
     assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+}
+
+/// Lo stato si può scegliere alla creazione, e il **default non si sposta**.
+///
+/// `R44`: il form non offriva lo stato, quindi si atterrava sempre in bozza, e lo
+/// stato si cambiava solo dal dialogo «Modifica» della scheda — che non è dove si
+/// va a cercarlo. Il campo è opzionale: chi non lo dice ottiene `draft` come
+/// prima, perché spostare il default nel dominio deciderebbe al posto di chi crea
+/// senza guardare.
+#[tokio::test]
+async fn a_property_can_be_born_available_and_stays_a_draft_when_nobody_says_otherwise() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "stato-alla-creazione").await;
+
+    let create = |body: serde_json::Value| app.post_auth("/api/v1/properties", &token, body);
+
+    let (status, implicit) = create(serde_json::json!({
+        "label": "Senza stato",
+        "property_type": "apartment",
+        "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {implicit}");
+    assert_eq!(
+        implicit["status"], "draft",
+        "il default del dominio non si sposta"
+    );
+
+    let (status, available) = create(serde_json::json!({
+        "label": "Disponibile da subito",
+        "property_type": "apartment",
+        "status": "available",
+        "address": { "street": "Via Roma 2", "city": "Milano", "province": "MI" }
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {available}");
+    assert_eq!(available["status"], "available");
+
+    // `archived` lo rifiuta `set_status`, che è lo stesso controllo del `PATCH`:
+    // archiviare ha l'operazione sua, e passa da `DELETE`.
+    let (status, problem) = create(serde_json::json!({
+        "label": "Nato archiviato",
+        "property_type": "apartment",
+        "status": "archived",
+        "address": { "street": "Via Roma 3", "city": "Milano", "province": "MI" }
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"],
+        "property.archive_requires_dedicated_operation"
+    );
 }
 
 #[tokio::test]
@@ -1513,7 +1571,11 @@ async fn a_property_is_partially_rented_when_one_of_its_rooms_is() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {detail}");
-    assert_eq!(detail["status"], "draft", "lo stato dichiarato non cambia");
+    assert_eq!(
+        detail["status"], "available",
+        "lo stato dichiarato non cambia: l'attivazione muove il derivato, e \
+         `available` è quello con cui l'immobile è nato"
+    );
     assert_eq!(
         detail["effective_status"], "partially_rented",
         "corpo: {detail}"

@@ -73,7 +73,7 @@ use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::payment::{IdempotencyKey, PaymentMethod, PaymentStatus};
 use propflow_domain::ports::WorkerUnitOfWorkFactory as _;
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
-use propflow_domain::property::{PropertyType, Room, RoomChanges};
+use propflow_domain::property::{PropertyStatus, PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
 use propflow_domain::ticket::{
     MessageBody, TicketCategory, TicketCorrection, TicketDescription, TicketPriority,
@@ -184,6 +184,7 @@ async fn row_level_security_isolates_organizations() {
                 label: "Immobile di Alfa".to_owned(),
                 property_type: PropertyType::Apartment,
                 address: address("Milano"),
+                status: None,
             },
         )
         .await
@@ -242,6 +243,7 @@ async fn creating_a_property_writes_one_event_and_one_audit_row() {
                 label: "Immobile tracciato".to_owned(),
                 property_type: PropertyType::House,
                 address: address("Torino"),
+                status: None,
             },
         )
         .await
@@ -344,6 +346,7 @@ async fn archiving_is_a_soft_delete_and_the_app_role_cannot_hard_delete() {
                 label: "Da archiviare".to_owned(),
                 property_type: PropertyType::Garage,
                 address: address("Bologna"),
+                status: None,
             },
         )
         .await
@@ -381,6 +384,12 @@ async fn archiving_is_a_soft_delete_and_the_app_role_cannot_hard_delete() {
 }
 
 /// Crea un immobile e restituisce il suo identificatore.
+/// Crea un immobile **disponibile** e restituisce il suo id.
+///
+/// Disponibile e non in bozza perché la gran parte di chi lo chiama ci attiva poi
+/// un contratto, e dalla sezione 12 un immobile in bozza lo rifiuta
+/// (`Invariant::PropertyNotLettable`, ADR-015). Che il default sia `draft` resta
+/// fissato dai test del dominio e dal bordo HTTP.
 async fn create_property(
     env: &common::TestEnv,
     context: &RequestContext,
@@ -394,6 +403,7 @@ async fn create_property(
                 label: label.to_owned(),
                 property_type: PropertyType::Apartment,
                 address: address(city),
+                status: Some(PropertyStatus::Available),
             },
         )
         .await
@@ -1299,6 +1309,7 @@ async fn lease_owner(
                 label: format!("Immobile {city}"),
                 property_type: PropertyType::Apartment,
                 address: address(city),
+                status: None,
             },
         )
         .await
@@ -1626,6 +1637,7 @@ async fn a_property(env: &common::TestEnv, context: &RequestContext, city: &str)
                 label: format!("Immobile {city}"),
                 property_type: PropertyType::Apartment,
                 address: address(city),
+                status: None,
             },
         )
         .await

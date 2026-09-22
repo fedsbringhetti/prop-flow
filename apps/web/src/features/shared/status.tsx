@@ -70,6 +70,28 @@ const propertyTone: Record<PropertyStatus, BadgeTone> = {
 const propertyJudgements = ['draft', 'maintenance', 'archived'] as const satisfies readonly PropertyStatus[]
 
 /**
+ * Gli stati di un immobile che si **scelgono**, in un solo posto.
+ *
+ * `rented` e `partially_rented` non ci sono perché discendono dai contratti in
+ * essere, e offrirli chiederebbe di aggiornare a mano qualcosa che il database sa
+ * già (ADR-019); `archived` non c'è perché ha la sua operazione, e il dominio lo
+ * rifiuta sia dal `PATCH` sia dalla creazione
+ * (`property.archive_requires_dedicated_operation`).
+ *
+ * Condivisa fra il form di creazione e il dialogo «Modifica» dalla sezione 12,
+ * quando la creazione ha smesso di atterrare sempre in bozza: due elenchi separati
+ * avrebbero potuto divergere, e chi crea e chi modifica sceglierebbero da due
+ * tendine diverse sullo stesso campo.
+ */
+export const EDITABLE_PROPERTY_STATUSES = [
+  'draft',
+  'available',
+  'maintenance',
+] as const satisfies readonly PropertyStatus[]
+
+export type EditablePropertyStatus = (typeof EDITABLE_PROPERTY_STATUSES)[number]
+
+/**
  * Lo stato di un immobile: **il fatto**, e il dichiarato solo se lo smentisce.
  */
 export function PropertyStatusBadge({

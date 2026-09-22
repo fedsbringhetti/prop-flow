@@ -511,6 +511,13 @@ export const it = {
     statusLabel: 'Stato dichiarato',
     statusHint:
       'Affittato e parzialmente affittato non si scelgono: li calcolano i contratti in essere.',
+    /** Alla creazione la frase è un'altra: lì non serve dire quali stati mancano,
+     *  serve dire a che cosa servono i due che ci sono. «Bozza» è una scelta
+     *  legittima — chi sta ancora compilando — ma è anche quella che rifiuta
+     *  l'attivazione di un contratto, e chi la sceglie deve saperlo adesso e non
+     *  dal `409`. */
+    statusCreateHint:
+      'Bozza è per chi sta ancora compilando: un immobile in bozza non si può affittare.',
     /** Il badge mostra il fatto; il dichiarato compare accanto solo quando è un
      *  giudizio che il fatto smentisce — un immobile in manutenzione e insieme
      *  affittato. Nella scheda c'è comunque, per chi lo cerca. */
