@@ -222,6 +222,17 @@ pub struct CreatePropertyRequest {
     pub label: String,
     pub property_type: PropertyTypeDto,
     pub address: AddressDto,
+    /// Stato iniziale. Assente significa `draft`, che resta il default.
+    ///
+    /// Il campo esiste perché senza di esso si atterrava sempre in bozza e lo
+    /// stato si cambiava solo dal dialogo «Modifica» della scheda, che non è dove
+    /// si va a cercarlo; e dalla sezione 12 un immobile in bozza rifiuta
+    /// l'attivazione di un contratto (`property.not_lettable`). È lo stesso tipo
+    /// del `PATCH`, quindi `archived` è rifiutato qui come là —
+    /// `property.archive_requires_dedicated_operation`, perché archiviare ha
+    /// l'operazione sua.
+    #[serde(default)]
+    pub status: Option<PropertyStatusDto>,
 }
 
 /// Modifica parziale. Un campo assente resta invariato; un campo presente con
@@ -401,6 +412,7 @@ pub struct ListQueryParams {
     responses(
         (status = 201, description = "Immobile creato", body = PropertyResponse),
         (status = 403, description = "Richiede ruolo proprietario o gestore", body = crate::error::ProblemDetails),
+        (status = 409, description = "`status: archived`: archiviare ha l'operazione sua", body = crate::error::ProblemDetails),
         (status = 422, description = "Dati non validi", body = crate::error::ProblemDetails),
     )
 )]
@@ -423,6 +435,7 @@ async fn create(
                 label: request.label,
                 property_type: request.property_type.into(),
                 address,
+                status: request.status.map(Into::into),
             },
         )
         .await

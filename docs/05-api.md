@@ -123,7 +123,9 @@ Aggiungere un codice è additivo, rinominarne uno è una rottura.
 | `code` | Stato | Condizione |
 |---|---|---|
 | `property.archived` | 409 | immobile archiviato, non modificabile |
-| `property.archive_requires_dedicated_operation` | 409 | archiviare non si fa con un `PATCH` di stato |
+| `property.archive_requires_dedicated_operation` | 409 | archiviare non si fa con un `PATCH` di stato, né chiedendolo alla creazione |
+| `property.not_lettable` | 409 | l'immobile è in bozza: non ci si attiva un contratto. Il rifiuto è sull'attivazione e non sulla bozza del contratto, che resta possibile |
+| `property.lease_in_force` | 409 | l'immobile ha un contratto in essere: non si archivia e non torna in bozza. `maintenance` resta ammesso. La via d'uscita è disdire il contratto — archiviare **non** disdice |
 | `room.archived` | 409 | stanza archiviata, non modificabile |
 | `lease.invalid_transition` | 409 | attivazione, disdetta o annullamento non ammessi nello stato attuale |
 | `lease.party_already_linked` | 409 | la parte è già collegata a un altro utente |
@@ -700,11 +702,11 @@ Nessuna migration: la vista esiste dalla `0015`.
 
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
-| POST | `/api/v1/properties` | staff | `201`, stato iniziale `draft` |
+| POST | `/api/v1/properties` | staff | `201`. `status` opzionale (`draft`, `available`, `maintenance`); assente significa `draft`, che resta il default. `409 property.archive_requires_dedicated_operation` su `archived` |
 | GET | `/api/v1/properties` | membro | `200`, pagina keyset. Filtri `status`, `city` |
 | GET | `/api/v1/properties/{id}` | membro | `200` o `404` |
-| PATCH | `/api/v1/properties/{id}` | staff | `200`. `409` se archiviato |
-| DELETE | `/api/v1/properties/{id}` | staff | `204`. Archiviazione, non cancellazione |
+| PATCH | `/api/v1/properties/{id}` | staff | `200`. `409 property.archived` se archiviato, `409 property.lease_in_force` su `status: draft` con un contratto in essere |
+| DELETE | `/api/v1/properties/{id}` | staff | `204`. Archiviazione, non cancellazione. `409 property.lease_in_force` con un contratto in essere: si disdice prima |
 | GET | `/api/v1/properties/{id}/residents` | membro | `200` con `items`, `404` se l'immobile non è visibile |
 
 L'inquilino vede gli immobili in cui abita, non gli altri della stessa
@@ -787,7 +789,7 @@ la forma `{ "items": [ … ] }` senza `next_cursor`.
 | GET | `/api/v1/leases` | membro | `200`, pagina keyset. Filtri `property_id`, `status`, `in_force` |
 | GET | `/api/v1/leases/{id}` | membro | `200` con le parti contrattuali, o `404` |
 | POST | `/api/v1/leases/{id}/parties` | staff | `201`. `409` se esiste già un intestatario principale |
-| POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete |
+| POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete, e `409 property.not_lettable` su un immobile in bozza — che è il primo rifiuto valutato, prima delle parti |
 | POST | `/api/v1/leases/{id}/terminate` | staff | `200`. `409` se il contratto non è attivo |
 
 L'inquilino vede il **proprio** contratto con `GET`, non gli altri della stessa

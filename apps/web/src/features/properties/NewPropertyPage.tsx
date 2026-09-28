@@ -17,6 +17,8 @@ import { keys } from '@/app/query'
 import { useApi } from '@/app/session'
 import { t } from '@/i18n'
 
+import { EDITABLE_PROPERTY_STATUSES } from '../shared/status'
+
 const TYPES: PropertyType[] = [
   'apartment',
   'house',
@@ -31,6 +33,7 @@ const TYPES: PropertyType[] = [
 
 const schema = z.object({
   label: z.string().min(1, t.validation.required),
+  status: z.enum(EDITABLE_PROPERTY_STATUSES),
   property_type: z.enum([
     'apartment',
     'house',
@@ -68,6 +71,11 @@ export function NewPropertyPage() {
     resolver: zodResolver(schema),
     defaultValues: {
       label: '',
+      // **`available` proposto, `draft` ancora scegliibile.** Il default dell'API
+      // resta `draft` e non si sposta; è il form a proporre lo stato in cui
+      // l'immobile serve a qualcosa, perché atterrare sempre in bozza significava
+      // scoprirlo dal rifiuto della prima attivazione.
+      status: 'available',
       property_type: 'apartment',
       street: '',
       city: '',
@@ -81,6 +89,7 @@ export function NewPropertyPage() {
       createProperty(client, {
         label: values.label,
         property_type: values.property_type,
+        status: values.status,
         address: {
           street: values.street,
           city: values.city,
@@ -136,6 +145,20 @@ export function NewPropertyPage() {
                   {TYPES.map((value) => (
                     <option key={value} value={value}>
                       {t.property.types[value]}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            {/* Lo stato **dichiarato**: gli altri due li calcolano i contratti, e
+                il campo di aiuto lo dice invece di lasciare che qualcuno cerchi
+                «Affittato» nella tendina. */}
+            <Field label={t.property.statusLabel} hint={t.property.statusCreateHint} error={form.formState.errors.status?.message}>
+              {(props) => (
+                <Select {...props} {...form.register('status')}>
+                  {EDITABLE_PROPERTY_STATUSES.map((value) => (
+                    <option key={value} value={value}>
+                      {t.property.statuses[value]}
                     </option>
                   ))}
                 </Select>

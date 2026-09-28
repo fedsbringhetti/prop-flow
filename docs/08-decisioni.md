@@ -327,6 +327,29 @@ workflow. Il saldo si legge da `v_charge_balances`, lo stato lo scrive il servic
 layer. Anche "almeno un owner per organizzazione" resta applicativo, perché
 richiederebbe un trigger cross-row.
 
+**Nota del 22 settembre 2026 — tre regole in più, dallo stesso lato del criterio.**
+La sezione 12 ha aggiunto ciò che un contratto in essere vieta su un immobile, e
+tutte e tre stanno nel service layer per la ragione di «almeno un owner»: il legame
+è **cross-row** — il vincolo vive su `app.leases` e la scrittura avviene su
+`app.properties` — e un trigger che lo esprimesse dovrebbe interrogare un'altra
+tabella a ogni `UPDATE`.
+
+- **in bozza non si affitta**: `ActivateLease` rilegge l'immobile e rifiuta su
+  `draft` con `Invariant::PropertyNotLettable` → `property.not_lettable`;
+- **con un contratto in essere non si torna in bozza**: `UpdateProperty` rifiuta
+  `status: draft` con `Invariant::PropertyHasLeaseInForce` →
+  `property.lease_in_force`;
+- **con un contratto in essere non si archivia**: `ArchiveProperty` rifiuta con lo
+  stesso invariante.
+
+Come per «almeno un owner», il rifiuto è **parlante** e non una policy che nega: la
+domanda passa da `LeaseRepository::has_in_force_for_property`, che interroga
+`app.lease_in_force` — la stessa funzione delle viste e dell'elenco, perché due
+definizioni di «in essere» farebbero rispondere l'archiviazione e la dashboard in
+modo diverso sullo stesso contratto. Che non ci sia una rete nel database è una
+conseguenza accettata: una `UPDATE` scritta a mano su `app.properties` aggira le
+tre regole, come aggirerebbe «almeno un owner».
+
 ---
 
 <a id="adr-016"></a>
@@ -3617,3 +3640,92 @@ alla membership; oggi non ce n'è.
 - il rientro ([ADR-051](#adr-051)) non cambia: riattivata la membership, la parte del
   contratto torna a valere.
 
+
+---
+
+<a id="adr-055"></a>
+
+## ADR-055 — Il totale incassato si somma oltre la RLS: una funzione, non una vista più larga
+
+**Contesto, e il difetto misurato.** `app.v_charge_balances` è `security_invoker = true`
+dalla `0015`: la vista applica la Row Level Security **di chi legge**, ed è la scelta
+giusta per l'addebito — chi non può vedere quella riga non ne legge il saldo. Ma il
+`paid_amount` di quella vista è una somma su `app.payments`, e `payments_select`
+(`0014:299-302`) mostra un pagamento a tre soggetti: lo staff, chi ha pagato
+(`payer_user_id`), chi ha incassato (`payee_user_id`). Un incasso registrato **senza**
+`payer_user_id` — il bonifico che arriva da un conto che non si sa a chi ricondurre, che
+`submit.rs` dichiara voluto e che resta tale — è invisibile all'inquilino, e quindi **non
+entra nella sua somma**.
+
+Misurato seminando i dati del collaudo: il proprietario registra `150,00` su un addebito
+da `420,00` senza attribuirlo; l'inquilino, sulla **stessa riga**, legge `status:
+partially_paid` con `paid_amount: 0.00` e `outstanding_amount: 420.00`. La riga si
+contraddice da sola — si dichiara pagata in parte e mostra il residuo intero — e chi la
+legge pagherebbe due volte. È la voce `R29`.
+
+Lo stato è scritto dal service layer ([ADR-015](#adr-015)) e quindi è lo stesso per
+tutti; la somma è derivata sotto la RLS e quindi cambia con chi guarda. **La
+contraddizione nasce da qui**, e non da un difetto di una delle due scelte.
+
+### Decisione
+
+`app.charge_paid_amount(p_charge_id uuid) RETURNS app.money_amount`, `SECURITY DEFINER`,
+somma i pagamenti di un addebito **senza la Row Level Security di chi chiama**;
+`app.v_charge_balances` la chiama al posto della `LATERAL` che sommava in linea
+(`migrations/0042_charge_paid_amount_reads_past_rls.sql`).
+
+Il predicato sommato è **lo stesso di prima, parola per parola**: `status = ANY
+(ARRAY['succeeded','partially_refunded'])` e `SUM(amount - refunded_amount)`. Non sono i
+tre stati di `payments_payable_ix`, che comprende anche `authorized` — denaro autorizzato
+e non incassato, che farebbe scendere il saldo su un incasso mai arrivato. Spostare la
+somma dentro una funzione non è l'occasione per cambiare che cosa si somma: cambierebbero
+due cose insieme, e il giorno in cui un saldo risultasse sbagliato non si saprebbe quale.
+
+**Che cosa rivela, e a chi.** Un **aggregato** — quanto è stato incassato su un addebito —
+a chi può vedere **quell'addebito**, cioè a una parte del suo contratto o allo staff
+(`charges_select`, `0014:291`, via `app.can_access_lease`). La funzione riceve un
+`charge_id` e restituisce un `numeric`: **non** chi ha pagato, **non** quando, **non**
+quante righe, **non** il metodo. `payments_select` non si tocca, e l'elenco dei pagamenti
+continua a mostrare all'inquilino i soli suoi.
+
+È la forma di [ADR-036](#adr-036): una funzione che **proietta** invece di una policy che
+si allarga. Là erano tre colonne dei residenti, qui è un solo numero.
+
+### Perché non le altre due vie
+
+La voce `R29` ne registrava tre, e le altre due sono state scartate con ragioni diverse.
+
+**Rendere `payer_user_id` obbligatorio** quando l'addebito ha un contratto con un solo
+inquilino registrato. È la più piccola, e non chiude il caso: il bonifico anonimo — un
+incasso che non si sa a chi ricondurre — esiste e continuerebbe a esistere sui contratti
+con più inquilini, che sono esattamente quelli del co-living. Chiuderebbe il caso
+frequente lasciando aperto quello che si nota di meno, che è il modo peggiore di chiudere
+un difetto di correttezza.
+
+**Non mostrare affatto il totale** a chi non vede tutte le righe. È l'unica che non
+richiedeva di decidere subito, ed è la ragione per cui la voce la registrava. Toglie però
+a chi abita **l'unico numero per cui apre la prima schermata** — *quanto resta da pagare*
+— e lo sostituisce con un'assenza che non spiega niente. Un residuo falso è peggio di un
+residuo assente, ma un residuo vero è meglio di entrambi, e costa una funzione.
+
+### Conseguenze
+
+- **`v_charge_balances` non è più interamente derivabile da ciò che il chiamante vede.**
+  Resta `security_invoker`, quindi **quali righe** si leggono non cambia: cambia che una
+  colonna di ciascuna è sommata oltre la policy. È una proprietà che
+  [04](04-sicurezza.md) ora descrive, ed è la ragione per cui questa decisione è un ADR e
+  non una riga di migration;
+- `v_owner_dashboard` legge da `v_charge_balances` e ne eredita il `paid_amount`: per lo
+  staff non cambia nulla, perché `payments_select` gli mostrava già tutto;
+- il `CREATE OR REPLACE VIEW` conserva **le stesse colonne, nello stesso ordine e con gli
+  stessi tipi**, che è la condizione perché il `REPLACE` sia ammesso e perché
+  `v_owner_dashboard` non venga portata via da un `DROP`;
+- la funzione ha `SET search_path = app, pg_temp` — l'invariante 6 di
+  `ops/sql/checks/schema_invariants.sql` ferma un `SECURITY DEFINER` che ne sia privo — e
+  in più `REVOKE ALL ... FROM PUBLIC` seguito dai `GRANT EXECUTE` ai ruoli. **Il `REVOKE`
+  è nuovo in questo repository**: `app.property_residents` (`0030`) concede per esplicito
+  ma non toglie il default di `PUBLIC`, e il controllo delle invarianti non se ne accorge.
+  Qui si fa, perché una funzione che legge oltre la RLS eseguibile da chiunque abbia una
+  connessione è la cosa che il `DEFINER` doveva evitare;
+- lo stato dell'addebito e il suo saldo **tornano a dire la stessa cosa a tutti**, che è
+  l'effetto per cui la decisione esiste.

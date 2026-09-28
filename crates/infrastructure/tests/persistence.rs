@@ -38,7 +38,8 @@ use propflow_application::use_cases::invitation::{
 };
 use propflow_application::use_cases::lease::{
     ActivateLease, ActivateLeaseCommand, AddLeaseParty, AddLeasePartyCommand, DraftLease,
-    DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery,
+    DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery, TerminateLease,
+    TerminateLeaseCommand,
 };
 use propflow_application::use_cases::payment::{
     ConfirmPayment, DeclarePayment, DeclarePaymentCommand, ListPayments, ListPaymentsQuery,
@@ -72,7 +73,7 @@ use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::payment::{IdempotencyKey, PaymentMethod, PaymentStatus};
 use propflow_domain::ports::WorkerUnitOfWorkFactory as _;
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
-use propflow_domain::property::{PropertyType, Room, RoomChanges};
+use propflow_domain::property::{PropertyStatus, PropertyType, Room, RoomChanges};
 use propflow_domain::shared::{Address, CountryCode, Currency, Money, PropertyId, RoomId};
 use propflow_domain::ticket::{
     MessageBody, TicketCategory, TicketCorrection, TicketDescription, TicketPriority,
@@ -183,6 +184,7 @@ async fn row_level_security_isolates_organizations() {
                 label: "Immobile di Alfa".to_owned(),
                 property_type: PropertyType::Apartment,
                 address: address("Milano"),
+                status: None,
             },
         )
         .await
@@ -241,6 +243,7 @@ async fn creating_a_property_writes_one_event_and_one_audit_row() {
                 label: "Immobile tracciato".to_owned(),
                 property_type: PropertyType::House,
                 address: address("Torino"),
+                status: None,
             },
         )
         .await
@@ -343,6 +346,7 @@ async fn archiving_is_a_soft_delete_and_the_app_role_cannot_hard_delete() {
                 label: "Da archiviare".to_owned(),
                 property_type: PropertyType::Garage,
                 address: address("Bologna"),
+                status: None,
             },
         )
         .await
@@ -380,6 +384,12 @@ async fn archiving_is_a_soft_delete_and_the_app_role_cannot_hard_delete() {
 }
 
 /// Crea un immobile e restituisce il suo identificatore.
+/// Crea un immobile **disponibile** e restituisce il suo id.
+///
+/// Disponibile e non in bozza perché la gran parte di chi lo chiama ci attiva poi
+/// un contratto, e dalla sezione 12 un immobile in bozza lo rifiuta
+/// (`Invariant::PropertyNotLettable`, ADR-015). Che il default sia `draft` resta
+/// fissato dai test del dominio e dal bordo HTTP.
 async fn create_property(
     env: &common::TestEnv,
     context: &RequestContext,
@@ -393,6 +403,7 @@ async fn create_property(
                 label: label.to_owned(),
                 property_type: PropertyType::Apartment,
                 address: address(city),
+                status: Some(PropertyStatus::Available),
             },
         )
         .await
@@ -554,6 +565,141 @@ async fn activate(
         .execute(context, ActivateLeaseCommand { id: lease_id })
         .await
         .map(|_| ())
+}
+
+/// `has_in_force_for_property` chiede **le date oltre allo stato**.
+///
+/// Le tre regole della sezione 12 — non si affitta una bozza, un immobile
+/// affittato non torna in bozza né si archivia — si reggono su questa domanda, e
+/// una condizione scritta come `status = 'active'` le farebbe rifiutare su un
+/// contratto scaduto o disdetto. Il test percorre i tre casi sullo stesso
+/// immobile e su uno vicino, perché è l'unico modo di vedere la differenza fra lo
+/// stato memorizzato e `app.lease_in_force`.
+#[tokio::test]
+async fn a_property_has_a_lease_in_force_only_while_the_dates_say_so() {
+    let env = require_db!();
+    let owner = register_owner(&env, "in-essere-immobile").await;
+
+    let property_id = create_property(&env, &owner, "Immobile in essere", "Trento").await;
+    let vacant_id = create_property(&env, &owner, "Immobile sfitto", "Trento").await;
+
+    // Un immobile senza contratti: falso, ed è il caso che l'archiviazione incontra
+    // sempre.
+    assert!(
+        !has_lease_in_force(&env, &owner, vacant_id).await,
+        "un immobile senza contratti non ha nulla in essere"
+    );
+
+    // Attivo, con oggi dentro il periodo: vero.
+    // `draft_lease` mette già un inquilino al 100%: è quanto basta ad attivare, e
+    // un invito in più non aggiungerebbe niente alla domanda che si sta provando.
+    let current = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-30),
+        Some(days_from_today(300)),
+    )
+    .await;
+    activate(&env, &owner, current.id())
+        .await
+        .expect("attivato");
+
+    assert!(
+        has_lease_in_force(&env, &owner, property_id).await,
+        "un contratto attivo con oggi dentro il periodo è in essere"
+    );
+    assert!(
+        !has_lease_in_force(&env, &owner, vacant_id).await,
+        "la domanda è per immobile: il contratto dell'uno non risponde per l'altro"
+    );
+
+    // Disdetto: falso. Lo stato memorizzato è cambiato.
+    TerminateLease::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            TerminateLeaseCommand {
+                id: current.id(),
+                reason: Some("Disdetta anticipata".to_owned()),
+            },
+        )
+        .await
+        .expect("disdetto");
+
+    assert!(
+        !has_lease_in_force(&env, &owner, property_id).await,
+        "un contratto disdetto non è più in essere"
+    );
+
+    // **Attivo e scaduto ieri: falso**, ed è la metà della definizione che uno
+    // stato da solo non vede. Nessuno scrive `expired` (ADR-019): la riga resta
+    // `active` per sempre, e `status = 'active'` risponderebbe vero.
+    let expired = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(-400),
+        Some(days_from_today(-1)),
+    )
+    .await;
+    activate(&env, &owner, expired.id())
+        .await
+        .expect("attivato: l'attivazione non guarda le date");
+
+    let mut uow = env.factory.begin(&owner).await.expect("transazione aperta");
+    let stored = uow
+        .leases()
+        .find_by_id(expired.id())
+        .await
+        .expect("query riuscita")
+        .expect("contratto visibile");
+    assert_eq!(
+        stored.status(),
+        LeaseStatus::Active,
+        "lo stato memorizzato resta `active`: è la premessa del caso"
+    );
+    drop(uow);
+
+    assert!(
+        !has_lease_in_force(&env, &owner, property_id).await,
+        "un contratto attivo scaduto ieri non è in essere, e uno stato da solo \
+         direbbe il contrario"
+    );
+
+    // E quello che comincia domani nemmeno: l'altro estremo dell'intervallo.
+    let future = draft_lease(
+        &env,
+        &owner,
+        property_id,
+        None,
+        days_from_today(1),
+        Some(days_from_today(400)),
+    )
+    .await;
+    activate(&env, &owner, future.id()).await.expect("attivato");
+
+    assert!(
+        !has_lease_in_force(&env, &owner, property_id).await,
+        "un contratto che comincia domani non è ancora in essere"
+    );
+}
+
+async fn has_lease_in_force(
+    env: &common::TestEnv,
+    context: &RequestContext,
+    property_id: PropertyId,
+) -> bool {
+    let mut uow = env
+        .factory
+        .begin(context)
+        .await
+        .expect("transazione aperta");
+    uow.leases()
+        .has_in_force_for_property(property_id)
+        .await
+        .expect("query riuscita")
 }
 
 #[tokio::test]
@@ -1163,6 +1309,7 @@ async fn lease_owner(
                 label: format!("Immobile {city}"),
                 property_type: PropertyType::Apartment,
                 address: address(city),
+                status: None,
             },
         )
         .await
@@ -1490,6 +1637,7 @@ async fn a_property(env: &common::TestEnv, context: &RequestContext, city: &str)
                 label: format!("Immobile {city}"),
                 property_type: PropertyType::Apartment,
                 address: address(city),
+                status: None,
             },
         )
         .await

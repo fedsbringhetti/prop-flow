@@ -12959,6 +12959,515 @@ organizzazioni sceglie la seconda e la schermata resta sui dati della prima. In
 - `R53`, sopra: una voce nuova, non una mezza cosa lasciata a questa sezione.
 
 
+<a id="piano-sezione-12"></a>
+
+## Piano — Sezione 12: l'immobile, con un contratto in essere
+
+Pianificata il **22 settembre 2026**, nello stesso giro dell'esito della
+[11](#esito-sezione-11), com'è la regola, ed **eseguita lo stesso giorno**. Il piano
+resta sotto com'è stato scritto — anche dove l'esecuzione l'ha smentito, che è la parte
+più utile da rileggere; ciò che ha confermato, corretto e trovato è nell'
+[esito](#esito-sezione-12). Chiude `R44`, `R45` e
+`R29`: tre regole del service layer che le voci hanno già mezze decise — **in bozza non
+si affitta, con un contratto in essere non si archivia né si torna in bozza, e il residuo
+che chi abita legge non mente**. Sono la stessa domanda — *che cosa vieta, o che cosa
+deve dire, un contratto in essere* — posta su tre righe, ed è la ragione per cui stanno
+in una sezione sola. **Una migration** (la `0042`, per `R29`), **nessuna rotta nuova**,
+un ADR prima del codice di `R29` e una nota a un ADR esistente per le altre due.
+
+**Si esegue in una sola conversazione**, senza agenti. Ogni test nuovo provato al
+contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito. I test con
+il database solo con `./ops/ci/test-integration.sh`, che non ha un filtro: le prove al
+contrario si combinano in un giro.
+
+### Che cosa esiste davvero, verificato e non dedotto
+
+| Premessa | Verifica |
+|---|---|
+| Un immobile nasce in `draft` e nessuna regola lo guarda | vero: `crates/domain/src/property/aggregate.rs:200`, `status: PropertyStatus::Draft` in `create`; `set_status` (`:291`) rifiuta solo `archived`; nessun caso d'uso in `crates/application/src/use_cases/{lease,property}/` legge lo stato dell'immobile per decidere |
+| Il form di creazione non offre lo stato; il dialogo «Modifica» sì | vero: `CreatePropertyRequest` (`crates/api/src/routes/properties.rs:220`) non ha `status`, `UpdatePropertyRequest` (`:240`) sì; `NewPropertyPage.tsx` non nomina `status`, `PropertyDetailPage.tsx:280-297` ha il `<Select>` con `EDITABLE_STATUSES` |
+| `ActivateLease` non legge l'immobile | vero: `crates/application/src/use_cases/lease/activate.rs:41-58` rilegge il contratto e le parti, poi `lease.activate(&parties, now)`; `property_id` compare solo nell'evento |
+| `ArchiveProperty` non guarda i contratti | vero: `crates/application/src/use_cases/property/archive.rs:46-51`, `find_by_id`, `property.archive(now)`, `soft_delete` |
+| «In essere» ha già una definizione sola, e un modo di chiederla per persona | vero: `app.lease_in_force(status, start_date, end_date)` dalla `0017`, usata da `LeaseRepository::list` con `LeaseQuery { property_id, in_force }` (`repositories/lease.rs:65-81`); `has_in_force_for_user` (`:224-231`) interroga `app.has_lease_in_force` per la sezione 6. **Non esiste** la forma per immobile |
+| Una regola cross-aggregato si esprime come `Invariant` sollevato dal caso d'uso, e risponde `409` | vero: `LeaveOrganization` (`use_cases/organization/leave.rs:105-109`) solleva `Invariant::MembershipHasLeaseInForce`, `crates/domain/src/error.rs:456` gli dà il codice `membership.lease_in_force`, `crates/api/src/error.rs:161` traduce ogni `Invariant` in `409 invariant`. È la forma di [ADR-015](08-decisioni.md#adr-015): «almeno un owner» resta applicativo perché richiederebbe un trigger cross-row |
+| Il saldo si somma sotto la RLS di chi legge, e i pagamenti non attribuiti sono invisibili a chi abita | vero: `app.v_charge_balances` è `security_invoker = true` (`0015:10`, `0024:71`), `payments_select` è staff **o** `payer_user_id` **o** `payee_user_id` (`0014:299-302`). Chi vede un addebito è una parte del suo contratto o staff (`charges_select`, `0014:291`, via `can_access_lease`) |
+| Il commento che promette il contrario è in **due** posti | vero: `use_cases/payment/read.rs:33-35` («il totale incassato resta comunque visibile a tutti nel `paid_amount` del saldo») e `routes/payments.rs:161-163` su `RecordPaymentRequest.payer_user_id` |
+| Esiste il precedente di una funzione `SECURITY DEFINER` che proietta poco | vero: `app.property_residents` (`0030:64`), `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = app, pg_temp`, con `REVOKE`/`GRANT` per ruolo (`0030:121-130`); l'invariante 6 di `ops/sql/checks/schema_invariants.sql:77-83` **fallisce** su un DEFINER senza `search_path` |
+| `propertyJudgements` in `status.tsx` include `draft`, e un test lo difende | vero: `features/shared/status.tsx:70`, e `status.test.tsx:45` «una bozza che risulta affittata è comunque un'anomalia da vedere» |
+| I test sono 479 Rust e 147 del client | vero, esito della 11 e `just ci` |
+
+### Decisioni prese, con il perché
+
+- **`R29`: il totale incassato si somma sotto `SECURITY DEFINER`, e il resto del saldo
+  resta com'è.** Delle tre vie della voce, la prima — `payer_user_id` obbligatorio con un
+  solo inquilino — non chiude il bonifico anonimo, che `submit.rs` dichiara voluto; la
+  terza — non mostrare il totale a chi non vede tutte le righe — toglie a chi abita
+  l'unico numero per cui apre la prima schermata, «quanto resta da pagare». La seconda lo
+  chiude e costa una funzione: `app.charge_paid_amount(p_charge_id uuid) RETURNS
+  app.money_amount`, `SECURITY DEFINER`, che somma i pagamenti nei **due stati che la
+  vista già conta** (il predicato della `LATERAL` in `0024:86-95`, da riusare tale e
+  quale) senza la RLS di chi chiama; `v_charge_balances` la usa al posto della `LATERAL`.
+  **Che cosa rivela**: un aggregato — quanto è stato incassato su un addebito — a chi può
+  vedere quell'addebito, cioè a una parte del contratto o allo staff; **non** chi ha
+  pagato, né quando. È la stessa forma di [ADR-036](08-decisioni.md#adr-036), che proietta
+  tre colonne dei residenti, e va scritta come **ADR-055** prima della migration, perché
+  cambia una proprietà che [04](04-sicurezza.md) descrive: una vista contabile che
+  legge oltre la policy;
+- **`R44`: si rifiuta all'attivazione, non alla bozza del contratto.** Nel modello
+  derivato «affittato» è `app.lease_in_force`, che comincia con l'attivazione: una bozza
+  di contratto su una bozza di immobile sono due cose che si preparano insieme, e
+  rifiutare `DraftLease` obbligherebbe a un ordine di compilazione. `ActivateLease`
+  rilegge l'immobile e rifiuta con `Invariant::PropertyNotLettable` →
+  `property.not_lettable`, `409`;
+- **`R44`, la porta di servizio: non si torna in bozza con un contratto in essere.**
+  `UpdateProperty` con `status: draft` su un immobile che ha un contratto in essere
+  rifiuta con `Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. Senza,
+  «Affittato (Bozza)» rientra dall'altra parte. `maintenance` resta ammesso: la 5-ter ha
+  tenuto apposta «In manutenzione (Affittato)», che è un'anomalia vera da vedere;
+- **`R45`: si rifiuta, non si disdice.** Archiviare è un soft delete; disdire un contratto
+  è un atto con una data e delle conseguenze — gli addebiti che smettono di maturare, la
+  persona che può uscire — e farlo *di nascosto* dentro un'archiviazione sarebbe
+  esattamente il genere di effetto che nessuno cerca dove succede. Chi amministra
+  disdice, poi archivia. Stesso `Invariant::PropertyHasLeaseInForce` di sopra: è la stessa
+  regola, «un immobile con un contratto in essere non cambia natura»;
+- **la domanda per immobile è un metodo della porta, non una query di elenco.**
+  `LeaseRepository::has_in_force_for_property(property_id)` accanto a
+  `has_in_force_for_user`, con `SELECT EXISTS (… WHERE property_id = $1 AND deleted_at IS
+  NULL AND app.lease_in_force(status, start_date, end_date))`: **la stessa funzione**
+  delle viste e dell'elenco, perché due definizioni di «in essere» farebbero rispondere
+  l'archiviazione e la dashboard in modo diverso sullo stesso contratto. L'alternativa —
+  `list(LeaseQuery { property_id, in_force: Some(true), limit: 1 })` — funziona e non
+  dice che cosa chiede;
+- **il form di creazione offre lo stato, con «Disponibile» proposto**, e il dominio non
+  cambia default: `CreatePropertyRequest.status` opzionale (`draft`, `available`,
+  `maintenance`; `archived` lo rifiuta già `set_status`), `CreatePropertyCommand.status`,
+  e il caso d'uso lo applica dopo `Property::create` — leggendo `aggregate.rs:221`
+  (`apply(PropertyChanges)`) si decide se passare da lì o da un parametro di `create`.
+  `draft` resta scegliibile per chi sta compilando;
+- **`propertyJudgements` non cambia, e nemmeno il suo test.** Se la regola regge,
+  `rented`+`draft` non nasce più; ma le righe **già** in quello stato — il database del
+  giro ne ha — restano, e il badge che le mostra come anomalia dice il vero. Nessun
+  backfill nella migration: quale stato mettere a una bozza affittata è una decisione di
+  chi amministra, che la prende dal dialogo «Modifica», dove `available` è ammesso.
+  L'alternativa — togliere `draft` dai giudizi — farebbe sparire un'anomalia vera;
+- **le regole vanno in [ADR-015](08-decisioni.md#adr-015) come nota**, non in un ADR
+  nuovo: sono tre righe in più di «non nel database», con la stessa ragione di «almeno
+  un owner».
+
+### Decomposizione
+
+#### `D0` — il commento falso, per primo
+
+`use_cases/payment/read.rs:33-35` e `routes/payments.rs:161-163` smettono di promettere
+che il totale «resta comunque visibile»: dicono che lo è **dalla `0042`**, per via della
+funzione, e prima non lo era. È la cosa da correggere per prima perché è ciò che farebbe
+concludere a chi passa di lì che il difetto non esiste — e va scritta anche se `D1`
+dovesse slittare.
+
+#### `D1` — `R29`: ADR-055, poi la `0042`
+
+ADR-055 in [08](08-decisioni.md), con il perimetro di ciò che la funzione rivela e a chi.
+Poi `migrations/0042_charge_paid_amount_reads_past_rls.sql`: la funzione, `REVOKE ALL ON
+FUNCTION … FROM PUBLIC`, `GRANT EXECUTE` ai tre ruoli con lo stesso `DO $$ … EXECUTE
+format(…)` della `0030`; `CREATE OR REPLACE VIEW app.v_charge_balances` con le **stesse
+colonne nello stesso ordine** e `paid_amount` dalla funzione. [03](03-modello-dati.md) e
+[04](04-sicurezza.md) descrivono lo stato nuovo.
+
+**Criterio di fine:** un test di contratto HTTP in `crates/api/tests/http_contract.rs`,
+dalla forma di `R29`: il proprietario registra `150.00` su un addebito da `420.00`
+**senza** `payer_user_id`; l'inquilino legge lo stesso addebito e trova `paid_amount:
+"150.00"`, `outstanding_amount: "270.00"`, e `status` che non contraddice più la riga.
+Al contrario, con la `0042` tolta: `paid_amount: "0.00"` e `outstanding_amount:
+"420.00"`, che è la voce.
+
+#### `D2` — la domanda per immobile
+
+`has_in_force_for_property` sulla porta (`crates/domain/src/ports/repositories.rs`, accanto
+a `:431`), l'implementazione in `repositories/lease.rs`, e il finto repository dei test
+applicativi che la conosce. Nessuna migration: `app.lease_in_force` c'è.
+
+**Criterio di fine:** un test di persistenza in `crates/infrastructure/tests/`: un
+contratto attivo con le date di oggi risponde vero; disdetto, o attivo con `end_date`
+ieri, risponde falso — le date sono la metà della definizione, e un test che provasse
+solo lo stato passerebbe anche con `status = 'active'` scritto a mano.
+
+#### `D3` — `R44`: non si attiva su una bozza
+
+`Invariant::PropertyNotLettable` con il codice `property.not_lettable` e il suo test
+sul catalogo dei codici (`error::tests` in `crates/api/src/error.rs`). `ActivateLease`
+rilegge l'immobile con `uow.properties().find_by_id(lease.property_id())` — se manca è
+`not_found`, come per ogni riferimento — e rifiuta su `Draft` **prima** di
+`lease.activate`. Nel client: la stringa in `errors` di `it.ts`, e la scheda del contratto
+la mostra dove mostra già gli altri rifiuti dell'attivazione. [05](05-api.md) elenca il
+codice sulla rotta.
+
+**Criterio di fine:** un test HTTP: contratto in bozza con le parti giuste su un immobile
+in bozza, `POST /leases/{id}/activate` → `409 property.not_lettable`; l'immobile messo
+`available` con `PATCH`, la stessa chiamata → `200`. Al contrario, senza la lettura
+dell'immobile: `200` al primo tentativo.
+
+#### `D4` — `R44` e `R45`: con un contratto in essere non si cambia natura
+
+`Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. `UpdateProperty`
+rifiuta quando `changes.status == Some(Draft)` e `has_in_force_for_property` è vero — e
+**solo** allora: un `PATCH` che non tocca lo stato, o lo mette in `maintenance`, non fa
+la domanda. `ArchiveProperty` rifiuta quando è vero, prima di `property.archive(now)`.
+Nel client: la stringa in `errors`; `property.archiveExplain` dice che con un contratto
+in essere non si archivia e che prima si disdice, perché la conferma deve dirlo (era la
+condizione della voce); l'archiviazione in blocco **non cambia**, il `409` è già un esito
+per riga dalla sezione 7.
+
+**Criterio di fine:** due test HTTP. `PATCH /properties/{id}` con `status: draft` su un
+immobile con un contratto attivo → `409 property.lease_in_force`, e con `status:
+maintenance` → `200`. `DELETE /properties/{id}` — che è l'archiviazione, `204` — sullo stesso → `409`; il
+contratto disdetto, la stessa chiamata → `204` e l'immobile fuori dall'elenco. Al contrario, senza i
+due rami: `200` e `204` al primo colpo — che è come è oggi.
+
+#### `D5` — il form di creazione offre lo stato
+
+`CreatePropertyRequest.status` e `CreatePropertyCommand.status`, il caso d'uso che lo
+applica; `NewPropertyPage.tsx` con il `<Select>` — gli stessi tre valori di
+`EDITABLE_STATUSES`, che diventa condivisa — e `available` preselezionato. Una stringa
+di aiuto sotto il campo, in `it.ts`, che dice che «Bozza» è per chi sta ancora
+compilando.
+
+**Criterio di fine:** un test HTTP: `POST /properties` senza `status` risponde `draft`
+(il default non cambia), con `status: available` risponde `available`, con `status:
+archived` risponde `409 property.archive_requires_dedicated_operation`. Un test del
+client sul catalogo delle opzioni, come quelli della 11.
+
+#### `D6` — documentazione
+
+La nota ad ADR-015; [03](03-modello-dati.md) sulla `0042` e sulla vista; [04](04-sicurezza.md)
+sulla funzione e su ciò che rivela; [05](05-api.md) con i due codici nuovi sulle rotte che
+li producono e `status` in `POST /properties`; le voci fuori da [12](12-da-fare.md).
+
+### Trappole
+
+**Cercare «affittato» nello stato memorizzato.** `rented` non è mai in database
+([ADR-019](08-decisioni.md#adr-019)): `status = 'rented'` è sempre falso, e una regola
+scritta così non rifiuterebbe mai niente e passerebbe ogni test che non attivi davvero un
+contratto. La domanda è `app.lease_in_force`, e i test di `D2` esistono per questo.
+
+**`CREATE OR REPLACE VIEW` cambia solo il corpo.** Le colonne devono restare le stesse,
+nello stesso ordine e con lo stesso tipo, o PostgreSQL rifiuta; aggiungere o riordinare
+significherebbe `DROP` e ricreare, e perdere i `GRANT` sulla vista — e `v_owner_dashboard`
+legge da `v_charge_balances`.
+
+**Un DEFINER senza `search_path` fissato non arriva alla CI.** L'invariante 6 dello
+schema lo ferma prima; ma un DEFINER con `search_path` e senza `REVOKE … FROM PUBLIC`
+passa, ed è eseguibile da chiunque abbia una connessione. La `0030` è il modello, con la
+`DO $$` che concede ai soli tre ruoli.
+
+**Rifiutare `DraftLease` invece di `ActivateLease`.** Sembra più prudente e obbliga a un
+ordine: prima l'immobile disponibile, poi il contratto. La voce lo scarta, e il piano lo
+conferma.
+
+**Disdire dentro l'archiviazione.** Vedi la decisione: un effetto in un posto dove nessuno
+lo cerca. Se un giorno servirà un «archivia e disdici», sarà un verbo con la sua
+conferma.
+
+**Leggere lo stato dell'immobile dopo `lease.activate`.** L'ordine conta poco per il
+database, che è in transazione, e molto per il messaggio: l'invariante delle parti e delle
+quote deve restare il primo rifiuto che chi attiva incontra solo se è quello vero;
+leggere l'immobile prima evita di dire «le quote non coprono il canone» su un contratto
+che comunque non si potrebbe attivare.
+
+**Il finto repository dei test applicativi.** `has_in_force_for_property` va aggiunto
+anche là, o il crate non compila; e il suo valore di default deve essere `false`, non
+`true`, altrimenti i test esistenti di `ArchiveProperty` — che archiviano senza contratti
+— cadono per una ragione che non è loro.
+
+**Il backfill che sembra dovuto.** Una migration che portasse ad `available` le bozze
+affittate deciderebbe al posto di chi amministra e nasconderebbe il badge che glielo dice.
+Non si fa, e la ragione è scritta nelle decisioni.
+
+### Che cosa **non** entra
+
+- il subentro (`R28`): è la 13, e tocca l'invariante delle quote;
+- togliere qualcuno (`R39`) e i contatti (`R43`): la 14, con i loro ADR;
+- la cache che non si svuota cambiando organizzazione (`R53`): è la 15, decisa il 22
+  settembre 2026 — vedi la [tabella](09-stato-e-roadmap.md#le-sezioni);
+- un «archivia e disdici»: verbo nuovo, con la sua conferma, se qualcuno lo chiede;
+- uno stato `unavailable` di stanza che blocchi l'attivazione: non è nelle voci, e la
+  stanza ha già la sua regola d'occupazione (`app.room_is_occupied`);
+- il backfill delle bozze affittate, con la ragione sopra.
+
+
+<a id="esito-sezione-12"></a>
+
+## Esito — Sezione 12: l'immobile, con un contratto in essere
+
+Eseguita il **22 settembre 2026**, in una conversazione sola e senza agenti, com'era
+scritto. Chiude `R44`, `R45` e `R29`. I test Rust passano da 479 a **486** — sei di
+contratto HTTP e uno di persistenza — quelli del client da 147 a **150**, in 26 file.
+`just ci` verde, zero `SALTATO`. **Una migration** (la `0042`), **nessuna rotta nuova**,
+un ADR ([ADR-055](08-decisioni.md#adr-055)) e una nota ad
+[ADR-015](08-decisioni.md#adr-015). Il giro a vista del giorno dopo ha aperto `R54`.
+
+### Che cosa è entrato
+
+- **`D0` — i due commenti falsi** (`R29`), per primi: `use_cases/payment/read.rs` e
+  `routes/payments.rs` promettevano che «il totale incassato resta comunque visibile a
+  tutti nel `paid_amount` del saldo», ed era falso. **Scritti come il vero di allora e
+  non come il vero di dopo**, che è l'unico scostamento dalla lettera del piano e sta
+  sotto;
+- **`D1` — `app.charge_paid_amount`** (`R29`): funzione `SECURITY DEFINER` con
+  `SET search_path = app, pg_temp`, `REVOKE ALL … FROM PUBLIC` e `GRANT EXECUTE` ai tre
+  ruoli; `v_charge_balances` la chiama al posto della `LATERAL` che sommava in linea, con
+  le stesse colonne nello stesso ordine. Il predicato sommato è quello di prima parola per
+  parola — `succeeded` e `partially_refunded` — perché spostare la somma non è l'occasione
+  per cambiare che cosa si somma. ADR-055 scritto **prima** della migration, com'era
+  chiesto;
+- **`D2` — `has_in_force_for_property`** sulla porta `LeaseRepository`, con
+  `SELECT EXISTS (… AND app.lease_in_force(status, start_date, end_date))`: la stessa
+  funzione delle viste e dell'elenco;
+- **`D3` — in bozza non si affitta** (`R44`): `Invariant::PropertyNotLettable` →
+  `property.not_lettable`, `409`. `ActivateLease` rilegge l'immobile **prima** delle parti;
+- **`D4` — con un contratto in essere non si cambia natura** (`R44`, `R45`):
+  `Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. `UpdateProperty`
+  rifiuta `status: draft` e **solo** quello; `ArchiveProperty` rifiuta, e non disdice.
+  `property.archiveExplain` lo dice nella conferma, che era la condizione della voce;
+- **`D5` — lo stato alla creazione** (`R44`): `CreatePropertyRequest.status` e
+  `CreatePropertyCommand.status`, opzionali; il caso d'uso li applica da
+  `Property::apply`, quindi passano da `set_status` e `archived` è rifiutato come dal
+  `PATCH`. Il form propone «Disponibile», `EDITABLE_STATUSES` diventa
+  `EDITABLE_PROPERTY_STATUSES` in `features/shared/status.tsx`, condivisa fra creazione e
+  dialogo «Modifica»;
+- **`D6`** — [03](03-modello-dati.md), [04](04-sicurezza.md), [05](05-api.md), la nota ad
+  ADR-015, le tre voci fuori da [12](12-da-fare.md).
+
+### Le premesse, riga per riga, e le due sbagliate
+
+Quindici su diciassette vere e verificate contro il codice prima di toccare un file. Le
+due sbagliate erano **la stessa riga**, quella sul precedente `SECURITY DEFINER`:
+
+1. la premessa diceva «con `REVOKE`/`GRANT` per ruolo (`0030:121-130`)». **La `0030` non
+   ha nessun `REVOKE`**, e `grep -rn REVOKE migrations/` non trova un solo
+   `REVOKE … ON FUNCTION … FROM PUBLIC` in tutto il repository: ci sono solo
+   `REVOKE UPDATE`/`INSERT` su tabelle. Righe 121-130 sono il solo blocco `DO $$` dei
+   `GRANT`;
+2. la trappola diceva «la `DO $$` che concede ai soli **tre** ruoli». Ne concede a
+   **due** — `propflow_app` e `propflow_worker`; il terzo, `propflow_migrator`, è l'owner
+   della funzione e non ne ha bisogno.
+
+**Il `REVOKE` si è fatto lo stesso**, ed è nuovo in questo repository: è precisamente la
+cosa che la `0030` non fa e che una funzione che legge oltre la RLS dovrebbe fare,
+perché l'invariante 6 dello schema ferma un `DEFINER` senza `search_path` ma non si
+accorge di uno eseguibile da chiunque abbia una connessione. I `GRANT` elencano tutti e
+tre i ruoli: quello al migrator è ridondante — è l'owner — ma dopo un
+`REVOKE … FROM PUBLIC` scriverlo per esplicito è ciò che rende la migration leggibile
+senza sapere chi possiede la funzione. Verificato sul database del giro:
+`proacl` porta `propflow_migrator=X`, `propflow_app=X`, `propflow_worker=X` e **niente
+`PUBLIC`**.
+
+Scostamenti minori, senza conseguenze: il percorso è
+`crates/infrastructure/src/db/repositories/lease.rs` e non `repositories/lease.rs`;
+`has_in_force_for_user` comincia a `:218` e non `:224`. Il conteggio dei test Rust — 479 —
+confermato da `just ci`, non prima.
+
+### Una trappola del piano non si applicava, e una decisione è stata corretta
+
+**«Il finto repository dei test applicativi» non esiste.** La trappola avvertiva di
+aggiungere `has_in_force_for_property` anche là, con default `false`. Cercato: non c'è
+alcun doppio in memoria di `LeaseRepository` — l'unico implementatore è quello sqlx, e i
+sedici test applicativi sono unitari su `authorization`, `password_policy`, `error` e le
+transizioni dei ticket. Niente da fare, e nessun rischio da evitare.
+
+**`D0` è stato scritto al presente, non al futuro.** Il piano voleva che i due commenti
+dicessero che il totale è visibile «**dalla `0042`**». Ma `D0` è per costruzione il passo
+che **precede** la migration, e un commento che rimandi a una `0042` che non è ancora
+nell'albero è falso a sua volta — cioè esattamente il difetto che `D0` corregge. I
+commenti dicono quindi il vero di allora: il totale **non** gli è visibile, e perché.
+`D1` ha riscritto le stesse righe quando il vero è cambiato. L'intento del piano — «va
+scritta anche se `D1` dovesse slittare» — è rispettato alla lettera: se `D1` fosse
+slittato, il commento sarebbe rimasto vero.
+
+**E la seconda metà è stata quasi dimenticata.** Con la `0042` scritta e la suite verde,
+i due commenti dicevano ancora che il totale non è visibile — di nuovo falsi, nella
+direzione opposta. Sono stati corretti al controllo finale prima dei commit, e vale la
+pena registrarlo: un commento in due tempi ha **due** occasioni di mentire, e la seconda
+non la segnala nessun test.
+
+### Il raggio d'azione che il piano non aveva contato
+
+`ActivateLease` che rifiuta su una bozza **rompe ogni test che attivi un contratto su un
+immobile creato dagli helper**, perché gli helper creavano in bozza: ventiquattro
+attivazioni in `http_contract.rs` e una decina in `persistence.rs`. I due
+`create_property` dei test creano ora un immobile **disponibile** — dopo `D5`, passando
+`status` alla creazione, che è una richiesta sola — con il commento che dice perché, e il
+default `draft` resta fissato da `full_property_lifecycle`, che crea senza passare
+dall'helper.
+
+Un test è cambiato di asserzione e non di senso:
+`a_property_is_partially_rented_when_one_of_its_rooms_is` pretendeva
+`status == "draft"` dopo l'attivazione, per dire che **lo stato dichiarato non cambia**.
+Quella proprietà è intatta; è cambiato il valore di partenza, e ora pretende
+`"available"`. Con la regola di `D3` quel test non poteva più esistere nella forma di
+prima: descriveva un immobile in bozza e affittato, che è ciò che la sezione vieta.
+
+**E il seeder.** `ops/dev/seed-walkthrough.py` metteva già `available` sulla prima casa
+prima di attivare, ma non sulla seconda — quella del vicolo cieco della sezione 3, con
+le quote 100/0, che esiste per far vedere un'attivazione rifiutata **per le quote**. Senza
+il `PATCH`, da questa sezione in poi il rifiuto sarebbe stato `property.not_lettable`, e
+il pezzo di collaudo avrebbe mostrato un'altra cosa. Aggiunto, con la ragione nel
+commento.
+
+### Decisioni prese eseguendo
+
+- **La funzione si chiama una volta per riga, non tre.** Le tre colonne di
+  `v_charge_balances` usano il pagato — `paid_amount`, `outstanding_amount`, `is_past_due`
+  — e scriverci `app.charge_paid_amount(c.id)` tre volte sarebbe stato tre letture di
+  `app.payments` dove ne basta una. La `LATERAL` resta, con la chiamata dentro al posto
+  della somma: la forma della vista non cambia, e nemmeno il numero di letture;
+- **`CreatePropertyRequest.status` è il tipo intero del filo**, `PropertyStatusDto`, e non
+  i tre valori scegliibili. È lo stesso tipo del `PATCH`, quindi i due endpoint accettano
+  e rifiutano le stesse cose per la stessa ragione — `set_status` — e quali offrirne resta
+  una decisione del form;
+- **`CreatePropertyInput.status` del client è anch'esso il tipo del filo**: `api/` descrive
+  che cosa l'API accetta, e far dipendere il livello dei dati da una costante di
+  `features/` avrebbe invertito il verso delle dipendenze;
+- **`propertyJudgements` non cambia, e nemmeno il suo test**, come il piano prevedeva: le
+  righe già in `rented`+`draft` restano — il database del giro ne ha tre — e il badge che
+  le mostra come anomalia dice il vero.
+
+### Verificato al contrario
+
+Ogni test nuovo rimesso sul difetto e guardato cadere, in tre giri combinati della suite
+con il database.
+
+**Primo giro**, tre difetti insieme:
+
+- **`D1`**, la vista che torna a sommare in linea sotto la RLS di chi legge:
+  `an_unattributed_payment_still_counts_in_the_balance_the_tenant_reads` cade con
+  `left: String("0.00") / right: "150.00"`, e il corpo stampato è **la voce parola per
+  parola** — `"paid_amount":"0.00"`, `"outstanding_amount":"420.00"`,
+  `"status":"partially_paid"`;
+- **`D3`**, `ActivateLease` che non rilegge l'immobile:
+  `a_draft_property_refuses_to_be_let_until_someone_declares_it_available` cade con
+  `left: 200 / right: 409` sul contratto attivato su una bozza;
+- **`D3`, l'ordine**: `a_draft_property_is_refused_before_the_parties_are_even_looked_at`
+  cade con `left: String("lease.no_tenant_party") / right: "property.not_lettable"`.
+
+**Secondo giro**, il solo `D2` — il primo si era fermato al binario rosso prima di
+arrivare alla persistenza — con `app.lease_in_force(…)` sostituito da `status = 'active'`:
+`a_property_has_a_lease_in_force_only_while_the_dates_say_so` cade a
+`persistence.rs:663`, sull'assert «un contratto attivo scaduto ieri non è in essere, e uno
+stato da solo direbbe il contrario». È la trappola del piano, riprodotta.
+
+**Terzo giro**, i rami di `D4` e `D5`:
+
+- `UpdateProperty` senza il ramo sulla bozza:
+  `a_property_with_a_lease_in_force_cannot_go_back_to_draft_but_can_go_to_maintenance`
+  cade con `left: 200 / right: 409`, e il corpo mostra `"status":"draft"` su un immobile
+  affittato;
+- `ArchiveProperty` senza il controllo:
+  `a_property_with_a_lease_in_force_is_archived_only_after_the_lease_is_terminated` cade
+  con `left: 204 / right: 409`;
+- `CreateProperty` che sposta il default nel dominio (`command.status.or(Some(Available))`,
+  cioè la via che il piano scarta):
+  `a_property_can_be_born_available_and_stays_a_draft_when_nobody_says_otherwise` cade con
+  `left: String("available") / right: "draft"`, e con lui `full_property_lifecycle`;
+- **quarto giro, isolato**, perché l'assert su `archived` non arrivava a girare: `set_status`
+  che smette di rifiutare `archived`. Lo stesso test cade con `left: 201 / right: 409`, e
+  il corpo porta un immobile `"label":"Nato archiviato"`, `"status":"archived"`.
+
+**I tre test del client**, con due difetti. Tolto il campo dal form, tutti e tre cadono
+con `Unable to find a label with the text of: Stato dichiarato`; rimessi due difetti più
+fini — `status: 'draft'` come proposta e la tendina che offre anche gli stati derivati —
+cadono per il contenuto: `expected 'draft' to be 'available'` e
+`expected [ 'Bozza', 'Disponibile', …(2) ] to deeply equal [ … ]` con `+ "Affittato"`.
+
+### Che cosa è stato provato a mano
+
+Su porte a parte — Postgres su `55432`, il database del giro della 10 e della 11, portato
+dalla quarantunesima alla **quarantaduesima** migration dal migratore; API su `8090` con
+`PROPFLOW__SERVER__BIND`; `.env` non toccato, un file d'ambiente a parte nello
+scratchpad. Con `curl` e il token del proprietario del collaudo:
+
+| Che cosa | Esito visto |
+|---|---|
+| `POST /properties` senza `status` | `draft` — il default non si è spostato |
+| `POST /properties` con `available` | `available` |
+| `POST /properties` con `archived` | `409 property.archive_requires_dedicated_operation` |
+| bozza di contratto su immobile in bozza | **ammessa**, com'era deciso |
+| `POST /leases/{id}/activate` su quella bozza | `409 property.not_lettable` |
+| immobile messo `available`, stessa chiamata | `200`, contratto `active` |
+| `PATCH` `status: draft` con quel contratto in essere | `409 property.lease_in_force` |
+| `PATCH` `status: maintenance` sullo stesso | `200` — la domanda si fa solo sulla bozza |
+| `DELETE /properties/{id}` sullo stesso | `409 property.lease_in_force` |
+| contratto disdetto, stessa `DELETE` | `204` |
+
+**E `R29` sul prodotto vero**, che è la prova per cui la sezione esiste. Registrato con
+`POST /charges/{id}/payments` un incasso di `150,00` su un addebito da `450,00`
+**senza `payer_user_id`**; l'inquilina Anna, con il proprio token, legge sulla stessa riga
+`paid_amount 150.00`, `outstanding_amount 300.00`, `status partially_paid` — coerenti — e
+`GET /charges/{id}/payments` le risponde **zero righe**. È il perimetro disegnato:
+il totale sì, la riga no.
+
+La funzione, letta dal catalogo del database: `prosecdef = t`,
+`proconfig = search_path=app, pg_temp`, e `proacl` con i soli tre ruoli e **nessun
+`PUBLIC`**.
+
+### E poi con gli occhi, il giorno dopo
+
+Il giro con `curl` non bastava: il client aveva solo i suoi test. Il 23 settembre, con il
+login fatto da chi possiede il progetto — le password non le digita l'assistente — il
+percorso è stato rifatto **dall'interfaccia**, su `http://localhost:5174`:
+
+- il form di creazione ha la tendina «Stato dichiarato» con **esattamente** `Bozza`,
+  `Disponibile`, `In manutenzione`, `available` preselezionato, e sotto la riga «Bozza è
+  per chi sta ancora compilando: un immobile in bozza non si può affittare»;
+- creato un immobile scegliendo «Bozza», la scheda lo mostra in bozza: il form onora la
+  scelta;
+- redatto un contratto su quell'immobile — ammesso, come deciso — e premuto «Attiva»
+  **senza nessuna parte contrattuale**, la modale mostra «L'immobile è in bozza:
+  dichiaralo disponibile prima di attivare il contratto.» È la decisione sull'ordine dei
+  rifiuti vista nel prodotto: il contratto è sbagliato due volte e la risposta manda a
+  sistemare quella giusta;
+- la conferma dell'archiviazione porta la frase nuova: «Se ha un contratto in essere, va
+  prima disdetto»;
+- su un immobile con un contratto davvero in essere, la modale mostra «L'immobile ha un
+  contratto in essere: disdicilo prima di cambiarne lo stato o archiviarlo.»
+
+### Il giro a vista ha trovato una cosa, e per un'ora è sembrata un difetto della sezione
+
+I primi due tentativi di archiviazione **sono passati**, su un immobile con un contratto
+`active` che cominciava quel giorno. Con i test verdi e la stessa prova riuscita con
+`curl` il giorno prima, sembrava un difetto dell'implementazione.
+
+Non lo era, e la caccia vale la pena di raccontarla perché ogni passo escludeva una
+spiegazione plausibile. Il binario in ascolto era di nove minuti più vecchio di quello su
+disco: riavviato, stesso esito. La query eseguita a mano come `propflow_app`, con il
+contesto RLS esatto dell'API, rispondeva **`true`** — quindi SQL e policy erano giusti. La
+sonda decisiva è stata chiedere all'API la stessa domanda dall'elenco:
+`GET /leases?property_id=…` restituiva il contratto `active`, e
+`GET /leases?property_id=…&in_force=true` **zero**.
+
+La causa: `app.lease_in_force` confronta con `CURRENT_DATE`, che dipende dal fuso **della
+sessione**, e la connessione di `sqlx` nasce con `TimeZone = UTC`. Il giro era l'una di
+notte del 23 a Roma, cioè le 23 del 22 in UTC: un contratto dal 23 non era ancora in
+essere. Rifatta la prova con un contratto già cominciato in UTC, `PATCH status: draft` e
+`DELETE` rispondono entrambi **`409 property.lease_in_force`**, e l'interfaccia mostra il
+messaggio.
+
+È diventata la voce **`R54`** in [12](12-da-fare.md): «oggi» del prodotto è il giorno UTC,
+e per due ore ogni notte non è il giorno italiano. Non è un difetto introdotto qui — la
+funzione è della `0017` e il fuso della connessione è di sempre — e i due livelli sono
+**coerenti fra loro**, perché il dominio usa `Utc::now().date_naive()`. Tocca anche
+`is_past_due` degli addebiti e `v_property_occupancy`.
+
+**Non provato con gli occhi**: niente. Il giro a vista ha coperto tutto ciò che la
+sezione cambia nell'interfaccia.
+
+### Che cosa resta aperto
+
+- l'Invio nel campo del codice su `/invito` con una tastiera vera, dal poscritto della 8:
+  ancora in sospeso, e resta nel passo 5 del cammino;
+- **`R54`**, sopra: una voce nuova, e l'unica delle nove aperte che non sta in una delle
+  sezioni 13-16 — dove metterla è una decisione da prendere.
+
+
 <a id="archivio-09-al-18-settembre-2026"></a>
 
 ## Archivio — «09 — Stato e roadmap» com'era prima della riscrittura del 18 settembre 2026

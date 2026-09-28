@@ -44,12 +44,12 @@ il proprio account, la posta in uscita e il recupero della password. **Si entra 
 invito** ([ADR-053](08-decisioni.md#adr-053)): un inquilino dal contratto di chi lo
 ospita, un proprietario da un token di piattaforma emesso da uno script.
 
-I numeri, contati sullo schema migrato e non dedotti: **41 migration**, 27 tabelle più le
+I numeri, contati sullo schema migrato e non dedotti: **42 migration**, 27 tabelle più le
 tre partizioni di `audit_log`, 35 enum, 6 domini, 163 indici, 69 policy RLS, 50 trigger, 4
-viste, 37 funzioni. **479 test Rust** — 221 di dominio, 16 applicativi, 27 di
-infrastruttura, 11 unitari del bordo HTTP, 85 di integrazione sulla persistenza, 3
-sull'adattatore S3, 113 di contratto HTTP, 3 di guardia sulla documentazione della
-configurazione — e **147 del client** in 25 file. `just ci` è il comando che li esegue
+viste, 38 funzioni. **486 test Rust** — 221 di dominio, 16 applicativi, 27 di
+infrastruttura, 11 unitari del bordo HTTP, 86 di integrazione sulla persistenza, 3
+sull'adattatore S3, 119 di contratto HTTP, 3 di guardia sulla documentazione della
+configurazione — e **150 del client** in 26 file. `just ci` è il comando che li esegue
 tutti, con lo schema verificato dalle sue invarianti.
 
 **Com'è arrivato qui.** Dal 3 all'8 settembre 2026 le fette — le «fetta 1» dei moduli, poi
@@ -60,7 +60,9 @@ volta che il prodotto veniva usato per intero, e ha prodotto la maggior parte di
 collaudo ha trovato, tolto la registrazione aperta, spiegato il prodotto da dentro e
 sistemato le tre cose che il primo deploy avrebbe incontrato da sé; il 22 settembre la
 [11](11-piani-conclusi.md#esito-sezione-11) ha aperto la serie che chiude tutto il
-segnalato prima del collaudo. Ogni sezione ha il suo piano e il suo esito in
+segnalato prima del collaudo, e la
+[12](11-piani-conclusi.md#esito-sezione-12) ha scritto che cosa vieta un contratto in
+essere. Ogni sezione ha il suo piano e il suo esito in
 [11](11-piani-conclusi.md), e la [tabella](#le-sezioni) qui sotto le elenca.
 
 **Che cosa blocca.** Dal 10 settembre il deploy aspetta **mezzi e non codice**: una VPS, un
@@ -164,10 +166,10 @@ sezione**.
 | ~~**9**~~ | ~~Spiegare come si usa il sito~~ — **conclusa** il 17 settembre 2026 | `R8` | client | [Piano](11-piani-conclusi.md#piano-sezione-9) · [esito](11-piani-conclusi.md#esito-sezione-9). Era ultima **apposta**, e la scelta di *dove* — gli stati vuoti spiegano, una pagina sola raccoglie, il riepilogo vuoto è il primo accesso — è nel piano con le alternative scartate. Due premesse sbagliate, nessuna decisione cambiata |
 | ~~**10**~~ | ~~Tre chiusure prima del primo deploy~~ — **conclusa** il 18 settembre 2026 | `R50` `R51` `R46` | due rotte di API, un ramo nel client, una migration | [Piano](11-piani-conclusi.md#piano-sezione-10) · [esito](11-piani-conclusi.md#esito-sezione-10). Ciò che il primo deploy incontra da sé nel primo mese. Una premessa incompleta, trovata dal giro a mano prima del codice: `R51` era un `502` del proxy, non un errore di rete, e il ramo copre entrambi. Ne è uscita `R52`, che non precede il deploy |
 | ~~**11**~~ | ~~Il client dice il vero~~ — **conclusa** il 22 settembre 2026 | `R36` `R26` `R49` `R52` `R41` `R27` | client + docs | [Piano](11-piani-conclusi.md#piano-sezione-11) · [esito](11-piani-conclusi.md#esito-sezione-11). Nessuna migration, nessuna rotta, nessun ADR, com'era scritto. Il piano aveva **una trappola giusta per la ragione sbagliata** — il flag di `R49` come `useState` è stato scartato per un giro doppio di React che, verificato, non esiste; lo ferma il lint — e un test che passava **senza** il rimedio, perché il probe non era `lazy` come le rotte vere. `R41` è entrata in tre posti guardando la schermata. Ha trovato `R53`: cambiare organizzazione non svuota la cache |
-| **12** | **L'immobile, con un contratto in essere** — [piano](#piano-in-corso) | `R44` `R45` `R29` | dominio + client, una migration, ADR-055 | Tre regole del service layer che le voci hanno già mezze decise: in bozza non si affitta, con un contratto in essere non si archivia, e il residuo che chi abita legge non mente. Una sezione perché sono la stessa domanda — *che cosa vieta un contratto in essere* — posta su tre righe |
-| **13** | **Il subentro** | `R28` | dominio + rotta + client | La transizione «esce X, entra Y, con queste quote», che scrive `left_at`. Da sola: è il pezzo di dominio più grande, e tocca l'invariante delle quote che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso |
+| ~~**12**~~ | ~~L'immobile, con un contratto in essere~~ — **conclusa** il 22 settembre 2026 | `R44` `R45` `R29` | dominio + client, una migration, ADR-055 | [Piano](11-piani-conclusi.md#piano-sezione-12) · [esito](11-piani-conclusi.md#esito-sezione-12). Tre regole del service layer, una domanda sola: *che cosa vieta, o che cosa deve dire, un contratto in essere*. La `0042` fa sommare il totale incassato a una funzione `SECURITY DEFINER`, e il residuo che chi abita legge ha smesso di mentire. Due premesse del piano erano sbagliate, ed erano la stessa riga: nel repository non esisteva **nessun** `REVOKE … FROM PUBLIC` su una funzione, e ora ce n'è uno |
+| **13** | **Il subentro** — [piano](#piano-in-corso) | `R28` | dominio + rotta + client | La transizione «esce X, entra Y, con queste quote», che scrive `left_at`. Da sola: è il pezzo di dominio più grande, e tocca l'invariante delle quote che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso |
 | **14** | **Le persone, l'altra direzione** | `R43` `R39` | ADR ×2, poi backend + client | Chi abita vede chi contattare; chi amministra può togliere qualcuno. Entrambe usano `has_lease_in_force`, che esiste; entrambe sono un ADR prima del codice perché una comunica un dato personale a un destinatario nuovo e l'altra decide che ne è dei contratti di chi viene tolto |
-| **15** | **La sessione** | `R42` `R48` | ADR, poi backend + client | «Ricordami» con la rotazione che non scorre, e l'invito da proprietario da un account che esiste già. Insieme perché sono le due cose che restano dell'autenticazione, e `R42` cambia una proprietà che [04](04-sicurezza.md) descrive |
+| **15** | **La sessione, e l'organizzazione attiva** | `R42` `R48` `R53` | ADR, poi backend + client | «Ricordami» con la rotazione che non scorre, l'invito da proprietario da un account che esiste già, e la cache che non si svuota cambiando organizzazione. Le prime due sono ciò che resta dell'autenticazione, e `R42` cambia una proprietà che [04](04-sicurezza.md) descrive; `R53` è qui dal 22 settembre 2026, deciso con l'esito della 11 che l'ha trovata — si tocca lo stesso guscio, e una delle sue due vie è una riga in `QueryProvider`. Nella 12 sarebbe stata un corpo estraneo: quella sezione risponde a *che cosa vieta un contratto in essere* |
 | **16** | **Cancellare una persona** | `R37` | ADR, migration, runbook | La cancellazione vera contro la regola 7 — `DELETE` vietato — e contro `audit_log`, che nomina le righe: che cosa significhi il verbo e che cosa resti quando la persona non c'è più. Ultima perché tocca tutto ciò che le altre costruiscono |
 | **17** | **Il primo deploy e il collaudo** — [runbook](07-operazioni.md#il-primo-deploy--runbook), [collaudo](13-collaudo.md) | — | a mano, su una macchina | Dopo la 16. Servono i mezzi. Il criterio di fine è il punto 4 del runbook, e il collaudo di 13 si percorre per intero dal telefono, con l'esito in [11](11-piani-conclusi.md) mentre lo si fa |
 
@@ -186,12 +188,22 @@ state rinviate finché a provare era chi costruisce, poi fatte nella 5-quater qu
 diventato chiaro che senza posta una persona esterna non può nemmeno cominciare. Il
 criterio si applica a ciò che **compra soltanto** quel valore, non a ciò che è scomodo.
 
-Dal 22 settembre il criterio ha un'eccezione dichiarata: le sedici voci aperte in
+Dal 22 settembre il criterio ha un'eccezione dichiarata: le voci aperte in
 [12](12-da-fare.md) si chiudono **prima** del collaudo, nelle sezioni 11-16, per la ragione
-scritta [sopra](#prossimo-passo-suggerito). Dopo il collaudo e il mese resta **`R40`** —
-l'email come credenziale, con la verifica che le va insieme — più ciò che il collaudo e il
-mese troveranno, che è la parte per cui il criterio esiste: quelle voci nuove si ordinano
-con la misura, non con un ragionamento.
+scritta [sopra](#prossimo-passo-suggerito). Erano sedici quando la decisione è stata presa;
+con la [11](11-piani-conclusi.md#esito-sezione-11) e la
+[12](11-piani-conclusi.md#esito-sezione-12) concluse restano **nove**, di cui **sette
+assegnate** alle sezioni 13-16. Vale anche per ciò che entra **dopo** la
+decisione e che una sezione incontra da sé: `R53`, nata eseguendo la 11, è andata nella
+15 invece di aspettare. **`R54` no, ed è l'eccezione da guardare**: nata dal giro a mano
+della 12 — «oggi» del prodotto è il giorno UTC — non sta in nessuna delle quattro
+sezioni rimaste, perché non è la domanda di nessuna di esse. Resta **da ordinare**, e la
+decisione è se meriti una sezione sua prima del collaudo o se la sua finestra di due ore
+notturne la mandi dopo. Finché non è presa, quella voce è l'unica cosa segnalata che il
+collaudo troverebbe ancora aperta. Dopo il collaudo e il mese resta **`R40`** — l'email come
+credenziale, con la verifica che le va insieme — più ciò che il collaudo e il mese
+troveranno, che è la parte per cui il criterio esiste: quelle voci nuove si ordinano con
+la misura, non con un ragionamento.
 
 ### Ciò che dipende da dove si esercisce
 
@@ -247,240 +259,227 @@ Sono la stessa conversazione, e vale la pena affrontarle insieme.
 
 ## Piano in corso
 
-<a id="piano-sezione-12"></a>
+<a id="piano-sezione-13"></a>
 
-### Piano — Sezione 12: l'immobile, con un contratto in essere
+### Piano — Sezione 13: il subentro
 
 Pianificata il **22 settembre 2026**, nello stesso giro dell'esito della
-[11](11-piani-conclusi.md#esito-sezione-11), com'è la regola. Chiude `R44`, `R45` e
-`R29`: tre regole del service layer che le voci hanno già mezze decise — **in bozza non
-si affitta, con un contratto in essere non si archivia né si torna in bozza, e il residuo
-che chi abita legge non mente**. Sono la stessa domanda — *che cosa vieta, o che cosa
-deve dire, un contratto in essere* — posta su tre righe, ed è la ragione per cui stanno
-in una sezione sola. **Una migration** (la `0042`, per `R29`), **nessuna rotta nuova**,
-un ADR prima del codice di `R29` e una nota a un ADR esistente per le altre due.
+[12](11-piani-conclusi.md#esito-sezione-12), com'è la regola. Chiude `R28`: **cambiare la
+composizione di un contratto attivo**, cioè «esce X, entra Y, con queste quote».
+
+È da sola perché è il pezzo di dominio più grande rimasto e tocca l'invariante delle quote
+che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso: è la **sola via legittima** per
+aggiungere una parte a un contratto attivo, e deve esserlo senza riaprire la porta che
+quell'ADR ha sbarrato. **Una rotta nuova** (è il primo caso da parecchie sezioni in cui ne
+serve davvero una), un ADR prima del codice, **nessuna migration** — e il perché della
+migration mancante è una delle decisioni, non una dimenticanza.
 
 **Si esegue in una sola conversazione**, senza agenti. Ogni test nuovo provato al
-contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito. I test con
-il database solo con `./ops/ci/test-integration.sh`, che non ha un filtro: le prove al
+contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito. I test con il
+database solo con `./ops/ci/test-integration.sh`, che non ha un filtro: le prove al
 contrario si combinano in un giro.
 
-#### Che cosa esiste davvero, verificato e non dedotto
+#### Che cosa esiste davvero, verificato contro il codice il 22 settembre 2026
 
 | Premessa | Verifica |
 |---|---|
-| Un immobile nasce in `draft` e nessuna regola lo guarda | vero: `crates/domain/src/property/aggregate.rs:200`, `status: PropertyStatus::Draft` in `create`; `set_status` (`:291`) rifiuta solo `archived`; nessun caso d'uso in `crates/application/src/use_cases/{lease,property}/` legge lo stato dell'immobile per decidere |
-| Il form di creazione non offre lo stato; il dialogo «Modifica» sì | vero: `CreatePropertyRequest` (`crates/api/src/routes/properties.rs:220`) non ha `status`, `UpdatePropertyRequest` (`:240`) sì; `NewPropertyPage.tsx` non nomina `status`, `PropertyDetailPage.tsx:280-297` ha il `<Select>` con `EDITABLE_STATUSES` |
-| `ActivateLease` non legge l'immobile | vero: `crates/application/src/use_cases/lease/activate.rs:41-58` rilegge il contratto e le parti, poi `lease.activate(&parties, now)`; `property_id` compare solo nell'evento |
-| `ArchiveProperty` non guarda i contratti | vero: `crates/application/src/use_cases/property/archive.rs:46-51`, `find_by_id`, `property.archive(now)`, `soft_delete` |
-| «In essere» ha già una definizione sola, e un modo di chiederla per persona | vero: `app.lease_in_force(status, start_date, end_date)` dalla `0017`, usata da `LeaseRepository::list` con `LeaseQuery { property_id, in_force }` (`repositories/lease.rs:65-81`); `has_in_force_for_user` (`:224-231`) interroga `app.has_lease_in_force` per la sezione 6. **Non esiste** la forma per immobile |
-| Una regola cross-aggregato si esprime come `Invariant` sollevato dal caso d'uso, e risponde `409` | vero: `LeaveOrganization` (`use_cases/organization/leave.rs:105-109`) solleva `Invariant::MembershipHasLeaseInForce`, `crates/domain/src/error.rs:456` gli dà il codice `membership.lease_in_force`, `crates/api/src/error.rs:161` traduce ogni `Invariant` in `409 invariant`. È la forma di [ADR-015](08-decisioni.md#adr-015): «almeno un owner» resta applicativo perché richiederebbe un trigger cross-row |
-| Il saldo si somma sotto la RLS di chi legge, e i pagamenti non attribuiti sono invisibili a chi abita | vero: `app.v_charge_balances` è `security_invoker = true` (`0015:10`, `0024:71`), `payments_select` è staff **o** `payer_user_id` **o** `payee_user_id` (`0014:299-302`). Chi vede un addebito è una parte del suo contratto o staff (`charges_select`, `0014:291`, via `can_access_lease`) |
-| Il commento che promette il contrario è in **due** posti | vero: `use_cases/payment/read.rs:33-35` («il totale incassato resta comunque visibile a tutti nel `paid_amount` del saldo») e `routes/payments.rs:161-163` su `RecordPaymentRequest.payer_user_id` |
-| Esiste il precedente di una funzione `SECURITY DEFINER` che proietta poco | vero: `app.property_residents` (`0030:64`), `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = app, pg_temp`, con `REVOKE`/`GRANT` per ruolo (`0030:121-130`); l'invariante 6 di `ops/sql/checks/schema_invariants.sql:77-83` **fallisce** su un DEFINER senza `search_path` |
-| `propertyJudgements` in `status.tsx` include `draft`, e un test lo difende | vero: `features/shared/status.tsx:70`, e `status.test.tsx:45` «una bozza che risulta affittata è comunque un'anomalia da vedere» |
-| I test sono 479 Rust e 147 del client | vero, esito della 11 e `just ci` |
+| A un contratto attivo **non** si aggiungono parti | vero: `AddLeaseParty` chiama `lease.ensure_accepts_parties()` (`use_cases/lease/add_party.rs:61`), che ammette solo `Draft` e `PendingSignature` e altrimenti solleva `Invariant::LeasePartiesLocked` (`domain/src/lease/aggregate.rs:229-237`) |
+| `PATCH /lease-parties/{id}` tocca **una** riga e non ricontrolla la somma | vero, e deliberato: `LeaseParty::correct` (`domain/src/lease/party.rs:164-215`) non guarda le altre parti; il suo commento lo dice e ADR-046 lo motiva — per portare `100 / 0` a `50 / 50` si passa da uno stato intermedio |
+| `DELETE /lease-parties/{id}` non serve a far uscire nessuno | vero: `LeaseParty::remove` (`party.rs:225-236`) rifiuta con `Invariant::LeasePartyHasUser` se la parte ha un utente collegato, e il suo commento nomina già `left_at` come «la cosa che non è questa» |
+| `left_at` c'è dappertutto e **nessuno lo scrive** | vero, in cinque punti: colonna `app.lease_parties.left_at` (`0005:94`), nel `GRANT UPDATE` per colonna a `propflow_app` (`0019:67-69`), letto e riscritto dal repository (`db/repositories/lease_party.rs:87` e `:119`), esposto in lettura dall'API (`routes/leases.rs:467`, `:483`) e nel tipo del client (`api/types.ts:296`). **Nessun caso d'uso lo valorizza**, e `CorrectLeasePartyRequest` lo esclude per esplicito (`routes/leases.rs:265-266`) |
+| L'invariante delle quote **sa già** di chi è uscito | vero: `ensure_tenancy_complete` filtra `party.left_at.is_none()` (`party.rs:247`), pretende almeno un inquilino e rifiuta una quota a zero |
+| E lo sanno anche le due aritmetiche della quota residua | vero e **già allineate**: `remaining_share` del server (`use_cases/invitation/invite_tenant.rs:205-212`) e `assignedShare` del client (`features/leases/shares.ts:22-27`) filtrano entrambe `left_at` |
+| `share_percent` **non ripartisce nessun addebito** | vero, ed è la premessa che cambia la dimensione della sezione: `grep -rn share_percent crates/application/src/use_cases/` dà due soli punti, `add_party.rs` e `invite_tenant.rs`. Gli addebiti stanno sul **contratto** (`IssueCharge` prende un `lease_id`), non sulla parte: la quota è dichiarativa e serve solo all'attivazione |
+| Chi esce sparisce da «in essere» e dai residenti | vero: `app.has_lease_in_force` filtra `lp.left_at IS NULL` (`0039:79`) e `app.property_residents` pure (`0030`). Scrivere `left_at` fa quindi due cose da sé: la persona può uscire dall'organizzazione (`R16`, sezione 6) e sparisce dall'elenco dei residenti |
+| **`app.can_access_lease` invece `left_at` non lo guarda** | vero, ed è la scoperta che decide la sezione: il ramo dell'inquilino chiede `lp.user_id = app.current_user_id() AND lp.deleted_at IS NULL` più `app.is_org_member` (`0041:54-76`). Chi esce da un contratto **continua a leggerlo** finché resta membro dell'organizzazione |
+| `lease_parties_primary_uk` non esclude chi è uscito | vero: `UNIQUE (lease_id) WHERE is_primary AND deleted_at IS NULL` (`0005:103-104`). Se esce l'intestatario principale ed entra il suo, per un istante sono due |
+| `lease_parties_lease_user_uk` nemmeno | vero: `UNIQUE (lease_id, user_id) WHERE user_id IS NOT NULL AND deleted_at IS NULL` (`0005:100-101`). La stessa persona non può avere due righe sullo stesso contratto, nemmeno se la prima è chiusa |
+| C'è un `CHECK` sulle date, e oggi è quasi sempre vuoto | vero: `lease_parties_dates_ck CHECK (left_at IS NULL OR joined_at IS NULL OR left_at >= joined_at)` (`0005:98`); `joined_at` lo scrive **solo** `link_user` (`party.rs:135`), cioè l'accettazione dell'invito. Una parte mai accettata ha `joined_at` nullo e il `CHECK` non dice niente |
+| Gli eventi delle parti esistono, e sono eventi **del contratto** | vero: `LeasePartyAdded`, `LeasePartyCorrected`, `LeasePartyRemoved` (`domain/src/events/mod.rs:125-127`), con `aggregate_type` del contratto (`:224-231`) |
+| Il client mostra tutte le parti e **non dice chi è uscito** | vero: `LeaseDetailPage.tsx:188-210`, la tabella stampa nome, ruolo, email e quota per ogni riga di `data.parties`, senza guardare `left_at` |
+| I verbi del contratto sono `POST /leases/{id}/<verbo>` | vero: `activate`, `terminate`, `cancel` (`routes/leases.rs:35-44`), la forma di [ADR-042](08-decisioni.md#adr-042) |
+| I test sono 486 Rust e 150 del client | vero, esito della 12 e `just ci` |
 
 #### Decisioni prese, con il perché
 
-- **`R29`: il totale incassato si somma sotto `SECURITY DEFINER`, e il resto del saldo
-  resta com'è.** Delle tre vie della voce, la prima — `payer_user_id` obbligatorio con un
-  solo inquilino — non chiude il bonifico anonimo, che `submit.rs` dichiara voluto; la
-  terza — non mostrare il totale a chi non vede tutte le righe — toglie a chi abita
-  l'unico numero per cui apre la prima schermata, «quanto resta da pagare». La seconda lo
-  chiude e costa una funzione: `app.charge_paid_amount(p_charge_id uuid) RETURNS
-  app.money_amount`, `SECURITY DEFINER`, che somma i pagamenti nei **due stati che la
-  vista già conta** (il predicato della `LATERAL` in `0024:86-95`, da riusare tale e
-  quale) senza la RLS di chi chiama; `v_charge_balances` la usa al posto della `LATERAL`.
-  **Che cosa rivela**: un aggregato — quanto è stato incassato su un addebito — a chi può
-  vedere quell'addebito, cioè a una parte del contratto o allo staff; **non** chi ha
-  pagato, né quando. È la stessa forma di [ADR-036](08-decisioni.md#adr-036), che proietta
-  tre colonne dei residenti, e va scritta come **ADR-055** prima della migration, perché
-  cambia una proprietà che [04](04-sicurezza.md) descrive: una vista contabile che
-  legge oltre la policy;
-- **`R44`: si rifiuta all'attivazione, non alla bozza del contratto.** Nel modello
-  derivato «affittato» è `app.lease_in_force`, che comincia con l'attivazione: una bozza
-  di contratto su una bozza di immobile sono due cose che si preparano insieme, e
-  rifiutare `DraftLease` obbligherebbe a un ordine di compilazione. `ActivateLease`
-  rilegge l'immobile e rifiuta con `Invariant::PropertyNotLettable` →
-  `property.not_lettable`, `409`;
-- **`R44`, la porta di servizio: non si torna in bozza con un contratto in essere.**
-  `UpdateProperty` con `status: draft` su un immobile che ha un contratto in essere
-  rifiuta con `Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. Senza,
-  «Affittato (Bozza)» rientra dall'altra parte. `maintenance` resta ammesso: la 5-ter ha
-  tenuto apposta «In manutenzione (Affittato)», che è un'anomalia vera da vedere;
-- **`R45`: si rifiuta, non si disdice.** Archiviare è un soft delete; disdire un contratto
-  è un atto con una data e delle conseguenze — gli addebiti che smettono di maturare, la
-  persona che può uscire — e farlo *di nascosto* dentro un'archiviazione sarebbe
-  esattamente il genere di effetto che nessuno cerca dove succede. Chi amministra
-  disdice, poi archivia. Stesso `Invariant::PropertyHasLeaseInForce` di sopra: è la stessa
-  regola, «un immobile con un contratto in essere non cambia natura»;
-- **la domanda per immobile è un metodo della porta, non una query di elenco.**
-  `LeaseRepository::has_in_force_for_property(property_id)` accanto a
-  `has_in_force_for_user`, con `SELECT EXISTS (… WHERE property_id = $1 AND deleted_at IS
-  NULL AND app.lease_in_force(status, start_date, end_date))`: **la stessa funzione**
-  delle viste e dell'elenco, perché due definizioni di «in essere» farebbero rispondere
-  l'archiviazione e la dashboard in modo diverso sullo stesso contratto. L'alternativa —
-  `list(LeaseQuery { property_id, in_force: Some(true), limit: 1 })` — funziona e non
-  dice che cosa chiede;
-- **il form di creazione offre lo stato, con «Disponibile» proposto**, e il dominio non
-  cambia default: `CreatePropertyRequest.status` opzionale (`draft`, `available`,
-  `maintenance`; `archived` lo rifiuta già `set_status`), `CreatePropertyCommand.status`,
-  e il caso d'uso lo applica dopo `Property::create` — leggendo `aggregate.rs:221`
-  (`apply(PropertyChanges)`) si decide se passare da lì o da un parametro di `create`.
-  `draft` resta scegliibile per chi sta compilando;
-- **`propertyJudgements` non cambia, e nemmeno il suo test.** Se la regola regge,
-  `rented`+`draft` non nasce più; ma le righe **già** in quello stato — il database del
-  giro ne ha — restano, e il badge che le mostra come anomalia dice il vero. Nessun
-  backfill nella migration: quale stato mettere a una bozza affittata è una decisione di
-  chi amministra, che la prende dal dialogo «Modifica», dove `available` è ammesso.
-  L'alternativa — togliere `draft` dai giudizi — farebbe sparire un'anomalia vera;
-- **le regole vanno in [ADR-015](08-decisioni.md#adr-015) come nota**, non in un ADR
-  nuovo: sono tre righe in più di «non nel database», con la stessa ragione di «almeno
-  un owner».
+- **Una transizione dedicata, non una richiesta che sostituisce tutte le parti.** La voce
+  registrava le due vie e questo piano sceglie la seconda, per tre ragioni. *Primo*: dice
+  **quando**, e la data è l'unica cosa che `left_at` chiede e che una sostituzione
+  massiva non porta. *Secondo*: una `PUT /leases/{id}/parties` che accetti un elenco
+  intero riaprirebbe in silenzio ciò che [ADR-046](08-decisioni.md#adr-046) ha chiuso —
+  aggiungere una parte a un contratto attivo — perché il suo corpo *è* un'aggiunta
+  travestita da sostituzione, e non ci sarebbe più un punto in cui dire di no. *Terzo*: la
+  transizione ha un nome, e un nome si può rifiutare, tracciare e raccontare nella
+  conferma; una `PUT` è muta;
+- **Una rotta sola: `POST /api/v1/leases/{id}/handover`.** Lo stesso verbo di `activate` e
+  `terminate`, in inglese come tutte. Il corpo porta **tutto ciò che deve cambiare
+  insieme**: chi esce, chi entra, da quando, e le quote di tutti dopo. Una bozza:
+
+  ```json
+  {
+    "effective_date": "2026-11-01",
+    "leaving_party_id": "…",
+    "joining": { "full_name": "…", "email": "…", "role": "cotenant", "share_percent": "50.00" },
+    "shares": [ { "party_id": "…", "share_percent": "50.00" } ]
+  }
+  ```
+
+  `shares` **non è opzionale quando serve**: se dopo l'uscita le quote non sommano a 100 e
+  nessuno le riassegna, il contratto resta attivo con un'invariante violata, che è
+  esattamente il danno di ADR-046. Chi entra può anche mancare — «esce X e basta» è un
+  caso vero, con le quote ridistribuite fra chi resta;
+- **L'invariante si riverifica alla fine della transizione, e solo lì.** `ensure_tenancy_complete`
+  sullo stato finale, dentro la stessa unità di lavoro. È la differenza con il `PATCH`:
+  là lo stato intermedio è legittimo e nessuno può controllare, qui lo stato intermedio
+  **non esiste** — una richiesta sola, una transazione sola. Il rifiuto è
+  `Invariant::LeaseSharesNotHundred` o `LeaseWithoutTenantParty`, che esistono già e hanno
+  già i loro codici;
+- **Il caso d'uso costruisce la parte nuova da sé e non passa da `AddLeaseParty`.** Quello
+  chiama `ensure_accepts_parties`, che rifiuta su un contratto attivo — ed è giusto che
+  continui a rifiutare. La regola di ADR-046 non si allenta: resta vero che *aggiungere*
+  una parte a un contratto attivo è vietato, e il subentro non è un'aggiunta;
+- **`can_access_lease` non si tocca, e quindi non c'è nessuna migration.** È la decisione
+  che costa di più e va detta per esteso. La tentazione è aggiungere `AND lp.left_at IS
+  NULL` al ramo dell'inquilino, come [ADR-054](08-decisioni.md#adr-054) ha aggiunto
+  `is_org_member`. **Non si fa**: chi esce da un contratto a metà **ha ancora degli
+  addebiti da pagare**, e togliergli la lettura del contratto gli toglierebbe la pagina da
+  cui li vede. Uscire da un contratto non è uscire dall'organizzazione. La risposta, in
+  una riga: **si smette di essere residente, non si smette di essere debitore** — e le due
+  cose sono già distinte nello schema, perché `has_lease_in_force` e `property_residents`
+  filtrano `left_at` e `can_access_lease` no. Va scritta in un ADR perché *sembra* una
+  dimenticanza e non lo è;
+- **Se esce l'intestatario principale, il suo posto si assegna nella stessa richiesta.**
+  Il corpo porta `is_primary` dentro `shares` o su `joining`; se chi esce era `is_primary`
+  e nessuno lo diventa, si rifiuta. Un contratto attivo senza intestatario non è uno stato
+  che qualcuno sappia nominare, ed è quello in cui la sezione 3 aveva trovato i contratti
+  rotti;
+- **Il subentro non muove un euro degli addebiti già emessi**, e il piano lo dice invece di
+  lasciarlo scoprire: le quote sono dichiarative, gli addebiti stanno sul contratto. Chi si
+  aspetta che l'inquilino nuovo cominci a essere addebitato automaticamente si aspetta una
+  capacità che non esiste — la ripartizione per quota è una voce che **non c'è**, e se
+  servirà nascerà da un giro a mano, non da qui;
+- **Un evento nuovo, `LeaseHandedOver`**, accanto ai tre che ci sono: porta
+  `lease_id`, `org_id`, la data, e gli **identificatori** delle parti che escono ed
+  entrano — mai nomi né email (regola 25). Non si riusa `LeasePartyAdded` +
+  `LeasePartyRemoved`: sono due fatti dove ce n'è uno, e chi li consuma non avrebbe modo di
+  sapere che erano la stessa transizione.
 
 #### Decomposizione
 
-##### `D0` — il commento falso, per primo
+##### `E0` — l'ADR, prima del codice
 
-`use_cases/payment/read.rs:33-35` e `routes/payments.rs:161-163` smettono di promettere
-che il totale «resta comunque visibile»: dicono che lo è **dalla `0042`**, per via della
-funzione, e prima non lo era. È la cosa da correggere per prima perché è ciò che farebbe
-concludere a chi passa di lì che il difetto non esiste — e va scritta anche se `D1`
-dovesse slittare.
+ADR-056 in [08](08-decisioni.md): la forma della transizione, il perché non è una
+sostituzione, e soprattutto il **perimetro di chi è uscito** — che cosa continua a vedere e
+perché `can_access_lease` resta com'è. È l'unica parte che non si deduce dal codice e
+quella che, senza un ADR, la sezione dopo rideriverebbe al contrario.
 
-##### `D1` — `R29`: ADR-055, poi la `0042`
+##### `E1` — il dominio
 
-ADR-055 in [08](08-decisioni.md), con il perimetro di ciò che la funzione rivela e a chi.
-Poi `migrations/0042_charge_paid_amount_reads_past_rls.sql`: la funzione, `REVOKE ALL ON
-FUNCTION … FROM PUBLIC`, `GRANT EXECUTE` ai tre ruoli con lo stesso `DO $$ … EXECUTE
-format(…)` della `0030`; `CREATE OR REPLACE VIEW app.v_charge_balances` con le **stesse
-colonne nello stesso ordine** e `paid_amount` dalla funzione. [03](03-modello-dati.md) e
-[04](04-sicurezza.md) descrivono lo stato nuovo.
+`LeaseParty::leave(effective_date, now)`: valorizza `left_at`, rifiuta se è già uscita e
+rifiuta se `joined_at` è valorizzato ed `effective_date` gli è precedente — **con un
+messaggio**, perché altrimenti lo rifiuta `lease_parties_dates_ck` e chi legge riceve un
+errore di vincolo. Un metodo del contratto che, date le parti e la transizione, dica se
+lo stato finale regge.
 
-**Criterio di fine:** un test di contratto HTTP in `crates/api/tests/http_contract.rs`,
-dalla forma di `R29`: il proprietario registra `150.00` su un addebito da `420.00`
-**senza** `payer_user_id`; l'inquilino legge lo stesso addebito e trova `paid_amount:
-"150.00"`, `outstanding_amount: "270.00"`, e `status` che non contraddice più la riga.
-Al contrario, con la `0042` tolta: `paid_amount: "0.00"` e `outstanding_amount:
-"420.00"`, che è la voce.
+**Criterio di fine:** test unitari di dominio, senza database: chi esce non conta più nelle
+quote; una data precedente a `joined_at` è rifiutata con il suo codice; uscire due volte è
+rifiutato.
 
-##### `D2` — la domanda per immobile
+##### `E2` — il caso d'uso
 
-`has_in_force_for_property` sulla porta (`crates/domain/src/ports/repositories.rs`, accanto
-a `:431`), l'implementazione in `repositories/lease.rs`, e il finto repository dei test
-applicativi che la conosce. Nessuna migration: `app.lease_in_force` c'è.
+`HandoverLease` in `use_cases/lease/handover.rs`: `ensure_staff`, rilegge contratto e
+parti, applica l'uscita, costruisce la parte nuova, riassegna le quote e `is_primary`,
+riverifica `ensure_tenancy_complete`, scrive, emette `LeaseHandedOver`, `commit`. Una
+transazione sola.
 
-**Criterio di fine:** un test di persistenza in `crates/infrastructure/tests/`: un
-contratto attivo con le date di oggi risponde vero; disdetto, o attivo con `end_date`
-ieri, risponde falso — le date sono la metà della definizione, e un test che provasse
-solo lo stato passerebbe anche con `status = 'active'` scritto a mano.
+**Criterio di fine:** test di persistenza in `crates/infrastructure/tests/`: dopo il
+subentro le quote sommano a 100 sulle parti non uscite, `left_at` è la data richiesta, e
+`app.has_lease_in_force` risponde **falso** per chi è uscito e **vero** per chi è entrato
+— che è la prova che il subentro ha fatto le due cose che contano.
 
-##### `D3` — `R44`: non si attiva su una bozza
+##### `E3` — il bordo HTTP
 
-`Invariant::PropertyNotLettable` con il codice `property.not_lettable` e il suo test
-sul catalogo dei codici (`error::tests` in `crates/api/src/error.rs`). `ActivateLease`
-rilegge l'immobile con `uow.properties().find_by_id(lease.property_id())` — se manca è
-`not_found`, come per ogni riferimento — e rifiuta su `Draft` **prima** di
-`lease.activate`. Nel client: la stringa in `errors` di `it.ts`, e la scheda del contratto
-la mostra dove mostra già gli altri rifiuti dell'attivazione. [05](05-api.md) elenca il
-codice sulla rotta.
+`POST /api/v1/leases/{id}/handover`, il DTO, i codici in [05](05-api.md). Nessuna rotta
+nuova oltre questa.
 
-**Criterio di fine:** un test HTTP: contratto in bozza con le parti giuste su un immobile
-in bozza, `POST /leases/{id}/activate` → `409 property.not_lettable`; l'immobile messo
-`available` con `PATCH`, la stessa chiamata → `200`. Al contrario, senza la lettura
-dell'immobile: `200` al primo tentativo.
+**Criterio di fine:** test di contratto HTTP: il subentro su un contratto attivo risponde
+`200` con le parti aggiornate; senza `shares` che riportino a 100 risponde `409
+lease.shares_not_hundred`; con `effective_date` prima di `joined_at` risponde il codice di
+`E1`; su un contratto in bozza risponde `409` — in bozza si aggiunge una parte, non si
+subentra. Al contrario, senza la riverifica finale: `200` con le quote che sommano a 50.
 
-##### `D4` — `R44` e `R45`: con un contratto in essere non si cambia natura
+##### `E4` — il client
 
-`Invariant::PropertyHasLeaseInForce` → `property.lease_in_force`. `UpdateProperty`
-rifiuta quando `changes.status == Some(Draft)` e `has_in_force_for_property` è vero — e
-**solo** allora: un `PATCH` che non tocca lo stato, o lo mette in `maintenance`, non fa
-la domanda. `ArchiveProperty` rifiuta quando è vero, prima di `property.archive(now)`.
-Nel client: la stringa in `errors`; `property.archiveExplain` dice che con un contratto
-in essere non si archivia e che prima si disdice, perché la conferma deve dirlo (era la
-condizione della voce); l'archiviazione in blocco **non cambia**, il `409` è già un esito
-per riga dalla sezione 7.
+La tabella delle parti dice **chi è uscito** e da quando — oggi non lo dice, ed è la riga
+che rende visibile ciò che la transizione scrive. Un dialogo «Subentro» sulla scheda del
+contratto, offerto **solo** quando il contratto è attivo, con le quote proposte come le
+propone `AddPartyDialog` (da `@/lib/decimal`, mai `parseFloat`). Le stringhe in
+`i18n/it.ts`.
 
-**Criterio di fine:** due test HTTP. `PATCH /properties/{id}` con `status: draft` su un
-immobile con un contratto attivo → `409 property.lease_in_force`, e con `status:
-maintenance` → `200`. `DELETE /properties/{id}` — che è l'archiviazione, `204` — sullo stesso → `409`; il
-contratto disdetto, la stessa chiamata → `204` e l'immobile fuori dall'elenco. Al contrario, senza i
-due rami: `200` e `204` al primo colpo — che è come è oggi.
+**Criterio di fine:** un test del client che il dialogo non compaia su un contratto in
+bozza, e uno sulle quote proposte.
 
-##### `D5` — il form di creazione offre lo stato
+##### `E5` — documentazione
 
-`CreatePropertyRequest.status` e `CreatePropertyCommand.status`, il caso d'uso che lo
-applica; `NewPropertyPage.tsx` con il `<Select>` — gli stessi tre valori di
-`EDITABLE_STATUSES`, che diventa condivisa — e `available` preselezionato. Una stringa
-di aiuto sotto il campo, in `it.ts`, che dice che «Bozza» è per chi sta ancora
-compilando.
-
-**Criterio di fine:** un test HTTP: `POST /properties` senza `status` risponde `draft`
-(il default non cambia), con `status: available` risponde `available`, con `status:
-archived` risponde `409 property.archive_requires_dedicated_operation`. Un test del
-client sul catalogo delle opzioni, come quelli della 11.
-
-##### `D6` — documentazione
-
-La nota ad ADR-015; [03](03-modello-dati.md) sulla `0042` e sulla vista; [04](04-sicurezza.md)
-sulla funzione e su ciò che rivela; [05](05-api.md) con i due codici nuovi sulle rotte che
-li producono e `status` in `POST /properties`; le voci fuori da [12](12-da-fare.md).
+ADR-056 già scritto in `E0`; [05](05-api.md) con la rotta e i codici;
+[03](03-modello-dati.md) su `left_at`, che da qui in poi qualcuno scrive;
+[04](04-sicurezza.md) sul perimetro di chi è uscito; `R28` fuori da [12](12-da-fare.md).
 
 #### Trappole
 
-**Cercare «affittato» nello stato memorizzato.** `rented` non è mai in database
-([ADR-019](08-decisioni.md#adr-019)): `status = 'rented'` è sempre falso, e una regola
-scritta così non rifiuterebbe mai niente e passerebbe ogni test che non attivi davvero un
-contratto. La domanda è `app.lease_in_force`, e i test di `D2` esistono per questo.
+**Scrivere `left_at` e credere che chiuda la lettura.** Non la chiude:
+`app.can_access_lease` guarda `deleted_at` e la membership, non `left_at` (`0041:54-76`).
+Un test che verificasse «chi è uscito non vede più il contratto» **fallirebbe**, e la
+reazione istintiva — aggiungere il filtro nella funzione — è la decisione sbagliata presa
+per la ragione sbagliata. Chi esce continua a vedere, ed è voluto: ha degli addebiti.
 
-**`CREATE OR REPLACE VIEW` cambia solo il corpo.** Le colonne devono restare le stesse,
-nello stesso ordine e con lo stesso tipo, o PostgreSQL rifiuta; aggiungere o riordinare
-significherebbe `DROP` e ricreare, e perdere i `GRANT` sulla vista — e `v_owner_dashboard`
-legge da `v_charge_balances`.
+**L'ordine delle due scritture su `is_primary`.** `lease_parties_primary_uk` è un indice
+unico parziale su `(lease_id) WHERE is_primary AND deleted_at IS NULL`, e non esclude chi è
+uscito. Nella stessa transazione, l'`UPDATE` che mette `is_primary` alla parte nuova
+**prima** di toglierlo a quella che esce viola il vincolo. Togliere prima, mettere dopo.
 
-**Un DEFINER senza `search_path` fissato non arriva alla CI.** L'invariante 6 dello
-schema lo ferma prima; ma un DEFINER con `search_path` e senza `REVOKE … FROM PUBLIC`
-passa, ed è eseguibile da chiunque abbia una connessione. La `0030` è il modello, con la
-`DO $$` che concede ai soli tre ruoli.
+**La stessa persona non rientra sullo stesso contratto.**
+`lease_parties_lease_user_uk` è su `(lease_id, user_id) WHERE user_id IS NOT NULL AND
+deleted_at IS NULL` e non guarda `left_at`: chi è uscito da un contratto e vuole
+rientrarci non può avere una seconda riga. Non è nel perimetro della sezione — ma è il
+genere di cosa che si scopre da un errore di vincolo in produzione, e va saputa prima.
 
-**Rifiutare `DraftLease` invece di `ActivateLease`.** Sembra più prudente e obbliga a un
-ordine: prima l'immobile disponibile, poi il contratto. La voce lo scarta, e il piano lo
-conferma.
+**Riusare `AddLeaseParty` perché «tanto fa la stessa cosa».** Chiama
+`ensure_accepts_parties` e rifiuta su un contratto attivo. Toglierne la chiamata per far
+funzionare il subentro riaprirebbe la porta di ADR-046 per tutti.
 
-**Disdire dentro l'archiviazione.** Vedi la decisione: un effetto in un posto dove nessuno
-lo cerca. Se un giorno servirà un «archivia e disdici», sarà un verbo con la sua
-conferma.
+**Aspettarsi che gli addebiti si spostino.** Non si spostano, e non c'è niente da
+spostare: la quota non ripartisce nessun addebito (verificato, due soli usi di
+`share_percent` in tutto il livello applicativo). Un piano che desse per scontato il
+contrario si troverebbe a scrivere una capacità intera non pianificata.
 
-**Leggere lo stato dell'immobile dopo `lease.activate`.** L'ordine conta poco per il
-database, che è in transazione, e molto per il messaggio: l'invariante delle parti e delle
-quote deve restare il primo rifiuto che chi attiva incontra solo se è quello vero;
-leggere l'immobile prima evita di dire «le quote non coprono il canone» su un contratto
-che comunque non si potrebbe attivare.
+**`joined_at` nullo.** Una parte mai accettata non ha `joined_at`, quindi il `CHECK` sulle
+date non dice niente e una `effective_date` qualunque passa. Il controllo in `E1` deve
+gestire il nullo senza rifiutare: rifiutare un subentro perché l'uscente non aveva mai
+accettato l'invito sarebbe il caso più comune dei contratti veri.
 
-**Il finto repository dei test applicativi.** `has_in_force_for_property` va aggiunto
-anche là, o il crate non compila; e il suo valore di default deve essere `false`, non
-`true`, altrimenti i test esistenti di `ArchiveProperty` — che archiviano senza contratti
-— cadono per una ragione che non è loro.
-
-**Il backfill che sembra dovuto.** Una migration che portasse ad `available` le bozze
-affittate deciderebbe al posto di chi amministra e nasconderebbe il badge che glielo dice.
-Non si fa, e la ragione è scritta nelle decisioni.
+**Un solo evento e non due.** `LeasePartyAdded` + `LeasePartyRemoved` descriverebbero due
+fatti indipendenti, e chi li consuma non saprebbe che erano una transizione sola. Per lo
+stesso motivo l'evento porta identificatori e date, mai nomi o email.
 
 #### Che cosa **non** entra
 
-- il subentro (`R28`): è la 13, e tocca l'invariante delle quote;
-- togliere qualcuno (`R39`) e i contatti (`R43`): la 14, con i loro ADR;
-- un «archivia e disdici»: verbo nuovo, con la sua conferma, se qualcuno lo chiede;
-- uno stato `unavailable` di stanza che blocchi l'attivazione: non è nelle voci, e la
-  stanza ha già la sua regola d'occupazione (`app.room_is_occupied`);
-- il backfill delle bozze affittate, con la ragione sopra.
+- **la ripartizione degli addebiti per quota**: non è una voce, non esiste oggi, e nascerà
+  da un giro a mano se servirà;
+- **il filtro `left_at` in `can_access_lease`**: deciso di non farlo, con la ragione
+  sopra — non è un rinvio;
+- **rientrare sullo stesso contratto** dopo esserne usciti: il vincolo unico lo impedisce,
+  e la via è un contratto nuovo;
+- togliere qualcuno dall'organizzazione (`R39`) e i contatti (`R43`): la 14, con i loro
+  ADR;
+- una migration di bonifica dei contratti con le quote già rotte: la stessa ragione di
+  ADR-046, quale sia la quota giusta lo sa solo chi amministra.
 
 ## Implementato
 
 ### Schema — completo per l'MVP
 
-Le 41 migration coprono l'intero perimetro funzionale dell'MVP: utenti e organizzazioni,
+Le 42 migration coprono l'intero perimetro funzionale dell'MVP: utenti e organizzazioni,
 immobili e stanze, contratti e parti contrattuali, inviti dei due generi, documenti con
 allegato polimorfico, segnalazioni con thread e storico, bollette con esito OCR, addebiti,
 pagamenti polimorfici, spese condivise con quote e regolamenti, registro dei job AI,

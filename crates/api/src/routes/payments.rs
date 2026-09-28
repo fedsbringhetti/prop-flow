@@ -159,8 +159,13 @@ pub struct RecordPaymentRequest {
     ///
     /// **Non è anagrafica.** `payments_select` mostra la riga a chi ha pagato:
     /// senza questo campo il pagamento resta visibile allo staff soltanto, e
-    /// l'inquilino non lo vedrà nel proprio elenco. Il totale incassato gli resta
-    /// comunque visibile in `paid_amount` sul saldo dell'addebito.
+    /// l'inquilino non lo vedrà nel proprio elenco.
+    ///
+    /// Il **totale** incassato gli resta però visibile in `paid_amount` sul saldo
+    /// dell'addebito, e dalla `0042` è vero: lo somma `app.charge_paid_amount`
+    /// oltre la Row Level Security di chi legge. Prima di quella migration questa
+    /// riga prometteva la stessa cosa ed era falsa — il residuo che l'inquilino
+    /// leggeva era più alto del vero.
     #[serde(default)]
     pub payer_user_id: Option<Uuid>,
 }

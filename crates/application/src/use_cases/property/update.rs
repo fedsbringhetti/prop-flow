@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, PropertyUpdated};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
-use propflow_domain::property::{Property, PropertyChanges};
+use propflow_domain::property::{Property, PropertyChanges, PropertyStatus};
 use propflow_domain::shared::PropertyId;
-use propflow_domain::{Entity, RequestContext};
+use propflow_domain::{DomainError, Entity, Invariant, RequestContext};
 
 use crate::authorization;
 use crate::error::{AppError, AppResult};
@@ -45,6 +45,23 @@ impl UpdateProperty {
             .find_by_id(command.id)
             .await?
             .ok_or(AppError::not_found(Entity::Property))?;
+
+        // **Solo quando si chiede la bozza, e non a ogni `PATCH`.** Un `PATCH` che
+        // non tocca lo stato, o che mette `maintenance`, non fa la domanda: la
+        // 5-ter ha tenuto apposta «In manutenzione (Affittato)», che è un'anomalia
+        // vera da vedere. Senza questo ramo la regola rientrerebbe dalla porta di
+        // servizio — si archivia no, ma si torna in bozza sì — e «Affittato
+        // (Bozza)» tornerebbe raggiungibile (ADR-015).
+        if matches!(command.changes.status, Some(PropertyStatus::Draft))
+            && uow
+                .leases()
+                .has_in_force_for_property(property.id())
+                .await?
+        {
+            return Err(AppError::Validation(DomainError::Invariant(
+                Invariant::PropertyHasLeaseInForce,
+            )));
+        }
 
         let changed = property.apply(command.changes, now)?;
         if !changed {

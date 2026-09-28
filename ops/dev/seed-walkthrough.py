@@ -389,6 +389,10 @@ def main():
             "address": {"street": "Corso Italia 4", "city": "Milano", "province": "MI"},
         },
     )
+    # Disponibile, come la prima: dalla sezione 12 un immobile in bozza rifiuta
+    # l'attivazione con `property.not_lettable`, e quel rifiuto **precederebbe**
+    # quello delle quote, che è il vicolo cieco che questo pezzo deve mostrare.
+    chiama("PATCH", f"/properties/{altra_casa['id']}", owner, org, {"status": "available"})
     _, bozza = chiama(
         "POST",
         "/leases",

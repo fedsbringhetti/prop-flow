@@ -205,6 +205,13 @@ export function getProperty(client: ApiClient, id: Uuid): Promise<Property> {
 export interface CreatePropertyInput {
   label: string
   property_type: PropertyType
+  /**
+   * Stato iniziale. Assente significa `draft`, che resta il default dell'API.
+   *
+   * Il tipo è quello del filo e non i tre valori scegliibili: qui si descrive che
+   * cosa l'API accetta, e quali offrirne lo decide il form (`EDITABLE_PROPERTY_STATUSES`).
+   */
+  status?: PropertyStatus
   address: {
     street: string
     city: string

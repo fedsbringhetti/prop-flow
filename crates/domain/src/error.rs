@@ -199,6 +199,24 @@ pub enum Invariant {
     PropertyArchived,
     #[error("Archiving requires the dedicated operation, not a status update")]
     PropertyArchiveRequiresDedicatedOperation,
+    /// Un immobile in bozza non si affitta.
+    ///
+    /// Il rifiuto è **all'attivazione** e non alla bozza del contratto: nel modello
+    /// derivato «affittato» comincia con `app.lease_in_force` (ADR-019), e una
+    /// bozza di contratto su una bozza di immobile sono due cose che si preparano
+    /// insieme. Regola del service layer per la ragione di ADR-015: il legame è
+    /// cross-row.
+    #[error("A draft property cannot be let")]
+    PropertyNotLettable,
+    /// Un immobile con un contratto in essere non cambia natura.
+    ///
+    /// Vale per due operazioni — tornare in bozza e archiviare — ed è di
+    /// proposito **un** invariante: è la stessa regola, e chi la incontra ha la
+    /// stessa cosa da fare, cioè disdire il contratto. Archiviare **non** disdice:
+    /// sarebbe un atto con una data e delle conseguenze nascosto dentro un soft
+    /// delete, dove nessuno lo cerca.
+    #[error("A property with a lease in force cannot be archived or moved back to draft")]
+    PropertyHasLeaseInForce,
     #[error("An archived room cannot be modified")]
     RoomArchived,
 
@@ -376,6 +394,8 @@ impl Invariant {
             Self::PropertyArchiveRequiresDedicatedOperation => {
                 "property.archive_requires_dedicated_operation"
             }
+            Self::PropertyNotLettable => "property.not_lettable",
+            Self::PropertyHasLeaseInForce => "property.lease_in_force",
             Self::RoomArchived => "room.archived",
             Self::LeaseNotActivatable | Self::LeaseNotTerminable | Self::LeaseNotCancellable => {
                 "lease.invalid_transition"
@@ -557,6 +577,8 @@ mod tests {
             Denial::InvitationExpired.code(),
             Invariant::PropertyArchived.code(),
             Invariant::PropertyArchiveRequiresDedicatedOperation.code(),
+            Invariant::PropertyNotLettable.code(),
+            Invariant::PropertyHasLeaseInForce.code(),
             Invariant::RoomArchived.code(),
             Invariant::LeaseNotActivatable.code(),
             Invariant::LeasePartyAlreadyLinked.code(),

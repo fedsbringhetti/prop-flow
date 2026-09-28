@@ -574,7 +574,12 @@ async fn openapi_document_is_served() {
     );
 }
 
-/// Crea un immobile e restituisce il suo id.
+/// Crea un immobile **disponibile** e restituisce il suo id.
+///
+/// Disponibile e non in bozza perché la gran parte di chi lo chiama ci attiva poi
+/// un contratto, e dalla sezione 12 un immobile in bozza lo rifiuta
+/// (`property.not_lettable`, ADR-015). Che il default resti `draft` lo verifica
+/// `full_property_lifecycle`, che crea senza passare da qui.
 async fn create_property(app: &TestApp, token: &str, label: &str) -> String {
     let (status, created) = app
         .post_auth(
@@ -583,6 +588,7 @@ async fn create_property(app: &TestApp, token: &str, label: &str) -> String {
             serde_json::json!({
                 "label": label,
                 "property_type": "apartment",
+                "status": "available",
                 "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
             }),
         )
@@ -759,6 +765,326 @@ async fn add_tenant(app: &TestApp, token: &str, lease: &str, name: &str, email: 
         .post_auth(&format!("/api/v1/leases/{lease}/parties"), token, body)
         .await;
     assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+}
+
+/// Lo stato si può scegliere alla creazione, e il **default non si sposta**.
+///
+/// `R44`: il form non offriva lo stato, quindi si atterrava sempre in bozza, e lo
+/// stato si cambiava solo dal dialogo «Modifica» della scheda — che non è dove si
+/// va a cercarlo. Il campo è opzionale: chi non lo dice ottiene `draft` come
+/// prima, perché spostare il default nel dominio deciderebbe al posto di chi crea
+/// senza guardare.
+#[tokio::test]
+async fn a_property_can_be_born_available_and_stays_a_draft_when_nobody_says_otherwise() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "stato-alla-creazione").await;
+
+    let create = |body: serde_json::Value| app.post_auth("/api/v1/properties", &token, body);
+
+    let (status, implicit) = create(serde_json::json!({
+        "label": "Senza stato",
+        "property_type": "apartment",
+        "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {implicit}");
+    assert_eq!(
+        implicit["status"], "draft",
+        "il default del dominio non si sposta"
+    );
+
+    let (status, available) = create(serde_json::json!({
+        "label": "Disponibile da subito",
+        "property_type": "apartment",
+        "status": "available",
+        "address": { "street": "Via Roma 2", "city": "Milano", "province": "MI" }
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {available}");
+    assert_eq!(available["status"], "available");
+
+    // `archived` lo rifiuta `set_status`, che è lo stesso controllo del `PATCH`:
+    // archiviare ha l'operazione sua, e passa da `DELETE`.
+    let (status, problem) = create(serde_json::json!({
+        "label": "Nato archiviato",
+        "property_type": "apartment",
+        "status": "archived",
+        "address": { "street": "Via Roma 3", "city": "Milano", "province": "MI" }
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"],
+        "property.archive_requires_dedicated_operation"
+    );
+}
+
+/// **In bozza non si affitta**, e il rifiuto è all'attivazione.
+///
+/// `R44`: un immobile nasce in bozza e ci resta, e fino alla sezione 12 nessuna
+/// regola lo guardava — si poteva attivare un contratto su un immobile che nessuno
+/// aveva mai dichiarato disponibile, e il doppio badge mostrava «Affittato (Bozza)»
+/// per sempre. Il rifiuto sta su `ActivateLease` e non su `DraftLease`: una bozza
+/// di contratto su una bozza di immobile sono due cose che si preparano insieme
+/// (ADR-015).
+#[tokio::test]
+async fn a_draft_property_refuses_to_be_let_until_someone_declares_it_available() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "bozza-non-si-affitta").await;
+
+    // Creato senza passare dall'helper: qui la bozza è la premessa, non un caso.
+    let (status, created) = app
+        .post_auth(
+            "/api/v1/properties",
+            &token,
+            serde_json::json!({
+                "label": "Immobile mai dichiarato",
+                "property_type": "apartment",
+                "address": { "street": "Via Roma 1", "city": "Milano", "province": "MI" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    assert_eq!(created["status"], "draft", "il default non cambia");
+    let property = created["id"].as_str().expect("id").to_owned();
+
+    // La bozza di contratto resta possibile: è l'ordine di compilazione che non si
+    // vuole imporre.
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &lease, "Inquilina Pronta", None).await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.not_lettable");
+
+    // Dichiarato disponibile, la stessa chiamata passa: è l'unica cosa che
+    // mancava.
+    let (status, updated) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "available" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {updated}");
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    assert_eq!(activated["status"], "active");
+}
+
+/// **Con un contratto in essere non si torna in bozza**, e `maintenance` sì.
+///
+/// `R44`, la porta di servizio: la regola dell'attivazione non basta da sola. Se
+/// un `PATCH` accettasse `status: draft` su un immobile affittato, «Affittato
+/// (Bozza)» rientrerebbe dall'altra parte. `maintenance` resta ammesso di
+/// proposito: «In manutenzione (Affittato)» è un'anomalia vera, che il doppio
+/// badge della 5-ter esiste per mostrare.
+#[tokio::test]
+async fn a_property_with_a_lease_in_force_cannot_go_back_to_draft_but_can_go_to_maintenance() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "porta-di-servizio").await;
+    let property = create_property(&app, &token, "Immobile affittato").await;
+
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &lease, "Inquilina Presente", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (status, problem) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "draft" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.lease_in_force");
+
+    // `maintenance` passa: la domanda si fa **solo** quando si chiede la bozza.
+    let (status, updated) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "status": "maintenance" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {updated}");
+    assert_eq!(updated["status"], "maintenance");
+
+    // E un `PATCH` che non tocca lo stato nemmeno: non c'è nessuna domanda da
+    // fare, e farla renderebbe immodificabile un immobile affittato.
+    let (status, renamed) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            Some(serde_json::json!({ "label": "Immobile affittato, rinominato" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {renamed}");
+    assert_eq!(renamed["label"], "Immobile affittato, rinominato");
+}
+
+/// **Con un contratto in essere non si archivia**, e disdire è la via d'uscita.
+///
+/// `R45`: archiviare è un soft delete, e prima della sezione 12 portava via
+/// l'immobile lasciando il contratto attaccato a una riga che le risposte chiamano
+/// «Immobile archiviato» — con gli addebiti che continuavano a maturare e
+/// l'inquilino che non vedeva nulla di strano. Si rifiuta, **non si disdice**: un
+/// atto con una data e delle conseguenze non si nasconde dentro un'archiviazione.
+#[tokio::test]
+async fn a_property_with_a_lease_in_force_is_archived_only_after_the_lease_is_terminated() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "archivia-affittato").await;
+    let property = create_property(&app, &token, "Immobile da archiviare").await;
+
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+    add_tenant(&app, &token, &lease, "Inquilino Residente", None).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+
+    let (status, problem) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "property.lease_in_force");
+
+    // L'immobile è ancora là: il rifiuto non ha archiviato a metà.
+    let (status, still_there) = app
+        .send(
+            "GET",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {still_there}");
+
+    // E il contratto **non** è stato disdetto dall'archiviazione rifiutata.
+    let (status, lease_now) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {lease_now}");
+    assert_eq!(
+        lease_now["status"], "active",
+        "archiviare non disdice, nemmeno quando fallisce"
+    );
+
+    // Disdetto il contratto, la stessa chiamata archivia.
+    let (status, terminated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/terminate"),
+            &token,
+            serde_json::json!({ "reason": "Fine del rapporto" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {terminated}");
+
+    let (status, body) = app
+        .send(
+            "DELETE",
+            &format!("/api/v1/properties/{property}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "corpo: {body}");
+
+    // E fuori dall'elenco, che è ciò che archiviare significa.
+    let (status, page) = app
+        .send("GET", "/api/v1/properties", Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let visible: Vec<&str> = page["items"]
+        .as_array()
+        .expect("elenco")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert!(!visible.contains(&property.as_str()), "corpo: {page}");
+}
+
+/// L'immobile si legge **prima** delle parti, e il messaggio è la ragione.
+///
+/// Un contratto senza inquilino su un immobile in bozza è sbagliato due volte. Se
+/// rispondesse `lease.without_tenant_party`, chi lo legge aggiungerebbe una parte
+/// per poi ricevere `property.not_lettable` al secondo tentativo: due giri per
+/// arrivare alla cosa da fare. Per il database l'ordine non conta — è tutto in una
+/// transazione — per chi legge la risposta sì.
+#[tokio::test]
+async fn a_draft_property_is_refused_before_the_parties_are_even_looked_at() {
+    let app = require_app!();
+    let (token, _org) = common::register_and_login(&app, "ordine-dei-rifiuti").await;
+
+    let (status, created) = app
+        .post_auth(
+            "/api/v1/properties",
+            &token,
+            serde_json::json!({
+                "label": "Immobile in bozza",
+                "property_type": "apartment",
+                "address": { "street": "Via Roma 2", "city": "Milano", "province": "MI" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {created}");
+    let property = created["id"].as_str().expect("id").to_owned();
+
+    // Nessuna parte: senza la lettura dell'immobile il rifiuto sarebbe quello
+    // dell'inquilino mancante.
+    let lease = draft_lease(&app, &token, &property, None, 0, Some(365)).await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &token,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(
+        problem["code"], "property.not_lettable",
+        "l'immobile va letto prima delle parti, o il rifiuto manda a sistemare \
+         la cosa sbagliata"
+    );
 }
 
 #[tokio::test]
@@ -1513,7 +1839,11 @@ async fn a_property_is_partially_rented_when_one_of_its_rooms_is() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "corpo: {detail}");
-    assert_eq!(detail["status"], "draft", "lo stato dichiarato non cambia");
+    assert_eq!(
+        detail["status"], "available",
+        "lo stato dichiarato non cambia: l'attivazione muove il derivato, e \
+         `available` è quello con cui l'immobile è nato"
+    );
     assert_eq!(
         detail["effective_status"], "partially_rented",
         "corpo: {detail}"
@@ -5530,6 +5860,130 @@ async fn charge_with_a_real_tenant(app: &TestApp, label: &str) -> (String, Strin
     let charge_id = charge["id"].as_str().expect("id").to_owned();
 
     (owner, owner_org, tenant, charge_id)
+}
+
+/// **Un incasso non attribuito non fa più leggere un residuo falso.**
+///
+/// `R29`, misurata: il proprietario registra `150,00` su un addebito da `420,00`
+/// **senza** `payer_user_id` — il bonifico da un conto che non si sa a chi
+/// ricondurre, che è deliberato — e prima della `0042` l'inquilino leggeva sulla
+/// stessa riga `status: partially_paid` con `paid_amount: 0.00` e
+/// `outstanding_amount: 420.00`. Pagherebbe due volte.
+///
+/// La causa è a due piani: `payments_select` nasconde il pagamento non
+/// attribuito, e `v_charge_balances` è `security_invoker`, quindi la somma
+/// scendeva con la Row Level Security di chi legge. `app.charge_paid_amount`
+/// somma oltre la policy e proietta il **solo totale** (ADR-055): l'elenco dei
+/// pagamenti continua a non mostrargli quella riga, e il saldo dice il vero.
+#[tokio::test]
+async fn an_unattributed_payment_still_counts_in_the_balance_the_tenant_reads() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "incasso-anonimo").await;
+    let property = create_property(&app, &owner, "Immobile con bonifico anonimo").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+
+    let email = common::unique_email("incasso-anonimo-inquilino");
+    add_tenant(&app, &owner, &lease, "Inquilina Pagante", Some(&email)).await;
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    let (_, accept_token) = invite_tenant(&app, &owner, &lease, &email).await;
+    let (tenant, _tenant_id) = common::register_tenant_from_invitation(
+        &app,
+        &accept_token,
+        "Inquilina Pagante",
+        "cavallo batteria graffetta",
+    )
+    .await;
+
+    let (status, charge) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/charges"),
+            &owner,
+            serde_json::json!({
+                "charge_type": "rent",
+                "amount": "420.00",
+                "due_date": day(15),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {charge}");
+    let charge = charge["id"].as_str().expect("id").to_owned();
+
+    // **Senza `payer_user_id`**: è la premessa del caso, non una dimenticanza.
+    let (status, payment) = app
+        .post_idempotent(
+            &format!("/api/v1/charges/{charge}/payments"),
+            &owner,
+            None,
+            Some(&idempotency_key("bonifico-anonimo")),
+            serde_json::json!({ "amount": "150.00", "method": "bank_transfer" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {payment}");
+
+    let (status, seen) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {seen}");
+    assert_eq!(seen["amount"], "420.00");
+    assert_eq!(
+        seen["paid_amount"], "150.00",
+        "il totale incassato si somma oltre la RLS di chi legge: {seen}"
+    );
+    assert_eq!(
+        seen["outstanding_amount"], "270.00",
+        "il residuo che chi abita legge non deve mentire: {seen}"
+    );
+    assert_eq!(
+        seen["status"], "partially_paid",
+        "lo stato e il saldo devono dire la stessa cosa: {seen}"
+    );
+
+    // **E il perimetro non si è allargato.** La funzione proietta un aggregato:
+    // l'elenco dei pagamenti continua a non mostrargli la riga che non è sua, e
+    // chi ha pagato resta ignoto.
+    let (status, page) = app
+        .send_in_org(
+            "GET",
+            &format!("/api/v1/charges/{charge}/payments"),
+            Some(&tenant),
+            Some(&owner_org),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {page}");
+    assert_eq!(
+        page["items"].as_array().expect("items").len(),
+        0,
+        "`payments_select` non si tocca: il pagamento non attribuito resta \
+         invisibile a chi non lo ha fatto — {page}"
+    );
+
+    // Il proprietario, che le righe le vede tutte, legge lo stesso saldo: la
+    // funzione somma lo stesso denaro per entrambi.
+    let (status, owner_view) = app
+        .send(
+            "GET",
+            &format!("/api/v1/charges/{charge}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {owner_view}");
+    assert_eq!(owner_view["paid_amount"], "150.00");
+    assert_eq!(owner_view["outstanding_amount"], "270.00");
 }
 
 fn idempotency_key(label: &str) -> String {
