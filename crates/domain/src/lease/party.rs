@@ -234,6 +234,31 @@ impl LeaseParty {
         Ok(())
     }
 
+    /// La parte esce dal contratto: è il lato «chi esce» del subentro (ADR-056).
+    ///
+    /// `today` e non una data a scelta: chi legge `left_at` —
+    /// `app.has_lease_in_force`, `app.property_residents`,
+    /// [`Self::ensure_tenancy_complete`] — guarda **se c'è** e non che data porta,
+    /// quindi una data futura farebbe uscire la persona da subito dicendo il
+    /// contrario. `lease_parties_dates_ck` (`left_at >= joined_at`) è rispettato per
+    /// costruzione: `joined_at` lo scrive [`Self::link_user`] con la data dello
+    /// stesso orologio, che non può essere dopo oggi.
+    ///
+    /// **Toglie l'intestazione, e dice se c'era.** Chi è uscito non intesta niente,
+    /// e `lease_parties_primary_uk` non guarda `left_at`: l'intestazione passa a chi
+    /// entra, e questa riga va scritta **prima** della sua, o per un istante gli
+    /// intestatari sono due. Restituirla qui tiene l'ordine in un posto solo.
+    pub fn leave(&mut self, today: NaiveDate, now: DateTime<Utc>) -> DomainResult<bool> {
+        if self.left_at.is_some() {
+            return Err(DomainError::Invariant(Invariant::LeasePartyAlreadyLeft));
+        }
+        let was_primary = self.is_primary;
+        self.left_at = Some(today);
+        self.is_primary = false;
+        self.updated_at = now;
+        Ok(was_primary)
+    }
+
     /// Le quote di chi abita devono coprire il canone per intero, e ci deve essere
     /// almeno un inquilino.
     ///

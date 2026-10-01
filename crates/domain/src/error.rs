@@ -240,6 +240,18 @@ pub enum Invariant {
     LeaseTenantWithoutShare,
     #[error("Parties can only be added while the lease is a draft or awaiting signature")]
     LeasePartiesLocked,
+    /// Il subentro esce da un rapporto che continua: in bozza e in firma si
+    /// aggiungono parti, e su un contratto finito o non ancora cominciato non c'è
+    /// nessuno che esca. Lo stesso codice delle altre transizioni (ADR-056).
+    #[error("A handover needs a lease in force today")]
+    LeaseNotHandoverable,
+    #[error("This party has already left the lease")]
+    LeasePartyAlreadyLeft,
+    /// Uscite comprese: l'accettazione di un invito cerca la parte per email senza
+    /// guardare `left_at`, e con due righe con la stessa email collegherebbe la
+    /// persona alla prima trovata.
+    #[error("A party of this lease already has this email")]
+    LeasePartyEmailTaken,
 
     #[error("The invitation has already been accepted")]
     InvitationAlreadyAccepted,
@@ -397,9 +409,10 @@ impl Invariant {
             Self::PropertyNotLettable => "property.not_lettable",
             Self::PropertyHasLeaseInForce => "property.lease_in_force",
             Self::RoomArchived => "room.archived",
-            Self::LeaseNotActivatable | Self::LeaseNotTerminable | Self::LeaseNotCancellable => {
-                "lease.invalid_transition"
-            }
+            Self::LeaseNotActivatable
+            | Self::LeaseNotTerminable
+            | Self::LeaseNotCancellable
+            | Self::LeaseNotHandoverable => "lease.invalid_transition",
             Self::LeasePartyAlreadyLinked => "lease.party_already_linked",
             Self::LeasePartyEmailLocked => "lease.party_email_locked",
             Self::LeasePartyHasUser => "lease.party_has_user",
@@ -407,6 +420,8 @@ impl Invariant {
             Self::LeaseSharesNotHundred { .. } => "lease.shares_not_hundred",
             Self::LeaseTenantWithoutShare => "lease.tenant_without_share",
             Self::LeasePartiesLocked => "lease.parties_locked",
+            Self::LeasePartyAlreadyLeft => "lease.party_already_left",
+            Self::LeasePartyEmailTaken => "lease.party_email_taken",
             Self::InvitationAlreadyAccepted | Self::AcceptedInvitationCannotBeRevoked => {
                 "invitation.already_accepted"
             }
