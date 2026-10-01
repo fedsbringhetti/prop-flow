@@ -782,11 +782,13 @@ export const it = {
     revoke: 'Revoca',
     revoked: 'Invito revocato.',
     created: 'Invito creato.',
-    /** Niente bugie nell'interfaccia: `Notifier` non ha un adattatore, quindi
-     *  nessuna email parte e il token lo consegna il proprietario. */
+    /** Niente bugie nell'interfaccia, in nessuna delle due direzioni. Fino alla
+     *  5-quater `Notifier` non aveva un adattatore e la frase diceva che nessuna
+     *  email partiva; da allora parte, ma **dopo il commit e senza garanzie**, quindi
+     *  il codice resta qui ed è la copia su cui contare. */
     tokenTitle: 'Consegna tu questo invito',
     tokenExplain:
-      'L’invio automatico delle email non è ancora attivo: copia questo codice e mandalo tu, come preferisci. Vale sette giorni e si vede una volta sola.',
+      'L’invito è partito anche per email, ma può non arrivare: se non arriva, copia questo codice e mandalo tu, come preferisci. Vale sette giorni e si vede una volta sola.',
     tokenLabel: 'Codice d’invito',
     /** Dove il codice si usa. Senza questa riga il proprietario ha in mano una
      *  credenziale e nessun posto a cui mandare chi la riceve. */

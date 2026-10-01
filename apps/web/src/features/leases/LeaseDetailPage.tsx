@@ -909,9 +909,12 @@ function AddPartyDialog({ leaseId, parties }: { leaseId: string; parties: LeaseP
 /**
  * L'invito, e il token consegnato per quello che è.
  *
- * `Notifier` è una porta senza adattatore: **nessuna email parte**. Una schermata
- * che dicesse «invito inviato» sarebbe una bugia nell'interfaccia, quindi il token
- * si mostra e si dice che va consegnato a mano. È brutto ed è la verità.
+ * L'email parte **dopo il commit e best-effort**: se il relay non risponde l'invito
+ * vale lo stesso, e il token mostrato qui è l'unica copia su cui contare. Una
+ * schermata che dicesse soltanto «invito inviato» sarebbe una bugia a metà, quindi il
+ * token si mostra e si dice che, se l'email non arriva, va consegnato a mano. Fino
+ * alla 5-quater nessuna email partiva e questo commento lo diceva; il subentro, che
+ * mostra lo stesso codice, ha reso visibile che era rimasto indietro.
  *
  * Il token è una **credenziale**: si mostra una volta, non si conserva, e non
  * finisce in nessun log — ecco perché non passa da nessuna cache di query.
