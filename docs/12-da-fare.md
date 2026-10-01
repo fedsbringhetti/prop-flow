@@ -1,9 +1,9 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Nove voci aperte**, una delle quali rinviata con la sua ragione (`R40`), con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Dodici voci aperte**, una delle quali rinviata con la sua ragione (`R40`), con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
-Trentadue sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
+Trentatré sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
 [sezione 2](11-piani-conclusi.md#esito-sezione-2); `R12`, `R13`, `R14`, `R17` e `R18` con
 la [sezione 3](11-piani-conclusi.md#esito-sezione-3); `R1`, `R11` e `R25` con la
@@ -16,7 +16,8 @@ e `R34` con la [sezione 5-ter](11-piani-conclusi.md#esito-sezione-5-ter); `R7`, 
 [sezione 9](11-piani-conclusi.md#esito-sezione-9); `R50`, `R51` e `R46` con la
 [sezione 10](11-piani-conclusi.md#esito-sezione-10); `R36`, `R26`, `R49`, `R52`, `R41` e
 `R27` con la [sezione 11](11-piani-conclusi.md#esito-sezione-11); `R44`, `R45` e `R29`
-con la [sezione 12](11-piani-conclusi.md#esito-sezione-12). Sono entrate
+con la [sezione 12](11-piani-conclusi.md#esito-sezione-12); `R28` con la
+[sezione 13](11-piani-conclusi.md#esito-sezione-13). Sono entrate
 `R26`, `R27`, `R28` e `R29`, poi `R30`–`R35` dal collaudo, e infine `R36` **eseguendo** la
 5-ter, `R37` **rivedendo** il piano della 5-quater contro il codice e `R38` **verificandone
 le premesse** prima di pianificare la sezione 6, con `R39` e `R40` uscite dalla stessa
@@ -32,7 +33,10 @@ per il costo, e ciò che vedeva lo si cerca da sé; `R50` e `R51` dal **giro a m
 8**, fatto come primo passo della 9 ([poscritto](11-piani-conclusi.md#poscritto-sezione-8));
 `R52` **eseguendo** la 10 e `R53` **eseguendo** la 11, entrambe viste di fianco a ciò che
 si stava sistemando; `R54` dal **giro a mano della 12**, che è tornato a essere il modo in
-cui si trovano le cose — l'ha scoperta l'ora in cui il giro è stato fatto.
+cui si trovano le cose — l'ha scoperta l'ora in cui il giro è stato fatto; `R55`, `R56` e `R57`
+**eseguendo** la 13, come ciò che il subentro ha deciso di non fare — le stesse due strade
+di `R39` e `R40`, che uscirono dalla pianificazione della 6. E `R58` **pianificando** la 14,
+riverificando una premessa di ADR-054 che risultava falsa.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -199,11 +203,24 @@ sezione è il primo client che legge un nome da `app.users`
 | R53 | aperta | **Cambiare organizzazione dal selettore non svuota la cache delle query**: la schermata resta sui dati di quella lasciata | Vista **eseguendo la sezione 11**, leggendo `app/query.tsx` per `R49`. Le chiavi in `keys` non portano l'organizzazione attiva — `['dashboard']`, `['charges', filtri]` — e `QueryProvider` svuota la cache solo quando la sessione cade (`store.current === null`), non quando `selectOrganization` cambia `X-Org-Id`. Chi ha due organizzazioni — un inquilino con due case, chi è proprietario di una e inquilino in un'altra — sceglie la seconda dal menù e la schermata aperta **resta su quella di prima**: nessuna rilettura parte finché la stessa query resta montata, perché `staleTime` conta solo a un nuovo montaggio, e navigando altrove le chiavi già in cache rispondono con i dati vecchi per trenta secondi. È un `200` con i dati sbagliati, la forma peggiore di sbagliare, e la stessa che la regola 24 esiste per impedire. Due vie, da decidere: **le chiavi portano l'organizzazione** (`keys.charges(org, filtri)`), che è la forma giusta di React Query ma tocca ogni `useQuery` e ogni invalidazione; oppure **`queryClient.clear()` al cambio**, come al logout, che è una riga in `QueryProvider` e costa una rilettura di tutto — accettabile, perché cambiare organizzazione è un evento raro e cambia davvero tutto. Nel primo mese c'è un proprietario con un'organizzazione: non si presenta, ma è dentro il collaudo di [13](13-collaudo.md) appena una persona ha due ruoli |
 | R42 | aperta | **La sessione non scade mai davvero, e non lo si è mai scelto.** Si vuole un «Ricordami per 30 giorni» | Trovata **controllando la sessione** dopo la sezione 6, non usando il prodotto: una scheda lasciata aperta un giorno con l'API spenta è rientrata da sé, ed è corretto — a tenerla dentro era il cookie del refresh. Controllando *perché*, è uscito che la finestra dei 30 giorni è **scorrevole**: `RefreshSession::issue` in `crates/application/src/use_cases/auth/refresh.rs` costruisce il successore con `expires_at = now + lifetime`, quindi i trenta giorni contano dall'**ultimo uso** e non dal login. Chi apre il prodotto una volta al mese resta dentro per sempre. Non è un difetto — è la forma comune — ma **non risulta scelto**, e [04](04-sicurezza.md) diceva «vita: 30 giorni», che si legge come un tetto: la descrizione è stata corretta, la decisione resta da prendere. **La decisione di prodotto c'è ed è questa: un «Ricordami per 30 giorni» al login, esplicito, e senza la spunta una sessione che finisce con il browser.** Quel che si sa già del lavoro: la durata è **già per riga** — `app.user_sessions.expires_at` — quindi **nessuna migration**; a essere globale è `RefreshTokenFactory::lifetime()`, che il caso d'uso del login dovrà ricevere come parametro invece di leggere dalla configurazione. Il cookie oggi porta **sempre** `Max-Age`, calcolato dalla vita residua del token (`session_reply` in `crates/api/src/routes/auth.rs`): senza la spunta va **omesso**, che è ciò che lo rende un cookie di sessione e lo fa morire con il browser. Servono un campo nel corpo del login, una casella nel form e una stringa nel catalogo. **La trappola è la rotazione**: se la finestra continua a scorrere, il bottone dice «30 giorni» e significa «per sempre» — cioè l'etichetta mente. Scegliere quella spunta implica quindi che il successore **non** superi la scadenza di chi lo precede, ed è la riga che si dimentica, perché oggi il codice fa il contrario e sembra giusto. Da decidere solo il resto: se il rinnovo silenzioso del `refresh` debba comportarsi allo stesso modo per entrambi i casi, e se serva anche un tetto assoluto per chi la spunta ce l'ha. **ADR prima del codice**: è una decisione sulla sicurezza, e cambia una proprietà che [04](04-sicurezza.md) descrive |
 
-### Contratti: quel che la sezione 3 ha lasciato aperto
+### La membership, un ramo ancora cieco
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
-| R28 | aperta | **Il subentro: cambiare la composizione di un contratto attivo** | Nato dalla [sezione 3](11-piani-conclusi.md#esito-sezione-3), che ha chiuso la porta da cui si entrava per sbaglio: aggiungere una parte a un contratto attivo era ammesso e faceva smettere le quote di sommare a 100, quindi ora si rifiuta con `lease.parties_locked` ([ADR-046](08-decisioni.md#adr-046)). Il caso legittimo dietro resta: **un coinquilino che subentra a metà contratto**. Non è un'aggiunta — è un cambio di composizione che deve tenere la somma a 100, cioè **due righe che cambiano insieme**, e nessuna richiesta lo permette: `PATCH /lease-parties/{id}` ne tocca una sola, e in mezzo si passa da uno stato che l'attivazione rifiuterebbe. Da decidere la forma: una richiesta che porta **tutte** le parti insieme e le sostituisce, oppure una transizione dedicata («esce X, entra Y, con queste quote»). La seconda dice anche *quando*, che è ciò che serve agli addebiti. Legata a `left_at`, che il modello ha e nessuno scrive |
+| R58 | aperta | **Chi esce dall'organizzazione, o ne viene tolto, continua a raggiungere i gruppi di spesa per i minuti del suo token** | Trovata **pianificando la sezione 14**, verificando che cosa perde una persona tolta (`R39`). **Verificato**: `app.can_access_expense_group` (`0014`, mai ridefinita) risponde vero per lo staff **oppure** per chi ha una riga in `expense_group_members` con `left_at` nullo, e **non guarda `org_members`** — è la forma dei due rami che [ADR-054](08-decisioni.md#adr-054) ha chiuso con la `0041` su contratti e immobili, e ADR-054 scrive che un altro ramo cieco «oggi non c'è». Le policy delle spese (`0014:313-353`) chiedono anche `org_id = app.current_org_id()`, e uscire da un'organizzazione non tocca il gruppo. **Dedotto e non provato**: la finestra è quella dei quindici minuti dell'access token, come in ADR-054 — dopo, `X-Org-Id` riletto contro la membership risponde `403` — e in quella finestra chi è uscito legge **e scrive** spese (`expenses_insert` passa dalla stessa funzione). Il rimedio ha la forma della `0041`: `AND app.is_org_member(g.org_id)` nel secondo ramo, con un `CREATE OR REPLACE` e la stessa firma. Il piano della 14 propone di farla entrare, perché togliere qualcuno la rende un gesto normale; la decisione è aperta |
+
+### Contratti: quel che il subentro ha lasciato fuori
+
+`R28` è uscita con la [sezione 13](11-piani-conclusi.md#esito-sezione-13) e
+[ADR-056](08-decisioni.md#adr-056). Le tre voci qui sotto sono ciò che quella sezione ha
+deciso di **non** fare, con la ragione scritta nel suo piano: nessuna è un difetto di ciò
+che c'è, tutte sono casi veri che oggi non hanno una via.
+
+| # | Stato | Cosa | Quel che si sa già |
+|---|---|---|---|
+| R55 | aperta | **Uscire da un contratto senza che nessuno entri**: il coinquilino se ne va, e chi resta si divide la sua quota | Nata **eseguendo la sezione 13**. Il subentro (`POST /leases/{id}/handover`) chiede sempre chi entra — `joining` è obbligatorio — perché il bottone che lo offre è «esce X, entra Y». Il caso «esce X e basta» è frequente in co-living e oggi **non ha una via**: la parte non si toglie se ha un utente (`lease.party_has_user`), `left_at` non si corregge dal `PATCH`, e una parte nuova su un contratto attivo è rifiutata. **La forma è quasi pronta**: il dominio calcola già le quote di chi resta (`Lease::hand_over`, `shares`), e la riverifica finale regge lo stesso; mancherebbe un `joining` opzionale, e con esso la domanda su chi eredita l'intestazione quando esce l'intestatario e non entra nessuno. È una decisione, non una riga: senza intestatario un contratto attivo è lo stato in cui la sezione 3 trovò i contratti rotti |
+| R56 | aperta | **Un contratto firmato e non ancora cominciato non cambia composizione** | Nata **eseguendo la sezione 13**. Il subentro chiede un contratto **in essere oggi** (`Lease::ensure_open_to_handover`), e da attivo le parti non si aggiungono (ADR-046); `cancel` ammette solo bozza e in firma. Se qualcuno si ritira fra la firma e l'ingresso, oggi resta la disdetta e un contratto nuovo. Il caso è raro — la finestra fra firma e inizio è di solito breve — ed è il motivo per cui non è entrato: aprire il subentro ai contratti non cominciati vorrebbe dire una data d'uscita **prima** di `start_date`, cioè una semantica di `left_at` che ADR-056 non ha |
+| R57 | aperta | **Un subentro non si annulla** | Nata **eseguendo la sezione 13**. L'uscita di chi esce non si disfa dal prodotto: `left_at` non è nel `PATCH` (`CorrectLeasePartyRequest` lo esclude per esplicito) e nessuna rotta lo riporta a nullo. Metà del rimedio c'è già — la parte di chi entra, finché non ha un utente, si toglie con `DELETE /lease-parties/{id}` e l'invito si revoca — ma la persona sbagliata fatta uscire resta fuori. La conferma del dialogo nomina chi esce e chi entra e dice che non si annulla, che è la difesa scelta; se il mese con un proprietario vero mostrasse che serve, è una rotta nuova e una decisione su chi può farlo e fino a quando |
 
 ### Il perimetro dei ruoli
 

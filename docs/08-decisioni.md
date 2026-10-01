@@ -3640,6 +3640,12 @@ alla membership; oggi non ce n'è.
 - il rientro ([ADR-051](#adr-051)) non cambia: riattivata la membership, la parte del
   contratto torna a valere.
 
+**Nota del 1° ottobre 2026.** L'alternativa scartata qui sopra si chiude con «oggi non ce
+n'è», riferito a un altro ramo cieco alla membership. **Ce n'è uno**: il secondo ramo di
+`app.can_access_expense_group` (`0014`) guarda `expense_group_members` e non
+`org_members`, trovato pianificando la sezione 14. È `R58` in [12](12-da-fare.md); la
+decisione di questo ADR non cambia, e il rimedio avrebbe la sua stessa forma.
+
 
 ---
 

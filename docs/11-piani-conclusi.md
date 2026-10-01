@@ -13468,6 +13468,728 @@ sezione cambia nell'interfaccia.
   sezioni 13-16 — dove metterla è una decisione da prendere.
 
 
+<a id="piano-sezione-13"></a>
+
+## Piano — Sezione 13: il subentro
+
+> **Eseguito dal 28 settembre al 1° ottobre 2026**, nella forma dell'[emendamento](#emendamento-sezione-13)
+> scritto quel giorno prima del codice. Il piano resta sotto com'è stato scritto — anche
+> dove l'esecuzione l'ha smentito, che è la parte più utile da rileggere; ciò che ha
+> confermato, corretto e trovato è nell'[esito](#esito-sezione-13).
+
+Pianificata il **22 settembre 2026**, nello stesso giro dell'esito della
+[12](#esito-sezione-12), com'è la regola. Chiude `R28`: **cambiare la
+composizione di un contratto attivo**, cioè «esce X, entra Y, con queste quote».
+
+È da sola perché è il pezzo di dominio più grande rimasto e tocca l'invariante delle quote
+che [ADR-046](08-decisioni.md#adr-046) ha appena chiuso: è la **sola via legittima** per
+aggiungere una parte a un contratto attivo, e deve esserlo senza riaprire la porta che
+quell'ADR ha sbarrato. **Una rotta nuova** (è il primo caso da parecchie sezioni in cui ne
+serve davvero una), un ADR prima del codice, **nessuna migration** — e il perché della
+migration mancante è una delle decisioni, non una dimenticanza.
+
+> **Emendato il 28 settembre 2026, prima del codice**, con chi possiede il progetto: la
+> forma è cambiata — un bottone «Subentro» che fa uscire X **oggi** e invita Y al suo posto —
+> ed è entrata una porta che il piano non aveva visto, l'invito su un contratto attivo.
+> **Si esegue l'[emendamento](#emendamento-sezione-13)**; il testo qui sotto resta com'era
+> perché le vie scartate, e il loro perché, sono la parte che serve rileggere.
+
+**Si esegue in una sola conversazione**, senza agenti. Ogni test nuovo provato al
+contrario prima di consegnarlo, con l'asserzione caduta scritta nell'esito. I test con il
+database solo con `./ops/ci/test-integration.sh`, che non ha un filtro: le prove al
+contrario si combinano in un giro.
+
+### Che cosa esiste davvero, verificato contro il codice il 22 settembre 2026
+
+| Premessa | Verifica |
+|---|---|
+| A un contratto attivo **non** si aggiungono parti | vero: `AddLeaseParty` chiama `lease.ensure_accepts_parties()` (`use_cases/lease/add_party.rs:61`), che ammette solo `Draft` e `PendingSignature` e altrimenti solleva `Invariant::LeasePartiesLocked` (`domain/src/lease/aggregate.rs:229-237`) |
+| `PATCH /lease-parties/{id}` tocca **una** riga e non ricontrolla la somma | vero, e deliberato: `LeaseParty::correct` (`domain/src/lease/party.rs:164-215`) non guarda le altre parti; il suo commento lo dice e ADR-046 lo motiva — per portare `100 / 0` a `50 / 50` si passa da uno stato intermedio |
+| `DELETE /lease-parties/{id}` non serve a far uscire nessuno | vero: `LeaseParty::remove` (`party.rs:225-236`) rifiuta con `Invariant::LeasePartyHasUser` se la parte ha un utente collegato, e il suo commento nomina già `left_at` come «la cosa che non è questa» |
+| `left_at` c'è dappertutto e **nessuno lo scrive** | vero, in cinque punti: colonna `app.lease_parties.left_at` (`0005:94`), nel `GRANT UPDATE` per colonna a `propflow_app` (`0019:67-69`), letto e riscritto dal repository (`db/repositories/lease_party.rs:87` e `:119`), esposto in lettura dall'API (`routes/leases.rs:467`, `:483`) e nel tipo del client (`api/types.ts:296`). **Nessun caso d'uso lo valorizza**, e `CorrectLeasePartyRequest` lo esclude per esplicito (`routes/leases.rs:265-266`) |
+| L'invariante delle quote **sa già** di chi è uscito | vero: `ensure_tenancy_complete` filtra `party.left_at.is_none()` (`party.rs:247`), pretende almeno un inquilino e rifiuta una quota a zero |
+| E lo sanno anche le due aritmetiche della quota residua | vero e **già allineate**: `remaining_share` del server (`use_cases/invitation/invite_tenant.rs:205-212`) e `assignedShare` del client (`features/leases/shares.ts:22-27`) filtrano entrambe `left_at` |
+| `share_percent` **non ripartisce nessun addebito** | vero, ed è la premessa che cambia la dimensione della sezione: `grep -rn share_percent crates/application/src/use_cases/` dà due soli punti, `add_party.rs` e `invite_tenant.rs`. Gli addebiti stanno sul **contratto** (`IssueCharge` prende un `lease_id`), non sulla parte: la quota è dichiarativa e serve solo all'attivazione |
+| Chi esce sparisce da «in essere» e dai residenti | vero: `app.has_lease_in_force` filtra `lp.left_at IS NULL` (`0039:79`) e `app.property_residents` pure (`0030`). Scrivere `left_at` fa quindi due cose da sé: la persona può uscire dall'organizzazione (`R16`, sezione 6) e sparisce dall'elenco dei residenti |
+| **`app.can_access_lease` invece `left_at` non lo guarda** | vero, ed è la scoperta che decide la sezione: il ramo dell'inquilino chiede `lp.user_id = app.current_user_id() AND lp.deleted_at IS NULL` più `app.is_org_member` (`0041:54-76`). Chi esce da un contratto **continua a leggerlo** finché resta membro dell'organizzazione |
+| `lease_parties_primary_uk` non esclude chi è uscito | vero: `UNIQUE (lease_id) WHERE is_primary AND deleted_at IS NULL` (`0005:103-104`). Se esce l'intestatario principale ed entra il suo, per un istante sono due |
+| `lease_parties_lease_user_uk` nemmeno | vero: `UNIQUE (lease_id, user_id) WHERE user_id IS NOT NULL AND deleted_at IS NULL` (`0005:100-101`). La stessa persona non può avere due righe sullo stesso contratto, nemmeno se la prima è chiusa |
+| C'è un `CHECK` sulle date, e oggi è quasi sempre vuoto | vero: `lease_parties_dates_ck CHECK (left_at IS NULL OR joined_at IS NULL OR left_at >= joined_at)` (`0005:98`); `joined_at` lo scrive **solo** `link_user` (`party.rs:135`), cioè l'accettazione dell'invito. Una parte mai accettata ha `joined_at` nullo e il `CHECK` non dice niente |
+| Gli eventi delle parti esistono, e sono eventi **del contratto** | vero: `LeasePartyAdded`, `LeasePartyCorrected`, `LeasePartyRemoved` (`domain/src/events/mod.rs:125-127`), con `aggregate_type` del contratto (`:224-231`) |
+| Il client mostra tutte le parti e **non dice chi è uscito** | vero: `LeaseDetailPage.tsx:188-210`, la tabella stampa nome, ruolo, email e quota per ogni riga di `data.parties`, senza guardare `left_at` |
+| I verbi del contratto sono `POST /leases/{id}/<verbo>` | vero: `activate`, `terminate`, `cancel` (`routes/leases.rs:35-44`), la forma di [ADR-042](08-decisioni.md#adr-042) |
+| I test sono 486 Rust e 150 del client | vero, esito della 12 e `just ci` |
+
+### Decisioni prese, con il perché
+
+> **Emendate il 28 settembre.** Restano intatte la transizione dedicata, la riverifica alla
+> fine, il rifiuto di passare da `AddLeaseParty`, `can_access_lease` non toccata, gli addebiti
+> che non si spostano, l'evento dedicato. Cambiano **la data** (oggi, non un campo), **il
+> corpo** (chi entra è obbligatorio e riceve l'invito), **l'intestazione** (passa a chi entra)
+> e **la conferma**: vedi l'[emendamento](#emendamento-sezione-13).
+
+- **Una transizione dedicata, non una richiesta che sostituisce tutte le parti.** La voce
+  registrava le due vie e questo piano sceglie la seconda, per tre ragioni. *Primo*: dice
+  **quando**, e la data è l'unica cosa che `left_at` chiede e che una sostituzione
+  massiva non porta. *Secondo*: una `PUT /leases/{id}/parties` che accetti un elenco
+  intero riaprirebbe in silenzio ciò che [ADR-046](08-decisioni.md#adr-046) ha chiuso —
+  aggiungere una parte a un contratto attivo — perché il suo corpo *è* un'aggiunta
+  travestita da sostituzione, e non ci sarebbe più un punto in cui dire di no. *Terzo*: la
+  transizione ha un nome, e un nome si può rifiutare, tracciare e raccontare nella
+  conferma; una `PUT` è muta;
+- **Una rotta sola: `POST /api/v1/leases/{id}/handover`.** Lo stesso verbo di `activate` e
+  `terminate`, in inglese come tutte. Il corpo porta **tutto ciò che deve cambiare
+  insieme**: chi esce, chi entra, da quando, e le quote di tutti dopo. Una bozza:
+
+  ```json
+  {
+    "effective_date": "2026-11-01",
+    "leaving_party_id": "…",
+    "joining": { "full_name": "…", "email": "…", "role": "cotenant", "share_percent": "50.00" },
+    "shares": [ { "party_id": "…", "share_percent": "50.00" } ]
+  }
+  ```
+
+  `shares` **non è opzionale quando serve**: se dopo l'uscita le quote non sommano a 100 e
+  nessuno le riassegna, il contratto resta attivo con un'invariante violata, che è
+  esattamente il danno di ADR-046. Chi entra può anche mancare — «esce X e basta» è un
+  caso vero, con le quote ridistribuite fra chi resta;
+- **L'invariante si riverifica alla fine della transizione, e solo lì.** `ensure_tenancy_complete`
+  sullo stato finale, dentro la stessa unità di lavoro. È la differenza con il `PATCH`:
+  là lo stato intermedio è legittimo e nessuno può controllare, qui lo stato intermedio
+  **non esiste** — una richiesta sola, una transazione sola. Il rifiuto è
+  `Invariant::LeaseSharesNotHundred` o `LeaseWithoutTenantParty`, che esistono già e hanno
+  già i loro codici;
+- **Il caso d'uso costruisce la parte nuova da sé e non passa da `AddLeaseParty`.** Quello
+  chiama `ensure_accepts_parties`, che rifiuta su un contratto attivo — ed è giusto che
+  continui a rifiutare. La regola di ADR-046 non si allenta: resta vero che *aggiungere*
+  una parte a un contratto attivo è vietato, e il subentro non è un'aggiunta;
+- **`can_access_lease` non si tocca, e quindi non c'è nessuna migration.** È la decisione
+  che costa di più e va detta per esteso. La tentazione è aggiungere `AND lp.left_at IS
+  NULL` al ramo dell'inquilino, come [ADR-054](08-decisioni.md#adr-054) ha aggiunto
+  `is_org_member`. **Non si fa**: chi esce da un contratto a metà **ha ancora degli
+  addebiti da pagare**, e togliergli la lettura del contratto gli toglierebbe la pagina da
+  cui li vede. Uscire da un contratto non è uscire dall'organizzazione. La risposta, in
+  una riga: **si smette di essere residente, non si smette di essere debitore** — e le due
+  cose sono già distinte nello schema, perché `has_lease_in_force` e `property_residents`
+  filtrano `left_at` e `can_access_lease` no. Va scritta in un ADR perché *sembra* una
+  dimenticanza e non lo è;
+- **Se esce l'intestatario principale, il suo posto si assegna nella stessa richiesta.**
+  Il corpo porta `is_primary` dentro `shares` o su `joining`; se chi esce era `is_primary`
+  e nessuno lo diventa, si rifiuta. Un contratto attivo senza intestatario non è uno stato
+  che qualcuno sappia nominare, ed è quello in cui la sezione 3 aveva trovato i contratti
+  rotti;
+- **Il subentro non muove un euro degli addebiti già emessi**, e il piano lo dice invece di
+  lasciarlo scoprire: le quote sono dichiarative, gli addebiti stanno sul contratto. Chi si
+  aspetta che l'inquilino nuovo cominci a essere addebitato automaticamente si aspetta una
+  capacità che non esiste — la ripartizione per quota è una voce che **non c'è**, e se
+  servirà nascerà da un giro a mano, non da qui;
+- **Un evento nuovo, `LeaseHandedOver`**, accanto ai tre che ci sono: porta
+  `lease_id`, `org_id`, la data, e gli **identificatori** delle parti che escono ed
+  entrano — mai nomi né email (regola 25). Non si riusa `LeasePartyAdded` +
+  `LeasePartyRemoved`: sono due fatti dove ce n'è uno, e chi li consuma non avrebbe modo di
+  sapere che erano la stessa transizione.
+
+### Decomposizione
+
+> **Sostituita** dalla [decomposizione emendata](#decomposizione-emendata-13). Resta per
+> confronto: il controllo su `joined_at` di `E1`, per esempio, è decaduto con la data fissa, e
+> il perché è scritto là.
+
+#### `E0` — l'ADR, prima del codice
+
+ADR-056 in [08](08-decisioni.md): la forma della transizione, il perché non è una
+sostituzione, e soprattutto il **perimetro di chi è uscito** — che cosa continua a vedere e
+perché `can_access_lease` resta com'è. È l'unica parte che non si deduce dal codice e
+quella che, senza un ADR, la sezione dopo rideriverebbe al contrario.
+
+#### `E1` — il dominio
+
+`LeaseParty::leave(effective_date, now)`: valorizza `left_at`, rifiuta se è già uscita e
+rifiuta se `joined_at` è valorizzato ed `effective_date` gli è precedente — **con un
+messaggio**, perché altrimenti lo rifiuta `lease_parties_dates_ck` e chi legge riceve un
+errore di vincolo. Un metodo del contratto che, date le parti e la transizione, dica se
+lo stato finale regge.
+
+**Criterio di fine:** test unitari di dominio, senza database: chi esce non conta più nelle
+quote; una data precedente a `joined_at` è rifiutata con il suo codice; uscire due volte è
+rifiutato.
+
+#### `E2` — il caso d'uso
+
+`HandoverLease` in `use_cases/lease/handover.rs`: `ensure_staff`, rilegge contratto e
+parti, applica l'uscita, costruisce la parte nuova, riassegna le quote e `is_primary`,
+riverifica `ensure_tenancy_complete`, scrive, emette `LeaseHandedOver`, `commit`. Una
+transazione sola.
+
+**Criterio di fine:** test di persistenza in `crates/infrastructure/tests/`: dopo il
+subentro le quote sommano a 100 sulle parti non uscite, `left_at` è la data richiesta, e
+`app.has_lease_in_force` risponde **falso** per chi è uscito e **vero** per chi è entrato
+— che è la prova che il subentro ha fatto le due cose che contano.
+
+#### `E3` — il bordo HTTP
+
+`POST /api/v1/leases/{id}/handover`, il DTO, i codici in [05](05-api.md). Nessuna rotta
+nuova oltre questa.
+
+**Criterio di fine:** test di contratto HTTP: il subentro su un contratto attivo risponde
+`200` con le parti aggiornate; senza `shares` che riportino a 100 risponde `409
+lease.shares_not_hundred`; con `effective_date` prima di `joined_at` risponde il codice di
+`E1`; su un contratto in bozza risponde `409` — in bozza si aggiunge una parte, non si
+subentra. Al contrario, senza la riverifica finale: `200` con le quote che sommano a 50.
+
+#### `E4` — il client
+
+La tabella delle parti dice **chi è uscito** e da quando — oggi non lo dice, ed è la riga
+che rende visibile ciò che la transizione scrive. Un dialogo «Subentro» sulla scheda del
+contratto, offerto **solo** quando il contratto è attivo, con le quote proposte come le
+propone `AddPartyDialog` (da `@/lib/decimal`, mai `parseFloat`). Le stringhe in
+`i18n/it.ts`.
+
+**Criterio di fine:** un test del client che il dialogo non compaia su un contratto in
+bozza, e uno sulle quote proposte.
+
+#### `E5` — documentazione
+
+ADR-056 già scritto in `E0`; [05](05-api.md) con la rotta e i codici;
+[03](03-modello-dati.md) su `left_at`, che da qui in poi qualcuno scrive;
+[04](04-sicurezza.md) sul perimetro di chi è uscito; `R28` fuori da [12](12-da-fare.md).
+
+### Trappole
+
+**Scrivere `left_at` e credere che chiuda la lettura.** Non la chiude:
+`app.can_access_lease` guarda `deleted_at` e la membership, non `left_at` (`0041:54-76`).
+Un test che verificasse «chi è uscito non vede più il contratto» **fallirebbe**, e la
+reazione istintiva — aggiungere il filtro nella funzione — è la decisione sbagliata presa
+per la ragione sbagliata. Chi esce continua a vedere, ed è voluto: ha degli addebiti.
+
+**L'ordine delle due scritture su `is_primary`.** `lease_parties_primary_uk` è un indice
+unico parziale su `(lease_id) WHERE is_primary AND deleted_at IS NULL`, e non esclude chi è
+uscito. Nella stessa transazione, l'`UPDATE` che mette `is_primary` alla parte nuova
+**prima** di toglierlo a quella che esce viola il vincolo. Togliere prima, mettere dopo.
+
+**La stessa persona non rientra sullo stesso contratto.**
+`lease_parties_lease_user_uk` è su `(lease_id, user_id) WHERE user_id IS NOT NULL AND
+deleted_at IS NULL` e non guarda `left_at`: chi è uscito da un contratto e vuole
+rientrarci non può avere una seconda riga. Non è nel perimetro della sezione — ma è il
+genere di cosa che si scopre da un errore di vincolo in produzione, e va saputa prima.
+
+**Riusare `AddLeaseParty` perché «tanto fa la stessa cosa».** Chiama
+`ensure_accepts_parties` e rifiuta su un contratto attivo. Toglierne la chiamata per far
+funzionare il subentro riaprirebbe la porta di ADR-046 per tutti.
+
+**Aspettarsi che gli addebiti si spostino.** Non si spostano, e non c'è niente da
+spostare: la quota non ripartisce nessun addebito (verificato, due soli usi di
+`share_percent` in tutto il livello applicativo). Un piano che desse per scontato il
+contrario si troverebbe a scrivere una capacità intera non pianificata.
+
+**`joined_at` nullo.** Una parte mai accettata non ha `joined_at`, quindi il `CHECK` sulle
+date non dice niente e una `effective_date` qualunque passa. Il controllo in `E1` deve
+gestire il nullo senza rifiutare: rifiutare un subentro perché l'uscente non aveva mai
+accettato l'invito sarebbe il caso più comune dei contratti veri.
+
+**Un solo evento e non due.** `LeasePartyAdded` + `LeasePartyRemoved` descriverebbero due
+fatti indipendenti, e chi li consuma non saprebbe che erano una transizione sola. Per lo
+stesso motivo l'evento porta identificatori e date, mai nomi o email.
+
+### Che cosa **non** entra
+
+- **la ripartizione degli addebiti per quota**: non è una voce, non esiste oggi, e nascerà
+  da un giro a mano se servirà;
+- **il filtro `left_at` in `can_access_lease`**: deciso di non farlo, con la ragione
+  sopra — non è un rinvio;
+- **rientrare sullo stesso contratto** dopo esserne usciti: il vincolo unico lo impedisce,
+  e la via è un contratto nuovo;
+- togliere qualcuno dall'organizzazione (`R39`) e i contatti (`R43`): la 14, con i loro
+  ADR;
+- una migration di bonifica dei contratti con le quote già rotte: la stessa ragione di
+  ADR-046, quale sia la quota giusta lo sa solo chi amministra.
+
+<a id="emendamento-sezione-13"></a>
+
+### Emendamento del 28 settembre 2026, prima del codice
+
+Deciso con chi possiede il progetto all'apertura della sezione, **prima di scrivere
+l'ADR**, dopo aver riverificato contro il codice tutte le premesse della tabella — reggono
+tutte, al riferimento indicato. Non è cambiata una premessa: è cambiata la **forma**, per
+due ragioni che il piano non aveva visto. **Si esegue questo emendamento.**
+
+#### Perché: la data che il piano dava per buona
+
+Il corpo proposto qui sopra portava `"effective_date": "2026-11-01"`, cioè un subentro
+registrato in anticipo. Con lo schema di oggi quella data **mente**. Chi legge `left_at`
+guarda **se c'è**, non **che data porta**: `has_lease_in_force` (`0039:79`),
+`property_residents` (`0030:101`, dove un commento rimanda la semantica del confine «a quando
+un caso d'uso valorizzerà la colonna» — ed è questo), `ensure_tenancy_complete`
+(`party.rs:247`). Un subentro scritto il 28 settembre con data 1° novembre renderebbe
+l'uscente non residente, libero di uscire dall'organizzazione e fuori dalle segnalazioni
+condivise con i residenti **dal 28 settembre**.
+
+Le vie considerate, e com'è andata:
+
+- *la data scelta da chi amministra, futuro compreso, con l'effetto immediato dichiarato
+  nell'ADR*: **scartata**. Il dato mentirebbe per tutto l'intervallo, e per iscritto;
+- *dare alla data un significato vero*, `left_at IS NULL OR left_at > CURRENT_DATE` nelle due
+  funzioni, con una migration: **scartata**. Nella versione piena chiede una composizione che
+  cambia nel tempo, e lo schema non la rappresenta: la quota di chi resta è **una colonna
+  sola** e non vale 50 fino a una data e 40 dopo; la parte nuova non ha una data d'inizio,
+  perché `joined_at` lo scrive `link_user` all'accettazione (`party.rs:135`);
+  `lease_parties_primary_uk` vieterebbe l'intestatario vecchio e quello nuovo insieme. Nella
+  versione ristretta — solo l'uscita aspetta la data — è sensata, ma registrare in anticipo
+  chiama un **annullamento** (l'uscente cambia idea a ottobre), cioè una seconda rotta, e
+  eredita la finestra UTC di `R54`;
+- *la data è oggi*: **scelta**. È anche la forma della disdetta, che scrive
+  `terminated_at = now` (`aggregate.rs:263`) e non chiede una data.
+
+Nell'uso reale il subentro presuppone un contratto **in corso**: si esce da un rapporto che
+continua. Da lì la regola sullo stato (decisione 3).
+
+#### La forma: un bottone «Subentro» accanto a «Disdici»
+
+Proposta da chi possiede il progetto: il gesto è **«X esce oggi, e al suo posto invito Y»**,
+in un'operazione sola. Le decisioni, con il perché:
+
+1. **Si chiude il posto di X, non il contratto.** *Scartato*: disdire e aprire un contratto
+   nuovo per Y. Esiste già senza scrivere codice, e non è un subentro — disdice anche per chi
+   resta e libera l'immobile. Il subentro tiene in vita lo stesso contratto;
+2. **La data è oggi**, il giorno di `Clock` (cioè UTC: vedi le trappole), e **non è un campo**
+   della richiesta. `left_at = oggi`;
+3. **Il contratto dev'essere in essere oggi**: stato memorizzato `active` **e**
+   `Lease::is_in_force(today)` (`aggregate.rs:294`). In bozza e in firma si aggiungono parti;
+   disdetto, annullato, scaduto o non ancora cominciato, non c'è un rapporto da cui uscire.
+   Rifiuto `409 lease.invalid_transition`, il codice delle altre transizioni
+   (`error.rs:400`), con un'invariante nuova `LeaseNotHandoverable`. Il contratto firmato e
+   non ancora cominciato resta **senza una via** per cambiare composizione — `cancel` ammette
+   solo bozza e firma — ed è una voce nuova in [12](12-da-fare.md), non questa sezione;
+4. **Chi esce si sceglie** quando le parti non uscite sono più d'una; con una sola il dialogo
+   la propone da sé, e la richiesta la porta comunque. Qualunque ruolo, garante compreso. `404
+   lease.party_not_found` se non è di quel contratto, `409 lease.party_already_left` (nuovo)
+   se è già uscita;
+5. **Chi entra è obbligatorio**: nome ed email. Nasce con **il ruolo di X** e con
+   **l'intestazione di X** (`is_primary`). **L'email non deve appartenere a nessuna parte del
+   contratto, uscite comprese** — `409 lease.party_email_taken`, nuovo. L'accettazione cerca
+   la parte **per email senza guardare `left_at`** (`accept.rs:228-231`), quindi con due righe
+   con la stessa email collegherebbe la persona alla prima trovata; e chi è uscito non può
+   comunque rientrare (`lease_parties_lease_user_uk`);
+6. **Le quote si presentano, con i valori di prima come proposta.** Il dialogo mostra una riga
+   per ogni parte che condivide il canone e resta, più Y: chi resta con la sua quota, Y con
+   quella di X. Chi amministra le può cambiare. **Valori iniziali dei campi, non `placeholder`
+   HTML**: un placeholder è testo grigio in un campo vuoto, e confermando senza toccare si
+   manderebbe niente. Sul filo `joining.share_percent` e `shares: [{ party_id, share_percent }]`
+   per chi resta; una parte che resta e non compare in `shares` **non cambia**. Alla fine si
+   riverifica `ensure_tenancy_complete` sullo stato finale: `lease.shares_not_hundred`,
+   `lease.tenant_without_share`, che esistono;
+7. **Le quote si applicano subito, non all'accettazione.** Nel frattempo la riga di Y è un
+   **segnaposto in attesa**: ha quota e intestazione, nessun utente, e la scheda la mostra «in
+   attesa di accettazione». Finché Y non accetta, chi resta paga ciò che pagava — la sua quota
+   non si tocca se chi amministra non la cambia. *Scartato*: applicare le quote
+   all'accettazione, che vorrebbe memorizzare quote «pendenti», cioè una colonna e una
+   migration, per una proprietà che non muove nessun addebito. Se Y non accetta o l'email era
+   sbagliata, le vie esistono già e non servono rotte: revocare l'invito (`DELETE
+   /api/v1/invitations/{id}`), togliere la parte (`DELETE /api/v1/lease-parties/{id}`, ammesso
+   finché non ha un utente, `party.rs:225`), correggere le quote (`PATCH`);
+8. **L'invito parte dallo stesso gesto**, nella stessa transazione, con la macchina di
+   `InviteTenant`: token, riga in `app.org_invitations` legata al contratto, evento
+   `TenantInvited`, recapito **dopo il `commit` e senza fallire**
+   (`invite_tenant.rs:161-195`). Il token torna nella risposta come in `InvitationResponse`
+   (`routes/invitations.rs:52`). **Non si chiama `InviteTenant`**: creerebbe una seconda parte
+   con `remaining_share`. Il recapito si estrae in una funzione comune del modulo degli
+   inviti, e il `deliver` di `InviteTenant` la usa;
+9. **Due eventi, e non contraddice «un solo evento»**: `LeaseHandedOver` (contratto,
+   organizzazione, parte uscente, parte entrante, data — identificatori, mai nomi né email) e
+   `TenantInvited`, che è un fatto di un altro aggregato. Il piano vietava di raccontare il
+   subentro come `LeasePartyAdded` + `LeasePartyRemoved`, e resta vietato;
+10. **La conferma è quella della disdetta, senza timer.** Prima nome, email e quote, poi un
+    `ConfirmAction` (`components/ui/confirm.tsx`) il cui testo nomina chi esce e chi entra e
+    dice che non si annulla. *Scartato*: un conto alla rovescia di cinque secondi prima di
+    «Continua». Si impara ad aspettare senza leggere, e la disdetta, che è più distruttiva,
+    non lo ha: averlo solo qui sarebbe incoerente. Se un giorno servisse, andrebbe su entrambe;
+11. **Si chiude la porta dell'invito**, che il piano non aveva visto. `InviteTenant` **non
+    guarda lo stato del contratto**, e se l'email non è di nessuna parte **ne crea una** con
+    `remaining_share` (`invite_tenant.rs:108-128`); il dialogo «Invita» è offerto in ogni
+    stato (`LeaseDetailPage.tsx:87`). Su un contratto attivo con le quote a 100 nasce un
+    inquilino a **0,00**, e l'uscente resta dentro: è il difetto osservato in
+    [ADR-046](08-decisioni.md#adr-046) (la riga `inq3`) da una seconda porta che quell'ADR non
+    ha visto — ed è esattamente ciò che un proprietario farebbe oggi per «far subentrare»
+    qualcuno. Rimedio: `ensure_accepts_parties` **nel solo ramo che crea la parte**. Invitare
+    una parte che esiste resta ammesso in ogni stato: «si attiva, poi si invita» è il giro
+    legittimo che ADR-046 nomina. Il client, su un contratto che non accetta parti, invita solo
+    le parti esistenti non ancora collegate. **Verificato** che niente usi la porta: il seeder
+    (`seed-walkthrough.py:343-348`) e i sette test di contratto che invitano dopo l'attivazione
+    aggiungono prima la parte con la stessa email (`add_tenant`).
+    **Smentito eseguendo:** la verifica aveva guardato il seeder e `crates/api/tests/`, non
+    `crates/infrastructure/tests/`. Là `tenant_on_lease` invitava un'email nuova su contratti
+    già attivi e `coliving_stage` tre, e **quindici test di persistenza** si reggevano sulla
+    porta — cioè su una parte a quota zero accanto al segnaposto al 100%, lo stato che ADR-046
+    chiama un difetto. Corretti gli helper, non la regola: vedi l'esito.
+
+Restano come erano scritte: `can_access_lease` non si tocca e chi esce continua a leggere il
+contratto, perché ha degli addebiti; **nessuna migration**; gli addebiti non si spostano; **una
+rotta sola**.
+
+Un uscente che non aveva mai accettato il suo invito **può accettarlo dopo**: `accept.rs` lo
+collega alla sua riga, uscita, e la persona entra nell'organizzazione e legge il contratto e i
+suoi addebiti. È coerente con il perimetro di chi è uscito, e il subentro non revoca quel
+vecchio invito.
+
+<a id="decomposizione-emendata-13"></a>
+
+#### Decomposizione emendata
+
+##### `E0` — ADR-056, prima del codice
+
+La forma (il posto e non il contratto, oggi, in essere, l'invito nello stesso gesto, le quote
+proposte e applicate subito), le vie scartate sulla data con il perché, **il perimetro di chi
+è uscito** (`can_access_lease` resta com'è: si smette di essere residente, non di essere
+debitore), e la porta dell'invito chiusa, come completamento di ADR-046.
+
+##### `E1` — il dominio
+
+- `Lease::ensure_open_to_handover(today)`: stato `Active` e `is_in_force(today)`, altrimenti
+  `Invariant::LeaseNotHandoverable` → `lease.invalid_transition`;
+- `LeaseParty::leave(today, now)`: rifiuta se già uscita (`Invariant::LeasePartyAlreadyLeft` →
+  `lease.party_already_left`), scrive `left_at`, **toglie `is_primary`** e restituisce se lo
+  aveva — così l'ordine delle scritture sull'intestazione sta in un posto solo;
+- `Invariant::LeasePartyEmailTaken` → `lease.party_email_taken`.
+
+**Il controllo su `joined_at` del piano decade**: `joined_at` è
+`now.date_naive()` all'accettazione, dallo stesso `Clock`, quindi è sempre ≤ oggi e
+`lease_parties_dates_ck` è rispettato per costruzione. Un codice d'errore che nessuna richiesta può produrre sarebbe
+rumore, e un test che lo provasse proverebbe un caso inventato.
+
+**Criterio di fine:** test unitari senza database — in bozza, disdetto, scaduto e non ancora
+cominciato si rifiuta, in essere no; uscire scrive `left_at`, toglie l'intestazione, e una
+seconda uscita è rifiutata; chi è uscito non conta più in `ensure_tenancy_complete`.
+
+##### `E2` — il caso d'uso, e la porta dell'invito
+
+`HandoverLease` in `use_cases/lease/handover.rs`, in una transazione:
+
+1. `ensure_staff`; rilegge organizzazione (per l'email), contratto e parti;
+2. `ensure_open_to_handover(today)`; trova X fra le parti (`404` se non c'è); rifiuta un'email
+   di Y già presente fra le parti, uscite comprese;
+3. **tutto in memoria, prima di scrivere**: X esce, Y nasce con ruolo, quota proposta e
+   intestazione di X, le quote di `shares` si applicano a chi resta (una `party_id` che non è
+   di chi resta è `404`), `ensure_tenancy_complete` sullo stato finale;
+4. poi le scritture, **nell'ordine**: X (che ha perso `is_primary`), chi resta, Y, l'invito,
+   gli eventi, `commit`; poi il recapito, che non fallisce.
+
+Nella stessa fetta `InviteTenant` chiama `ensure_accepts_parties` **nel solo ramo** che crea la
+parte, e il recapito diventa la funzione comune.
+
+**Criterio di fine:** è quello di `E3`. Il piano chiedeva test di persistenza in
+`crates/infrastructure/tests/`; le proprietà che contano — l'indice dell'intestazione,
+`has_lease_in_force`, l'accettazione che trova la riga giusta — si vedono solo con la RLS, i
+vincoli e l'accettazione vera, e il bordo HTTP le esercita tutte insieme. Un test del caso
+d'uso con porte finte proverebbe le porte finte.
+
+##### `E3` — il bordo HTTP
+
+`POST /api/v1/leases/{id}/handover`:
+
+```json
+{
+  "leaving_party_id": "…",
+  "joining": { "full_name": "…", "email": "…", "share_percent": "50.00" },
+  "shares": [ { "party_id": "…", "share_percent": "50.00" } ]
+}
+```
+
+Risponde `200` con il contratto e le parti, come `GET /leases/{id}`, più l'invito nella forma
+di `InvitationResponse`. Nessuna rotta oltre questa. I codici in [05](05-api.md).
+
+**Criterio di fine**, test di contratto HTTP, ognuno provato al contrario:
+
+- il subentro su un contratto in essere risponde `200`: X ha `left_at` oggi e non è più
+  intestatario, Y è intestatario, senza utente, con la quota proposta;
+- **X può uscire dall'organizzazione** dopo il subentro, e prima riceveva `409
+  membership.lease_in_force`: è la prova di `has_lease_in_force` falso, dal bordo;
+- **Y accetta l'invito e viene collegato alla sua riga**; dopo, è lui a non poter uscire —
+  `has_lease_in_force` vero;
+- quote che non fanno 100 → `409 lease.shares_not_hundred`, e **niente è scritto** (X è ancora
+  dentro);
+- contratto in bozza → `409 lease.invalid_transition`; X già uscito → `409
+  lease.party_already_left`; email di una parte → `409 lease.party_email_taken`;
+- invitare un'email nuova su un contratto attivo → `409 lease.parties_locked`; invitare una
+  parte che esiste → `201`, come prima.
+
+##### `E4` — il client
+
+- la tabella delle parti dice **chi è uscito e da quando** («uscito il …», con `@/lib/format`)
+  e **chi è in attesa** (nessun `user_id`: «in attesa di accettazione»);
+- il bottone «Subentro» accanto a «Disdici», offerto quando il contratto è attivo e non
+  scaduto; il dialogo: chi esce (scelta solo se sono più d'una), nome ed email di chi entra,
+  le quote precompilate come erano, poi la conferma che nomina le due persone;
+- il dialogo «Invita» su un contratto che non accetta parti offre **solo** le parti esistenti
+  non collegate;
+- stringhe in `i18n/it.ts`, aritmetica da `@/lib/decimal`.
+
+**Criterio di fine:** test del client: il bottone non compare su un contratto in bozza; le
+quote proposte sono quelle di prima, con quella di X a Y; il dialogo d'invito su un contratto
+attivo non offre un'email libera.
+
+##### `E5` — documentazione
+
+ADR-056 già in `E0`; [05](05-api.md) con la rotta, il corpo e i codici, e il nuovo rifiuto
+dell'invito; [03](03-modello-dati.md) su `left_at`, che da qui in poi qualcuno scrive, e che
+cosa significa; [04](04-sicurezza.md) sul perimetro di chi è uscito; `R28` fuori da
+[12](12-da-fare.md), e **tre voci nuove** là: «esce X e basta» (chi resta si divide la quota,
+nessuno entra), il contratto firmato e non ancora cominciato che non cambia composizione, e un
+subentro che non si annulla.
+
+#### Trappole aggiunte dall'emendamento
+
+**«Oggi» è il giorno UTC.** Fra mezzanotte e le 02:00 italiane (l'una d'inverno) il subentro
+scrive `left_at` con la data di ieri, e un contratto che comincia «oggi» non è in essere e
+viene rifiutato. È `R54`, che **non entra** in questa sezione: se in un giro a mano un
+rifiuto scatta o non scatta di notte, si guardano le date prima del codice.
+
+**`list_for_lease` restituisce anche chi è uscito.** «Chi resta» è filtrato su `left_at`; la
+verifica dell'email invece guarda **tutte** le righe, uscite comprese, per la ragione di
+`accept.rs`.
+
+**`ensure_accepts_parties` va nel ramo che crea, non in testa a `InviteTenant`.** In testa
+romperebbe «si attiva, poi si invita», cioè il seeder e sette test di contratto.
+
+**Il `placeholder` non è un valore.** Vedi la decisione 6: i campi partono pieni.
+
+**Verificare tutto prima di scrivere.** Una verifica fallita a metà delle scritture fa
+comunque il `rollback`, ma l'ordine «calcola, verifica, scrivi» è ciò che rende l'ordine delle
+scritture sull'intestazione l'unica cosa da ricordare.
+
+**Un invito già pendente per l'email di Y** fa rispondere `409 invitation.already_pending`
+(`org_invitations_pending_uk`, tradotto da `map_pending_conflict`) e annulla **tutto**, uscita
+di X compresa: è il comportamento giusto, e va provato.
+
+#### Che cosa **non** entra, emendato
+
+Resta tutto l'elenco qui sopra, più:
+
+- **«esce X e basta»**, senza nessuno che entri: chi resta si divide la quota. È un caso vero
+  in co-living, e chiede l'elenco delle quote senza la parte nuova: una voce in `12`;
+- **cambiare la composizione di un contratto firmato non ancora cominciato**: nessuna via oggi;
+  una voce in `12`;
+- **annullare un subentro**: l'uscita di X non si disfa dal prodotto; una voce in `12`;
+- **la data futura, e la semantica di data di `left_at`**: scartate con la ragione sopra, non
+  rinviate.
+
+<a id="esito-sezione-13"></a>
+
+## Esito — Sezione 13: il subentro
+
+Eseguita **dal 28 settembre al 1° ottobre 2026** — il codice e il giro a mano il 28, la
+documentazione e il piano della 14 il 1° ottobre — in una conversazione sola e senza
+agenti, com'era scritto. Chiude `R28`. I test Rust passano da 486 a **497** — sette di dominio e quattro di
+contratto HTTP — quelli del client da 150 a **160**, in 27 file. `just ci` verde, zero
+`SALTATO`. **Nessuna migration**, **una rotta** (`POST /api/v1/leases/{id}/handover`), un
+ADR ([ADR-056](08-decisioni.md#adr-056)). La forma è stata **emendata prima del codice**,
+e le tre voci che il subentro decide di non fare sono entrate in [12](12-da-fare.md):
+`R55`, `R56`, `R57`.
+
+### Perché la forma è cambiata prima di cominciare
+
+Due cose che il piano non aveva visto, e una proposta di chi possiede il progetto.
+
+**La data futura mentiva.** Il corpo del piano portava `"effective_date": "2026-11-01"`;
+riverificando le letture di `left_at` è risultato che nessuna guarda la data — tutte
+chiedono `left_at IS NULL` — e che la `0030` rimandava la semantica del confine «a quando
+un caso d'uso valorizzerà la colonna». Un subentro registrato in anticipo avrebbe fatto
+uscire la persona da subito. Discusse tre vie, compresa una migration che desse alla data
+un significato vero (scartata per ragioni scritte nell'emendamento: la quota di chi resta
+è una colonna sola, e registrare in anticipo chiama un annullamento). **Scelta: la data è
+oggi.**
+
+**La forma del gesto.** Chi possiede il progetto ha proposto un bottone «Subentro»
+accanto a «Disdici» che faccia uscire X oggi e inviti Y al suo posto, con le quote da
+impostare proposte «come erano». È diventata la forma, con due precisazioni discusse: si
+chiude **il posto** di X e non il contratto, e «come erano» sono **valori iniziali dei
+campi**, non un `placeholder`. Il timer di cinque secondi sulla conferma è stato scartato
+insieme.
+
+**La seconda porta di ADR-046.** Controllando come funziona l'invito, per integrarlo nel
+gesto, è risultato che `InviteTenant` non guardava lo stato del contratto e creava una
+parte a `remaining_share` — a zero — su un contratto attivo. È il difetto osservato in
+ADR-046, da una porta che quell'ADR non ha visto, ed è entrata nella sezione.
+
+### Che cosa è entrato
+
+- **`E0` — [ADR-056](08-decisioni.md#adr-056)**, scritto prima del codice: la forma, la
+  porta dell'invito, **il perimetro di chi è uscito** («smette di essere residente, non di
+  essere debitore»), il significato di `left_at`, sei alternative scartate;
+- **`E1` — il dominio**: `Lease::ensure_open_to_handover` (in essere oggi, altrimenti
+  `lease.invalid_transition`), `LeaseParty::leave` (scrive `left_at`, **toglie
+  l'intestazione e dice se c'era**, rifiuta una seconda uscita con
+  `lease.party_already_left`), e il modulo `lease/handover.rs` con `Lease::hand_over`, che
+  calcola e verifica **tutto in memoria prima di scrivere** e restituisce le righe
+  nell'ordine in cui vanno scritte. `Invariant::LeasePartyEmailTaken` →
+  `lease.party_email_taken`. L'evento `LeaseHandedOver`, con identificatori e data;
+- **`E2` — il caso d'uso** `HandoverLease`: una transazione, le scritture in ordine — chi
+  esce, chi resta, chi entra — poi l'invito, l'evento, il commit, il recapito. Da
+  `InviteTenant` sono uscite due funzioni comuni, `issue_tenant_invitation` (dentro la
+  transazione di chi chiama) e `deliver_tenant_invitation` (dopo il commit, senza
+  fallire), e `InviteTenant` chiama `ensure_accepts_parties` **nel solo ramo che crea la
+  parte**;
+- **`E3` — il bordo HTTP**: la rotta, `HandoverLeaseRequest`, `HandoverResponse` (il
+  contratto come `GET /leases/{id}` e l'invito come `POST .../invitations`),
+  `LeaseDetailResponse::from_detail` estratta e usata anche da `detail`, i codici in
+  [05](05-api.md#il-subentro);
+- **`E4` — il client**: il bottone «Subentro» accanto a «Disdici», offerto sul contratto
+  attivo, non scaduto e già cominciato; il dialogo in tre passi — form, conferma, codice —
+  con le quote precompilate da `proposedHandover` in `shares.ts`; la tabella delle parti
+  dice «fuori dal …» e «in attesa di accettazione»; l'invito su un contratto che non
+  accetta parti offre **solo** le parti esistenti non collegate (`invitableParties`), con
+  lo stato vuoto «nessuna parte è in attesa» progettato; `InvitationToken` estratto e
+  usato da entrambi i dialoghi;
+- **`E5`** — [03](03-modello-dati.md) su `left_at`, [04](04-sicurezza.md#chi-e-uscito-da-un-contratto)
+  sul perimetro di chi è uscito e sull'invito, [05](05-api.md#il-subentro), `R28` fuori da
+  [12](12-da-fare.md) e `R55`–`R57` dentro.
+
+### Le premesse, e quella sbagliata
+
+**Le quindici righe della tabella del piano reggevano tutte**, riverificate al riferimento
+indicato prima di toccare un file — comprese le due che decidevano la forma: `share_percent`
+compare in due soli file del livello applicativo, e `app.can_access_lease` (ultima
+definizione in `0041`) non guarda `left_at`.
+
+**Quella sbagliata era dell'emendamento, scritto in questa stessa sezione.** La decisione 11
+diceva «verificato che niente usi la porta» dopo aver guardato il seeder e
+`crates/api/tests/`. Il primo giro della suite ha fatto cadere **quindici test di
+persistenza** con `Validation(Invariant(LeasePartiesLocked))` a
+`persistence.rs:2244`: `tenant_on_lease` invitava un'email nuova su contratti già attivi, e
+`coliving_stage` ne invitava tre sullo stesso. Quelle fixture si reggevano **sul difetto**
+— una parte a quota zero accanto al segnaposto al 100% di `draft_lease` — senza saperlo.
+Corretti gli helper e non la regola: `tenant_on_lease` dà l'email dell'inquilino al primo
+segnaposto senza utente e senza email e invita quello, che è il giro «si attiva, poi si
+invita»; `coliving_stage` prepara tre posti — 34, 33, 33 — prima di attivare. La premessa è
+segnata come smentita nell'emendamento, dove sta.
+
+### Decisioni prese eseguendo
+
+- **La conferma cambia il corpo della stessa modale**, e non è un `ConfirmAction` come
+  diceva la decisione 10 dell'emendamento: è la forma che `InviteTenantDialog` motiva — due
+  strati modali per un gesto da due righe — e dopo la conferma la modale deve comunque
+  mostrare il codice d'invito. La sostanza della decisione resta: una conferma sola, che
+  nomina chi esce e chi entra e dice che non si annulla, senza timer;
+- **il `403` a chi abita arriva anche dalla RLS**, e l'assert l'ha mostrato: senza
+  `ensure_staff`, l'`UPDATE` di `lease_parties` sotto il contesto dell'inquilino tocca zero
+  righe e risponde `403 auth.denied_by_policy`. Il test affermava solo lo stato e restava
+  verde; ora afferma `org.staff_role_required`, e al contrario cade;
+- **l'email si verifica prima dell'uscita**, quindi ripetere lo stesso subentro — il doppio
+  clic — risponde `lease.party_email_taken` e non `lease.party_already_left`. Scritto in
+  [05](05-api.md#il-subentro);
+- **una quota in `shares` su chi non resta è un `422`**, non un `404`: è una richiesta
+  malformata su un contratto che esiste, non una risorsa che manca. Una parte ripetuta in
+  `shares` è rifiutata allo stesso modo invece di far vincere l'ultima;
+- **il controllo su `joined_at` di `E1` è decaduto** con la data fissa, come l'emendamento
+  prevedeva: `joined_at` e `left_at` vengono dallo stesso orologio;
+- **la composizione sta nel dominio** (`Lease::hand_over`) e non nel caso d'uso: è ciò che
+  l'ha resa provabile con sette test senza database, e ciò che tiene l'ordine delle
+  scritture in un posto solo;
+- **il bottone controlla anche `start_date <= todayIso()`**, cioè il giorno **locale** del
+  browser, mentre il server decide sul giorno UTC. Per due ore di notte il bottone può
+  comparire su un contratto che il server rifiuta, o mancare su uno che accetterebbe: è
+  `R54`, e il rifiuto del server resta il confine;
+- **la frase dell'invito diceva che nessuna email parte**, ed era falsa dalla 5-quater. Il
+  dialogo del subentro mostra lo stesso codice dicendo che l'email è partita, e le due
+  modali si sarebbero contraddette sulla stessa schermata: `invitation.tokenExplain` e il
+  commento di `InviteTenantDialog` dicono ora il vero — l'email parte, può non arrivare, il
+  codice è la copia su cui contare.
+
+### Verificato al contrario
+
+Ogni test nuovo rimesso sul difetto e guardato cadere, poi ripristinato.
+
+**Dominio**, un difetto alla volta, `cargo test -p propflow-domain`:
+
+| Difetto | Test che cade | Assert caduto |
+|---|---|---|
+| `ensure_open_to_handover` guarda solo lo stato `Active` | `only_a_lease_in_force_today_accepts_a_handover` | `attesa un'invariante, ottenuto Ok(HandoverOutcome …)` sul contratto non ancora cominciato |
+| `leave` non toglie l'intestazione | `leaving_writes_the_date_drops_the_title_and_happens_once`, `the_joining_party_takes_the_place_…` | `assertion failed: !anna.is_primary()`; «chi esce non intesta più niente» |
+| niente riverifica finale | `the_shares_of_who_stays_can_change_and_the_final_sum_is_checked` | `attesa un'invariante, ottenuto Ok(…)` su 50 + 40 |
+| quote ammesse anche su chi esce | `a_share_can_only_be_set_on_a_party_that_stays` | `Ok(HandoverOutcome …)` al posto del `Validation` |
+| si esce due volte | `a_party_leaves_once_and_its_email_cannot_come_back`, `leaving_writes_…` | `matches!(… LeasePartyAlreadyLeft)` |
+| email controllata solo fra chi non è uscito | `a_party_leaves_once_and_its_email_cannot_come_back` | `Ok(…)` dove andava `LeasePartyEmailTaken`: Anna rientrava |
+| uscente sconosciuto come `422` | `a_party_that_is_not_on_the_lease_cannot_leave_it` | `matches!(result, Err(DomainError::NotFound(Entity::LeaseParty)))` |
+
+**Contratto HTTP**, cinque giri della suite con il database, abbinando difetti che cadono
+su test diversi:
+
+| Giro | Difetto | Test che cade, e dove |
+|---|---|---|
+| 1 | niente riverifica finale | `a_handover_that_does_not_add_up_…`: `200` con il corpo del subentro dove andava `409 lease.shares_not_hundred` |
+| 1 | `ensure_open_to_handover` solo sullo stato | `a_handover_needs_a_lease_in_force`: «non ancora cominciato», `200` invece di `409` |
+| 1 | `ensure_accepts_parties` tolto dall'invito | `an_invitation_reaches_an_existing_party_…`: `201` all'email nuova invece di `409 lease.parties_locked` |
+| 1 | `ensure_staff` sostituito da `ensure_member` | **nessuno** — il `403` arrivava dalla RLS. Assert rafforzato, vedi sopra |
+| 2 | parte nuova inserita prima che l'uscente perda l'intestazione | `a_handover_lets_the_leaving_tenant_out_…`: `409 conflict.constraint_violated` invece di `200` — è `lease_parties_primary_uk` |
+| 2 | `ensure_accepts_parties` **in testa** a `InviteTenant` | `an_invitation_reaches_…` sull'invito alla parte esistente, `409` invece di `201`; **con lui altri diciassette**, fra contratto HTTP e persistenza: la trappola del piano, misurata |
+| 3 | `AND lp.left_at IS NULL` in `can_access_lease` (`0041`) | `a_handover_lets_…`: «chi esce continua a leggere», `404 lease.not_found`. **L'unico test della suite a cadere**: la decisione di ADR-056 la custodisce solo lui |
+| 3 | l'invito emesso in una seconda transazione dopo il commit delle parti | `a_handover_that_does_not_add_up_…`: «nessuna parte nuova» — l'invito pendente rifiutava, e la parte nuova restava scritta |
+| 4 | `has_lease_in_force` senza il filtro `left_at` (`0039`) | `a_handover_lets_…`: «ora può uscire», `409 membership.lease_in_force`. Anche qui l'unico: finché nessuno scriveva `left_at`, quel filtro non lo provava nessuno |
+| 5 | di nuovo `ensure_member` al posto di `ensure_staff` | `a_handover_lets_…`: `left: "auth.denied_by_policy" / right: "org.staff_role_required"` |
+
+Le migration mutate nei giri 3 e 4 sono tornate intatte: il container della suite è
+effimero, e nessuna migration è stata scritta.
+
+**Client**, un difetto alla volta, `vitest`:
+
+| Difetto | Test che cade |
+|---|---|
+| il bottone anche in bozza | «non si offre su un contratto in bozza» |
+| il bottone mai offerto | «si offre sul contratto in essere», e i due che lo aprono |
+| chi entra parte con il campo vuoto — il `placeholder` | «propone le quote com'erano» |
+| la proposta non segue chi esce quando cambia | «propone le quote com'erano», sulla seconda scelta |
+| la conferma saltata | «conferma nominando chi esce e chi entra» |
+| le quote di chi resta non mandate | «conferma nominando…», sul corpo della richiesta |
+| «fuori dal …» non detto | «dicono chi è fuori e da quando» |
+| email libera anche da attivo | «raggiunge solo chi è già scritto sul contratto» |
+| `proposedHandover`: a chi entra `0.00` | «dà a chi entra la quota di chi esce», «segue chi esce» |
+| `proposedHandover`: chi esce fra chi resta | «dà a chi entra la quota di chi esce» |
+| `proposedHandover`: proposta per chi è già uscito | «non propone niente per chi è già uscito» |
+| `invitableParties`: anche chi ha un account | «è chi è scritto sul contratto, con un'email e senza account» |
+
+### Che cosa è stato provato a mano
+
+Su porte a parte: i container del giro riaccesi (`propflow-postgres`, `propflow-minio`,
+`propflow-mailpit`), Postgres su `55432` con il mondo del seeder, **quarantadue migration e
+nessuna nuova** dal migratore; API su `8090` con `PROPFLOW__SERVER__BIND`; `.env` non
+toccato, un file d'ambiente a parte fuori dal repository versionato. Il 28 settembre alle
+16 UTC — le 18 italiane, fuori dalla finestra di `R54`. **Su un contratto creato apposta**
+e con due persone nuove, Dora ed Elio, per non consumare Anna e Bruno, che servono al
+collaudo:
+
+| Che cosa | Esito visto |
+|---|---|
+| contratto dal giorno −10, Dora al 100% con l'email, attivato | `200` |
+| invito a un'email nuova su quel contratto | `409 lease.parties_locked` — la porta chiusa |
+| invito a Dora, che è già scritta sul contratto | `201` — «si attiva, poi si invita» |
+| Dora, registrata dall'invito, prova a uscire dall'organizzazione | `409 membership.lease_in_force` |
+| il subentro chiesto da Dora | `403 org.staff_role_required` |
+| il subentro dal proprietario, Dora → Elio | `200`: Elio al 100%, intestatario, senza utente; Dora intestataria `false`, `left_at` `2026-09-28` |
+| lo stesso subentro ripetuto | `409 lease.party_email_taken` |
+| Dora legge il contratto | `200` — chi è uscito continua a leggere |
+| Dora esce dall'organizzazione | `200` |
+| la posta | un messaggio a Elio in mailpit, «Invito a Immobili di Giulia Ferrari su PropFlow» |
+| Elio si registra dal codice della risposta | `201`, e la sua riga ha ora un utente |
+| Elio prova a uscire | `409 membership.lease_in_force` — ora è lui ad abitare |
+
+**Con gli occhi, no.** Il client è coperto dai dieci test nuovi, ma la schermata — il
+bottone accanto a «Disdici», il dialogo in tre passi, le etichette nella tabella, l'invito
+senza email libera — non l'ha guardata nessuno. È il passo che la 8 e la 12 hanno mostrato
+non sostituibile, e resta da fare.
+
+### Che cosa resta aperto
+
+- **il giro a vista** della scheda del contratto, sopra;
+- **`R55`, `R56`, `R57`**, in [12](12-da-fare.md): uscire senza che nessuno entri, il
+  contratto firmato e non cominciato, il subentro che non si annulla. Nessuna è assegnata a
+  una sezione;
+- **`R54`**, ancora da ordinare, e questa sezione l'ha incontrata due volte senza tirarla
+  dentro: il giorno del subentro è il giorno UTC, e il bottone del client decide sul giorno
+  locale;
+- l'Invio nel campo del codice su `/invito` con una tastiera vera, dal poscritto della 8:
+  ancora in sospeso, nel passo 5 del cammino.
+
+
 <a id="archivio-09-al-18-settembre-2026"></a>
 
 ## Archivio — «09 — Stato e roadmap» com'era prima della riscrittura del 18 settembre 2026

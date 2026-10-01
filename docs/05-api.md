@@ -791,6 +791,7 @@ la forma `{ "items": [ … ] }` senza `next_cursor`.
 | POST | `/api/v1/leases/{id}/parties` | staff | `201`. `409` se esiste già un intestatario principale |
 | POST | `/api/v1/leases/{id}/activate` | staff | `200`. `409` su periodo occupato o parti incomplete, e `409 property.not_lettable` su un immobile in bozza — che è il primo rifiuto valutato, prima delle parti |
 | POST | `/api/v1/leases/{id}/terminate` | staff | `200`. `409` se il contratto non è attivo |
+| POST | `/api/v1/leases/{id}/handover` | staff | `200` con il contratto e l'invito per chi entra. Vedi [il subentro](#il-subentro) per i rifiuti |
 
 L'inquilino vede il **proprio** contratto con `GET`, non gli altri della stessa
 organizzazione: la distinzione la fa `app.can_access_lease` attraverso
@@ -799,6 +800,59 @@ organizzazione: la distinzione la fa `app.can_access_lease` attraverso
 Attivazione e disdetta sono sotto-risorse e non un `PATCH` sullo stato: hanno
 effetti propri — firma, occupazione del periodo, data di fine rapporto — come già
 l'archiviazione degli immobili.
+
+<a id="il-subentro"></a>
+
+#### Il subentro
+
+`POST /api/v1/leases/{id}/handover` fa uscire **oggi** una parte e mette al suo posto
+una persona nuova, che riceve l'invito nella stessa transazione
+([ADR-056](08-decisioni.md#adr-056)). È la **sola** via per mettere una persona nuova in
+un contratto attivo: `POST .../parties` rifiuta con `lease.parties_locked`
+([ADR-046](08-decisioni.md#adr-046)), e da questa sezione anche l'invito a un'email che
+non è di nessuna parte.
+
+```json
+{
+  "leaving_party_id": "…",
+  "joining": { "full_name": "Giulia Bianchi", "email": "giulia@example.com", "share_percent": "50.00" },
+  "shares": [ { "party_id": "…", "share_percent": "50.00" } ]
+}
+```
+
+- **La data non c'è**: è oggi, il giorno UTC del server. Chi legge `left_at` guarda se
+  c'è e non che data porta, quindi una data futura farebbe uscire la persona da subito;
+- **chi entra** eredita il **ruolo** e l'**intestazione** di chi esce, e nasce senza
+  utente — un posto in attesa finché non accetta l'invito;
+- **`shares`** porta le quote di chi resta; chi non compare non cambia. La somma si
+  riverifica sullo stato finale, nella stessa transazione: a differenza di
+  `PATCH /lease-parties/{id}` lo stato intermedio non esiste;
+- **la risposta** è `{ "lease": …, "invitation": … }`: il contratto come
+  `GET /leases/{id}`, e l'invito come `POST .../invitations`, con `accept_token`. La
+  posta parte dopo il commit e può non arrivare, e questa è l'unica copia del codice;
+- **gli addebiti non si spostano**: stanno sul contratto, non sulla parte.
+
+| Esito | Quando |
+|---|---|
+| `200` | il subentro è registrato e l'invito emesso |
+| `403 org.staff_role_required` | chi chiama non amministra |
+| `404 lease.not_found` | il contratto non esiste o non è visibile |
+| `404 lease.party_not_found` | `leaving_party_id` non è una parte di quel contratto |
+| `409 lease.invalid_transition` | il contratto non è **in essere oggi**: in bozza, in firma, disdetto, annullato, scaduto o non ancora cominciato |
+| `409 lease.party_already_left` | chi esce è già uscito |
+| `409 lease.party_email_taken` | l'email di chi entra è già di una parte del contratto, **uscite comprese**: l'accettazione cerca la parte per email |
+| `409 lease.shares_not_hundred`, `409 lease.tenant_without_share` | le quote finali non sommano a 100, o un inquilino resta a zero |
+| `409 invitation.already_pending` | c'è già un invito pendente per quell'email nell'organizzazione. **Non si scrive niente**, uscita compresa |
+| `422` | email malformata, quota fuori da 0–100, o una quota in `shares` su chi non resta |
+
+Ripetere la stessa richiesta dopo un successo risponde `409 lease.party_email_taken` —
+l'email di chi entra è ormai di una parte — e non `lease.party_already_left`: l'email si
+verifica prima.
+
+**Chi è uscito continua a leggere il contratto** finché è membro dell'organizzazione: ha
+degli addebiti, e `GET /leases/{id}` è la pagina da cui li vede. Smette invece di
+risultare in un contratto in essere, e può uscire dall'organizzazione. Vedi
+[04](04-sicurezza.md#chi-e-uscito-da-un-contratto).
 
 Il tipo di contratto **non si dichiara**: si deduce dalla presenza di `room_id`.
 Dichiararlo a parte sarebbe soltanto un modo di contraddirlo, e il `CHECK`
@@ -1979,13 +2033,21 @@ curl -s http://localhost:8080/api/v1/expense-groups/$GROUP/balances \
 
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
-| POST | `/api/v1/leases/{id}/invitations` | staff | `201` con il token da consegnare. `409` se c'è già un invito pendente per quell'email |
+| POST | `/api/v1/leases/{id}/invitations` | staff | `201` con il token da consegnare. `409` se c'è già un invito pendente per quell'email, `409 lease.parties_locked` se l'email non è di nessuna parte e il contratto non accetta più parti |
 | DELETE | `/api/v1/invitations/{id}` | staff | `204`. `409` se già accettato |
 | POST | `/api/v1/auth/accept-invitation` | autenticato | `200`. `401` se il token è sconosciuto, scaduto o revocato; `409` se già accettato |
 
 Emettere l'invito crea anche la **parte contrattuale** con `user_id` nullo, se non
 esiste già una riga con quella email: è ciò che l'invitato collegherà a sé, e senza
 di essa accettare non lo renderebbe parte di nulla.
+
+**Solo finché il contratto accetta parti**, cioè in bozza o in firma. Su un contratto
+attivo l'invito raggiunge **una parte che esiste** — «si attiva, poi si invita», con la
+persona già scritta sul contratto — e un'email nuova risponde `409 lease.parties_locked`.
+Prima creava la parte a `remaining_share`, cioè a zero, con chi doveva uscire ancora
+dentro: era la seconda porta di [ADR-046](08-decisioni.md#adr-046), chiusa da
+[ADR-056](08-decisioni.md#adr-056). Per far entrare qualcuno al posto di chi esce c'è
+[il subentro](#il-subentro).
 
 Il token in chiaro esiste **solo** nella risposta a `POST .../invitations` e
 nell'email, come il refresh token: in database ne resta lo hash.
