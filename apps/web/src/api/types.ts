@@ -773,6 +773,24 @@ export interface Invitation {
   accept_token: string
 }
 
+/**
+ * Il subentro (ADR-056): chi esce **oggi**, chi entra al suo posto, e le quote di
+ * chi resta. La data non c'è: il server la fissa a oggi, perché una data futura
+ * farebbe uscire la persona da subito dicendo il contrario.
+ */
+export interface HandoverInput {
+  leaving_party_id: Uuid
+  joining: { full_name: string; email: string; share_percent: Amount }
+  /** Chi resta e non compare qui **non cambia** quota. */
+  shares: { party_id: Uuid; share_percent: Amount }[]
+}
+
+/** Il contratto dopo il subentro, e l'invito per chi entra con il suo codice. */
+export interface HandoverResult {
+  lease: LeaseDetail
+  invitation: Invitation
+}
+
 // ---------------------------------------------------------------------------
 // Spese co-living
 // ---------------------------------------------------------------------------

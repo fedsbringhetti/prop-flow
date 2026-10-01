@@ -12,6 +12,8 @@ import type {
   ExpenseGroupKind,
   ExpenseGroupMember,
   GroupBalance,
+  HandoverInput,
+  HandoverResult,
   Invitation,
   Items,
   Lease,
@@ -386,6 +388,19 @@ export function terminateLease(client: ApiClient, id: Uuid, reason?: string): Pr
  */
 export function cancelLease(client: ApiClient, id: Uuid): Promise<Lease> {
   return client.post<Lease>(`/leases/${id}/cancel`, {})
+}
+
+/**
+ * Il subentro: esce una parte, ne entra un'altra al suo posto, e l'invito parte
+ * nella stessa transazione. È la **sola** via per mettere una persona nuova in un
+ * contratto attivo (ADR-056).
+ */
+export function handoverLease(
+  client: ApiClient,
+  id: Uuid,
+  input: HandoverInput,
+): Promise<HandoverResult> {
+  return client.post<HandoverResult>(`/leases/${id}/handover`, input)
 }
 
 // ---------------------------------------------------------------------------

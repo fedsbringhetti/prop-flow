@@ -647,6 +647,37 @@ export const it = {
     terminateExplain: 'Indica la data di fine rapporto. Il periodo si libera.',
     terminationDate: 'Data di fine rapporto',
     terminated: 'Contratto disdetto.',
+    /* Il subentro (ADR-056): esce una parte, oggi, e un'altra prende il suo posto
+       nello stesso contratto. È la sola via per mettere una persona nuova in un
+       contratto attivo, e le frasi devono dirlo: non si disdice niente. */
+    handover: 'Subentro',
+    handoverTitle: 'Subentro',
+    handoverExplain:
+      'Chi esce lascia oggi il suo posto nel contratto, e chi entra riceve l’invito per prenderlo. Il contratto continua, per tutti gli altri com’era.',
+    handoverLeaving: 'Chi esce',
+    handoverChooseLeaving: 'Scegli chi esce',
+    handoverJoining: 'Chi entra',
+    handoverShares: 'Le quote, dopo il subentro',
+    /** Le quote partono **com'erano**: chi entra con quella di chi esce. */
+    handoverSharesHint:
+      'Sono proposte com’erano: chi entra con la quota di chi esce. Cambiale qui se il canone si divide in un altro modo, e devono sommare a 100.',
+    handoverSharesTotal: (total: string) => `Totale: ${total} %.`,
+    handoverJoiningShare: (name: string) => `Quota di ${name || 'chi entra'}`,
+    handoverContinue: 'Continua',
+    handoverBack: 'Torna indietro',
+    handoverConfirmTitle: 'Confermare il subentro?',
+    /** La conferma nomina le due persone: è l'unico momento in cui si vede chi
+     *  sostituisce chi, e non c'è un «annulla» dopo. */
+    handoverConfirmExplain: (leaving: string, joining: string) =>
+      `${leaving} esce dal contratto oggi, e ${joining} riceve l’invito per prendere il suo posto. Non si può annullare. Gli addebiti già emessi restano dove sono.`,
+    handoverConfirm: 'Conferma il subentro',
+    handoverDoneTitle: 'Subentro registrato',
+    handoverDoneExplain:
+      'Finché chi entra non accetta, il suo posto resta in attesa. Il codice è anche nell’email che è partita: se non arriva, consegnalo tu.',
+    /** Chi è uscito resta fra le righe: ha degli addebiti, e la scheda è la pagina
+     *  da cui li vede. */
+    partyLeft: (date: string) => `fuori dal ${date}`,
+    partyPending: 'in attesa di accettazione',
     created: 'Contratto redatto.',
     empty: 'Nessun contratto.',
     emptyHint:
@@ -762,6 +793,13 @@ export const it = {
     tokenWhereToUse:
       'Chi lo riceve deve prima creare il proprio account, poi incollare il codice in «Ho un codice d’invito».',
     alreadyPending: 'C’è già un invito in attesa per questa email.',
+    /* Da attivo l'invito raggiunge solo una parte che esiste (ADR-056). */
+    whoToInvite: 'Chi inviti',
+    chooseParty: 'Scegli chi inviti',
+    lockedExplain:
+      'Il contratto è in essere: l’invito va a una persona che è già scritta sul contratto e non ha ancora un account. Per far entrare qualcuno al posto di chi esce, usa «Subentro».',
+    nobodyToInvite:
+      'Nessuna parte è in attesa di un invito. Per invitare una parte che non ha l’email, correggila e aggiungila; per far entrare qualcuno di nuovo, usa «Subentro».',
     pending: 'In attesa',
     accepted: 'Accettato',
     expired: 'Scaduto',
@@ -1687,7 +1725,10 @@ export const it = {
     'lease.tenant_without_share':
       'Un inquilino ha la quota a zero: correggila prima di attivare, o toglilo dalle parti.',
     'lease.parties_locked':
-      'Le parti si aggiungono finché il contratto è in bozza. Su un contratto in essere si correggono quelle che ci sono.',
+      'Le parti si aggiungono finché il contratto è in bozza. Su un contratto in essere si correggono quelle che ci sono, e per far entrare qualcuno al posto di chi esce c’è «Subentro».',
+    'lease.party_already_left': 'Questa persona è già uscita dal contratto.',
+    'lease.party_email_taken':
+      'Questa email è già di una parte del contratto, anche di chi è uscito: chi entra ne ha bisogno di una sua.',
     'lease.primary_party_exists': 'C’è già un intestatario principale.',
     'lease.derived_status_filter': 'Questo stato è derivato e non si può filtrare.',
     'invitation.not_found': 'Invito non trovato.',
