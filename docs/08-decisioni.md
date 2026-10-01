@@ -3729,3 +3729,134 @@ residuo assente, ma un residuo vero è meglio di entrambi, e costa una funzione.
   connessione è la cosa che il `DEFINER` doveva evitare;
 - lo stato dell'addebito e il suo saldo **tornano a dire la stessa cosa a tutti**, che è
   l'effetto per cui la decisione esiste.
+
+
+---
+
+<a id="adr-056"></a>
+
+## ADR-056 — Il subentro: il posto di chi esce, oggi, con l'invito a chi entra; chi è uscito smette di essere residente, non di essere debitore
+
+**28 settembre 2026**, sezione 13. Chiude `R28`. Completa [ADR-046](#adr-046).
+
+### Il fatto
+
+Un contratto attivo non cambiava composizione in nessun modo. Aggiungere una parte è
+rifiutato con `lease.parties_locked` da ADR-046, perché faceva smettere le quote di sommare a
+100; togliere una parte con un utente collegato è rifiutato con `lease.party_has_user`
+(`LeaseParty::remove`), perché farebbe sparire un inquilino vero; la correzione
+(`PATCH /lease-parties/{id}`) non tocca `left_at`, per esplicito. La colonna `left_at`
+esisteva dal primo schema (`0005`) e **nessun caso d'uso la scriveva**. Il caso legittimo
+dietro — un coinquilino che se ne va e un altro che prende il suo posto — non aveva una via.
+
+Ne aveva invece una sbagliata, che ADR-046 non aveva visto: **l'invito**. `InviteTenant` non
+guardava lo stato del contratto, e se l'email non era di nessuna parte **ne creava una** con
+`remaining_share`; il client offriva «Invita» in ogni stato. Su un contratto attivo con le
+quote a 100 nasceva un inquilino a **0,00** con l'uscente ancora dentro — il difetto della
+riga `inq3` di ADR-046, da una seconda porta. Era ciò che un proprietario avrebbe fatto per
+«far subentrare» qualcuno.
+
+### Decisione
+
+**Una transizione dedicata, `POST /api/v1/leases/{id}/handover`: la parte X esce oggi, e al
+suo posto nasce la parte Y, che riceve l'invito nella stessa operazione.**
+
+- **Si chiude il posto di X, non il contratto.** Il contratto continua: è ciò che il subentro
+  è nell'uso reale. Disdire e redigerne uno nuovo esiste già, e disdice anche per chi resta;
+- **la data è oggi**, il giorno del `Clock`, e non è un campo: `left_at = oggi`;
+- **il contratto dev'essere in essere oggi** — `active` e `Lease::is_in_force` — altrimenti
+  `409 lease.invalid_transition`. In bozza e in firma si aggiungono parti; su un contratto
+  finito o non cominciato non c'è un rapporto da cui uscire;
+- **chi entra è obbligatorio**, eredita il **ruolo** e l'**intestazione** di chi esce, e la
+  sua email non deve appartenere a nessuna parte del contratto, **uscite comprese**
+  (`lease.party_email_taken`): l'accettazione cerca la parte per email senza guardare
+  `left_at`;
+- **le quote si propongono come erano** — chi resta con la sua, chi entra con quella di chi
+  esce — si possono cambiare nella stessa richiesta, e **si applicano subito**. La somma si
+  riverifica sullo stato finale con `ensure_tenancy_complete`, nella stessa transazione: a
+  differenza del `PATCH`, qui lo stato intermedio non esiste;
+- fino all'accettazione la parte nuova è un **segnaposto in attesa**: quota e intestazione,
+  nessun utente. Se l'invito non va a buon fine le vie ci sono già — revocarlo, togliere la
+  parte, correggere le quote — e nessuna rotta nuova le sostituisce;
+- **l'invito sulla porta vecchia si chiude**: `InviteTenant` rifiuta con
+  `lease.parties_locked` quando dovrebbe **creare** una parte su un contratto che non ne
+  accetta. Invitare una parte che esiste resta ammesso in ogni stato — «si attiva, poi si
+  invita» è il giro legittimo che ADR-046 nomina. Da qui in poi il subentro è **la sola via**
+  per mettere una persona nuova in un contratto attivo;
+- **un evento `LeaseHandedOver`**, con gli identificatori del contratto, delle due parti e la
+  data — mai nomi né email — accanto a `TenantInvited`, che è il fatto dell'invito. Non
+  `LeasePartyAdded` più `LeasePartyRemoved`: sarebbero due fatti dove ce n'è uno.
+
+### Il perimetro di chi è uscito
+
+**Chi esce smette di essere residente, non smette di essere debitore**, e lo schema distingue
+già le due cose:
+
+- `app.has_lease_in_force` (`0039`) e `app.property_residents` (`0030`) filtrano `left_at IS
+  NULL`: da quando esce, X **può uscire dall'organizzazione** (`R16`) e **non è più fra i
+  residenti**, quindi non vede le segnalazioni condivise con loro (`0035`);
+- `app.can_access_lease` (`0041`) **non guarda `left_at`, e resta così**: X continua a leggere
+  il contratto finché è membro dell'organizzazione. È voluto — uscire a metà contratto lascia
+  degli addebiti da pagare, e la scheda del contratto è la pagina da cui si vedono. Uscire dal
+  contratto non è uscire dall'organizzazione; quando X esce anche da quella, ADR-054 gli
+  toglie la lettura come a chiunque.
+
+La tentazione è aggiungere `AND lp.left_at IS NULL` al ramo dell'inquilino di
+`can_access_lease`, come ADR-054 vi ha aggiunto la membership. **Non si fa**, ed è la ragione
+per cui questa decisione è un ADR: *sembra* una dimenticanza. Un test che affermasse «chi è
+uscito non vede più il contratto» fallirebbe, e la risposta giusta è cambiare il test.
+
+Un uscente che non aveva mai accettato il suo invito può accettarlo dopo, e l'accettazione lo
+collega alla sua riga, uscita: entra nell'organizzazione e legge contratto e addebiti. È lo
+stesso perimetro, e il subentro non revoca quel vecchio invito.
+
+**Gli addebiti non si spostano.** Stanno sul contratto e non sulla parte (`IssueCharge` prende
+un `lease_id`), e la quota non ripartisce nessun addebito: è dichiarativa, e serve
+all'attivazione. Chi si aspetta che l'inquilino nuovo cominci a essere addebitato da sé si
+aspetta una capacità che non esiste.
+
+### `left_at` è una data, ma non una data futura
+
+Il primo caso d'uso che scrive `left_at` è anche quello che ne decide il significato, e la
+`0030` lo rimandava a lui per esplicito. Tutti i punti che la leggono guardano **se c'è**, non
+**che data porta**. Ne segue che `left_at` valorizzata significa **uscita adesso**, e che una
+data futura mentirebbe: un subentro scritto il 28 settembre per il 1° novembre farebbe uscire X
+dal 28.
+
+### Alternative scartate
+
+- **Una `PUT /leases/{id}/parties` che sostituisce tutte le parti.** Riaprirebbe in silenzio ciò
+  che ADR-046 ha chiuso: il suo corpo *è* un'aggiunta travestita da sostituzione, e non ci
+  sarebbe più un punto in cui dire di no. Non dice nemmeno *quando*, e non ha un nome che si
+  possa rifiutare o raccontare;
+- **la data scelta da chi amministra, futuro compreso, con l'effetto immediato dichiarato.**
+  Il dato mentirebbe per tutto l'intervallo;
+- **una semantica di data vera**, `left_at IS NULL OR left_at > CURRENT_DATE` nelle due
+  funzioni, con una migration. Piena, chiede una composizione che cambia nel tempo: una quota
+  che vale 50 fino a una data e 40 dopo, una data d'inizio per chi entra (`joined_at` è
+  dell'accettazione e `link_user` lo sovrascrive), due intestatari che coesistono contro
+  `lease_parties_primary_uk`. Ristretta all'uscita, chiama un annullamento — registrare in
+  anticipo significa che l'uscente può cambiare idea — cioè una seconda rotta, ed eredita la
+  finestra UTC di `R54`;
+- **applicare le quote all'accettazione di chi entra.** Chiederebbe di memorizzare quote
+  «pendenti», una colonna e una migration, per una proprietà che non muove un euro;
+- **passare da `AddLeaseParty`.** Chiama `ensure_accepts_parties` e rifiuta su un contratto
+  attivo, ed è giusto che continui: togliere quella chiamata riaprirebbe la porta per tutti;
+- **un conto alla rovescia prima della conferma.** Si impara ad aspettare senza leggere, e la
+  disdetta, che è più distruttiva, non lo ha. La conferma nomina chi esce e chi entra, e dice
+  che non si annulla.
+
+### Conseguenze
+
+- `left_at` ha un significato scritto: il giorno da cui la parte non è più nel contratto, mai
+  nel futuro. [03](03-modello-dati.md) lo descrive;
+- la finestra UTC di `R54` vale anche qui: fra mezzanotte e le 02:00 italiane `left_at` porta
+  la data di ieri, e un contratto che comincia «oggi» non è in essere. Non si corregge in
+  questa decisione;
+- restano senza una via, e sono voci in [12](12-da-fare.md): **uscire senza che nessuno entri**
+  (chi resta si divide la quota), **cambiare la composizione di un contratto firmato e non
+  ancora cominciato**, **annullare un subentro**;
+- chi è uscito **non rientra** sullo stesso contratto: `lease_parties_lease_user_uk` è su
+  `(lease_id, user_id)` e non guarda `left_at`, e la verifica dell'email lo rifiuta prima che
+  lo faccia il vincolo. La via è un contratto nuovo;
+- ADR-046 resta vero per intero, e la sua porta ora è chiusa anche dal lato dell'invito.
