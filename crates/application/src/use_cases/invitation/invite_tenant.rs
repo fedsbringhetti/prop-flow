@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, TenantInvited};
 use propflow_domain::identity::{Invitation, NewInvitation, OrgRole};
 use propflow_domain::lease::{LeaseParty, LeasePartyRole, NewLeaseParty};
-use propflow_domain::ports::{Clock, UnitOfWorkFactory};
-use propflow_domain::shared::{Email, InvitationId, LeaseId, LeasePartyId};
+use propflow_domain::ports::{Clock, UnitOfWork, UnitOfWorkFactory};
+use propflow_domain::shared::{Email, InvitationId, LeaseId, LeasePartyId, OrgId, UserId};
 use propflow_domain::{Entity, RequestContext};
 use rust_decimal::Decimal;
 
 use crate::authorization;
 use crate::error::{AppError, AppResult, Conflict};
-use crate::ports::{Notification, NotificationContent, Notifier, OpaqueTokenFactory};
+use crate::ports::{Notification, NotificationContent, Notifier, OpaqueToken, OpaqueTokenFactory};
 
 #[derive(Debug, Clone)]
 pub struct InviteTenantCommand {
@@ -127,71 +128,120 @@ impl InviteTenant {
             uow.lease_parties().insert(&party).await?;
         }
 
-        let invitation = Invitation::issue(
-            NewInvitation {
-                id: InvitationId::generate(),
+        let issued = issue_tenant_invitation(
+            uow.as_mut(),
+            material,
+            TenantInvitationTarget {
                 org_id,
+                lease_id: lease.id(),
                 email: command.email,
-                role: OrgRole::Tenant,
-                token_hash: material.hash,
-                lease_id: Some(lease.id()),
-                invited_by: Some(invited_by),
+                invited_by,
             },
+            context,
             now,
-        )?;
-
-        uow.invitations()
-            .insert(&invitation)
-            .await
-            .map_err(|error| map_pending_conflict(error.into()))?;
-        uow.events()
-            .append(&DomainEvent::new(
-                DomainEventPayload::TenantInvited(TenantInvited {
-                    invitation_id: invitation.id(),
-                    org_id,
-                    lease_id: invitation.lease_id(),
-                    role: invitation.role().as_str(),
-                }),
-                now,
-                EventMetadata::from_context(context),
-            ))
-            .await?;
+        )
+        .await?;
         uow.commit().await?;
 
-        self.deliver(&invitation, organization.name(), &material.plaintext)
-            .await;
-
-        Ok(IssuedInvitation {
-            invitation,
-            token: material.plaintext,
-        })
+        deliver_tenant_invitation(self.notifier.as_ref(), &issued, organization.name()).await;
+        Ok(issued)
     }
+}
 
-    /// Recapita il codice, e **non fallisce**.
-    ///
-    /// Il tipo di ritorno è `()` di proposito: non c'è niente che il chiamante
-    /// possa fare con un errore qui, perché a questo punto l'invito è già scritto e
-    /// il token è già nella risposta. Restituire un `Result` inviterebbe qualcuno a
-    /// propagarlo, e propagarlo significherebbe annullare un invito valido perché
-    /// un server di posta era occupato.
-    async fn deliver(&self, invitation: &Invitation, organization_name: &str, token: &str) {
-        let notification = Notification {
-            to: invitation.email().clone(),
-            content: NotificationContent::TenantInvitation {
-                organization_name: organization_name.to_owned(),
-                accept_token: token.to_owned(),
-            },
-        };
-        if let Err(error) = self.notifier.send(&notification).await {
-            // **Né il destinatario né il token**: `docs/04-sicurezza.md` vieta email
-            // e credenziali nelle tracce, e questa è la riga in cui è più facile
-            // scriverli. L'identificatore dell'invito basta a ritrovare la riga.
-            tracing::warn!(
-                invitation_id = %invitation.id(),
-                error = %error,
-                "invito non recapitato per posta: il codice resta nella risposta"
-            );
-        }
+/// A chi va un invito da inquilino, e da parte di chi.
+pub(crate) struct TenantInvitationTarget {
+    pub org_id: OrgId,
+    pub lease_id: LeaseId,
+    pub email: Email,
+    pub invited_by: UserId,
+}
+
+/// Emette un invito da inquilino **dentro la transazione di chi chiama**: la riga
+/// in `app.org_invitations` e l'evento `TenantInvited`, niente commit e niente
+/// posta.
+///
+/// È fuori da [`InviteTenant`] perché il subentro (ADR-056) invita chi entra nella
+/// stessa transazione in cui fa uscire chi esce, e non può chiamare `InviteTenant`:
+/// quello crea da sé una parte con `remaining_share`, e il subentro l'ha già
+/// costruita con la quota di chi esce. Un invito già pendente per quell'email fa
+/// fallire la transazione intera, uscita compresa, ed è il comportamento voluto.
+pub(crate) async fn issue_tenant_invitation(
+    uow: &mut dyn UnitOfWork,
+    material: OpaqueToken,
+    target: TenantInvitationTarget,
+    context: &RequestContext,
+    now: DateTime<Utc>,
+) -> AppResult<IssuedInvitation> {
+    let TenantInvitationTarget {
+        org_id,
+        lease_id,
+        email,
+        invited_by,
+    } = target;
+    let invitation = Invitation::issue(
+        NewInvitation {
+            id: InvitationId::generate(),
+            org_id,
+            email,
+            role: OrgRole::Tenant,
+            token_hash: material.hash,
+            lease_id: Some(lease_id),
+            invited_by: Some(invited_by),
+        },
+        now,
+    )?;
+
+    uow.invitations()
+        .insert(&invitation)
+        .await
+        .map_err(|error| map_pending_conflict(error.into()))?;
+    uow.events()
+        .append(&DomainEvent::new(
+            DomainEventPayload::TenantInvited(TenantInvited {
+                invitation_id: invitation.id(),
+                org_id,
+                lease_id: invitation.lease_id(),
+                role: invitation.role().as_str(),
+            }),
+            now,
+            EventMetadata::from_context(context),
+        ))
+        .await?;
+
+    Ok(IssuedInvitation {
+        invitation,
+        token: material.plaintext,
+    })
+}
+
+/// Recapita il codice **dopo il commit**, e **non fallisce**.
+///
+/// Il tipo di ritorno è `()` di proposito: non c'è niente che il chiamante
+/// possa fare con un errore qui, perché a questo punto l'invito è già scritto e
+/// il token è già nella risposta. Restituire un `Result` inviterebbe qualcuno a
+/// propagarlo, e propagarlo significherebbe annullare un invito valido perché
+/// un server di posta era occupato.
+pub(crate) async fn deliver_tenant_invitation(
+    notifier: &dyn Notifier,
+    issued: &IssuedInvitation,
+    organization_name: &str,
+) {
+    let notification = Notification {
+        to: issued.invitation.email().clone(),
+        content: NotificationContent::TenantInvitation {
+            organization_name: organization_name.to_owned(),
+            accept_token: issued.token.clone(),
+        },
+    };
+    if let Err(error) = notifier.send(&notification).await {
+        // **Né il destinatario né il token**: `docs/04-sicurezza.md` vieta email
+        // e credenziali nelle tracce, e questa è la riga in cui è più facile
+        // scriverli. L'identificatore dell'invito basta a ritrovare la riga.
+        tracing::warn!(
+            invitation_id = %issued.invitation.id(),
+            error = %error,
+            "invito non recapitato per posta: il codice resta nella risposta"
+        );
     }
 }
 
