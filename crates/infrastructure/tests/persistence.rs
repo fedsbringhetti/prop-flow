@@ -37,9 +37,9 @@ use propflow_application::use_cases::invitation::{
     AcceptInvitation, AcceptInvitationCommand, InviteTenant, InviteTenantCommand,
 };
 use propflow_application::use_cases::lease::{
-    ActivateLease, ActivateLeaseCommand, AddLeaseParty, AddLeasePartyCommand, DraftLease,
-    DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery, TerminateLease,
-    TerminateLeaseCommand,
+    ActivateLease, ActivateLeaseCommand, AddLeaseParty, AddLeasePartyCommand, CorrectLeaseParty,
+    CorrectLeasePartyCommand, DraftLease, DraftLeaseCommand, GetLease, ListLeases, ListLeasesQuery,
+    TerminateLease, TerminateLeaseCommand,
 };
 use propflow_application::use_cases::payment::{
     ConfirmPayment, DeclarePayment, DeclarePaymentCommand, ListPayments, ListPaymentsQuery,
@@ -69,7 +69,7 @@ use propflow_domain::expense::{
     ExpenseCategory, ExpenseGroupKind, SettlementStatus, SplitMethod, Weight,
 };
 use propflow_domain::identity::OrgRole;
-use propflow_domain::lease::{LeasePartyRole, LeaseStatus, RentFrequency};
+use propflow_domain::lease::{LeasePartyChanges, LeasePartyRole, LeaseStatus, RentFrequency};
 use propflow_domain::payment::{IdempotencyKey, PaymentMethod, PaymentStatus};
 use propflow_domain::ports::WorkerUnitOfWorkFactory as _;
 use propflow_domain::ports::{LeaseOverlap, RepositoryError};
@@ -2204,6 +2204,15 @@ async fn register_bill(
 /// Passa dall'invito vero e non da una `INSERT` a mano: è il solo modo in cui la
 /// membership e il collegamento della parte contrattuale esistono davvero, ed è da
 /// quel collegamento che dipende tutto ciò che l'inquilino vede.
+///
+/// **Su un contratto attivo l'invito va a una parte che esiste** (ADR-056): il
+/// giro è «si attiva, poi si invita», con la persona già scritta sul contratto.
+/// L'helper prende quindi la prima parte ancora senza utente e senza email — il
+/// segnaposto di [`draft_lease`] — e le dà l'email dell'inquilino. Prima invitava
+/// un'email nuova anche a contratto attivo, e creava una seconda parte a quota
+/// zero accanto al segnaposto al 100%: lo stato che ADR-046 chiama un difetto, su
+/// cui quindici test si reggevano senza saperlo. Se non c'è un segnaposto libero
+/// l'invito crea la parte, come in bozza.
 async fn tenant_on_lease(
     env: &common::TestEnv,
     owner: &RequestContext,
@@ -2225,6 +2234,31 @@ async fn tenant_on_lease(
             .email()
             .clone()
     };
+
+    let placeholder = {
+        let mut uow = env.factory.begin(owner).await.expect("transazione aperta");
+        uow.lease_parties()
+            .list_for_lease(lease_id)
+            .await
+            .expect("parti del contratto")
+            .into_iter()
+            .find(|party| party.user_id().is_none() && party.email().is_none())
+    };
+    if let Some(placeholder) = placeholder {
+        CorrectLeaseParty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+            .execute(
+                owner,
+                CorrectLeasePartyCommand {
+                    id: placeholder.id(),
+                    changes: LeasePartyChanges {
+                        email: Some(Some(tenant_email.clone())),
+                        ..LeasePartyChanges::default()
+                    },
+                },
+            )
+            .await
+            .expect("email sul segnaposto");
+    }
 
     let issued = InviteTenant::new(
         Arc::clone(&env.factory),
@@ -3749,6 +3783,44 @@ async fn coliving_stage(
         Some(days_from_today(335)),
     )
     .await;
+    // Tre posti sul contratto prima di attivarlo, uno per coinquilino: da attivo non
+    // se ne aggiungono, e l'invito va a una parte che esiste (ADR-056).
+    let parties = {
+        let mut uow = env.factory.begin(&owner).await.expect("transazione aperta");
+        uow.lease_parties()
+            .list_for_lease(lease.id())
+            .await
+            .expect("parti del contratto")
+    };
+    CorrectLeaseParty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+        .execute(
+            &owner,
+            CorrectLeasePartyCommand {
+                id: parties[0].id(),
+                changes: LeasePartyChanges {
+                    share_percent: Some(rust_decimal::Decimal::from(34)),
+                    ..LeasePartyChanges::default()
+                },
+            },
+        )
+        .await
+        .expect("quota del primo posto");
+    for nth in 2..=3 {
+        AddLeaseParty::new(Arc::clone(&env.factory), Arc::clone(&env.clock) as _)
+            .execute(
+                &owner,
+                AddLeasePartyCommand {
+                    lease_id: lease.id(),
+                    role: LeasePartyRole::Cotenant,
+                    full_name: format!("Coinquilino di prova {nth}"),
+                    email: None,
+                    share_percent: rust_decimal::Decimal::from(33),
+                    is_primary: false,
+                },
+            )
+            .await
+            .expect("posto aggiunto");
+    }
     activate(env, &owner, lease.id()).await.expect("attivato");
 
     let mut tenants = Vec::with_capacity(3);

@@ -112,6 +112,12 @@ impl InviteTenant {
             .iter()
             .any(|party| party.email() == Some(&command.email))
         {
+            // **Qui, e non in testa**: invitare una parte che esiste è ammesso in ogni
+            // stato — «si attiva, poi si invita» è il giro legittimo di ADR-046 — ma
+            // crearne una su un contratto attivo era la seconda porta che
+            // quell'ADR non aveva visto. Nasceva a `remaining_share`, cioè a zero, con
+            // chi doveva uscire ancora dentro. Il subentro è la via (ADR-056).
+            lease.ensure_accepts_parties()?;
             let party = LeaseParty::new(
                 NewLeaseParty {
                     id: LeasePartyId::generate(),

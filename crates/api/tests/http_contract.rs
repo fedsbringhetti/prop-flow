@@ -1627,6 +1627,56 @@ async fn a_zero_share_blocks_activation_and_an_active_lease_takes_no_new_parties
     assert_eq!(problem["code"], "lease.parties_locked");
 }
 
+/// **La seconda porta di ADR-046**, chiusa (ADR-056): un invito a un'email nuova
+/// su un contratto attivo creava una parte a `remaining_share`, cioè a zero, con
+/// chi doveva uscire ancora dentro. Invitare una parte che esiste resta ammesso:
+/// «si attiva, poi si invita».
+#[tokio::test]
+async fn an_invitation_reaches_an_existing_party_of_an_active_lease_but_adds_no_new_one() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "invito-a-contratto-attivo").await;
+    let property = create_property(&app, &owner, "Casa dell'invito tardivo").await;
+    let lease = draft_lease(&app, &owner, &property, None, -10, Some(355)).await;
+    let email = common::unique_email("invito-tardivo");
+    add_tenant(&app, &owner, &lease, "Inquilino Tardivo", Some(&email)).await;
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            &owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            &owner,
+            serde_json::json!({
+                "email": common::unique_email("invito-intruso"),
+                "full_name": "Chi Non C'era",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.parties_locked");
+
+    invite_tenant(&app, &owner, &lease, &email).await;
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(
+        detail["parties"].as_array().expect("parti").len(),
+        1,
+        "corpo: {detail}"
+    );
+}
+
 /// **Una parte con una persona dietro non è una riga sbagliata.**
 ///
 /// Due rifiuti, e sono la ragione per cui correggere e togliere non sono la stessa
