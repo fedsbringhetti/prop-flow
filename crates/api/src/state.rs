@@ -26,8 +26,8 @@ use propflow_application::use_cases::invitation::{
     AcceptInvitation, InviteTenant, RevokeInvitation,
 };
 use propflow_application::use_cases::lease::{
-    ActivateLease, AddLeaseParty, CancelLease, CorrectLeaseParty, DraftLease, GetLease, ListLeases,
-    RemoveLeaseParty, TerminateLease,
+    ActivateLease, AddLeaseParty, CancelLease, CorrectLeaseParty, DraftLease, GetLease,
+    HandoverLease, ListLeases, RemoveLeaseParty, TerminateLease,
 };
 use propflow_application::use_cases::organization::{LeaveOrganization, ListOrganizations};
 use propflow_application::use_cases::payment::{
@@ -105,6 +105,7 @@ pub struct AppState {
     pub add_lease_party: Arc<AddLeaseParty>,
     pub activate_lease: Arc<ActivateLease>,
     pub terminate_lease: Arc<TerminateLease>,
+    pub handover_lease: Arc<HandoverLease>,
     pub cancel_lease: Arc<CancelLease>,
     pub correct_lease_party: Arc<CorrectLeaseParty>,
     pub remove_lease_party: Arc<RemoveLeaseParty>,
@@ -386,6 +387,12 @@ impl AppState {
             terminate_lease: Arc::new(TerminateLease::new(
                 Arc::clone(&unit_of_work),
                 Arc::clone(&clock),
+            )),
+            handover_lease: Arc::new(HandoverLease::new(
+                Arc::clone(&unit_of_work),
+                Arc::clone(&invitation_tokens),
+                Arc::clone(&clock),
+                Arc::clone(&notifier),
             )),
             cancel_lease: Arc::new(CancelLease::new(
                 Arc::clone(&unit_of_work),

@@ -1627,6 +1627,396 @@ async fn a_zero_share_blocks_activation_and_an_active_lease_takes_no_new_parties
     assert_eq!(problem["code"], "lease.parties_locked");
 }
 
+/// Un contratto attivo da dieci giorni, con due parti al 50%: Anna, intestataria e
+/// collegata a un account, e Marco, senza account. Restituisce l'id del contratto,
+/// della parte di Anna, di quella di Marco, il token di Anna e l'email di Marco.
+async fn active_lease_of_two(
+    app: &TestApp,
+    owner: &str,
+    label: &str,
+) -> (String, String, String, String, String) {
+    let property = create_property(app, owner, label).await;
+    let lease = draft_lease(app, owner, &property, None, -10, Some(355)).await;
+
+    // L'invito su una bozza crea la parte: al 100%, e intestataria perché è la prima.
+    let anna_email = common::unique_email("subentro-anna");
+    let (_, accept_token) = invite_tenant(app, owner, &lease, &anna_email).await;
+    let (anna, _) = common::register_tenant_from_invitation(
+        app,
+        &accept_token,
+        "Anna Che Esce",
+        "cavallo batteria graffetta",
+    )
+    .await;
+    let (_, detail) = app
+        .send("GET", &format!("/api/v1/leases/{lease}"), Some(owner), None)
+        .await;
+    let anna_party = detail["parties"][0]["id"].as_str().expect("id").to_owned();
+    let (status, _) = app
+        .send(
+            "PATCH",
+            &format!("/api/v1/lease-parties/{anna_party}"),
+            Some(owner),
+            Some(serde_json::json!({ "share_percent": "50" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let marco_email = common::unique_email("subentro-marco");
+    let (status, marco) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/parties"),
+            owner,
+            serde_json::json!({
+                "full_name": "Marco Che Resta",
+                "email": marco_email,
+                "role": "cotenant",
+                "share_percent": "50",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {marco}");
+    let marco_party = marco["id"].as_str().expect("id").to_owned();
+
+    let (status, activated) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/activate"),
+            owner,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {activated}");
+    (lease, anna_party, marco_party, anna, marco_email)
+}
+
+fn party_in<'a>(parties: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    parties
+        .as_array()
+        .expect("elenco delle parti")
+        .iter()
+        .find(|party| party["id"] == id)
+        .expect("la parte c'è")
+}
+
+/// **Il subentro fa le due cose che contano**, e le fa vedere dal bordo (ADR-056).
+///
+/// Chi esce **smette di essere residente**: dopo il subentro può uscire
+/// dall'organizzazione, prima riceveva `409 membership.lease_in_force` — è
+/// `app.has_lease_in_force` che filtra `left_at`. **Non smette di essere
+/// debitore**: finché è membro continua a leggere il contratto, perché
+/// `app.can_access_lease` non guarda `left_at`, ed è voluto. Chi entra nasce come
+/// segnaposto in attesa, con la quota e l'intestazione di chi esce, e accettando
+/// l'invito **diventa lui** quello che non può uscire.
+#[tokio::test]
+async fn a_handover_lets_the_leaving_tenant_out_and_puts_the_joining_one_in_its_place() {
+    let app = require_app!();
+    let (owner, owner_org) = common::register_and_login(&app, "subentro-proprietario").await;
+    let (lease, anna_party, marco_party, anna, _) =
+        active_lease_of_two(&app, &owner, "Casa del subentro").await;
+
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &anna,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.lease_in_force");
+
+    let giulia_email = common::unique_email("subentro-giulia");
+    let body = serde_json::json!({
+        "leaving_party_id": anna_party,
+        "joining": { "full_name": "Giulia Che Entra", "email": giulia_email, "share_percent": "50" },
+    });
+
+    // Il subentro è di chi amministra: chi abita non fa uscire nessuno. Il codice e
+    // non solo lo stato, perché senza `ensure_staff` il `403` arriverebbe lo stesso
+    // dalla RLS (`auth.denied_by_policy`) — provato al contrario — e il test non
+    // saprebbe distinguere il controllo che c'è da quello che manca.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/handover"),
+            &anna,
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "corpo: {problem}");
+    assert_eq!(problem["code"], "org.staff_role_required");
+
+    let (status, handed) = app
+        .post_auth(&format!("/api/v1/leases/{lease}/handover"), &owner, body)
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {handed}");
+
+    let parties = &handed["lease"]["parties"];
+    let left = party_in(parties, &anna_party);
+    assert_eq!(left["left_at"], day(0), "esce oggi: {left}");
+    assert_eq!(left["is_primary"], false, "chi esce non intesta più niente");
+    let joined = parties
+        .as_array()
+        .expect("parti")
+        .iter()
+        .find(|party| party["email"] == giulia_email.as_str())
+        .expect("la parte di chi entra");
+    assert_eq!(
+        joined["is_primary"], true,
+        "l'intestazione passa a chi entra"
+    );
+    assert_eq!(joined["share_percent"], "50.00");
+    assert_eq!(joined["role"], "tenant", "il ruolo di chi esce");
+    assert!(
+        joined.get("user_id").is_none(),
+        "un segnaposto in attesa: {joined}"
+    );
+    assert_eq!(party_in(parties, &marco_party)["share_percent"], "50.00");
+    assert_eq!(handed["invitation"]["email"], giulia_email.as_str());
+    let giulia_token = handed["invitation"]["accept_token"]
+        .as_str()
+        .expect("token dell'invito")
+        .to_owned();
+
+    // Anna continua a leggere il contratto: ha degli addebiti da pagare.
+    let (status, seen) = app
+        .send("GET", &format!("/api/v1/leases/{lease}"), Some(&anna), None)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "chi esce continua a leggere: {seen}"
+    );
+
+    // E ora può uscire dall'organizzazione.
+    let (status, body) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &anna,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {body}");
+
+    // Giulia accetta: l'invito trova la sua riga, e da qui è lei ad avere un
+    // contratto in essere.
+    let (giulia, giulia_id) = common::register_tenant_from_invitation(
+        &app,
+        &giulia_token,
+        "Giulia Che Entra",
+        "lampada fiume cartolina",
+    )
+    .await;
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let joined_id = joined["id"].as_str().expect("id");
+    assert_eq!(
+        party_in(&detail["parties"], joined_id)["user_id"],
+        giulia_id.as_str()
+    );
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/organizations/{owner_org}/leave"),
+            &giulia,
+            serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "membership.lease_in_force");
+}
+
+/// **Un rifiuto non lascia niente a metà**: né l'uscita, né la parte nuova, né le
+/// quote. È la ragione per cui il subentro è una richiesta sola e non una sequenza
+/// di `PATCH`.
+#[tokio::test]
+async fn a_handover_that_does_not_add_up_is_refused_and_writes_nothing() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "subentro-rifiuti").await;
+    let (lease, anna_party, marco_party, _, marco_email) =
+        active_lease_of_two(&app, &owner, "Casa dei subentri rifiutati").await;
+    let url = format!("/api/v1/leases/{lease}/handover");
+    let giulia_email = common::unique_email("subentro-rifiuti-giulia");
+    let handover = |leaving: &str, email: &str, joining: &str, shares: serde_json::Value| {
+        serde_json::json!({
+            "leaving_party_id": leaving,
+            "joining": { "full_name": "Giulia Che Entra", "email": email, "share_percent": joining },
+            "shares": shares,
+        })
+    };
+
+    // Anna esce con il suo 50, e 50 + 40 non fa 100.
+    let marco_40 = serde_json::json!([{ "party_id": marco_party, "share_percent": "40" }]);
+    let (status, problem) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(&anna_party, &giulia_email, "50", marco_40.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.shares_not_hundred");
+
+    // Un'email che è già di una parte: l'accettazione troverebbe quella riga.
+    let (status, problem) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(&anna_party, &marco_email, "50", serde_json::json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_email_taken");
+
+    // Una quota su chi esce non è una quota di chi resta.
+    let on_anna = serde_json::json!([{ "party_id": anna_party, "share_percent": "50" }]);
+    let (status, problem) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(&anna_party, &giulia_email, "50", on_anna),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "corpo: {problem}");
+
+    let stranger = uuid::Uuid::now_v7().to_string();
+    let (status, problem) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(&stranger, &giulia_email, "50", serde_json::json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_not_found");
+
+    // Un invito già pendente per quell'email, su un altro contratto della stessa
+    // organizzazione, annulla **tutto**: anche l'uscita di Anna.
+    let other_property = create_property(&app, &owner, "Casa dell'invito pendente").await;
+    let other = draft_lease(&app, &owner, &other_property, None, 0, Some(365)).await;
+    let pending_email = common::unique_email("subentro-pendente");
+    invite_tenant(&app, &owner, &other, &pending_email).await;
+    let (status, problem) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(&anna_party, &pending_email, "50", serde_json::json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "invitation.already_pending");
+
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let parties = detail["parties"].as_array().expect("parti");
+    assert_eq!(parties.len(), 2, "nessuna parte nuova: {detail}");
+    let anna = party_in(&detail["parties"], &anna_party);
+    assert_eq!(
+        anna["left_at"],
+        serde_json::Value::Null,
+        "Anna è ancora dentro"
+    );
+    assert_eq!(anna["is_primary"], true);
+    assert_eq!(
+        party_in(&detail["parties"], &marco_party)["share_percent"],
+        "50.00"
+    );
+
+    // Con le quote giuste passa, e le quote di chi resta cambiano.
+    let marco_40 = serde_json::json!([{ "party_id": marco_party, "share_percent": "40" }]);
+    let (status, handed) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(&anna_party, &giulia_email, "60", marco_40),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {handed}");
+    assert_eq!(
+        party_in(&handed["lease"]["parties"], &marco_party)["share_percent"],
+        "40.00"
+    );
+
+    // E Anna non esce due volte.
+    let (status, problem) = app
+        .post_auth(
+            &url,
+            &owner,
+            handover(
+                &anna_party,
+                &common::unique_email("subentro-luca"),
+                "60",
+                serde_json::json!([]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_already_left");
+}
+
+/// Il subentro esce da un rapporto **in corso**: in bozza si aggiunge una parte, e
+/// un contratto firmato che comincia fra un mese non ha ancora nessuno che esca.
+#[tokio::test]
+async fn a_handover_needs_a_lease_in_force() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "subentro-stati").await;
+
+    for (label, start, activate) in [
+        ("in bozza", -10, false),
+        ("non ancora cominciato", 30, true),
+    ] {
+        let property = create_property(&app, &owner, &format!("Casa {label}")).await;
+        let lease = draft_lease(&app, &owner, &property, None, start, Some(start + 365)).await;
+        let email = common::unique_email("subentro-stati-parte");
+        add_tenant(&app, &owner, &lease, "Parte Unica", Some(&email)).await;
+        if activate {
+            let (status, body) = app
+                .post_auth(
+                    &format!("/api/v1/leases/{lease}/activate"),
+                    &owner,
+                    serde_json::json!({}),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "corpo: {body}");
+        }
+        let (_, detail) = app
+            .send(
+                "GET",
+                &format!("/api/v1/leases/{lease}"),
+                Some(&owner),
+                None,
+            )
+            .await;
+        let party = detail["parties"][0]["id"].as_str().expect("id");
+
+        let (status, problem) = app
+            .post_auth(
+                &format!("/api/v1/leases/{lease}/handover"),
+                &owner,
+                serde_json::json!({
+                    "leaving_party_id": party,
+                    "joining": {
+                        "full_name": "Chi Entra",
+                        "email": common::unique_email("subentro-stati-entra"),
+                        "share_percent": "100",
+                    },
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{label}: {problem}");
+        assert_eq!(problem["code"], "lease.invalid_transition", "{label}");
+    }
+}
+
 /// **La seconda porta di ADR-046**, chiusa (ADR-056): un invito a un'email nuova
 /// su un contratto attivo creava una parte a `remaining_share`, cioè a zero, con
 /// chi doveva uscire ancora dentro. Invitare una parte che esiste resta ammesso:

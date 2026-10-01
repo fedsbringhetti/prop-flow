@@ -6,8 +6,8 @@ use chrono::NaiveDate;
 use propflow_application::error::AppError;
 use propflow_application::use_cases::lease::{
     ActivateLeaseCommand, AddLeasePartyCommand, CancelLeaseCommand, CorrectLeasePartyCommand,
-    DraftLeaseCommand, LeaseDetail, LeaseView, ListLeasesQuery, RemoveLeasePartyCommand,
-    TerminateLeaseCommand,
+    DraftLeaseCommand, HandedOverLease, HandoverLeaseCommand, LeaseDetail, LeaseView,
+    ListLeasesQuery, RemoveLeasePartyCommand, TerminateLeaseCommand,
 };
 use propflow_domain::DomainError;
 use propflow_domain::lease::{
@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::Authenticated;
+use crate::routes::invitations::InvitationResponse;
 use crate::routes::{amount, explicit_null, format_amount};
 use crate::state::AppState;
 
@@ -36,6 +37,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/leases/{id}/activate", post(activate))
         .route("/api/v1/leases/{id}/terminate", post(terminate))
         .route("/api/v1/leases/{id}/cancel", post(cancel))
+        // Il subentro è un verbo del contratto come gli altri tre, e non una
+        // `PUT` sulle parti: una sostituzione dell'elenco intero sarebbe
+        // un'aggiunta travestita, e riaprirebbe ciò che ADR-046 ha chiuso (ADR-056).
+        .route("/api/v1/leases/{id}/handover", post(handover))
         // Le parti si creano annidate e si correggono da una rotta propria: è la
         // forma delle stanze, che nascono sotto l'immobile e vivono sotto
         // `/rooms/{id}`. Una `PATCH` annidata chiederebbe due identificatori per
@@ -328,6 +333,57 @@ pub struct TerminateLeaseRequest {
     pub reason: Option<String>,
 }
 
+/// Il subentro: chi esce, chi entra, e le quote di chi resta.
+///
+/// **La data non c'è**: è oggi (ADR-056). Chi legge `left_at` guarda se c'è e non
+/// che data porta, quindi una data futura farebbe uscire la persona da subito
+/// dicendo il contrario.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct HandoverLeaseRequest {
+    pub leaving_party_id: Uuid,
+    pub joining: HandoverJoiningRequest,
+    /// Le quote di chi resta. Una parte che resta e non compare **non cambia**.
+    #[serde(default)]
+    pub shares: Vec<HandoverShareRequest>,
+}
+
+/// Chi entra. Ruolo e intestazione non ci sono: si ereditano da chi esce.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct HandoverJoiningRequest {
+    #[schema(example = "Giulia Bianchi")]
+    pub full_name: String,
+    /// Riceve l'invito. Non deve essere di nessuna parte del contratto, uscite
+    /// comprese.
+    pub email: String,
+    /// Quota di ripartizione del canone, 0–100. Il client propone quella di chi esce.
+    #[schema(value_type = String, example = "50.00")]
+    pub share_percent: Decimal,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct HandoverShareRequest {
+    pub party_id: Uuid,
+    #[schema(value_type = String, example = "50.00")]
+    pub share_percent: Decimal,
+}
+
+impl HandoverLeaseRequest {
+    fn into_command(self, lease_id: LeaseId) -> Result<HandoverLeaseCommand, DomainError> {
+        Ok(HandoverLeaseCommand {
+            lease_id,
+            leaving_party_id: LeasePartyId::from_uuid(self.leaving_party_id),
+            joining_full_name: self.joining.full_name,
+            joining_email: Email::parse(&self.joining.email)?,
+            joining_share_percent: self.joining.share_percent,
+            shares: self
+                .shares
+                .into_iter()
+                .map(|share| (LeasePartyId::from_uuid(share.party_id), share.share_percent))
+                .collect(),
+        })
+    }
+}
+
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct LeaseResponse {
     pub id: Uuid,
@@ -492,6 +548,34 @@ pub struct LeaseDetailResponse {
     pub parties: Vec<LeasePartyResponse>,
 }
 
+impl LeaseDetailResponse {
+    fn from_detail(detail: &LeaseDetail) -> Self {
+        Self {
+            lease: LeaseResponse::from_view_with_labels(
+                &LeaseView {
+                    lease: detail.lease.clone(),
+                    effective_status: detail.effective_status,
+                },
+                detail.labels.as_ref(),
+            ),
+            parties: detail
+                .parties
+                .iter()
+                .map(LeasePartyResponse::from_domain)
+                .collect(),
+        }
+    }
+}
+
+/// Il contratto dopo il subentro, come `GET /leases/{id}`, e l'invito per chi
+/// entra con il suo token, come `POST /leases/{id}/invitations`: la posta parte
+/// dopo il commit e può non arrivare, e questa è l'unica copia del codice.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct HandoverResponse {
+    pub lease: LeaseDetailResponse,
+    pub invitation: InvitationResponse,
+}
+
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct LeasePageResponse {
     pub items: Vec<LeaseResponse>,
@@ -606,30 +690,13 @@ async fn detail(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<LeaseDetailResponse>> {
     let request_id = context.request_id().map(str::to_owned);
-    let LeaseDetail {
-        lease,
-        effective_status,
-        parties,
-        labels,
-    } = state
+    let detail = state
         .get_lease
         .execute(&context, LeaseId::from_uuid(id))
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
 
-    Ok(Json(LeaseDetailResponse {
-        lease: LeaseResponse::from_view_with_labels(
-            &LeaseView {
-                lease,
-                effective_status,
-            },
-            labels.as_ref(),
-        ),
-        parties: parties
-            .iter()
-            .map(LeasePartyResponse::from_domain)
-            .collect(),
-    }))
+    Ok(Json(LeaseDetailResponse::from_detail(&detail)))
 }
 
 #[utoipa::path(
@@ -729,6 +796,45 @@ async fn terminate(
         .await
         .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
     Ok(Json(LeaseResponse::from_view(&view)))
+}
+
+/// Il subentro: chi esce lascia oggi il suo posto, chi entra riceve l'invito.
+#[utoipa::path(
+    post, path = "/api/v1/leases/{id}/handover", tag = "contratti",
+    params(("id" = Uuid, Path, description = "Identificatore del contratto")),
+    request_body = HandoverLeaseRequest,
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Subentro registrato, invito emesso", body = HandoverResponse),
+        (status = 404, description = "Contratto o parte uscente non trovati", body = crate::error::ProblemDetails),
+        (status = 409, description = "Contratto non in essere, parte già uscita, email già di una parte, quote che non fanno 100, invito già pendente", body = crate::error::ProblemDetails),
+        (status = 422, description = "Email malformata, quota fuori intervallo, una quota su chi non resta", body = crate::error::ProblemDetails),
+    )
+)]
+async fn handover(
+    State(state): State<AppState>,
+    Authenticated(context): Authenticated,
+    Path(id): Path<Uuid>,
+    Json(request): Json<HandoverLeaseRequest>,
+) -> ApiResult<Json<HandoverResponse>> {
+    let request_id = context.request_id().map(str::to_owned);
+    let command = request
+        .into_command(LeaseId::from_uuid(id))
+        .map_err(|error| {
+            ApiError::from(propflow_application::AppError::Validation(error))
+                .with_request_id(request_id.clone())
+        })?;
+
+    let HandedOverLease { detail, invitation } = state
+        .handover_lease
+        .execute(&context, command)
+        .await
+        .map_err(|error| ApiError::from(error).with_request_id(request_id))?;
+
+    Ok(Json(HandoverResponse {
+        lease: LeaseDetailResponse::from_detail(&detail),
+        invitation: InvitationResponse::from_issued(&invitation),
+    }))
 }
 
 /// Nessun corpo, a differenza della disdetta: annullare non registra un fatto
