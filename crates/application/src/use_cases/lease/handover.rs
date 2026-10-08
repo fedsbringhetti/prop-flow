@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use propflow_domain::events::{DomainEvent, DomainEventPayload, EventMetadata, LeaseHandedOver};
-use propflow_domain::lease::{Handover, JoiningParty};
+use propflow_domain::lease::{Handover, JoiningParty, LeaseParty};
 use propflow_domain::ports::{Clock, UnitOfWorkFactory};
 use propflow_domain::shared::{Email, LeaseId, LeasePartyId};
 use propflow_domain::{Entity, RequestContext};
@@ -154,6 +154,22 @@ impl HandoverLease {
         // Riletti nella stessa transazione: la risposta è ciò che il database ha
         // accettato, non ciò che il dominio ha calcolato.
         let parties = uow.lease_parties().list_for_lease(lease.id()).await?;
+
+        // E riverificati, sulle righe rilette e non su quelle calcolate. La
+        // verifica di `Lease::hand_over` lavora sullo **snapshot** letto all'inizio
+        // della transazione, che sotto `READ COMMITTED` può essere invecchiato: due
+        // subentri concorrenti sullo stesso contratto calcolano ciascuno una somma
+        // di 100 dal proprio snapshot, e il secondo riscrive la riga che il primo
+        // ha già cambiato riportandola al valore vecchio. Il risultato è un
+        // contratto attivo con le quote che non fanno 100 e nessun errore — cioè
+        // esattamente lo stato che ADR-046 esiste per impedire, raggiunto per un'altra
+        // strada.
+        //
+        // Questa `SELECT` vede le righe committate dall'altra transazione, quindi
+        // vede la somma vera; fallire qui annulla tutto, perché il `commit` non è
+        // ancora avvenuto. Costa una verifica in memoria su una lettura che già si
+        // faceva.
+        LeaseParty::ensure_tenancy_complete(&parties)?;
         let labels = uow.leases().labels(&[lease.id()]).await?.into_iter().next();
         uow.commit().await?;
 
