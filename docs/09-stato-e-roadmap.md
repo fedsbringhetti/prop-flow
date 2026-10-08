@@ -113,6 +113,33 @@ Poi, nell'ordine:
 *Fatto, e non si ripete:* la CI verde e il merge della PR #57 in `dev` (`fafc2bd`, merge
 commit, non squash) il 18 settembre; il collaudo scritto e mergiato (#58, `822d4f9`) il 22.
 
+<a id="prima-di-qualunque-sezione"></a>
+
+*Prima di qualunque sezione, e in quest'ordine.* Scritto il 6 ottobre 2026. Due lavori
+sono in volo insieme e l'ordine fra loro non è indifferente:
+
+1. **lo storage senza MinIO entra in `dev` per primo** ([ADR-057](08-decisioni.md#adr-057)).
+   Non è una preferenza: dal 28 settembre **la CI di `dev` è rossa** — le immagini di MinIO
+   non si scaricano più, e il passo che prepara lo storage fallisce con `unauthorized` al
+   pull — e finché quel merge non c'è, nessuna PR può diventare verde, compresa la #62. In
+   locale non si vedeva perché l'immagine era in cache;
+2. **poi la #62**, la sezione 13. Il suo branch riceve `dev` con un **merge** e non con un
+   rebase — è già pubblicato — e i conflitti sono di prosa, in questo file e in
+   [12](12-da-fare.md): entrambi i rami riscrivono *Dove siamo*, la tabella qui sopra e la
+   riga del conteggio delle voci.
+
+**La trappola del conteggio.** Le voci aperte di [12](12-da-fare.md) sono dodici su questo
+branch e dieci su quello dello storage, perché i due partono dallo stesso nove e aggiungono
+cose diverse — la 13 chiude `R28` e apre `R55`–`R57`, lo storage apre `R59`. **Dopo il
+merge sono tredici**, e nessuna delle due intestazioni lo dice: il numero si ricontà a mano
+sulle righe, non si prende da un lato.
+
+C'è una scorciatoia che sembra equivalente e non lo è: il workflow usa il checkout di
+default, quindi la CI di una PR gira sul merge con la base, e un semplice *re-run* della
+#62 dopo il passo 1 basterebbe a farla diventare verde. Ma in locale `just ci`
+continuerebbe a cercare MinIO, e la verifica a mano — che qui è la prova che conta —
+resterebbe finta.
+
 *Perché il deploy adesso, con i mezzi che ci sono.* Deciso con l'esito della 9. I mezzi
 vanno procurati, non costruiti: nessuna sezione li fa arrivare. Nel frattempo ogni sezione
 ha reso meno della precedente, e le ultime tre sono state rifinitura su schermate che
@@ -308,7 +335,7 @@ cinque.
 
 #### Decisioni da prendere, con la proposta e il perché
 
-**`R43` — chi abita vede chi contattare** ([ADR-057](08-decisioni.md), da scrivere):
+**`R43` — chi abita vede chi contattare** ([ADR-058](08-decisioni.md), da scrivere):
 
 - **Chi: il proprietario dell'immobile del contratto**, cioè `properties.owner_id`. È
   l'unica risposta che dice «chi amministra il **mio** contratto». *Scartati*: tutto lo
@@ -333,7 +360,7 @@ cinque.
   stringere sarebbe una rottura per chi ci contava. Non emenda ADR-036, che governa la
   **casa** e proietta il solo nome: questa voce sta sul ramo che la `0030` ha tenuto aperto.
 
-**`R39` — chi amministra toglie qualcuno** ([ADR-058](08-decisioni.md), da scrivere):
+**`R39` — chi amministra toglie qualcuno** ([ADR-059](08-decisioni.md), da scrivere):
 
 - **Una rotta: `POST /api/v1/organizations/{id}/members/{user_id}/remove`**, verbo come
   `leave`. *Scartato*: `DELETE`, che nel progetto vuol dire soft delete, e qui si scrive uno
@@ -373,10 +400,19 @@ chi la esegue.
 
 #### Decomposizione
 
-##### `P0` — ADR-057 e ADR-058, prima del codice
+##### `P0` — ADR-058 e ADR-059, prima del codice
 
-Le decisioni sopra, con le alternative scartate. ADR-058 dice per esteso che cosa perde
+Le decisioni sopra, con le alternative scartate. ADR-059 dice per esteso che cosa perde
 chi viene tolto e perché non si cancella niente.
+
+**Erano 057 e 058, e sono stati rinumerati il 6 ottobre 2026.** Questo piano li ha
+riservati il 1° ottobre contando da ADR-056, l'ultimo di questo branch; lo stesso giorno,
+su un branch partito da `dev` — dove 056 non è ancora mergiato — il passaggio dello storage
+a SeaweedFS ha scritto davvero un [ADR-057](08-decisioni.md#adr-057), lasciando 056 libero
+per la 13. Due numeri riservati e uno scritto: vince quello scritto. **È la trappola di
+prenotare un numero su un branch**, e si ripresenta ogni volta che due lavori corrono in
+parallelo: il numero si prende quando l'ADR si scrive, e si verifica contro `dev` e contro
+i branch aperti, non contro il proprio.
 
 ##### `P1` — i contatti (`R43`)
 
@@ -407,7 +443,7 @@ applicativo** (è la policy); non sé stessi, non un `owner`; rientra con un inv
 
 ##### `P3` — documentazione
 
-ADR-057 e ADR-058 già in `P0`; [04](04-sicurezza.md) sul perimetro dei contatti e su chi
+ADR-058 e ADR-059 già in `P0`; [04](04-sicurezza.md) sul perimetro dei contatti e su chi
 viene tolto; [05](05-api.md); `R43` e `R39` fuori da [12](12-da-fare.md), `R58` fuori o
 assegnata secondo la decisione.
 
