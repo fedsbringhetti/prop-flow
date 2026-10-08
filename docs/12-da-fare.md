@@ -1,7 +1,7 @@
 # 12 — Da fare
 
 Le cose da sistemare e da costruire, raccolte usando il prodotto e leggendo il codice.
-**Dodici voci aperte**, una delle quali rinviata con la sua ragione (`R40`), con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
+**Tredici voci aperte**, una delle quali rinviata con la sua ragione (`R40`), con un identificatore stabile ciascuna — `R35` è entrata e si è dissolta nello stesso giorno, dentro `R31`.
 
 Trentatré sono uscite: `R4`, `R5`, `R6`, `R10`, `R20` e il bottone del thread con la
 [sezione 1](11-piani-conclusi.md#esito-sezione-1); `R2` e `R3` con la
@@ -35,8 +35,10 @@ per il costo, e ciò che vedeva lo si cerca da sé; `R50` e `R51` dal **giro a m
 si stava sistemando; `R54` dal **giro a mano della 12**, che è tornato a essere il modo in
 cui si trovano le cose — l'ha scoperta l'ora in cui il giro è stato fatto; `R55`, `R56` e `R57`
 **eseguendo** la 13, come ciò che il subentro ha deciso di non fare — le stesse due strade
-di `R39` e `R40`, che uscirono dalla pianificazione della 6. E `R58` **pianificando** la 14,
-riverificando una premessa di ADR-054 che risultava falsa.
+di `R39` e `R40`, che uscirono dalla pianificazione della 6; `R58` **pianificando** la 14,
+riverificando una premessa di ADR-054 che risultava falsa; e `R59` **pianificando** lo
+storage senza MinIO, leggendo gli artefatti del deploy — l'unica trovata leggendo
+artefatti che nessuno ha mai eseguito.
 
 **Quasi tutte le ha trovate l'uso del prodotto**, non la lettura del codice, e le ultime
 due sono l'eccezione che vale la pena distinguere: non vengono da un giro né da una
@@ -109,6 +111,7 @@ ogni fetta. Qui restano le voci, con il loro stato. Com'era, con le ragioni dell
 
 | # | Stato | Cosa | Quel che si sa già |
 |---|---|---|---|
+| R59 | aperta | **In produzione il download di un documento non raggiunge il browser** | Trovata **pianificando lo storage senza MinIO** ([ADR-057](08-decisioni.md#adr-057)), leggendo gli artefatti del deploy, che non sono mai stati eseguiti: **dedotta, non osservata** — ma riproducibile in locale, vedi sotto. `DownloadDocument` restituisce un URL **prefirmato** sull'endpoint dello storage (`use_cases/document/download.rs`), e il client ci manda il browser. Con l'API lanciata sull'host (`cargo run`) l'endpoint è `http://localhost:9000`, che il browser raggiunge, ed è la ragione per cui non si è mai visto; nel compose di produzione è `http://storage:8333` — prima `http://minio:9000` — cioè un nome che esiste solo **dentro la rete del compose**, e il Caddyfile (`ops/deploy/Caddyfile`) inoltra soltanto `/api/v1/*` e i file statici. Il primo documento scaricato dal telefono, al punto 5 del cammino, fallirebbe. **E si osserva oggi, in locale, senza aspettare il deploy**: con `docker compose up` — lo stack dietro il proxy su `:8081`, che `CLAUDE.md` §4 chiama «la stessa forma che avrà in produzione» — l'API ha già `PROPFLOW__STORAGE__ENDPOINT: http://storage:8333` (`docker-compose.yml:132`) e anche `ops/web/Caddyfile` instrada solo `/api/v1/*`. Riprodurla costa dieci minuti ed è la cosa più economica da fare **prima** di decidere fra le due vie. **Due vie, e una decisione.** Esporre lo storage su un'origine pubblica — un sottodominio, perché SigV4 firma l'host e un prefisso di percorso aggiunto dal proxy invaliderebbe la firma — con un secondo endpoint usato **solo** per firmare; oppure far passare il download dall'API, che rilegge l'oggetto e lo serve, togliendo l'URL prefirmato e con lui il «permesso trasferibile» che `presign_ttl_seconds` limita. La prima tiene i byte fuori dall'API, la seconda tiene un'origine sola, che è metà dell'argomento di [ADR-038](08-decisioni.md#adr-038). **Va decisa prima del deploy** |
 
 ### Interfaccia e prodotto
 

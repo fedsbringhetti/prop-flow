@@ -10,7 +10,7 @@
 set -euo pipefail
 
 CONTAINER="${PROPFLOW_TEST_CONTAINER:-propflow-test-db}"
-MINIO_CONTAINER="${PROPFLOW_TEST_MINIO_CONTAINER:-propflow-test-minio}"
+STORAGE_CONTAINER="${PROPFLOW_TEST_STORAGE_CONTAINER:-propflow-test-storage}"
 PORT="${PROPFLOW_TEST_PORT:-55433}"
 IMAGE="postgres:16-alpine"
 KEEP="${PROPFLOW_TEST_KEEP:-0}"
@@ -19,7 +19,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cleanup() {
   if [[ "$KEEP" != "1" ]]; then
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    docker rm -f "$MINIO_CONTAINER" >/dev/null 2>&1 || true
+    docker rm -f "$STORAGE_CONTAINER" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -45,7 +45,7 @@ echo "== storage oggetti di test =="
 # Anche lo storage è effimero, per la stessa ragione del database: i test
 # dell'adattatore S3 si dichiarerebbero `SALTATO` senza, e un test saltato in
 # silenzio è un verde che non prova nulla.
-eval "$(PROPFLOW_TEST_MINIO_CONTAINER="$MINIO_CONTAINER" "${ROOT}/ops/ci/prepare-object-storage.sh")"
+eval "$(PROPFLOW_TEST_STORAGE_CONTAINER="$STORAGE_CONTAINER" "${ROOT}/ops/ci/prepare-object-storage.sh")"
 
 echo "== controlli statici sullo schema =="
 "${ROOT}/ops/ci/check-schema.sh" "$PROPFLOW_TEST_MIGRATOR_URL"

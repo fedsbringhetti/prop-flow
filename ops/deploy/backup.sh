@@ -2,7 +2,7 @@
 # Copia di sicurezza: il **database e il bucket**, cifrati, fuori dalla macchina.
 #
 # DUE COSE E NON UNA
-# I documenti sono oggetti in MinIO, non righe: un dump del database li lascia
+# I documenti sono oggetti nello storage, non righe: un dump del database li lascia
 # fuori, e la riga che li cita resta senza byte. È la stessa constatazione che
 # `just down-hard` ha già prodotto una volta in sviluppo, e in produzione sarebbe
 # un contratto senza il suo PDF.
@@ -49,13 +49,12 @@ docker compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T postgres \
   > "${work}/propflow.dump"
 
 echo "== copia del bucket dei documenti =="
-# `mc mirror` dentro un container usa e getta, sulla stessa rete del compose: non
-# serve installare il client MinIO sulla macchina.
-docker compose -f "$COMPOSE" --env-file "$ENV_FILE" run --rm --no-deps \
-  --entrypoint sh -v "${work}:/backup" minio -c '
-    mc alias set src "http://minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-    mc mirror --overwrite --remove src/propflow-documents /backup/documents
-  '
+# `aws s3 sync` nel servizio `storage-cli`, sulla stessa rete del compose: non serve
+# installare la CLI sulla macchina. `--delete` è il `--remove` di `mc mirror`, che
+# c'era prima (ADR-057): la copia è lo stato del bucket, non un accumulo.
+docker compose -f "$COMPOSE" --env-file "$ENV_FILE" --profile tools run --rm --no-deps \
+  -v "${work}:/backup" storage-cli \
+  s3 sync s3://propflow-documents /backup/documents --delete --only-show-errors
 
 echo "== archivio cifrato =="
 archive="${STAGING}/propflow-${stamp}.tar.gz.gpg"

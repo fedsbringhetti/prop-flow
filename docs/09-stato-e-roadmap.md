@@ -112,39 +112,34 @@ Poi, nell'ordine:
 | 1 | **Le sezioni 11-16**, una per conversazione, ognuna con il piano in questo file prima e l'esito in [11](11-piani-conclusi.md) dopo | chi sviluppa | dalla 11 alla 13 sono [concluse](11-piani-conclusi.md#esito-sezione-13), la 14 è [pianificata](#piano-in-corso) |
 | 2 | I mezzi: VPS, dominio, relay SMTP con SPF, DKIM e DMARC, credenziali | chi possiede il progetto | **il blocco reale**, dal 10 settembre; si procurano in parallelo alle sezioni |
 | 3 | **Il ripristino provato una volta**, mentre dentro non ci sono i dati di nessuno | runbook | mai eseguito |
-| 4 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G* |
+| 4 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G*. **Prima va decisa `R59`**: com'è scritto, il download di un documento non raggiungerebbe il browser |
 | 5 | **Il collaudo di [13](13-collaudo.md)**, per intero, dal telefono — compreso l'Invio su `/invito` con una tastiera vera (B2), in sospeso dal poscritto della 8 | a mano, meglio se da chi non ha scritto il codice | l'esito in [11](11-piani-conclusi.md), **mentre lo si percorre** |
 | 6 | **Il mese con un proprietario vero** | esterno | la misura che decide tutto ciò che viene dopo |
 
 *Fatto, e non si ripete:* la CI verde e il merge della PR #57 in `dev` (`fafc2bd`, merge
-commit, non squash) il 18 settembre; il collaudo scritto e mergiato (#58, `822d4f9`) il 22.
+commit, non squash) il 18 settembre; il collaudo scritto e mergiato (#58, `822d4f9`) il 22;
+lo storage senza MinIO mergiato con la #63 (`778d97b`) il 9 ottobre, che è ciò che ha
+riportato `dev` a poter accettare un merge.
 
-<a id="prima-di-qualunque-sezione"></a>
+*Fatto fuori sequenza, dal 1° al 9 ottobre 2026:* lo storage dei documenti è passato da
+MinIO, le cui immagini non si scaricano più, a **SeaweedFS** in CI, sviluppo e produzione
+([ADR-057](08-decisioni.md#adr-057), [esito](11-piani-conclusi.md#esito-storage-senza-minio)),
+e con lui ogni immagine di terze parti è fissata per versione. **Non era rimandabile:**
+dal 28 settembre il job che prepara lo storage falliva al pull con `unauthorized`, e con
+esso il check `CI` che la protezione di `dev` esige — per undici giorni nessuna PR ha
+potuto entrare, compresa quella della 13. Entrato in `dev` con la #63 il 9 ottobre, ed è
+la ragione per cui quel merge ha dovuto precedere la #62 e non il contrario.
 
-*Prima di qualunque sezione, e in quest'ordine.* Scritto il 6 ottobre 2026. Due lavori
-sono in volo insieme e l'ordine fra loro non è indifferente:
-
-1. **lo storage senza MinIO entra in `dev` per primo** ([ADR-057](08-decisioni.md#adr-057)).
-   Non è una preferenza: dal 28 settembre **la CI di `dev` è rossa** — le immagini di MinIO
-   non si scaricano più, e il passo che prepara lo storage fallisce con `unauthorized` al
-   pull — e finché quel merge non c'è, nessuna PR può diventare verde, compresa la #62. In
-   locale non si vedeva perché l'immagine era in cache;
-2. **poi la #62**, la sezione 13. Il suo branch riceve `dev` con un **merge** e non con un
-   rebase — è già pubblicato — e i conflitti sono di prosa, in questo file e in
-   [12](12-da-fare.md): entrambi i rami riscrivono *Dove siamo*, la tabella qui sopra e la
-   riga del conteggio delle voci.
-
-**La trappola del conteggio.** Le voci aperte di [12](12-da-fare.md) sono dodici su questo
-branch e dieci su quello dello storage, perché i due partono dallo stesso nove e aggiungono
-cose diverse — la 13 chiude `R28` e apre `R55`–`R57`, lo storage apre `R59`. **Dopo il
-merge sono tredici**, e nessuna delle due intestazioni lo dice: il numero si ricontà a mano
-sulle righe, non si prende da un lato.
-
-C'è una scorciatoia che sembra equivalente e non lo è: il workflow usa il checkout di
-default, quindi la CI di una PR gira sul merge con la base, e un semplice *re-run* della
-#62 dopo il passo 1 basterebbe a farla diventare verde. Ma in locale `just ci`
-continuerebbe a cercare MinIO, e la verifica a mano — che qui è la prova che conta —
-resterebbe finta.
+Ha trovato **tre difetti**, tutti in artefatti mai eseguiti. Due leggendo il codice per
+spostarlo: il bucket di produzione che non creava nessuno, sistemato; e il download
+prefirmato che non raggiungerebbe il browser, che è `R59` e **va deciso prima del passo
+4**. Il terzo l'ha trovato una **review a lavoro finito**, ed è quello che i test non
+potevano vedere: `ops/deploy/restore.sh` non ripristinava i documenti su un bucket non
+vuoto — `aws s3 sync` non ha l'`--overwrite` che `mc mirror` aveva, e i file estratti da
+`tar` sono più vecchi degli oggetti che trovano. Nessuno dei 497 test copre quello script,
+e la verifica che lo dichiarava provato lo era su una destinazione vuota, dove `sync` e
+`cp` si comportano uguale. È nel [poscritto](11-piani-conclusi.md#poscritto-storage-senza-minio),
+e **è il caso che ha fatto scrivere la regola sulla review** in `CLAUDE.md` §3.
 
 *Perché il deploy adesso, con i mezzi che ci sono.* Deciso con l'esito della 9. I mezzi
 vanno procurati, non costruiti: nessuna sezione li fa arrivare. Nel frattempo ogni sezione
@@ -385,7 +380,7 @@ I numeri sono in [Dove siamo](#dove-siamo).
 | **Una spesa si annulla** (`POST /expenses/{id}/cancel`): è il soft delete che la `0028` concedeva e nessuno faceva, ed esce dai saldi da sola — **anche dopo un regolamento**, che salda un saldo e non una spesa. Chi l'ha registrata, chi l'ha anticipata, o lo staff; la `USING` è più larga, e il confine è nel caso d'uso | completo |
 | Coinquilini visibili: elenco dei residenti di un immobile letto da una funzione che proietta, anagrafica ristretta al perimetro della casa | completo |
 | OCR delle bollette: porta `OcrProvider` senza fornitore scelto, adattatore deterministico, coda `ai_jobs` con `SKIP LOCKED`, `pending_review` con le sue uscite, stato del job dall'API | completo |
-| Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
+| Storage oggetti: adattatore S3 su SeaweedFS ([ADR-057](08-decisioni.md#adr-057)), cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox, lettura automatica delle bollette | completi |
 | Dashboard: `GET /dashboard`, **nove** numeri letti da `v_owner_dashboard`, staff soltanto | completo |
 | Sessione in cookie: refresh `HttpOnly` fuori dal corpo, `Secure` condizionale, test che tiene in piedi l'argomento CSRF | completo |

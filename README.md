@@ -42,7 +42,7 @@ The interface is in Italian: its users are Italian owners and tenants. English i
 deferred, not declined, which is why no visible string is written inside a
 component — see [ADR-039](docs/08-decisioni.md#adr-039).
 
-Full suite (ephemeral PostgreSQL and MinIO containers, migrations, invariants, every
+Full suite (ephemeral PostgreSQL and SeaweedFS containers, migrations, invariants, every
 test):
 
 ```bash

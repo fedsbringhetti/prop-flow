@@ -9,7 +9,9 @@ use sha2::{Digest as _, Sha256};
 use url::Url;
 
 /// Header con cui S3 dichiara di aver cifrato l'oggetto a riposo (`AES256`,
-/// `aws:kms`). MinIO lo restituisce con la stessa semantica.
+/// `aws:kms`). **SeaweedFS non lo restituisce**, nemmeno con la cifratura di default
+/// impostata sul bucket, e MinIO non lo faceva senza un KMS: `is_encrypted` resta
+/// `false`, che è il vero (ADR-024, ADR-057).
 const SSE_HEADER: &str = "x-amz-server-side-encryption";
 
 /// Vita della firma delle richieste che l'API esegue da sé.
@@ -27,7 +29,7 @@ pub struct S3Settings {
     pub bucket: String,
     pub access_key_id: String,
     pub secret_access_key: String,
-    /// `true` per MinIO e per S3 raggiunto da un endpoint personalizzato: lo stile
+    /// `true` per ogni endpoint personalizzato, S3 compreso: lo stile
     /// virtual-host richiede un DNS con il nome del bucket come sottodominio, che
     /// in locale non esiste.
     pub path_style: bool,
@@ -47,7 +49,7 @@ pub enum S3SetupError {
     Client(String),
 }
 
-/// Adattatore S3, valido anche per MinIO.
+/// Adattatore S3, valido per qualunque server compatibile.
 ///
 /// `rusty-s3` firma le richieste e non le esegue (Sans-IO): il trasporto è
 /// `reqwest`, già nell'albero come dipendenza di `opentelemetry-otlp`. Scartato
@@ -221,7 +223,7 @@ mod tests {
         }
     }
 
-    /// Con MinIO e con un endpoint personalizzato lo stile deve essere `path`: il
+    /// Con un endpoint personalizzato lo stile deve essere `path`: il
     /// virtual-host richiede un DNS con il bucket come sottodominio, che in locale
     /// non esiste e in produzione va predisposto.
     #[test]

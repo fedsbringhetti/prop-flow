@@ -5,15 +5,15 @@
 
 //! Test dell'adattatore S3 contro uno storage **vero**.
 //!
-//! Girano solo se l'ambiente è configurato: `ops/ci/test-integration.sh` non
-//! avvia MinIO, e pretendere un secondo servizio per l'intera suite renderebbe
-//! non eseguibili anche i test che con lo storage non c'entrano. Senza le
-//! variabili si dichiarano saltati, come i test che richiedono il database.
+//! Girano solo se l'ambiente è configurato: `ops/ci/test-integration.sh` e la CI
+//! avviano uno storage effimero (`ops/ci/prepare-object-storage.sh`, SeaweedFS
+//! dopo ADR-057), e la CI fallisce se trova un test `SALTATO`. Senza le variabili
+//! si dichiarano saltati, come i test che richiedono il database.
 //!
 //! Per eseguirli in locale:
 //!
 //! ```bash
-//! docker compose up -d minio minio-setup
+//! docker compose up -d storage storage-setup
 //! export PROPFLOW_TEST_S3_ENDPOINT=http://127.0.0.1:9000
 //! export PROPFLOW_TEST_S3_BUCKET=propflow-documents
 //! export PROPFLOW_TEST_S3_ACCESS_KEY_ID=propflow
@@ -35,7 +35,7 @@ fn storage() -> Option<S3ObjectStorage> {
     ) else {
         eprintln!(
             "SALTATO: storage oggetti non configurato \
-             (PROPFLOW_TEST_S3_ENDPOINT e affini, vedi docker compose up -d minio)"
+             (PROPFLOW_TEST_S3_ENDPOINT e affini, vedi docker compose up -d storage storage-setup)"
         );
         return None;
     };
@@ -48,7 +48,7 @@ fn storage() -> Option<S3ObjectStorage> {
             bucket,
             access_key_id,
             secret_access_key,
-            // MinIO non ha un DNS `<bucket>.<host>`: senza path style ogni
+            // In locale non c'è un DNS `<bucket>.<host>`: senza path style ogni
             // richiesta fallirebbe nella risoluzione del nome.
             path_style: true,
             request_timeout: Duration::from_secs(10),

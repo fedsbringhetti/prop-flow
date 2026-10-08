@@ -820,6 +820,11 @@ in produzione, dove creare bucket non è un'operazione che un servizio HTTP debb
 fare. Lo creano `docker-compose.yml` (servizio `minio-setup`) in sviluppo e
 `ops/ci/prepare-object-storage.sh` nei test.
 
+*Nota del 1° ottobre 2026.* MinIO non si scarica più, e lo storage è SeaweedFS
+([ADR-057](#adr-057)). La decisione 3 resta com'era: il bucket lo crea il servizio
+`storage-setup`, in sviluppo **e ora anche in produzione**, dove prima non lo creava
+nessuno; la decisione 2 resta vera, e su SeaweedFS `is_encrypted` è `false`.
+
 **Conseguenza operativa.** La cifratura a riposo è un passo di configurazione del
 bucket, documentato in [07 — Operazioni](07-operazioni.md#configurazione). Se manca,
 non fallisce nulla: i documenti si caricano e si scaricano, e `documents.is_encrypted`
@@ -3866,3 +3871,62 @@ dal 28.
   `(lease_id, user_id)` e non guarda `left_at`, e la verifica dell'email lo rifiuta prima che
   lo faccia il vincolo. La via è un contratto nuovo;
 - ADR-046 resta vero per intero, e la sua porta ora è chiusa anche dal lato dell'invito.
+
+---
+
+<a id="adr-057"></a>
+
+## ADR-057 — Lo storage dei documenti è SeaweedFS, perché MinIO non si distribuisce più
+
+**1° ottobre 2026**, fuori dalla serie delle sezioni. Sostituisce MinIO dove
+[ADR-024](#adr-024) lo dava per scontato; ADR-024 resta valido per tutto il resto.
+
+### Il fatto
+
+MinIO ha smesso di pubblicare immagini gratuite nell'ottobre 2025 e ha archiviato il
+repository; l'11 settembre 2026 Docker Hub ha cancellato `minio/minio` e `minio/mc`, e dal
+28 settembre il manifest manca anche su `quay.io`, per `latest`, per tag e per digest. La
+CI di `dev` è rossa da quel giorno, lo stack di sviluppo non parte su una macchina senza
+cache, e il primo deploy fallirebbe al pull. Il progetto usava `latest`, e la cache locale
+ha nascosto la rottura finché la CI non ha scaricato da zero.
+
+### Decisione
+
+**SeaweedFS (`chrislusf/seaweedfs`, Apache-2.0), lo stesso in CI, sviluppo e produzione**,
+con un solo container (`server -s3 -dir=/data`), le credenziali da `AWS_ACCESS_KEY_ID` e
+`AWS_SECRET_ACCESS_KEY` e la salute su `/healthz`. Il bucket lo crea la AWS CLI ufficiale
+(`amazon/aws-cli`), che fa anche copia e ripristino con `aws s3 sync`. **Le immagini si
+fissano per versione**, non `latest`.
+
+L'adattatore non cambia: chiede `PutObject`, `GetObject` e un `GET` prefirmato con SigV4 e
+indirizzi path-style, che SeaweedFS serve come MinIO.
+
+### Come si è scelto
+
+Cinque candidati con un'immagine pubblica — SeaweedFS, RustFS, Garage, Versity, Zenko
+CloudServer — provati con il bucket creato dalla AWS CLI e `cargo test --test
+object_storage` con le variabili della CI: **tre su tre per tutti**. La scelta quindi non
+l'ha fatta la compatibilità, che è pari, ma il resto:
+
+- **RustFS** è il più facile da sostituire — variabili d'ambiente come MinIO — e la sua 1.0
+  è del 16 settembre 2026. In produzione ci stanno i documenti dei clienti;
+- **Garage** è AGPL come MinIO e leggerissimo, ma chiede un layout di cluster, chiavi nel
+  suo formato e una regione propria: tre passi di provisioning in più da tenere giusti;
+- **Versity** è un gateway sopra il filesystem e non implementa `PutBucketEncryption`;
+- **Zenko** è il più pesante;
+- **costruire MinIO dai sorgenti** ci farebbe manutentori di un'immagine, aggiornamenti di
+  sicurezza compresi;
+- **uno S3 gestito** in produzione separerebbe la scelta dei test da quella reale e
+  aggiungerebbe un fornitore ai mezzi da procurare per il deploy.
+
+### Conseguenze
+
+- la cifratura a riposo resta quella del disco: nessun candidato restituisce
+  `x-amz-server-side-encryption` sulla `PUT`, come MinIO senza KMS, e `is_encrypted` resta
+  `false` com'è previsto da ADR-024;
+- in produzione le variabili sono `STORAGE_ACCESS_KEY` e `STORAGE_SECRET_KEY`; nulla era
+  deployato, quindi nessuno ha da migrare;
+- in sviluppo la porta sull'host resta la 9000, e l'endpoint di `.env` non cambia; il volume
+  vecchio di MinIO resta sulla macchina e non viene letto;
+- **il download prefirmato in produzione non raggiunge il browser**, e non per questa
+  decisione: l'endpoint è interno al compose, e il Caddyfile non lo espone. È `R59`.

@@ -98,10 +98,11 @@ pub struct AuthConfig {
 
 /// Storage oggetti per i documenti.
 ///
-/// Un solo adattatore, S3, che parla anche con MinIO: il fornitore è un **dato**
-/// di configurazione e non un ramo del codice (`docs/06-sviluppo.md` §Aggiungere
-/// un provider esterno). In sviluppo l'endpoint è il MinIO del compose, in
-/// produzione quello di S3.
+/// Un solo adattatore, S3, che parla con qualunque server compatibile: il
+/// fornitore è un **dato** di configurazione e non un ramo del codice
+/// (`docs/06-sviluppo.md` §Aggiungere un provider esterno). Oggi è SeaweedFS in
+/// sviluppo, in CI e in produzione (ADR-057): è stato MinIO finché le sue immagini
+/// si scaricavano, e il passaggio non ha toccato una riga di codice.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct StorageConfig {
     pub endpoint: String,
@@ -114,8 +115,7 @@ pub struct StorageConfig {
     pub access_key_id: String,
     pub secret_access_key: String,
     /// `true` mette il bucket nel percorso invece che nel sottodominio. Serve a
-    /// MinIO e a ogni endpoint personalizzato, dove un DNS
-    /// `<bucket>.<host>` non esiste.
+    /// ogni endpoint personalizzato, dove un DNS `<bucket>.<host>` non esiste.
     #[serde(default = "default_storage_path_style")]
     pub path_style: bool,
     /// Vita dell'URL pre-firmato di download.
