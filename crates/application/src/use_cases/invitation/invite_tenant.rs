@@ -6,7 +6,7 @@ use propflow_domain::identity::{Invitation, NewInvitation, OrgRole};
 use propflow_domain::lease::{LeaseParty, LeasePartyRole, NewLeaseParty};
 use propflow_domain::ports::{Clock, UnitOfWork, UnitOfWorkFactory};
 use propflow_domain::shared::{Email, InvitationId, LeaseId, LeasePartyId, OrgId, UserId};
-use propflow_domain::{Entity, RequestContext};
+use propflow_domain::{DomainError, Entity, Invariant, RequestContext};
 use rust_decimal::Decimal;
 
 use crate::authorization;
@@ -108,6 +108,22 @@ impl InviteTenant {
         // che l'invitato collegherà a sé, e senza di essa accettare non lo
         // renderebbe parte di nulla.
         let parties = uow.lease_parties().list_for_lease(lease.id()).await?;
+        // `list_for_lease` non filtra `left_at`: le righe uscite ci sono. Trovarle è
+        // necessario — è così che il subentro impedisce due parti con la stessa email
+        // — ma **una riga uscita non vale come parte esistente** per decidere se la
+        // porta di ADR-046 vada aperta. Senza questo rifiuto, l'email di chi è appena
+        // uscito faceva saltare `ensure_accepts_parties` e l'invito usciva su un
+        // contratto attivo: la porta chiusa dal lato del subentro si riapriva dal lato
+        // dell'invito. Chi è uscito rientra con un contratto nuovo (ADR-056), non con
+        // un invito su quello da cui è uscito.
+        if parties
+            .iter()
+            .any(|party| party.email() == Some(&command.email) && party.left_at().is_some())
+        {
+            return Err(AppError::Validation(DomainError::Invariant(
+                Invariant::LeasePartyAlreadyLeft,
+            )));
+        }
         if !parties
             .iter()
             .any(|party| party.email() == Some(&command.email))
