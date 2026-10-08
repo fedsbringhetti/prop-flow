@@ -33,11 +33,12 @@ access_token_ttl_seconds = 900
 refresh_token_ttl_days = 30
 
 [storage]
-# MinIO del compose. In produzione: https://s3.<regione>.amazonaws.com
+# Lo storage del compose (SeaweedFS, ADR-057), sulla 9000 dell'host. In produzione
+# è quello del compose di produzione, `http://storage:8333`.
 endpoint = "http://localhost:9000"
 region = "us-east-1"
 bucket = "propflow-documents"
-# MinIO e ogni endpoint personalizzato richiedono il bucket nel percorso: lo stile
+# Ogni endpoint personalizzato richiede il bucket nel percorso: lo stile
 # virtual-host vorrebbe un DNS `<bucket>.<host>` che in locale non esiste.
 path_style = true
 # 5 minuti: l'URL pre-firmato è un permesso trasferibile, chi lo intercetta lo usa.

@@ -27,10 +27,10 @@ use tower::ServiceExt as _;
 
 /// Doppio in memoria di [`ObjectStorage`].
 ///
-/// I test dei bordi verificano il **contratto HTTP**, non S3: un MinIO acceso
+/// I test dei bordi verificano il **contratto HTTP**, non S3: uno storage acceso
 /// renderebbe la suite dipendente da un secondo servizio per verificare codici di
 /// stato e autorizzazione, che con S3 non hanno nulla a che vedere. L'adattatore
-/// vero ha i propri test, e uno contro MinIO gira solo se l'ambiente c'è.
+/// vero ha i propri test, che girano contro lo storage effimero della suite.
 ///
 /// Riproduce le due proprietà su cui il resto del codice fa affidamento: il
 /// checksum lo calcola **chi scrive**, e l'URL pre-firmato è opaco e a scadenza.

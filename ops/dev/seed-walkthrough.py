@@ -157,7 +157,7 @@ def gia_seminato(email, corpo=None):
     raise ApiError(
         f"{email} esiste già: questo mondo è stato seminato una volta.\n"
         "Per rifarlo da zero serve un database pulito — `just down-hard`, "
-        f"che porta via anche i volumi, MinIO compreso.{corpo_riga}"
+        f"che porta via anche i volumi, lo storage compreso.{corpo_riga}"
     )
 
 

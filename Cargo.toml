@@ -55,7 +55,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 
 # Client SMTP. **Un solo adattatore che parla con qualunque relay**, per la stessa
-# ragione per cui `rusty-s3` parla anche con MinIO: il fornitore di posta è un
+# ragione per cui `rusty-s3` parla con qualunque S3 compatibile: il fornitore di posta è un
 # **dato di configurazione** e non un ramo del codice.
 #
 # TLS: `tokio1-rustls-tls` e non `tokio1-native-tls`, che tirerebbe OpenSSL — cioè

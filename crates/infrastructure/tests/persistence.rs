@@ -1220,7 +1220,7 @@ async fn the_application_role_cannot_rewrite_what_an_account_is() {
 
 /// Doppio in memoria di `ObjectStorage` per i test di persistenza.
 ///
-/// Qui si verifica il **repository**, non S3: legare questi test a un MinIO
+/// Qui si verifica il **repository**, non S3: legare questi test a uno storage
 /// acceso significherebbe non poterli eseguire quando lo storage manca, e la
 /// query non ha nulla da guadagnarne.
 /// Doppio di `Notifier` che non fa niente.

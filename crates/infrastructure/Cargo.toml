@@ -43,7 +43,7 @@ workspace = true
 # Il doppio in memoria di `ObjectStorage` nei test di persistenza calcola lo
 # stesso digest dell'adattatore vero: un checksum inventato non proverebbe nulla.
 async-trait.workspace = true
-# Il test contro MinIO scarica un URL pre-firmato **senza credenziali**: serve un
+# Il test contro lo storage vero scarica un URL pre-firmato **senza credenziali**: serve un
 # client HTTP nudo, non l'adattatore che sta verificando.
 reqwest.workspace = true
 rust_decimal.workspace = true
