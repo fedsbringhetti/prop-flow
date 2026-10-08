@@ -1771,6 +1771,24 @@ async fn a_handover_lets_the_leaving_tenant_out_and_puts_the_joining_one_in_its_
     );
     assert_eq!(party_in(parties, &marco_party)["share_percent"], "50.00");
     assert_eq!(handed["invitation"]["email"], giulia_email.as_str());
+
+    // **L'evento esiste davvero nell'outbox.** Senza questa asserzione, cancellare
+    // l'`append` di `LeaseHandedOver` nel caso d'uso lasciava verde l'intera suite —
+    // Rust e client — e l'outbox perdeva in silenzio il fatto che il subentro è
+    // avvenuto. Lo si verifica qui e non nel dominio perché è il caso d'uso a
+    // emetterlo, ed è la transazione a doverlo aver scritto.
+    let handed_over_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM app.domain_events \
+         WHERE aggregate_id = $1 AND event_type = 'lease.handed_over'",
+    )
+    .bind(uuid::Uuid::parse_str(&lease).expect("id del contratto"))
+    .fetch_one(app.pools.privileged())
+    .await
+    .expect("conteggio degli eventi del subentro");
+    assert_eq!(
+        handed_over_events, 1,
+        "il subentro emette `lease.handed_over`, una volta sola"
+    );
     let giulia_token = handed["invitation"]["accept_token"]
         .as_str()
         .expect("token dell'invito")
@@ -1827,6 +1845,113 @@ async fn a_handover_lets_the_leaving_tenant_out_and_puts_the_joining_one_in_its_
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
     assert_eq!(problem["code"], "membership.lease_in_force");
+}
+
+/// **Chi esce senza aver mai accettato resta invitabile a sé stesso, e non
+/// re-invitabile dagli altri.** Due rimedi trovati da una review, e sono due facce
+/// della stessa riga.
+///
+/// ADR-056 e [04](../../../docs/04-sicurezza.md) dichiarano che chi non aveva
+/// accettato il proprio invito **può accettarlo dopo** il subentro, per entrare
+/// nell'organizzazione e leggere il contratto e i propri addebiti. Il codice non ce
+/// l'aveva: `link_user` scriveva `joined_at = oggi` su una riga con `left_at` già
+/// scritto, e `lease_parties_dates_ck` (`left_at >= joined_at`) rifiutava tutto con
+/// un `409 conflict.constraint_violated` opaco. Ora `joined_at` **resta nullo**, che
+/// è anche la verità: quella persona nel contratto non è mai entrata.
+///
+/// Dal lato opposto, `list_for_lease` non filtra `left_at`, quindi l'email di chi era
+/// uscito faceva **saltare** `ensure_accepts_parties` e un invito nuovo usciva su un
+/// contratto attivo — la porta che ADR-046 chiude e che il subentro aveva chiuso solo
+/// dal proprio lato.
+///
+/// **Quello che questo test non può provare:** il `CHECK` cade solo se l'accettazione
+/// è in un giorno UTC **successivo** all'uscita, e qui le due cose avvengono nello
+/// stesso giorno. L'asserzione che discrimina è quindi `joined_at` nullo, non il
+/// codice di stato: senza il rimedio quella colonna porterebbe la data di oggi.
+#[tokio::test]
+async fn whoever_left_without_accepting_can_still_accept_but_cannot_be_invited_again() {
+    let app = require_app!();
+    let (owner, _) = common::register_and_login(&app, "uscito-proprietario").await;
+    let (lease, _, marco_party, _, marco_email) =
+        active_lease_of_two(&app, &owner, "Casa di chi non accetta").await;
+
+    // Marco è una parte senza utente: lo si invita sul contratto **attivo**, ed è
+    // legittimo — «si attiva, poi si invita» è il giro che ADR-046 ammette, perché
+    // la parte esiste già.
+    let (status, invitation) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            &owner,
+            serde_json::json!({ "email": marco_email, "full_name": "Marco Che Resta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "corpo: {invitation}");
+    let marco_token = invitation["accept_token"]
+        .as_str()
+        .expect("token dell'invito")
+        .to_owned();
+
+    // Marco esce senza aver accettato; entra Giulia al suo posto.
+    let (status, handed) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/handover"),
+            &owner,
+            serde_json::json!({
+                "leaving_party_id": marco_party,
+                "joining": {
+                    "full_name": "Giulia Che Entra",
+                    "email": common::unique_email("uscito-giulia"),
+                    "share_percent": "50",
+                },
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "corpo: {handed}");
+
+    // **Il suo invito, quello di prima, funziona ancora.**
+    let (_, marco_id) = common::register_tenant_from_invitation(
+        &app,
+        &marco_token,
+        "Marco Che Non Accettò",
+        "quaderno salice tamburo",
+    )
+    .await;
+
+    let (_, detail) = app
+        .send(
+            "GET",
+            &format!("/api/v1/leases/{lease}"),
+            Some(&owner),
+            None,
+        )
+        .await;
+    let marco_row = party_in(&detail["parties"], &marco_party);
+    assert_eq!(
+        marco_row["user_id"],
+        marco_id.as_str(),
+        "l'accettazione collega l'utente alla riga uscita: {marco_row}"
+    );
+    assert!(
+        marco_row["joined_at"].is_null(),
+        "chi è uscito senza accettare non è mai entrato, e `joined_at` lo dice: {marco_row}"
+    );
+    assert_eq!(marco_row["left_at"], day(0), "e resta uscito: {marco_row}");
+
+    // **E adesso non lo si re-invita.** Il rifiuto si prova **qui**, dopo
+    // l'accettazione, e non prima: finché il suo invito era pendente il rifiuto
+    // sarebbe arrivato lo stesso da `org_invitations_pending_uk`, cioè
+    // `invitation.already_pending`, e il test avrebbe mostrato un verde che non
+    // dipendeva dal rimedio — provato al contrario, è esattamente ciò che
+    // succedeva. Senza invito pendente, togliere la guardia fa rispondere `201`.
+    let (status, problem) = app
+        .post_auth(
+            &format!("/api/v1/leases/{lease}/invitations"),
+            &owner,
+            serde_json::json!({ "email": marco_email, "full_name": "Marco Che Resta" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "corpo: {problem}");
+    assert_eq!(problem["code"], "lease.party_already_left");
 }
 
 /// **Un rifiuto non lascia niente a metà**: né l'uscita, né la parte nuova, né le

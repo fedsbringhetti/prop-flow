@@ -412,6 +412,75 @@ mod tests {
         ));
     }
 
+    /// Una quota non si posa su una riga **già uscita**, e il test esiste perché il
+    /// suo rimedio non era coperto: `a_share_can_only_be_set_on_a_party_that_stays`
+    /// prova con chi esce *adesso* e con un id inesistente, mai con chi era uscito
+    /// prima. Togliendo `&& party.left_at().is_none()` dal filtro, quei due test
+    /// restavano verdi e una quota finiva su una riga che `ensure_tenancy_complete`
+    /// non somma — cioè un numero scritto che non corrisponde a niente di verificato.
+    #[test]
+    fn a_share_cannot_be_set_on_a_party_that_had_already_left() {
+        let (lease, parties) = active_with_two();
+        let (anna, marco) = (parties[0].id(), parties[1].id());
+        let first = lease
+            .hand_over(
+                &parties,
+                Handover {
+                    leaving_party_id: anna,
+                    joining: giulia("50"),
+                    shares: vec![],
+                },
+                date(IN_FORCE),
+                Utc::now(),
+            )
+            .expect("primo subentro");
+        let after = vec![first.left, parties[1].clone(), first.joined];
+
+        // Marco esce, Luca entra, e si prova a dare una quota ad Anna, uscita prima.
+        let result = lease.hand_over(
+            &after,
+            Handover {
+                leaving_party_id: marco,
+                joining: JoiningParty {
+                    email: email("luca@example.com"),
+                    ..giulia("50")
+                },
+                shares: vec![(anna, dec("50"))],
+            },
+            date(IN_FORCE),
+            Utc::now(),
+        );
+        assert!(
+            matches!(result, Err(DomainError::Validation { .. })),
+            "una quota su una parte uscita è un riferimento a nessuno: {result:?}"
+        );
+    }
+
+    /// La stessa parte due volte in `shares` è rifiutata, e il controllo è
+    /// **portante**: senza, `reshared` conterrebbe due copie, lo stato verificato
+    /// risolverebbe con la **prima** (`find`) e il database scriverebbe la
+    /// **seconda** in ordine. La somma verificata e la somma scritta sarebbero due
+    /// numeri diversi, e il contratto resterebbe attivo con le quote rotte.
+    #[test]
+    fn the_same_party_cannot_appear_twice_among_the_shares() {
+        let (lease, parties) = active_with_two();
+        let (anna, marco) = (parties[0].id(), parties[1].id());
+        let result = lease.hand_over(
+            &parties,
+            Handover {
+                leaving_party_id: anna,
+                joining: giulia("20"),
+                shares: vec![(marco, dec("80")), (marco, dec("30"))],
+            },
+            date(IN_FORCE),
+            Utc::now(),
+        );
+        assert!(
+            matches!(result, Err(DomainError::Validation { .. })),
+            "due quote per la stessa parte: {result:?}"
+        );
+    }
+
     #[test]
     fn a_party_that_is_not_on_the_lease_cannot_leave_it() {
         let (lease, parties) = active_with_two();
