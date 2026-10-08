@@ -96,11 +96,13 @@ services:
   #
   # **Non è un fornitore.** Non verifica SPF, DKIM né i rimbalzi: prova che il
   # messaggio parte e che cosa contiene, non che sarebbe recapitato — è lo stesso
-  # limite che lo storage di sviluppo ha rispetto a S3. La posta verso un indirizzo vero va provata
-  # con un mittente vero, e su un dominio nuovo finisce nello spam senza dare
-  # errore.
+  # limite che lo storage di sviluppo ha rispetto a S3. La posta verso un indirizzo
+  # vero va provata con un mittente vero, e su un dominio nuovo finisce nello spam
+  # senza dare errore.
   mailpit:
-    image: axllent/mailpit:latest
+    # Fissata per versione come le altre: `latest` è ciò che ha nascosto la
+    # scomparsa di MinIO finché la cache c'era (ADR-057), e qui varrebbe uguale.
+    image: axllent/mailpit:v1.31.1
     container_name: propflow-mailpit
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: "true"

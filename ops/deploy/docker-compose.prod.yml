@@ -76,8 +76,8 @@ services:
   storage-setup:
     image: amazon/aws-cli:2.37.7
     environment:
-      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
-      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY:?serve STORAGE_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY:?serve STORAGE_SECRET_KEY}
       AWS_DEFAULT_REGION: us-east-1
     entrypoint:
       - sh
@@ -89,6 +89,8 @@ services:
       storage:
         condition: service_healthy
     restart: "no"
+    security_opt:
+      - no-new-privileges:true
 
   # La AWS CLI sulla rete del compose, per `backup.sh` e `restore.sh`: il profilo
   # `tools` la tiene fuori da `up`, e si usa con `run --rm`. Prima lo faceva `mc`
@@ -97,10 +99,12 @@ services:
     image: amazon/aws-cli:2.37.7
     profiles: ["tools"]
     environment:
-      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
-      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY:?serve STORAGE_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY:?serve STORAGE_SECRET_KEY}
       AWS_DEFAULT_REGION: us-east-1
       AWS_ENDPOINT_URL: http://storage:8333
+    security_opt:
+      - no-new-privileges:true
 
   # Le migration girano **prima** dell'API e con il ruolo del migratore, che è
   # l'unico con privilegi DDL. Un job che termina, non un servizio.
