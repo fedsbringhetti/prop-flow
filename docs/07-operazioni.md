@@ -107,9 +107,13 @@ rifiuta per primo. Il router monta quindi il limite generale sul gruppo di rotte
 **non** comprende l'upload, e a quella dà il proprio. Alzare il limite generale
 funzionerebbe ed è la via da non prendere: indebolisce ogni endpoint per servirne uno.
 
-**Cifratura a riposo.** Il bucket va configurato con la cifratura predefinita (SSE):
+**Cifratura a riposo.** Su uno S3 gestito, o su qualunque fornitore che dichiari la
+cifratura sulla `PUT`, il bucket va configurato con la cifratura predefinita (SSE):
 l'applicazione non la richiede a ogni oggetto, **legge** dalla risposta del fornitore
 se l'oggetto è stato cifrato e registra la modalità in `documents.encryption_key_ref`.
+**Sullo storage che il progetto spedisce oggi questo passo non c'è**, e il paragrafo
+dopo dice perché: non esiste un comando da eseguire né in `storage-setup` né nel
+runbook, perché non cambierebbe niente di osservabile.
 Su un bucket non configurato la colonna `documents.is_encrypted` risulta `false`, ed è
 il comportamento voluto — dice il vero invece di dire ciò che si spera. Con SSE la
 chiave è del fornitore: non protegge da un accesso amministrativo al bucket.

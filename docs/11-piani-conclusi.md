@@ -13501,7 +13501,7 @@ della CI fallisce con `unauthorized` al pull, su `dev` dal merge della #61. In l
 | SeaweedFS 4.48 prende le credenziali dall'ambiente | vero, provato: `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`, e un segreto sbagliato dà 0 su 3. Nessun file di configurazione |
 | Ha un endpoint di salute | vero: `/healthz` risponde `200`, e nell'immagine c'è `wget` |
 | I dati sopravvivono | vero, provato: dopo un riavvio e con un container **nuovo** sullo stesso volume gli oggetti ci sono tutti |
-| Copia e ripristino reggono con la CLI ufficiale | vero, provato: `aws s3 sync` in andata e ritorno dà file identici; un `mb` su un bucket che c'è risponde `BucketAlreadyOwnedByYou` |
+| Copia e ripristino reggono con la CLI ufficiale | vero **su una destinazione vuota**, che è l'unico modo in cui è stato provato: `aws s3 sync` in andata e ritorno dà file identici, e un `mb` su un bucket che c'è risponde `BucketAlreadyOwnedByYou`. La premessa non copriva il caso vero — vedi il [poscritto](#poscritto-storage-senza-minio) |
 | La cifratura a riposo non distingue | vero: nessuno dei cinque restituisce `x-amz-server-side-encryption` sulla `PUT`, come MinIO senza KMS. `is_encrypted` resta `false`, come ADR-024 prevede |
 
 ### Decisioni, con il perché
@@ -13617,9 +13617,12 @@ che gli sta intorno. [ADR-057](08-decisioni.md#adr-057), con una nota ad ADR-024
   `SALTATO`, con lo storage su SeaweedFS; `cargo clippy … -D warnings` pulito;
 - **lo sviluppo**: `storage` diventa `healthy`, `storage-setup` crea il bucket al primo giro
   ed esce `0` anche al secondo;
-- **copia e ripristino**, con i comandi esatti degli script contro il compose di
-  produzione: un oggetto scritto, copiato fuori, il volume buttato, ripristinato su uno
-  storage nuovo **prima** di `up`, riletto **identico byte per byte**;
+- **copia e ripristino**, con i comandi degli script contro il compose di produzione: un
+  oggetto scritto, copiato fuori, il volume buttato e lo storage ricreato **vuoto**,
+  riletto **identico byte per byte**. Due limiti di questa prova, scoperti dopo e scritti
+  qui perché sono la ragione per cui non ha visto il difetto del [poscritto](#poscritto-storage-senza-minio):
+  è stata fatta **sui singoli comandi** e non con `restore.sh` da capo a fondo, e la
+  destinazione era sempre vuota;
 - **da capo a fondo**: un'API compilata da questo branch, con SeaweedFS, carica un documento
   su un contratto (`201`, `is_encrypted: false`), risponde `307` al contenuto, e l'URL
   prefirmato si scarica **senza credenziali** (`200`) con il file identico.
@@ -13631,6 +13634,43 @@ che gli sta intorno. [ADR-057](08-decisioni.md#adr-057), con una nota ad ADR-024
   e non vengono più letti: lo stack nuovo parte vuoto, e il mondo del seeder va
   riseminato per avere i documenti;
 - la cifratura a riposo dei documenti è quella del disco della VPS, da attivare sul volume.
+
+<a id="poscritto-storage-senza-minio"></a>
+
+### Poscritto — quello che una review ha trovato dopo
+
+Il 9 ottobre 2026, a lavoro finito e verificato, una review del diff ha trovato **un
+difetto che la verifica sopra non poteva vedere**, e vale la pena dire perché non poteva.
+
+**`restore.sh` non ripristinava i documenti su un bucket non vuoto.** Sostituire
+`mc mirror --overwrite` con `aws s3 sync` ha perso l'`--overwrite`, che in `sync` non ha
+un equivalente: `sync` trasferisce solo se la dimensione differisce **oppure** se la
+sorgente è più recente, e `tar` conserva le mtime dell'archivio — i file ripristinati sono
+quindi più **vecchi** degli oggetti che trovano, e venivano saltati. Con
+`--only-show-errors` lo script usciva `0` senza stampare niente.
+
+**Perché la verifica non l'ha visto:** è stata fatta su una destinazione vuota, dove
+`sync` e `cp` si comportano allo stesso modo. Il caso che conta è l'opposto, ed è anche
+quello comune — si butta il database per rifarlo dal dump e il volume dei documenti
+sopravvive. La guardia dello script controllava soltanto che lo schema `app` fosse vuoto.
+
+**Com'è stato corretto:** una guardia sul bucket **prima** del ripristino del database,
+perché accorgersene dopo lascia un sistema a metà; e `cp --recursive` al posto di `sync`,
+così la copia è incondizionata e non dipende dalla guardia.
+
+Nello stesso giro sono state corrette altre cose minori: il commento che giustificava la
+creazione del bucket con «un ripristino può venire prima di `up`» — via che lo script non
+permette, perché usa `exec` su postgres e `run --no-deps` sullo storage; `no-new-privileges`
+mancante sui due servizi nuovi, unici del file a non averlo; `${STORAGE_ACCESS_KEY}` senza
+`:?` mentre il runbook dice che le variabili pretese si dichiarano così; `axllent/mailpit`
+ancora a `latest`; e il paragrafo sulla cifratura a riposo in `07`, che era rimasto
+un'istruzione senza procedura.
+
+**Su `R59` la review ha aggiunto un fatto**, ed è quello che cambia di più: non è
+riproducibile solo in produzione. Con `docker compose up` — lo stack dietro il proxy, la
+forma che `CLAUDE.md` §4 chiama «la stessa che avrà in produzione» — l'API ha già
+`PROPFLOW__STORAGE__ENDPOINT: http://storage:8333` e `ops/web/Caddyfile` instrada solo
+`/api/v1/*`. **`R59` si osserva oggi, in locale**, e smette di essere dedotta.
 
 
 <a id="archivio-09-al-18-settembre-2026"></a>
