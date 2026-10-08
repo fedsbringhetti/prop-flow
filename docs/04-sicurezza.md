@@ -257,7 +257,14 @@ contrario: provato al contrario con il filtro aggiunto alla funzione, è **l'uni
 della suite a cadere.
 
 Un uscente che non aveva mai accettato il suo invito può accettarlo dopo: l'accettazione
-lo collega alla sua riga, uscita, ed entra nello stesso perimetro.
+lo collega alla sua riga, uscita, ed entra nello stesso perimetro. Su quella riga
+`joined_at` **resta nullo** — scriverlo violerebbe `lease_parties_dates_ck`, ed è anche
+falso, perché nel contratto quella persona non è mai entrata. Fino al 9 ottobre 2026 il
+codice non lo faceva e questa frase era falsa: vedi l'emendamento in
+[ADR-056](08-decisioni.md#adr-056).
+
+**Non lo si può però re-invitare** su quel contratto: `409 lease.party_already_left`. Il
+suo invito vecchio resta valido, uno nuovo no.
 
 ### Il pool privilegiato
 

@@ -2033,7 +2033,7 @@ curl -s http://localhost:8080/api/v1/expense-groups/$GROUP/balances \
 
 | Metodo | Percorso | Ruolo minimo | Esito |
 |---|---|---|---|
-| POST | `/api/v1/leases/{id}/invitations` | staff | `201` con il token da consegnare. `409` se c'è già un invito pendente per quell'email, `409 lease.parties_locked` se l'email non è di nessuna parte e il contratto non accetta più parti |
+| POST | `/api/v1/leases/{id}/invitations` | staff | `201` con il token da consegnare. `409` se c'è già un invito pendente per quell'email, `409 lease.parties_locked` se l'email non è di nessuna parte e il contratto non accetta più parti, `409 lease.party_already_left` se l'email è di una parte **uscita**: chi è uscito rientra con un contratto nuovo, e il suo invito vecchio resta valido ([ADR-056](08-decisioni.md#adr-056)) |
 | DELETE | `/api/v1/invitations/{id}` | staff | `204`. `409` se già accettato |
 | POST | `/api/v1/auth/accept-invitation` | autenticato | `200`. `401` se il token è sconosciuto, scaduto o revocato; `409` se già accettato |
 

@@ -3821,6 +3821,32 @@ Un uscente che non aveva mai accettato il suo invito può accettarlo dopo, e l'a
 collega alla sua riga, uscita: entra nell'organizzazione e legge contratto e addebiti. È lo
 stesso perimetro, e il subentro non revoca quel vecchio invito.
 
+> **Emendamento del 9 ottobre 2026.** Questa frase era **falsa quando è stata scritta**, e lo
+> è rimasta fino a una review del diff a lavoro finito. `LeaseParty::link_user` scriveva
+> `joined_at = oggi` su una riga che aveva già `left_at`, e `lease_parties_dates_ck`
+> (`migrations/0005_leases.sql:98`, `left_at >= joined_at`) rifiutava l'accettazione con un
+> `23514` tradotto in `409 conflict.constraint_violated` — un codice che il catalogo del
+> client non mappa nemmeno. Funzionava **solo** se l'accettazione cadeva nello stesso giorno
+> UTC dell'uscita.
+>
+> **Il codice è stato corretto, non la decisione:** su una parte già uscita `link_user` lascia
+> `joined_at` **nullo**, e la colonna è nullabile apposta. È anche la risposta esatta, perché
+> quella persona nel contratto non è mai entrata — ha ricevuto un invito e non l'ha accettato
+> in tempo.
+>
+> La premessa che il piano aveva verificato — «una parte mai accettata ha `joined_at` nullo e
+> il `CHECK` non dice niente» — era vera **nel momento del subentro** e smetteva di esserlo
+> dopo. È la forma di premessa sbagliata più cara: vera quando la si controlla, falsa quando
+> serve.
+
+**Re-invitare chi è uscito è rifiutato**, con `409 lease.party_already_left`. Anche questo è
+un emendamento del 9 ottobre: `LeasePartyRepository::list_for_lease` non filtra `left_at`,
+quindi in `InviteTenant` l'email di una riga uscita contava come «la parte esiste già» e
+faceva **saltare** `ensure_accepts_parties`. L'invito usciva su un contratto attivo, cioè
+esattamente la porta che questa sezione aveva chiuso dal lato del subentro, riaperta dal lato
+dell'invito. Chi è uscito rientra con un contratto nuovo, non con un invito su quello da cui
+è uscito.
+
 **Gli addebiti non si spostano.** Stanno sul contratto e non sulla parte (`IssueCharge` prende
 un `lease_id`), e la quota non ripartisce nessun addebito: è dichiarativa, e serve
 all'attivazione. Chi si aspetta che l'inquilino nuovo cominci a essere addebitato da sé si
