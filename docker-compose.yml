@@ -32,41 +32,51 @@ services:
       timeout: 5s
       retries: 10
 
-  # Storage oggetti per i documenti. In produzione al suo posto c'è S3: stesso
-  # protocollo, stesso adattatore, cambia l'endpoint.
-  minio:
-    image: quay.io/minio/minio:latest
-    container_name: propflow-minio
-    command: ["server", "/data", "--console-address", ":9001"]
+  # Storage oggetti per i documenti: SeaweedFS, lo stesso della CI e della
+  # produzione (ADR-057). Stesso protocollo S3, stesso adattatore.
+  #
+  # **La porta sull'host resta la 9000**, mappata sulla 8333 del container: così
+  # l'endpoint di sviluppo (`http://localhost:9000`, in `.env.example`) non cambia.
+  # L'immagine è fissata per versione: `latest` è ciò che ha nascosto la sparizione
+  # di quella di MinIO finché la cache c'era.
+  storage:
+    image: chrislusf/seaweedfs:4.48
+    container_name: propflow-storage
+    command: ["server", "-s3", "-dir=/data"]
     environment:
-      MINIO_ROOT_USER: propflow
-      MINIO_ROOT_PASSWORD: propflow-dev-secret
+      # Le credenziali dall'ambiente bastano: SeaweedFS ne fa l'identità con tutti i
+      # permessi, e una firma con un segreto diverso viene rifiutata.
+      AWS_ACCESS_KEY_ID: propflow
+      AWS_SECRET_ACCESS_KEY: propflow-dev-secret
     ports:
-      - "9000:9000"
-      # Console web, comoda per guardare cosa c'è nel bucket.
-      - "9001:9001"
+      - "9000:8333"
     volumes:
-      - minio_data:/data
+      - storage_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   # Crea il bucket una volta sola. Non lo fa l'API: creare un bucket è
   # un'operazione di provisioning, e darle il privilegio significherebbe darglielo
-  # anche in produzione.
-  minio-setup:
-    image: quay.io/minio/mc:latest
+  # anche in produzione (ADR-024). `BucketAlreadyOwnedByYou` al secondo avvio non è
+  # un errore: è ciò che `mc mb --ignore-existing` faceva in silenzio.
+  storage-setup:
+    image: amazon/aws-cli:2.37.7
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: propflow
+      AWS_SECRET_ACCESS_KEY: propflow-dev-secret
+      AWS_DEFAULT_REGION: us-east-1
     entrypoint:
       - sh
       - -c
       - |
-        mc alias set propflow http://minio:9000 propflow propflow-dev-secret
-        mc mb --ignore-existing propflow/propflow-documents
+        out=$$(aws --endpoint-url http://storage:8333 s3api create-bucket --bucket propflow-documents 2>&1) \
+          || case "$$out" in *BucketAlreadyOwnedByYou*) ;; *) echo "$$out" >&2; exit 1 ;; esac
     restart: "no"
 
   migrate:
@@ -86,11 +96,13 @@ services:
   #
   # **Non è un fornitore.** Non verifica SPF, DKIM né i rimbalzi: prova che il
   # messaggio parte e che cosa contiene, non che sarebbe recapitato — è lo stesso
-  # limite che MinIO ha rispetto a S3. La posta verso un indirizzo vero va provata
-  # con un mittente vero, e su un dominio nuovo finisce nello spam senza dare
-  # errore.
+  # limite che lo storage di sviluppo ha rispetto a S3. La posta verso un indirizzo
+  # vero va provata con un mittente vero, e su un dominio nuovo finisce nello spam
+  # senza dare errore.
   mailpit:
-    image: axllent/mailpit:latest
+    # Fissata per versione come le altre: `latest` è ciò che ha nascosto la
+    # scomparsa di MinIO finché la cache c'era (ADR-057), e qui varrebbe uguale.
+    image: axllent/mailpit:v1.31.1
     container_name: propflow-mailpit
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
@@ -119,7 +131,7 @@ services:
       PROPFLOW__DATABASE__PRIVILEGED_URL: postgres://propflow_worker:worker@postgres:5432/propflow
       PROPFLOW__AUTH__PRIVATE_KEY_PATH: /run/secrets/jwt_ed25519.pem
       PROPFLOW__AUTH__PUBLIC_KEY_PATH: /run/secrets/jwt_ed25519.pub.pem
-      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__ENDPOINT: http://storage:8333
       PROPFLOW__STORAGE__BUCKET: propflow-documents
       PROPFLOW__STORAGE__ACCESS_KEY_ID: propflow
       PROPFLOW__STORAGE__SECRET_ACCESS_KEY: propflow-dev-secret
@@ -147,7 +159,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio-setup:
+      storage-setup:
         condition: service_completed_successfully
       mailpit:
         condition: service_healthy
@@ -194,7 +206,7 @@ services:
       # Lo **stesso** bucket dell'API: il worker legge le scansioni che l'API ha
       # scritto, e due configurazioni divergenti darebbero job falliti su documenti
       # che l'API mostra benissimo.
-      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__ENDPOINT: http://storage:8333
       PROPFLOW__STORAGE__BUCKET: propflow-documents
       PROPFLOW__STORAGE__ACCESS_KEY_ID: propflow
       PROPFLOW__STORAGE__SECRET_ACCESS_KEY: propflow-dev-secret
@@ -202,7 +214,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio-setup:
+      storage-setup:
         condition: service_completed_successfully
     read_only: true
     security_opt:
@@ -210,4 +222,4 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
+  storage_data:

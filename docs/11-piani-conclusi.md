@@ -13468,6 +13468,211 @@ sezione cambia nell'interfaccia.
   sezioni 13-16 — dove metterla è una decisione da prendere.
 
 
+<a id="piano-storage-senza-minio"></a>
+
+## Piano fuori sequenza — Lo storage dei documenti senza MinIO
+
+> **Eseguito il 1° ottobre 2026**, il giorno stesso. Il piano resta com'è stato scritto;
+> ciò che l'esecuzione ha confermato e trovato è nell'[esito](#esito-storage-senza-minio).
+
+Pianificato ed eseguito il **1° ottobre 2026**, fuori dalla serie delle sezioni e prima di
+chiudere la 13, perché **la CI di `dev` è rossa dal 28 settembre** e nessuna PR backend
+può più passare. Deciso con chi possiede il progetto: **SeaweedFS in CI, sviluppo e
+produzione**, su un branch e una PR suoi. [ADR-057](08-decisioni.md#adr-057) prima del
+codice. **Nessuna migration, nessuna rotta, nessun cambiamento all'adattatore.**
+
+### Il fatto
+
+MinIO ha smesso di pubblicare immagini gratuite nell'ottobre 2025 e ha archiviato il
+repository nel 2026; l'11 settembre 2026 Docker Hub ha cancellato `minio/minio` e
+`minio/mc`, e dal 28 settembre manca anche il manifest su `quay.io`, per `latest`, per il
+tag `RELEASE.2025-09-07T16-13-09Z` e per il digest. Il passo «Prepare the object storage»
+della CI fallisce con `unauthorized` al pull, su `dev` dal merge della #61. In locale
+`just ci` passava perché l'immagine era in cache.
+
+### Che cosa esiste davvero, verificato il 1° ottobre 2026
+
+| Premessa | Verifica |
+|---|---|
+| L'adattatore chiede poco a S3 | vero: `storage/s3.rs` usa `rusty-s3` con `PutObject`, `GetObject` e un `GET` prefirmato, firma SigV4, `path_style = true` (`config/default.toml:35-42`) |
+| Il bucket lo crea il provisioning | vero, [ADR-024](08-decisioni.md#adr-024) decisione 3: `minio-setup` in `docker-compose.yml:59-68`, `mc mb` in `ops/ci/prepare-object-storage.sh` |
+| MinIO sta in quattro posti | vero: lo script della CI, `docker-compose.yml:37-68`, `ops/deploy/docker-compose.prod.yml:50-57`, `backup.sh:51-57` e `restore.sh:56-61` (`mc mirror` dentro l'immagine di MinIO) |
+| Cinque sostituti passano i nostri test | vero, provato: SeaweedFS, RustFS, Garage, Versity e Zenko CloudServer, ciascuno con il bucket creato da `amazon/aws-cli` e `cargo test --test object_storage` con le variabili della CI: **3 su 3** per tutti |
+| SeaweedFS 4.48 prende le credenziali dall'ambiente | vero, provato: `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`, e un segreto sbagliato dà 0 su 3. Nessun file di configurazione |
+| Ha un endpoint di salute | vero: `/healthz` risponde `200`, e nell'immagine c'è `wget` |
+| I dati sopravvivono | vero, provato: dopo un riavvio e con un container **nuovo** sullo stesso volume gli oggetti ci sono tutti |
+| Copia e ripristino reggono con la CLI ufficiale | vero **su una destinazione vuota**, che è l'unico modo in cui è stato provato: `aws s3 sync` in andata e ritorno dà file identici, e un `mb` su un bucket che c'è risponde `BucketAlreadyOwnedByYou`. La premessa non copriva il caso vero — vedi il [poscritto](#poscritto-storage-senza-minio) |
+| La cifratura a riposo non distingue | vero: nessuno dei cinque restituisce `x-amz-server-side-encryption` sulla `PUT`, come MinIO senza KMS. `is_encrypted` resta `false`, come ADR-024 prevede |
+
+### Decisioni, con il perché
+
+- **SeaweedFS, lo stesso ovunque.** Apache-2.0, il più consolidato fra i sostituti, e la CI
+  prova quello che gira in produzione. *Scartati*: RustFS, il più facile da sostituire ma
+  alla 1.0 da due settimane, dove starebbero i documenti dei clienti; Garage, AGPL e con la
+  preparazione più complessa (layout, chiavi nel suo formato, regione propria); Versity, un
+  gateway sopra il filesystem; Zenko, il più pesante; costruire MinIO dai sorgenti, che ci
+  farebbe manutentori di un'immagine; uno S3 gestito, che aggiunge un fornitore ai mezzi
+  del deploy;
+- **le immagini si fissano per versione**: `chrislusf/seaweedfs:4.48` e
+  `amazon/aws-cli:2.37.7`. `latest` è ciò che ha nascosto il problema finché la cache c'era.
+  Fissare non impedisce che un'immagine sparisca, ma rende la rottura un cambiamento di
+  versione visibile e non un pull che cambia sotto i piedi;
+- **la porta 9000 sull'host resta**, mappata sulla 8333 del container: l'endpoint di
+  sviluppo (`http://localhost:9000`, in `.env.example` e `config/default.toml`) non cambia, e
+  nessun `.env` locale va riscritto;
+- **il bucket lo crea la AWS CLI**, in un container usa e getta, tollerando
+  `BucketAlreadyOwnedByYou`: è la stessa operazione di `mc mb --ignore-existing`;
+- **copia e ripristino passano da `aws s3 sync`**, con `--delete` dove c'era
+  `mc mirror --remove`;
+- **le variabili di produzione cambiano nome**: `STORAGE_ACCESS_KEY` e `STORAGE_SECRET_KEY`
+  al posto di `MINIO_ROOT_USER` e `MINIO_ROOT_PASSWORD`. Nulla è deployato, quindi non c'è
+  nessuno da migrare: è il momento più economico per farlo.
+
+### Decomposizione
+
+1. ADR-057 e questo piano;
+2. la CI: `prepare-object-storage.sh` e `test-integration.sh` (variabili
+   `PROPFLOW_TEST_STORAGE_*`), il commento in `ci.yml`. I nomi dei job e dei passi non
+   cambiano;
+3. lo sviluppo: i servizi `storage` e `storage-setup` in `docker-compose.yml`, la ricetta
+   `up` del `justfile`, `.env.example`, il comando in `CLAUDE.md` §4;
+4. la produzione: il servizio `storage` con healthcheck su `/healthz`, `backup.sh`,
+   `restore.sh`, il runbook in `07`;
+5. il resto della documentazione e i commenti che descrivono lo stato (`06`, `07`, ADR-024
+   con una nota, `README.md`, `config/default.toml`, `s3.rs`);
+6. la verifica: `just ci` e la CI della PR, verdi; lo stack di sviluppo da zero, con un
+   documento caricato e scaricato dal client; copia e ripristino provati.
+
+**Criterio di fine:** la CI della PR verde, cioè il passo che oggi fallisce passa e i tre
+test dell'adattatore girano davvero (zero `SALTATO`).
+
+### Trappole
+
+**Il volume vecchio di sviluppo.** `propflow-minio` e `minio_data` restano sulla macchina di
+chi sviluppa: lo stack nuovo parte con un volume vuoto, e i documenti del mondo del seeder
+non si ritrovano. Si ri-semina; non c'è niente da migrare fuori dallo sviluppo.
+
+**`BucketAlreadyOwnedByYou` non è un errore.** Un `mb` ripetuto deve passare, o il secondo
+`docker compose up` fallisce.
+
+**Il download prefirmato in produzione.** Fuori da questo piano, ma trovato pianificandolo:
+l'URL punta all'endpoint dello storage, che nel compose di produzione è interno
+(`http://minio:9000`, ora `http://storage:8333`) e che il Caddyfile non espone. Un browser
+non lo raggiunge. È `R59` in [12](12-da-fare.md), e va decisa prima del deploy.
+
+### Che cosa **non** entra
+
+- `R59`, sopra: è una decisione su come i documenti escono, non sul server che li tiene;
+- la cifratura a riposo lato server: nessun candidato la dichiara sulla `PUT`; resta quella
+  del disco della macchina, com'era con MinIO.
+
+<a id="esito-storage-senza-minio"></a>
+
+## Esito — Lo storage dei documenti senza MinIO
+
+Eseguito il **1° ottobre 2026**, in un worktree a parte per non toccare il giro a vista
+della 13, che girava sulla cartella principale. SeaweedFS `4.48` in CI, sviluppo e
+produzione, la AWS CLI `2.37.7` per il bucket, la copia e il ripristino. **Nessuna
+migration, nessuna rotta, l'adattatore non è cambiato di una riga**: è cambiato solo ciò
+che gli sta intorno. [ADR-057](08-decisioni.md#adr-057), con una nota ad ADR-024.
+
+### Che cosa è entrato
+
+- **la CI**: `prepare-object-storage.sh` avvia SeaweedFS con le credenziali dall'ambiente,
+  aspetta `/healthz`, crea il bucket con la AWS CLI tollerando `BucketAlreadyOwnedByYou`;
+  `test-integration.sh` usa `PROPFLOW_TEST_STORAGE_*`. I nomi dei job e dei passi non sono
+  cambiati, quindi il check `CI` della protezione dei branch è lo stesso;
+- **lo sviluppo**: i servizi `storage` (sulla 9000 dell'host, così `.env` non cambia) e
+  `storage-setup` in `docker-compose.yml`, la ricetta `up`, `.env.example`, `CLAUDE.md` §4.
+  Sparisce la console web sulla 9001, che SeaweedFS non ha;
+- **la produzione**: il servizio `storage`, `storage-setup` — **che prima non c'era** — e
+  `storage-cli` nel profilo `tools`; `backup.sh` e `restore.sh` con `aws s3 sync`; le
+  variabili `STORAGE_ACCESS_KEY` e `STORAGE_SECRET_KEY`; il runbook in `07`;
+- i commenti che descrivevano lo stato, in `config/default.toml`, `api/src/config.rs`,
+  `storage/`, nei test e nel `README`. Due erano **falsi già prima**: in `s3.rs` «MinIO lo
+  restituisce con la stessa semantica», detto dell'header di cifratura che MinIO senza KMS
+  non restituiva, e in `object_storage.rs` «`test-integration.sh` non avvia MinIO», quando
+  lo avviava da tempo.
+
+### Che cosa ha trovato, oltre a ciò che cercava
+
+- **Il bucket di produzione non lo creava nessuno.** Il compose di produzione non aveva un
+  servizio di setup e il runbook faceva `up -d`: `/ready` verde, e il primo upload
+  fallito con il sintomo muto che `07` stessa descrive. Ora `storage-setup` è un one-shot
+  da cui API e worker dipendono;
+- **il download di un documento in produzione non raggiungerebbe il browser** (`R59`): l'URL
+  prefirmato porta l'host dello storage, interno al compose, e il Caddyfile non lo espone.
+  La prova da capo a fondo lo conferma per costruzione — il `Location` del `307` è
+  l'endpoint dello storage. Non è risolto qui: chiede di scegliere fra un'origine pubblica
+  per lo storage e il download che passa dall'API.
+
+### Verifica
+
+- **cinque candidati provati** con i nostri tre test dell'adattatore — SeaweedFS, RustFS,
+  Garage, Versity, Zenko — tre su tre per tutti, con il bucket creato dalla AWS CLI;
+- **SeaweedFS da vicino**: credenziali dall'ambiente, e un segreto sbagliato dà zero su tre;
+  `/healthz` risponde `200` e c'è `wget` per l'healthcheck; gli oggetti sopravvivono a un
+  riavvio e a un container nuovo sullo stesso volume; un volume nuovo occupa 828 KB;
+- **la suite nel worktree**: `./ops/ci/test-integration.sh` — 486 test, zero falliti, zero
+  `SALTATO`, con lo storage su SeaweedFS; `cargo clippy … -D warnings` pulito;
+- **lo sviluppo**: `storage` diventa `healthy`, `storage-setup` crea il bucket al primo giro
+  ed esce `0` anche al secondo;
+- **copia e ripristino**, con i comandi degli script contro il compose di produzione: un
+  oggetto scritto, copiato fuori, il volume buttato e lo storage ricreato **vuoto**,
+  riletto **identico byte per byte**. Due limiti di questa prova, scoperti dopo e scritti
+  qui perché sono la ragione per cui non ha visto il difetto del [poscritto](#poscritto-storage-senza-minio):
+  è stata fatta **sui singoli comandi** e non con `restore.sh` da capo a fondo, e la
+  destinazione era sempre vuota;
+- **da capo a fondo**: un'API compilata da questo branch, con SeaweedFS, carica un documento
+  su un contratto (`201`, `is_encrypted: false`), risponde `307` al contenuto, e l'URL
+  prefirmato si scarica **senza credenziali** (`200`) con il file identico.
+
+### Che cosa resta aperto
+
+- **`R59`**, da decidere prima del passo 4 del cammino;
+- in sviluppo il volume `minio_data` e il container `propflow-minio` restano sulla macchina
+  e non vengono più letti: lo stack nuovo parte vuoto, e il mondo del seeder va
+  riseminato per avere i documenti;
+- la cifratura a riposo dei documenti è quella del disco della VPS, da attivare sul volume.
+
+<a id="poscritto-storage-senza-minio"></a>
+
+### Poscritto — quello che una review ha trovato dopo
+
+Il 9 ottobre 2026, a lavoro finito e verificato, una review del diff ha trovato **un
+difetto che la verifica sopra non poteva vedere**, e vale la pena dire perché non poteva.
+
+**`restore.sh` non ripristinava i documenti su un bucket non vuoto.** Sostituire
+`mc mirror --overwrite` con `aws s3 sync` ha perso l'`--overwrite`, che in `sync` non ha
+un equivalente: `sync` trasferisce solo se la dimensione differisce **oppure** se la
+sorgente è più recente, e `tar` conserva le mtime dell'archivio — i file ripristinati sono
+quindi più **vecchi** degli oggetti che trovano, e venivano saltati. Con
+`--only-show-errors` lo script usciva `0` senza stampare niente.
+
+**Perché la verifica non l'ha visto:** è stata fatta su una destinazione vuota, dove
+`sync` e `cp` si comportano allo stesso modo. Il caso che conta è l'opposto, ed è anche
+quello comune — si butta il database per rifarlo dal dump e il volume dei documenti
+sopravvive. La guardia dello script controllava soltanto che lo schema `app` fosse vuoto.
+
+**Com'è stato corretto:** una guardia sul bucket **prima** del ripristino del database,
+perché accorgersene dopo lascia un sistema a metà; e `cp --recursive` al posto di `sync`,
+così la copia è incondizionata e non dipende dalla guardia.
+
+Nello stesso giro sono state corrette altre cose minori: il commento che giustificava la
+creazione del bucket con «un ripristino può venire prima di `up`» — via che lo script non
+permette, perché usa `exec` su postgres e `run --no-deps` sullo storage; `no-new-privileges`
+mancante sui due servizi nuovi, unici del file a non averlo; `${STORAGE_ACCESS_KEY}` senza
+`:?` mentre il runbook dice che le variabili pretese si dichiarano così; `axllent/mailpit`
+ancora a `latest`; e il paragrafo sulla cifratura a riposo in `07`, che era rimasto
+un'istruzione senza procedura.
+
+**Su `R59` la review ha aggiunto un fatto**, ed è quello che cambia di più: non è
+riproducibile solo in produzione. Con `docker compose up` — lo stack dietro il proxy, la
+forma che `CLAUDE.md` §4 chiama «la stessa che avrà in produzione» — l'API ha già
+`PROPFLOW__STORAGE__ENDPOINT: http://storage:8333` e `ops/web/Caddyfile` instrada solo
+`/api/v1/*`. **`R59` si osserva oggi, in locale**, e smette di essere dedotta.
+
+
 <a id="archivio-09-al-18-settembre-2026"></a>
 
 ## Archivio — «09 — Stato e roadmap» com'era prima della riscrittura del 18 settembre 2026

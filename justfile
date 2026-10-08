@@ -84,16 +84,16 @@ env:
 # *avviati*, e su un volume nuovo PostgreSQL sta ancora facendo `initdb`. Il passo
 # successivo trovava la porta aperta e il server non pronto.
 #
-# **`minio-setup` resta fuori dall'attesa**, ed è la seconda cosa che si scopre
+# **`storage-setup` resta fuori dall'attesa**, ed è la seconda cosa che si scopre
 # provando: è un one-shot che crea il bucket ed esce `0`, e per `--wait` un
 # servizio che termina è un fallimento. Aspettarlo faceva fallire `up` con tutti i
 # container sani. Parte dopo, e `depends_on: service_healthy` gli garantisce
-# comunque il MinIO pronto.
+# comunque lo storage pronto.
 
-# Avvia PostgreSQL, MinIO e il raccoglitore di posta, poi crea il bucket.
+# Avvia PostgreSQL, lo storage e il raccoglitore di posta, poi crea il bucket.
 up:
-    docker compose up -d --wait postgres minio mailpit
-    docker compose up -d minio-setup
+    docker compose up -d --wait postgres storage mailpit
+    docker compose up -d storage-setup
 
 # I volumi restano: i dati di un giro a mano non si buttano via per aver fermato
 # un container. Per cancellarli davvero c'è `down-hard`.

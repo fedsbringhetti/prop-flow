@@ -49,16 +49,50 @@ if [[ "${tables//[[:space:]]/}" != "0" ]]; then
   exit 1
 fi
 
+echo "== il bucket dei documenti deve essere vuoto =="
+# Stessa ragione della guardia sul database, e **sta qui**, prima di scrivere
+# qualunque cosa: il caso normale non è la macchina nuova, è il database buttato per
+# rifarlo dal dump mentre il volume dei documenti sopravvive. Accorgersene dopo aver
+# ripristinato il database lascia un sistema a metà, che è peggio di un rifiuto.
+# Un bucket che non esiste conta come vuoto: lo crea il passo del ripristino.
+objects="$(docker compose -f "$COMPOSE" --env-file "$ENV_FILE" --profile tools \
+  run --rm --no-deps --entrypoint sh storage-cli -c '
+    out=$(aws s3api list-objects-v2 --bucket propflow-documents --max-keys 1 \
+            --output text 2>&1) || out=""
+    case "$out" in *CONTENTS*) echo pieno ;; *) echo vuoto ;; esac
+  ' | tr -d '[:space:]')"
+# Il confronto è un `case` e non un `=`: `docker compose run` può stampare righe sue
+# sullo stdout, e un'uguaglianza stretta le leggerebbe come «non vuoto». Lo stato che
+# non si riconosce si tratta come un errore, non come un via libera.
+case "$objects" in
+  *pieno*) echo "il bucket 'propflow-documents' non è vuoto: ripristina su uno storage vuoto." >&2
+           exit 1 ;;
+  *vuoto*) ;;
+  *)       echo "non si è potuto leggere il bucket dei documenti: $objects" >&2
+           exit 1 ;;
+esac
+
 echo "== ripristino del database =="
 docker compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T postgres \
   pg_restore --no-owner --dbname="propflow" --username="postgres" < "${work}/propflow.dump"
 
 echo "== ripristino del bucket dei documenti =="
-docker compose -f "$COMPOSE" --env-file "$ENV_FILE" run --rm --no-deps \
-  --entrypoint sh -v "${work}:/backup" minio -c '
-    mc alias set dst "http://minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-    mc mb --ignore-existing dst/propflow-documents
-    mc mirror --overwrite /backup/documents dst/propflow-documents
+# Il bucket lo crea `storage-setup` all'avvio dello stack; qui si ricrea solo per non
+# dipendere dall'ordine in cui i due sono stati eseguiti, e «esiste già» è il caso
+# normale, non un errore.
+#
+# **`cp --recursive` e non `sync`**, ed è la riga che conta: `sync` trasferisce solo se
+# la dimensione differisce **oppure** se la sorgente è più recente della destinazione, e
+# `tar` conserva le mtime dell'archivio — cioè i file che arrivano sono più vecchi degli
+# oggetti che trovano, e `sync` li salterebbe uscendo `0` senza stampare niente. Prima
+# era `mc mirror --overwrite`, e `--overwrite` in `sync` non ha un equivalente (ADR-057).
+# La guardia sopra rende il bucket vuoto una precondizione; la copia resta incondizionata
+# per non dipendere da quella guardia.
+docker compose -f "$COMPOSE" --env-file "$ENV_FILE" --profile tools run --rm --no-deps \
+  --entrypoint sh -v "${work}:/backup" storage-cli -c '
+    out=$(aws s3api create-bucket --bucket propflow-documents 2>&1) \
+      || case "$out" in *BucketAlreadyOwnedByYou*) ;; *) echo "$out" >&2; exit 1 ;; esac
+    aws s3 cp /backup/documents s3://propflow-documents --recursive --only-show-errors
   '
 
 echo ""
