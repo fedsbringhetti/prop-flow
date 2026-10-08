@@ -124,6 +124,27 @@ impl LeaseParty {
     ///
     /// Rifiuta se un utente è già collegato: sovrascriverlo significherebbe
     /// trasferire il contratto a un'altra persona senza traccia dell'operazione.
+    ///
+    /// # `joined_at` su una parte già uscita
+    ///
+    /// Una parte **uscita** resta collegabile: [ADR-056](../../../../docs/08-decisioni.md)
+    /// stabilisce che chi non aveva mai accettato il proprio invito possa accettarlo
+    /// dopo il subentro, per entrare nell'organizzazione e leggere il contratto e i
+    /// propri addebiti. Su quella riga `joined_at` **resta nullo**, e per due ragioni
+    /// che puntano nella stessa direzione.
+    ///
+    /// La prima è che scriverlo romperebbe `lease_parties_dates_ck`
+    /// (`migrations/0005_leases.sql:98`), che esige `left_at >= joined_at`: la data di
+    /// oggi è posteriore all'uscita in ogni giorno che non sia quello del subentro, e
+    /// l'accettazione fallirebbe con un `23514` tradotto in un `409
+    /// conflict.constraint_violated` che non dice niente a nessuno. **Era un difetto
+    /// vero**, trovato da una review: la capacità era dichiarata in due documenti e il
+    /// codice non ce l'aveva.
+    ///
+    /// La seconda è che sarebbe falso. `joined_at` è il giorno in cui quella persona è
+    /// entrata nel contratto, e questa non ci è mai entrata: ha ricevuto un invito,
+    /// non l'ha accettato in tempo, ed è uscita prima di accettarlo. Nullo è la
+    /// risposta esatta, e la colonna è nullabile apposta.
     pub fn link_user(&mut self, user_id: UserId, now: DateTime<Utc>) -> DomainResult<()> {
         if let Some(existing) = self.user_id {
             if existing == user_id {
@@ -132,7 +153,9 @@ impl LeaseParty {
             return Err(DomainError::Invariant(Invariant::LeasePartyAlreadyLinked));
         }
         self.user_id = Some(user_id);
-        self.joined_at = Some(now.date_naive());
+        if self.left_at.is_none() {
+            self.joined_at = Some(now.date_naive());
+        }
         self.updated_at = now;
         Ok(())
     }
