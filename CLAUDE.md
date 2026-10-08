@@ -183,34 +183,50 @@ Prima di scrivere un titolo di PR o un messaggio di commit, verifica di essere i
 inglese. È l'errore più facile da commettere e il più costoso da correggere dopo,
 perché richiede di riscrivere la storia o di riaprire le PR.
 
-### I piani atterrano nella roadmap, prima dell'implementazione
+### I piani atterrano nella roadmap, corti; il dettaglio si fa passo per passo
 
 Quando in una sessione si progetta un lavoro, **quel piano si scrive in
-`docs/09-stato-e-roadmap.md` prima di implementarlo**, con lo stesso dettaglio con
-cui è stato pensato. Non un riassunto e non un rimando: la decomposizione, così che
-chi non era in quella conversazione possa eseguirla.
+`docs/09-stato-e-roadmap.md` prima di implementarlo**, e contiene **due cose sole**:
 
-Tre cose devono sopravvivere, e sono quelle che si perdono per prime:
+1. **una descrizione breve e generale, in apertura** — che cosa si sta per fare e
+   perché, in un paragrafo. È ciò che si legge per capire di che lavoro si tratta
+   senza leggere i passi;
+2. **i passi, una o due righe l'uno** — che cosa quel passo deve *ottenere*, non come.
+   Eseguibili singolarmente, e leggibili in fila per vedere dove va il lavoro.
 
-1. la scomposizione in passi eseguibili singolarmente;
-2. le decisioni **con il perché**, e le alternative scartate;
-3. le **trappole**: le vie che sembrano corrette e non lo sono. Sono la conoscenza
-   più cara da riacquistare, perché per riscoprirne una bisogna prima sbagliare.
+**Il dettaglio non si scrive qui e non si scrive in anticipo.** Si produce un passo
+alla volta, in una conversazione a parte e **in plan mode**, nel momento in cui quel
+passo si prende in mano: è lì che le premesse si verificano contro il codice com'è
+*adesso*, e non com'era quando la sezione è stata pianificata.
 
-La roadmap **può essere lunga**: l'istinto di accorciarla per ordine è esattamente
-ciò che cancella il dettaglio per cui esiste. Ciò che è rinviato si segna come
-rinviato, con la ragione, altrimenti si rilegge come lavoro pendente e qualcuno lo
-prende in mano.
+**È il cambiamento dell'8 ottobre 2026**, e sostituisce la regola precedente, che
+chiedeva la decomposizione intera — passi, decisioni, alternative e trappole — scritta
+in `09` prima di cominciare. Quella regola nasceva da un'osservazione vera, e resta
+vera: un piano che vive solo nella conversazione in cui è nato non esiste per la
+sessione dopo. Ma pianificare in dettaglio una sezione intera prima di toccarla ha
+prodotto premesse sbagliate con regolarità, e lo dice il registro di questo progetto:
+la **5-ter**, la **7**, la **9**, la **10**, la **12** e la **13** hanno ciascuna
+almeno una premessa smentita dal codice che il piano pretendeva di descrivere — la 7
+ne aveva tre, e una stava nella tabella intitolata «verificato e non dedotto».
+Riscriverle è costato più di quanto il dettaglio anticipato abbia fatto risparmiare.
 
-Il motivo è semplice e costoso: un piano che vive fuori dal repository non esiste
-per la sessione successiva, che riparte da zero e ri-deriva le stesse trappole.
+**Ciò che deve sopravvivere sopravvive nell'esito, non nel piano.** Quando un passo si
+chiude, in `docs/11-piani-conclusi.md` vanno le decisioni **con il perché** e le
+alternative scartate, e soprattutto le **trappole**: le vie che sembrano corrette e non
+lo sono, che sono la conoscenza più cara da riacquistare, perché per riscoprirne una
+bisogna prima sbagliare. Il piano dettagliato di plan mode può morire con la sua chat;
+questo no, ed è la condizione che rende accettabile tenerlo fuori dai file.
+
+Ciò che è rinviato si segna come rinviato, con la ragione, altrimenti si rilegge come
+lavoro pendente e qualcuno lo prende in mano.
 
 **A esito scritto si pianifica subito la sezione successiva, nello stesso giro di
-lavoro.** Chi ha appena chiuso una sezione ha in testa le trappole incontrate, le
-premesse verificate e ciò che il codice fa *adesso*: è materiale che la sessione dopo
-non avrà, e un piano scritto a freddo lo rideriva — che è dove le premesse si
-sbagliano. Una sezione non è conclusa finché la successiva non è pianificata in
-`docs/09-stato-e-roadmap.md`, con le premesse verificate contro il codice.
+lavoro.** Chi ha appena chiuso una sezione ha in testa le trappole incontrate e ciò che
+il codice fa *adesso*: è materiale che la sessione dopo non avrà. Una sezione non è
+conclusa finché la successiva non ha, in `docs/09-stato-e-roadmap.md`, il suo paragrafo
+di apertura e i suoi passi. Dal cambiamento dell'8 ottobre costa poco — è un paragrafo e
+un elenco, non più una decomposizione — e **le premesse non si verificano qui**: si
+verificano in plan mode, passo per passo, che è il punto del cambiamento.
 
 **A esito scritto, il piano si sposta in `docs/11-piani-conclusi.md`, nello stesso
 commit.** I due file si dividono per **ciclo di vita** e non per argomento: `09` si
@@ -221,6 +237,23 @@ Lo spostamento sta nello stesso commit dell'esito perché è l'unico momento in 
 lavora ha già entrambi i file aperti: una regola di migrazione che chieda un passaggio
 a parte non viene rispettata, e dopo due fette i file tornano a essere due archivi
 mescolati.
+
+### La review di un agent, quando il lavoro la merita
+
+**Non è sistematica, e non ha una soglia scritta.** Una review costa un agent intero, e
+farla su tre stringhe e un ramo nel client è spendere senza comprare niente; non farla
+mai su una migration o su un artefatto di deploy è il contrario.
+
+La regola è quindi di procedura e non di contenuto: **a lavoro finito e verificato,
+prima di proporre i commit, si dice se quel cambiamento merita una review e perché** —
+e chi possiede il progetto decide. Non si lancia un agent senza averlo chiesto.
+
+Il criterio da usare nel proporla, che resta un giudizio e per questo non è scritto come
+regola: **quanto costerebbe un difetto che i test non vedono.** Lo meritano le modifiche
+importanti e i blocchi critici — una migration o una policy RLS, l'autenticazione e i
+permessi, un calcolo di importi o di quote, un artefatto di deploy che non è mai stato
+eseguito. Non lo meritano le rifiniture del client, le stringhe del catalogo e la
+documentazione.
 
 ### Commit
 

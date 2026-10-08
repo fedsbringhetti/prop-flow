@@ -18,12 +18,18 @@ riscrive a ogni fetta, `11` non si riscrive mai, `12` cresce e si svuota di cont
 
 Le regole, che stanno anche in `CLAUDE.md` §3:
 
-- **un piano si scrive qui prima di implementarlo**, con la scomposizione in passi, le
-  decisioni con il perché, le alternative scartate e le trappole: un piano che resta nella
-  conversazione in cui è nato non esiste per la sessione successiva;
+- **un piano si scrive qui prima di implementarlo, e sta in due cose**: un paragrafo che
+  dice che cosa si sta per fare e perché, e i passi, una o due righe l'uno, che dicono che
+  cosa ciascuno deve *ottenere*. **Il dettaglio non sta qui**: si fa un passo alla volta,
+  in una conversazione a parte e in plan mode, quando quel passo si prende in mano — è lì
+  che le premesse si verificano contro il codice com'è adesso. È la regola dell'8 ottobre
+  2026, e ha sostituito la decomposizione intera scritta in anticipo, che in sei sezioni su
+  tredici ha prodotto almeno una premessa smentita dal codice che pretendeva di descrivere;
+- **ciò che deve sopravvivere sopravvive nell'esito, in `11`**, non nel piano: le decisioni
+  con il perché, le alternative scartate e le trappole. Il piano dettagliato di plan mode
+  muore con la sua chat, e va bene solo perché l'esito non muore;
 - **a esito scritto il piano si sposta in `11` nello stesso commit**, e nello stesso giro
-  si pianifica la sezione successiva, perché chi ha appena chiuso ha in testa le trappole
-  che la sessione dopo non avrà;
+  si pianifica la sezione successiva — che ora costa un paragrafo e un elenco;
 - **ciò che è rinviato si segna come rinviato, con la ragione**, altrimenti si rilegge come
   lavoro pendente;
 - **ciò che descrive com'era e non com'è si sposta in `11`** nel commit che lo rende
@@ -295,202 +301,50 @@ Sono la stessa conversazione, e vale la pena affrontarle insieme.
 
 ### Piano — Sezione 14: le persone, l'altra direzione
 
-Pianificata il **1° ottobre 2026**, nello stesso giro dell'esito della
-[13](11-piani-conclusi.md#esito-sezione-13), com'è la regola. Chiude `R43` — chi abita sa
-come contattare chi gli affitta casa — e `R39` — chi amministra può togliere qualcuno
-dalla propria organizzazione. Sono «l'altra direzione» di due cose che esistono: il
-proprietario vede già i contatti dell'inquilino (sono le parti del contratto), e
-l'inquilino può già uscire da sé (`R16`, sezione 6).
+Pianificata il 1° ottobre 2026 e **riscritta nella forma corta il 9 ottobre**, quando il
+metodo è cambiato: qui stanno il quadro e i passi, e il dettaglio di ciascuno si fa in plan
+mode nel momento in cui lo si prende in mano. La decomposizione precedente — la tabella
+delle premesse, le decisioni con le alternative e le trappole — è stata tolta
+deliberatamente: aveva otto giorni, e andava comunque riverificata contro un codice che nel
+frattempo si è mosso.
 
-**Due ADR prima del codice**, uno per voce: `R43` comunica un dato personale a un
-destinatario nuovo, `R39` decide che cosa resta di una persona tolta. **Nessuna
-migration** per le due voci, e la ragione è una premessa verificata, non un auspicio: la
-policy che serve a ciascuna esiste già. **Una rotta nuova**, quella di `R39`; `R43` è un
-campo in più su una lettura che c'è. Una terza voce, `R58`, è nata pianificando e chiede una
-decisione all'apertura (sotto).
+**Che cosa si sta per fare.** Due cose che oggi esistono in una direzione sola, e si
+completano nell'altra. Chi affitta vede già i contatti di chi abita — sono le parti del
+contratto, scritte da lui per l'invito — mentre **chi abita non ha nessun modo di sapere
+come contattare chi gli affitta casa** (`R43`). E chi abita può uscire da sé da
+un'organizzazione dalla sezione 6, mentre **chi amministra non può togliere nessuno**
+(`R39`): un proprietario che ha invitato la persona sbagliata, oggi, non ha modo di
+disfarlo. Entrambe sono **una decisione prima del codice**, e per ragioni diverse: la prima
+comunica un dato personale a un destinatario nuovo, la seconda stabilisce che cosa resta di
+una persona tolta. Nessuna delle due dovrebbe chiedere una migration, perché la policy che
+serve a ciascuna sembra esistere già — ma è una premessa da **riverificare in `P0`**, non un
+dato acquisito.
 
-**Si esegue in una sola conversazione**, senza agenti. Ogni test nuovo provato al contrario
-prima di consegnarlo, con l'asserzione caduta scritta nell'esito. I test con il database
-solo con `./ops/ci/test-integration.sh`, che non ha un filtro: le prove al contrario si
-combinano in un giro, **abbinando difetti che cadono su test diversi** — nella 13 un
-difetto che cadeva prima nello stesso test ne ha mascherato un altro, e i giri sono stati
-cinque.
+#### I passi
 
-#### Che cosa esiste davvero, verificato contro il codice il 1° ottobre 2026
+| | Passo | Che cosa deve ottenere |
+|---|---|---|
+| `P0` | **Le due decisioni**, ADR-058 e ADR-059 | Scritte prima di toccare il codice: *quali* contatti, e di *chi*, l'inquilino può vedere; e che cosa perde — e che cosa resta — di una persona tolta dall'organizzazione. Qui si riverificano anche le premesse sulle policy e sulla migration |
+| `P1` | **I contatti** (`R43`) | Chi abita legge, dalla scheda del proprio contratto, come contattare chi gliela affitta. Una **proiezione** che nomina le colonne scelte, mai una rotta che risolva le persone per identificatore |
+| `P2` | **Togliere qualcuno** (`R39`) | Chi amministra toglie dall'organizzazione una persona senza contratti in essere, e quella smette di vedere i dati dell'organizzazione. Il divieto deve reggere **anche senza il controllo applicativo**, perché la persona tolta non è chi chiama |
+| `P3` | **La documentazione** | Gli ADR di `P0`, [04](04-sicurezza.md) sul perimetro dei contatti e su chi viene tolto, [05](05-api.md), e le voci chiuse tolte da [12](12-da-fare.md) |
 
-| Premessa | Verifica |
-|---|---|
-| L'inquilino **può già leggere** la riga utente di chi amministra | vero: `users_select` (`0030:261-271`, `ALTER POLICY`) ha il ramo `app.is_my_staff(id)`, messo apposta «per tenere in piedi il rapporto proprietario ↔ inquilino». Nessuna policy da scrivere |
-| `is_my_staff` risponde per **tutto** lo staff | vero, ed è la trappola della voce: `0030:232-244` è vero per ogni `owner` e `manager` attivo di un'organizzazione a cui il chiamante appartiene, non per «chi amministra il **mio** contratto» |
-| La persona giusta ha già una strada nello schema | vero: `app.properties.owner_id` (`0004:8`, `NOT NULL`), scritto da `CreateProperty` con chi crea (`use_cases/property/create.rs:46`) ed esposto in lettura (`routes/properties.rs:304`, `api/types.ts:150`). Contratto → immobile → `owner_id` dice chi, e `users_select` dice se lo si può vedere |
-| Email **e telefono** di chi amministra esistono | vero: `app.users.phone` (`0003`), scrivibile da sé (`GRANT UPDATE (full_name, phone, …)`, `0038:103`) con `PATCH /api/v1/me` (`routes/me.rs:31`, `:106`) e dalla pagina dell'account (`AccountPage.tsx:76-87`) |
-| La forma della proiezione esiste | vero: `UserRepository::names(ids)` (`ports/repositories.rs:129`, `repositories/user.rs:185-210`) seleziona **solo** `id, full_name` sotto `users_select`, e il suo commento dice perché non passa da `select_user!` (`user.rs:18`), che legge l'aggregato con l'hash della password |
-| L'informativa **contraddice** la voce | vero: «Chi altro li vede» (`i18n/it.ts:211-212`) dice «nessuno oltre a chi amministra la tua organizzazione e alle persone a cui quei dati si riferiscono». Mostrare all'inquilino email e telefono del proprietario la rende falsa: va emendata **nello stesso commit** |
-| Togliere qualcuno è **già** ammesso e già vietato dove serve | vero: `org_members_update` è `is_org_staff(org_id)` su `USING`, e la sua `WITH CHECK` (`0039:127-131`) è `is_org_staff(org_id) AND (status <> 'left' OR NOT app.has_lease_in_force(org_id, user_id))`. La `0039` lo dice: «chiude in anticipo la porta che `R39` percorrerà». Il divieto su una persona **che non è chi chiama** — il caso difficile della `0029` — è già al livello della policy |
-| Si scrive solo lo stato | vero: `propflow_app` ha `UPDATE (status, joined_at)` su `app.org_members` (`0039`, blocco dei privilegi di colonna); `role`, `org_id`, `user_id`, `deleted_at` restano negati |
-| L'uscita da sé fa tre cose e nessun'altra | vero: `LeaveOrganization` (`use_cases/organization/leave.rs`) rifiuta l'ultimo `owner` (`LastOwnerCannotLeave`), rifiuta con un contratto in essere (`MembershipHasLeaseInForce`), scrive `status = 'left'` ed emette `OrganizationMemberLeft`. **Non revoca le sessioni**: dalla `0041` basta la RLS (ADR-054) |
-| Nessuna rotta elenca i membri | vero: `routes/organizations.rs` ha `GET /organizations` (`:20`) e `POST /organizations/{id}/leave` (`:25`). Lo staff vede le persone **dalle parti dei contratti**, che portano `user_id` (`LeasePartyResponse`) |
-| I membri sono proprietari e inquilini | vero: un invito conferisce solo `tenant` (`04`, «Inviti»), e un proprietario entra dal token di piattaforma (ADR-053). Nessuna via crea un `manager` |
-| I test sono 497 Rust e 160 del client | vero, esito della 13 e `just ci` |
-
-#### Decisioni da prendere, con la proposta e il perché
-
-**`R43` — chi abita vede chi contattare** ([ADR-058](08-decisioni.md), da scrivere):
-
-- **Chi: il proprietario dell'immobile del contratto**, cioè `properties.owner_id`. È
-  l'unica risposta che dice «chi amministra il **mio** contratto». *Scartati*: tutto lo
-  staff dell'organizzazione (`is_my_staff` per tutti), che con più gestori non dice chi
-  chiamare; il solo `owner` dell'organizzazione, che in V3 non è per forza chi possiede
-  quell'immobile. Se la persona non è più staff, `users_select` non la restituisce e la
-  scheda lo dice — nessun identificatore in faccia;
-- **che cosa: nome, email, telefono.** Il telefono è spesso il contatto che serve, sta sulla
-  stessa riga e non costa lavoro. Assente se chi amministra non l'ha messo;
-- **dove: la scheda del contratto**, una carta «Chi ti affitta» per chi abita. L'inquilino
-  ha di solito un contratto solo, e quella è la pagina da cui arriva a tutto. *Scartato*:
-  una pagina «contatti» a sé, che sarebbe la prima pagina di persone del prodotto e
-  chiederebbe un elenco;
-- **come: un modello di lettura**, `UserRepository::contacts(ids)` accanto a `names`, che
-  proietta `id, full_name, email, phone` sotto `users_select`, e un campo `landlord` su
-  `GET /leases/{id}`. **Nessuna rotta e nessuna migration.** *Scartato*: una rotta che
-  risolva una persona per identificatore, che è ciò che ADR-049 vieta;
-- **l'informativa si emenda nello stesso commit**, e chi amministra **lo sa**: la pagina
-  dell'account dice accanto a email e telefono che li vede chi abita i suoi immobili. È una
-  comunicazione di dato personale a un destinatario nuovo, ed è la ragione dell'ADR;
-- **è il pavimento**: allargare dopo (i coinquilini su contratti separati) è additivo,
-  stringere sarebbe una rottura per chi ci contava. Non emenda ADR-036, che governa la
-  **casa** e proietta il solo nome: questa voce sta sul ramo che la `0030` ha tenuto aperto.
-
-**`R39` — chi amministra toglie qualcuno** ([ADR-059](08-decisioni.md), da scrivere):
-
-- **Una rotta: `POST /api/v1/organizations/{id}/members/{user_id}/remove`**, verbo come
-  `leave`. *Scartato*: `DELETE`, che nel progetto vuol dire soft delete, e qui si scrive uno
-  stato (`status = 'left'`, la ragione è in testa alla `0039`);
-- **si toglie solo chi ha il ruolo `tenant`**, e mai sé stessi (per sé c'è `leave`).
-  Proprietari e gestori fra loro sono governo dell'organizzazione, che oggi non ha un caso:
-  nessuna via crea un `manager`, e un secondo `owner` non esiste nel primo mese. `409` con
-  un codice suo;
-- **non con un contratto in essere**: `409 membership.lease_in_force`, lo stesso codice
-  dell'uscita da sé. Il caso d'uso lo dice prima, la policy lo garantisce comunque — e il
-  test al contrario deve provare **la policy**, togliendo il controllo applicativo, perché
-  è lì che sta la garanzia su una persona che non è chi chiama;
-- **che ne è del resto: niente si cancella.** Contratti finiti, addebiti, pagamenti,
-  segnalazioni e messaggi restano dove sono, con il nome denormalizzato (ADR-043). La
-  persona **perde la lettura** di tutto, come chi esce da sé (ADR-054). Se ha addebiti
-  aperti su un contratto finito, non li vede più: la conferma lo dice, ed è il motivo per
-  cui la decisione è un ADR. *Alternativa da pesare*: rifiutare la rimozione con addebiti
-  aperti. Non la propongo — sposterebbe sul prodotto un recupero crediti che si fa fuori —
-  ma va scritta;
-- **un evento suo, `OrganizationMemberRemoved`**, con chi è stato tolto e da chi —
-  identificatori, mai nomi. *Scartato*: riusare `OrganizationMemberLeft`, che direbbe che la
-  persona è uscita da sé;
-- **può rientrare** con un invito nuovo, dalla stessa porta (ADR-051): la riga torna
-  `active`. **Nessuna email** a chi viene tolto, nella 14: è una scelta di prodotto, non
-  tecnica, e la si scrive come rinviata;
-- **dove, nel client: la riga della parte** sulla scheda del contratto, per una parte con un
-  utente, quando il contratto non è in essere. È l'unico posto in cui lo staff vede le
-  persone. *Scartato*: un elenco dei membri, che chiederebbe una seconda rotta.
-
-**`R58` — da decidere all'apertura della 14** (vedi [12](12-da-fare.md)): il ramo di
-`app.can_access_expense_group` (`0014`) non guarda la membership dell'organizzazione, come
-i rami che ADR-054 ha chiuso su contratti e immobili. La proposta è di **farla entrare**,
-con la migration che le spetta: `R39` rende la rimozione un gesto normale, e una persona
-tolta che resta membro di un gruppo di spesa è la stessa domanda. Ma la 14 è stata decisa
-come «nessuna migration», e allargarla è una decisione di chi possiede il progetto, non di
-chi la esegue.
-
-#### Decomposizione
-
-##### `P0` — ADR-058 e ADR-059, prima del codice
-
-Le decisioni sopra, con le alternative scartate. ADR-059 dice per esteso che cosa perde
-chi viene tolto e perché non si cancella niente.
-
-**Erano 057 e 058, e sono stati rinumerati il 6 ottobre 2026.** Questo piano li ha
-riservati il 1° ottobre contando da ADR-056, l'ultimo di questo branch; lo stesso giorno,
-su un branch partito da `dev` — dove 056 non è ancora mergiato — il passaggio dello storage
-a SeaweedFS ha scritto davvero un [ADR-057](08-decisioni.md#adr-057), lasciando 056 libero
-per la 13. Due numeri riservati e uno scritto: vince quello scritto. **È la trappola di
-prenotare un numero su un branch**, e si ripresenta ogni volta che due lavori corrono in
-parallelo: il numero si prende quando l'ADR si scrive, e si verifica contro `dev` e contro
-i branch aperti, non contro il proprio.
-
-##### `P1` — i contatti (`R43`)
-
-`UserRepository::contacts(ids)` → `Vec<PersonContact>` (id, nome, email, telefono), con un
-`Debug` che non stampa email e telefono (regola 26); `GetLease` legge `owner_id`
-dell'immobile e ne risolve il contatto; `landlord` su `LeaseDetailResponse`, assente se
-non risolto; la carta in `LeaseDetailPage` per chi non è staff; l'informativa e la riga
-dell'account in `i18n/it.ts`.
-
-**Criterio di fine:** un test di contratto HTTP — l'inquilino legge nome, email e telefono
-del proprietario dell'immobile e **non** quelli di un secondo gestore della stessa
-organizzazione; un estraneo non li legge; tolto `is_my_staff` dalla risoluzione (o usato
-`select_user!`), il test cade. Un test del client che la carta compaia per l'inquilino e
-non per lo staff.
-
-##### `P2` — togliere qualcuno (`R39`)
-
-`RemoveMember` in `use_cases/organization/remove.rs`: `ensure_staff`, non sé stessi, solo
-`tenant`, `has_in_force_for_user`, `member.leave()` (o un metodo del dominio con un nome
-suo, se la differenza merita un tipo), `OrganizationMemberRemoved`, commit. La rotta, i
-codici in [05](05-api.md). Nel client, il gesto sulla riga della parte, con una conferma
-che dice che la persona non vedrà più niente, addebiti compresi.
-
-**Criterio di fine:** test di contratto HTTP — lo staff toglie un inquilino senza contratto
-in essere, e quello **non legge più** il contratto finito con il token che aveva; con un
-contratto in essere `409 membership.lease_in_force` **anche togliendo il controllo
-applicativo** (è la policy); non sé stessi, non un `owner`; rientra con un invito nuovo.
-
-##### `P3` — documentazione
-
-ADR-058 e ADR-059 già in `P0`; [04](04-sicurezza.md) sul perimetro dei contatti e su chi
-viene tolto; [05](05-api.md); `R43` e `R39` fuori da [12](12-da-fare.md), `R58` fuori o
-assegnata secondo la decisione.
-
-#### Trappole
-
-**`is_my_staff` non dice «il mio proprietario».** Usarlo per decidere *chi* mostrare dà
-tutto lo staff. Decide solo *se* la riga si legge; *chi* lo dice `owner_id`.
-
-**`select_user!` per comodità.** Legge l'aggregato intero, hash della password compreso.
-La proiezione nomina le quattro colonne e nient'altro, come `names`.
-
-**Il `Debug` del contatto.** Un `#[derive(Debug)]` su una struct con email e telefono li
-stampa nel primo `tracing` che la incontra.
-
-**Provare il divieto solo dal caso d'uso.** Su `R39` la garanzia che conta è la policy,
-perché la persona tolta non è chi chiama: un test che passa con il controllo applicativo e
-cade senza la policy è quello giusto, uno che passa per entrambi non dice quale dei due
-regge.
-
-**L'ultimo proprietario.** `LeaveOrganization` lo protegge; `RemoveMember` non toglie
-`owner`, quindi non può svuotare l'organizzazione — ma se un giorno togliesse anche lo
-staff, la stessa regola va lì.
-
-**Chi è stato tolto e aveva il token aperto.** Per i quindici minuti dell'access token il
-ruolo nei claim resta; a chiudere è la RLS (ADR-054) — e per i gruppi di spesa **non
-chiude**, che è `R58`.
-
-#### `R54`: la decisione resta aperta, e non entra
-
-«Oggi» del prodotto è il giorno UTC (`R54`, in [12](12-da-fare.md)). **Non entra nella 14**,
-che non tocca date. La 13 l'ha incontrata due volte senza tirarla dentro — `left_at` è il
-giorno UTC, e il bottone del subentro decide sul giorno **locale** del browser, quindi per
-due ore di notte il client e il server possono non essere d'accordo — e in entrambi i casi
-il rifiuto del server è restato il confine. La decisione è di chi possiede il progetto, ed è
-quella scritta nella voce: **una sezione sua prima del collaudo** (fissare il fuso della
-sessione a `Europe/Rome`, o dichiarare le date UTC dove si vedono), oppure **dopo**, perché
-la finestra è di due ore di notte. Finché non è presa, è l'unica cosa segnalata che il
-collaudo troverebbe ancora aperta senza un posto nel cammino.
+**Una decisione all'apertura:** `R58`, nata pianificando questa sezione — chi esce o viene
+tolto continua a raggiungere i gruppi di spesa per i minuti del suo token. Se entra, la
+chiude `P2`; se no, resta in [12](12-da-fare.md) con la sua ragione scritta.
 
 #### Che cosa **non** entra
 
 - i contatti fra coinquilini con contratti **separati**: il perimetro di `R43` è il rapporto
-  contrattuale, deciso nella voce;
-- togliere `owner` o `manager`: nessun caso oggi;
-- un'email a chi viene tolto: rinviata, con la ragione sopra;
+  contrattuale, ed è deciso nella voce;
+- togliere un `owner` o un `manager`: nessun caso oggi, visto che un invito conferisce solo
+  `tenant`;
 - un elenco dei membri dell'organizzazione: chiederebbe una seconda rotta;
-- `R55`, `R56`, `R57`, dalla 13: non sono la domanda della 14.
+- `R55`, `R56`, `R57`, aperte dalla 13: non sono la domanda della 14;
+- **`R54`, il giorno UTC**: la 14 non tocca date. Va però detto qui perché non ha un posto
+  altrove: finché quella decisione non è presa, è **l'unica cosa segnalata che il collaudo
+  troverebbe ancora aperta** senza una riga nel cammino.
+
 
 ## Implementato
 
