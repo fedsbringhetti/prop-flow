@@ -105,12 +105,19 @@ Poi, nell'ordine:
 | 1 | **Le sezioni 11-16**, una per conversazione, ognuna con il piano in questo file prima e l'esito in [11](11-piani-conclusi.md) dopo | chi sviluppa | la 11 è [conclusa](11-piani-conclusi.md#esito-sezione-11), la 12 è [pianificata](#piano-in-corso) |
 | 2 | I mezzi: VPS, dominio, relay SMTP con SPF, DKIM e DMARC, credenziali | chi possiede il progetto | **il blocco reale**, dal 10 settembre; si procurano in parallelo alle sezioni |
 | 3 | **Il ripristino provato una volta**, mentre dentro non ci sono i dati di nessuno | runbook | mai eseguito |
-| 4 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G* |
+| 4 | Il primo deploy dal runbook, com'è scritto | runbook | criterio di fine: *aprire il prodotto dal telefono, in 4G*. **Prima va decisa `R59`**: com'è scritto, il download di un documento non raggiungerebbe il browser |
 | 5 | **Il collaudo di [13](13-collaudo.md)**, per intero, dal telefono — compreso l'Invio su `/invito` con una tastiera vera (B2), in sospeso dal poscritto della 8 | a mano, meglio se da chi non ha scritto il codice | l'esito in [11](11-piani-conclusi.md), **mentre lo si percorre** |
 | 6 | **Il mese con un proprietario vero** | esterno | la misura che decide tutto ciò che viene dopo |
 
 *Fatto, e non si ripete:* la CI verde e il merge della PR #57 in `dev` (`fafc2bd`, merge
 commit, non squash) il 18 settembre; il collaudo scritto e mergiato (#58, `822d4f9`) il 22.
+
+*Fatto fuori sequenza, il 1° ottobre 2026:* lo storage dei documenti è passato da MinIO,
+le cui immagini non si scaricano più, a **SeaweedFS** in CI, sviluppo e produzione
+([ADR-057](08-decisioni.md#adr-057), [esito](11-piani-conclusi.md#esito-storage-senza-minio)).
+Ha trovato due difetti degli artefatti del deploy: il bucket di produzione non lo creava
+nessuno, ed è sistemato; il download di un documento non raggiungerebbe il browser, ed è
+`R59`, da decidere prima del passo 4.
 
 *Perché il deploy adesso, con i mezzi che ci sono.* Deciso con l'esito della 9. I mezzi
 vanno procurati, non costruiti: nessuna sezione li fa arrivare. Nel frattempo ogni sezione
@@ -513,7 +520,7 @@ I numeri sono in [Dove siamo](#dove-siamo).
 | **Una spesa si annulla** (`POST /expenses/{id}/cancel`): è il soft delete che la `0028` concedeva e nessuno faceva, ed esce dai saldi da sola — **anche dopo un regolamento**, che salda un saldo e non una spesa. Chi l'ha registrata, chi l'ha anticipata, o lo staff; la `USING` è più larga, e il confine è nel caso d'uso | completo |
 | Coinquilini visibili: elenco dei residenti di un immobile letto da una funzione che proietta, anagrafica ristretta al perimetro della casa | completo |
 | OCR delle bollette: porta `OcrProvider` senza fornitore scelto, adattatore deterministico, coda `ai_jobs` con `SKIP LOCKED`, `pending_review` con le sue uscite, stato del job dall'API | completo |
-| Storage oggetti: adattatore S3/MinIO, cifratura letta dal fornitore | completo |
+| Storage oggetti: adattatore S3 su SeaweedFS ([ADR-057](08-decisioni.md#adr-057)), cifratura letta dal fornitore | completo |
 | Migratore, dispatcher dell'outbox, lettura automatica delle bollette | completi |
 | Dashboard: `GET /dashboard`, **nove** numeri letti da `v_owner_dashboard`, staff soltanto | completo |
 | Sessione in cookie: refresh `HttpOnly` fuori dal corpo, `Secure` condizionale, test che tiene in piedi l'argomento CSRF | completo |

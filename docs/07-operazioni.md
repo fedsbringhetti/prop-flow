@@ -51,7 +51,7 @@ Sono i campi di `AppConfig` (`crates/api/src/config.rs`), lette da figment.
 | `PROPFLOW__AUTH__AUDIENCE` | `propflow-api` | |
 | `PROPFLOW__AUTH__ACCESS_TOKEN_TTL_SECONDS` | `900` | |
 | `PROPFLOW__AUTH__REFRESH_TOKEN_TTL_DAYS` | `30` | |
-| `PROPFLOW__STORAGE__ENDPOINT` | `http://localhost:9000` | MinIO in sviluppo, `https://s3.<regione>.amazonaws.com` in produzione |
+| `PROPFLOW__STORAGE__ENDPOINT` | `http://localhost:9000` | SeaweedFS del compose in sviluppo, `http://storage:8333` nel compose di produzione ([ADR-057](08-decisioni.md#adr-057)); qualunque S3 compatibile |
 | `PROPFLOW__STORAGE__REGION` | `us-east-1` | |
 | `PROPFLOW__STORAGE__BUCKET` | `propflow-documents` | |
 | `PROPFLOW__STORAGE__ACCESS_KEY_ID` | — | **obbligatoria** |
@@ -113,6 +113,12 @@ se l'oggetto è stato cifrato e registra la modalità in `documents.encryption_k
 Su un bucket non configurato la colonna `documents.is_encrypted` risulta `false`, ed è
 il comportamento voluto — dice il vero invece di dire ciò che si spera. Con SSE la
 chiave è del fornitore: non protegge da un accesso amministrativo al bucket.
+
+**Su SeaweedFS l'header non torna** ([ADR-057](08-decisioni.md#adr-057)): accetta la
+cifratura predefinita sul bucket e non la dichiara sulla `PUT`, come MinIO senza un KMS.
+`is_encrypted` resta quindi `false` anche configurandola, che è il vero dal punto di vista
+dell'applicazione. La cifratura a riposo dei documenti è oggi **quella del disco** della
+macchina — da attivare sul volume della VPS — e la colonna non lo può sapere.
 
 La colonna dei default riporta ciò che il progetto **spedisce**, cioè i valori di
 `config/default.toml`. Dove il file non viene trovato valgono i default del codice,
@@ -199,8 +205,11 @@ produzione](#migrazioni-in-produzione).
 deve esporla: darla all'applicazione significherebbe darle in produzione il
 privilegio di creare bucket, che un servizio HTTP non deve avere
 ([ADR-024](08-decisioni.md#adr-024)). Il bucket si crea con il provisioning — in
-sviluppo lo fa il servizio `minio-setup` di `docker-compose.yml`, in CI
-`ops/ci/prepare-object-storage.sh`.
+sviluppo e in produzione lo fa il servizio `storage-setup` dei due compose, in CI
+`ops/ci/prepare-object-storage.sh`. In produzione **prima non lo faceva nessuno**: il
+runbook faceva `up -d`, e il bucket mancante dava il sintomo muto descritto sotto.
+`storage-setup` è un one-shot da cui API e worker dipendono, e al secondo avvio
+`BucketAlreadyOwnedByYou` non è un errore.
 
 Le tre impostazioni `PROPFLOW__STORAGE__ENDPOINT`, `__ACCESS_KEY_ID` e
 `__SECRET_ACCESS_KEY` non hanno un default e sono **obbligatorie**: senza, l'API
@@ -473,7 +482,7 @@ compose di produzione pretende sono dichiarate con `:?` in
 
 ```
 POSTGRES_SUPERUSER_PASSWORD=…
-MINIO_ROOT_USER=…            MINIO_ROOT_PASSWORD=…
+STORAGE_ACCESS_KEY=…         STORAGE_SECRET_KEY=…
 PROPFLOW__DATABASE__MIGRATOR_URL=postgres://propflow_migrator:…@postgres:5432/propflow
 PROPFLOW__DATABASE__APPLICATION_URL=postgres://propflow_app:…@postgres:5432/propflow
 PROPFLOW__DATABASE__PRIVILEGED_URL=postgres://propflow_worker:…@postgres:5432/propflow
@@ -539,7 +548,7 @@ PROPFLOW_BACKUP_PASSPHRASE=… PROPFLOW_BACKUP_REMOTE=… ops/deploy/backup.sh
 0 3 * * * PROPFLOW_BACKUP_PASSPHRASE=… PROPFLOW_BACKUP_REMOTE=…   /srv/propflow/ops/deploy/backup.sh >> /var/log/propflow-backup.log 2>&1
 ```
 
-Due cose e non una: il **database e il bucket**. I documenti sono oggetti in MinIO, non
+Due cose e non una: il **database e il bucket**. I documenti sono oggetti nello storage, non
 righe — un dump del database li lascia fuori, e la riga che li cita resta senza byte. E
 la copia **esce dalla macchina**: un backup sullo stesso disco del database è una seconda
 copia dello stesso guasto.

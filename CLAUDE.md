@@ -311,7 +311,7 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 ./ops/ci/check-schema.sh "$DATABASE_URL"
 
 # Ambiente di sviluppo
-docker compose up -d postgres minio minio-setup mailpit   # minio: documenti; mailpit: posta
+docker compose up -d postgres storage storage-setup mailpit   # storage: documenti; mailpit: posta
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
 cp .env.example .env                    # poi adattare
 set -a; source .env; set +a             # solo se lanci a mano: `just` lo carica da sé

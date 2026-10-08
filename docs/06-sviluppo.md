@@ -51,13 +51,13 @@ non ha `just` o vuole capire che cosa succede:
 #    che l'errore compaia tre passi dopo come un'autenticazione fallita.
 cp .env.example .env
 
-# 3. `up`: PostgreSQL, MinIO (lo storage dei documenti) e mailpit (la posta: l'API
+# 3. `up`: PostgreSQL, lo storage dei documenti (SeaweedFS, ADR-057) e mailpit (la posta: l'API
 #    non parte senza una configurazione della posta), con `--wait` perché su un
 #    volume nuovo PostgreSQL è in `initdb` quando la porta si apre; poi il one-shot
 #    che crea il bucket, fuori dall'attesa perché termina e `--wait` lo leggerebbe
 #    come un guasto.
-docker compose up -d --wait postgres minio mailpit
-docker compose up -d minio-setup
+docker compose up -d --wait postgres storage mailpit
+docker compose up -d storage-setup
 
 # 4. `db`: database, i tre ruoli e le migration, con lo stesso script della CI —
 #    due procedure di preparazione divergono al primo cambiamento. I default
@@ -122,7 +122,7 @@ Quattro livelli sul codice, più una guardia sulla documentazione.
 | Unitari di dominio | `crates/domain/src/**` | invarianti, validazioni, transizioni | no |
 | Unitari applicativi | `crates/application/src/**` | autorizzazione, policy sulle password | no |
 | Integrazione persistenza | `crates/infrastructure/tests/persistence.rs` | query, contesto RLS, atomicità di comando ed evento | **sì** |
-| Integrazione storage | `crates/infrastructure/tests/object_storage.rs` | firma SigV4, URL pre-firmati, digest, contro un MinIO vero | no, ma serve MinIO |
+| Integrazione storage | `crates/infrastructure/tests/object_storage.rs` | firma SigV4, URL pre-firmati, digest, contro uno storage vero (SeaweedFS) | no, ma serve lo storage, che `test-integration.sh` avvia |
 | Contratto HTTP | `crates/api/tests/` | codici di stato, formato degli errori, autorizzazione | **sì** |
 | Guardie sulla documentazione | `crates/api/tests/docs_config_reference.rs` | che le tabelle di [07 — Operazioni](07-operazioni.md#configurazione) non restino indietro rispetto al codice | no |
 | Client web | `apps/web/src/**/*.test.ts(x)` | il refresh a singolo volo, i decimali, la formattazione, il percorso da tastiera | no |
