@@ -51,11 +51,11 @@ non ha `just` o vuole capire che cosa succede:
 #    che l'errore compaia tre passi dopo come un'autenticazione fallita.
 cp .env.example .env
 
-# 3. `up`: PostgreSQL, lo storage dei documenti (SeaweedFS, ADR-057) e mailpit (la posta: l'API
-#    non parte senza una configurazione della posta), con `--wait` perché su un
-#    volume nuovo PostgreSQL è in `initdb` quando la porta si apre; poi il one-shot
-#    che crea il bucket, fuori dall'attesa perché termina e `--wait` lo leggerebbe
-#    come un guasto.
+# 3. `up`: PostgreSQL, lo storage dei documenti (SeaweedFS, ADR-057) e mailpit (la
+#    posta: l'API non parte senza una configurazione della posta), con `--wait`
+#    perché su un volume nuovo PostgreSQL è in `initdb` quando la porta si apre;
+#    poi il one-shot che crea il bucket, fuori dall'attesa perché termina e
+#    `--wait` lo leggerebbe come un guasto.
 docker compose up -d --wait postgres storage mailpit
 docker compose up -d storage-setup
 

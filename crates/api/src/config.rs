@@ -115,8 +115,7 @@ pub struct StorageConfig {
     pub access_key_id: String,
     pub secret_access_key: String,
     /// `true` mette il bucket nel percorso invece che nel sottodominio. Serve a
-    /// ogni endpoint personalizzato, dove un DNS
-    /// `<bucket>.<host>` non esiste.
+    /// ogni endpoint personalizzato, dove un DNS `<bucket>.<host>` non esiste.
     #[serde(default = "default_storage_path_style")]
     pub path_style: bool,
     /// Vita dell'URL pre-firmato di download.
