@@ -54,11 +54,14 @@ docker compose -f "$COMPOSE" --env-file "$ENV_FILE" exec -T postgres \
   pg_restore --no-owner --dbname="propflow" --username="postgres" < "${work}/propflow.dump"
 
 echo "== ripristino del bucket dei documenti =="
-docker compose -f "$COMPOSE" --env-file "$ENV_FILE" run --rm --no-deps \
-  --entrypoint sh -v "${work}:/backup" minio -c '
-    mc alias set dst "http://minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-    mc mb --ignore-existing dst/propflow-documents
-    mc mirror --overwrite /backup/documents dst/propflow-documents
+# Il bucket lo crea `storage-setup` all'avvio dello stack; qui si crea lo stesso,
+# tollerando che ci sia già, perché un ripristino su una macchina nuova può venire
+# prima di `up`. Poi `aws s3 sync`, che prima era `mc mirror` (ADR-057).
+docker compose -f "$COMPOSE" --env-file "$ENV_FILE" --profile tools run --rm --no-deps \
+  --entrypoint sh -v "${work}:/backup" storage-cli -c '
+    out=$(aws s3api create-bucket --bucket propflow-documents 2>&1) \
+      || case "$out" in *BucketAlreadyOwnedByYou*) ;; *) echo "$out" >&2; exit 1 ;; esac
+    aws s3 sync /backup/documents s3://propflow-documents --only-show-errors
   '
 
 echo ""

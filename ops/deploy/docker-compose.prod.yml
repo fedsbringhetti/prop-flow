@@ -9,7 +9,7 @@
 #
 # Le differenze dal compose di sviluppo, tutte deliberate:
 #
-#   - **niente porte esposte oltre la 80 e la 443.** Il database, MinIO, la posta e
+#   - **niente porte esposte oltre la 80 e la 443.** Il database, lo storage, la posta e
 #     l'API stessa parlano solo dentro la rete del compose. In sviluppo la 8080
 #     dell'API è aperta per Swagger UI; qui Swagger UI non si espone affatto;
 #   - **niente credenziali scritte qui.** Arrivano da `.env.prod`, che non sta nel
@@ -47,22 +47,60 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  minio:
-    image: quay.io/minio/minio:latest
-    command: ["server", "/data"]
+  # Lo storage dei documenti: SeaweedFS, lo stesso della CI e dello sviluppo
+  # (ADR-057). Immagine fissata per versione, come quella della AWS CLI qui sotto.
+  storage:
+    image: chrislusf/seaweedfs:4.48
+    command: ["server", "-s3", "-dir=/data"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?serve MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?serve MINIO_ROOT_PASSWORD}
+      # Diventano l'unica identità S3, con tutti i permessi: una firma con un
+      # segreto diverso è rifiutata.
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY:?serve STORAGE_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY:?serve STORAGE_SECRET_KEY}
     volumes:
-      - minio_data:/data
+      - storage_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+
+  # Crea il bucket, una volta, prima che API e worker partano. **Prima mancava**: il
+  # runbook faceva `up -d` e nessuno creava `propflow-documents`, con il sintomo muto
+  # che `07` descrive — `/ready` verde e il primo upload che fallisce. Non lo fa
+  # l'API, che non deve poter creare bucket (ADR-024). `BucketAlreadyOwnedByYou` a
+  # ogni avvio successivo non è un errore.
+  storage-setup:
+    image: amazon/aws-cli:2.37.7
+    environment:
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint:
+      - sh
+      - -c
+      - |
+        out=$$(aws --endpoint-url http://storage:8333 s3api create-bucket --bucket propflow-documents 2>&1) \
+          || case "$$out" in *BucketAlreadyOwnedByYou*) ;; *) echo "$$out" >&2; exit 1 ;; esac
+    depends_on:
+      storage:
+        condition: service_healthy
+    restart: "no"
+
+  # La AWS CLI sulla rete del compose, per `backup.sh` e `restore.sh`: il profilo
+  # `tools` la tiene fuori da `up`, e si usa con `run --rm`. Prima lo faceva `mc`
+  # dentro l'immagine di MinIO.
+  storage-cli:
+    image: amazon/aws-cli:2.37.7
+    profiles: ["tools"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://storage:8333
 
   # Le migration girano **prima** dell'API e con il ruolo del migratore, che è
   # l'unico con privilegi DDL. Un job che termina, non un servizio.
@@ -86,10 +124,10 @@ services:
       PROPFLOW__DATABASE__PRIVILEGED_URL: ${PROPFLOW__DATABASE__PRIVILEGED_URL:?serve l'URL privilegiato}
       PROPFLOW__AUTH__PRIVATE_KEY_PATH: /run/secrets/jwt_ed25519.pem
       PROPFLOW__AUTH__PUBLIC_KEY_PATH: /run/secrets/jwt_ed25519.pub.pem
-      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__ENDPOINT: http://storage:8333
       PROPFLOW__STORAGE__BUCKET: propflow-documents
-      PROPFLOW__STORAGE__ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      PROPFLOW__STORAGE__ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
+      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
       # Un relay vero. Il mittente deve stare sul **tuo** dominio, e quel dominio
       # deve avere SPF, DKIM e DMARC: senza, la posta parte e finisce nello spam,
       # con un sintomo muto — nessun errore, il codice non arriva.
@@ -108,8 +146,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio:
-        condition: service_healthy
+      storage-setup:
+        condition: service_completed_successfully
     read_only: true
     restart: unless-stopped
     security_opt:
@@ -123,16 +161,16 @@ services:
       # **Lo stesso bucket dell'API.** Due configurazioni che divergono danno il
       # sintomo peggiore: job che falliscono `document_unavailable` su documenti
       # che l'API mostra benissimo.
-      PROPFLOW__STORAGE__ENDPOINT: http://minio:9000
+      PROPFLOW__STORAGE__ENDPOINT: http://storage:8333
       PROPFLOW__STORAGE__BUCKET: propflow-documents
-      PROPFLOW__STORAGE__ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      PROPFLOW__STORAGE__ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
+      PROPFLOW__STORAGE__SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
       PROPFLOW__TELEMETRY__JSON_LOGS: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio:
-        condition: service_healthy
+      storage-setup:
+        condition: service_completed_successfully
     read_only: true
     restart: unless-stopped
     security_opt:
@@ -159,7 +197,7 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
+  storage_data:
   # I certificati di Caddy: senza un volume si riprendono a ogni riavvio, e Let's
   # Encrypt ha un limite di richieste che si tocca in fretta.
   caddy_data:
