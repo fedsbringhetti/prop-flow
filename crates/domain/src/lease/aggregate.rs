@@ -285,6 +285,19 @@ impl Lease {
         Ok(())
     }
 
+    /// Un subentro si fa solo su un contratto **in essere oggi** (ADR-056).
+    ///
+    /// Non basta lo stato `Active`: uno scaduto resta `active` in memoria perché
+    /// nessuno scheduler lo cambia (ADR-019), e uno firmato che comincia fra un mese
+    /// non ha ancora nessuno che ne esca. In bozza e in firma le parti si
+    /// aggiungono, e il subentro non serve.
+    pub fn ensure_open_to_handover(&self, today: NaiveDate) -> DomainResult<()> {
+        if !self.is_in_force(today) {
+            return Err(DomainError::Invariant(Invariant::LeaseNotHandoverable));
+        }
+        Ok(())
+    }
+
     /// `true` se il contratto è attivo e `today` cade in `[start_date, end_date)`.
     ///
     /// Stessa definizione della funzione `app.lease_in_force`, deliberatamente:

@@ -124,6 +124,27 @@ impl LeaseParty {
     ///
     /// Rifiuta se un utente è già collegato: sovrascriverlo significherebbe
     /// trasferire il contratto a un'altra persona senza traccia dell'operazione.
+    ///
+    /// # `joined_at` su una parte già uscita
+    ///
+    /// Una parte **uscita** resta collegabile: [ADR-056](../../../../docs/08-decisioni.md)
+    /// stabilisce che chi non aveva mai accettato il proprio invito possa accettarlo
+    /// dopo il subentro, per entrare nell'organizzazione e leggere il contratto e i
+    /// propri addebiti. Su quella riga `joined_at` **resta nullo**, e per due ragioni
+    /// che puntano nella stessa direzione.
+    ///
+    /// La prima è che scriverlo romperebbe `lease_parties_dates_ck`
+    /// (`migrations/0005_leases.sql:98`), che esige `left_at >= joined_at`: la data di
+    /// oggi è posteriore all'uscita in ogni giorno che non sia quello del subentro, e
+    /// l'accettazione fallirebbe con un `23514` tradotto in un `409
+    /// conflict.constraint_violated` che non dice niente a nessuno. **Era un difetto
+    /// vero**, trovato da una review: la capacità era dichiarata in due documenti e il
+    /// codice non ce l'aveva.
+    ///
+    /// La seconda è che sarebbe falso. `joined_at` è il giorno in cui quella persona è
+    /// entrata nel contratto, e questa non ci è mai entrata: ha ricevuto un invito,
+    /// non l'ha accettato in tempo, ed è uscita prima di accettarlo. Nullo è la
+    /// risposta esatta, e la colonna è nullabile apposta.
     pub fn link_user(&mut self, user_id: UserId, now: DateTime<Utc>) -> DomainResult<()> {
         if let Some(existing) = self.user_id {
             if existing == user_id {
@@ -132,7 +153,9 @@ impl LeaseParty {
             return Err(DomainError::Invariant(Invariant::LeasePartyAlreadyLinked));
         }
         self.user_id = Some(user_id);
-        self.joined_at = Some(now.date_naive());
+        if self.left_at.is_none() {
+            self.joined_at = Some(now.date_naive());
+        }
         self.updated_at = now;
         Ok(())
     }
@@ -232,6 +255,31 @@ impl LeaseParty {
         self.archived_at = Some(now);
         self.updated_at = now;
         Ok(())
+    }
+
+    /// La parte esce dal contratto: è il lato «chi esce» del subentro (ADR-056).
+    ///
+    /// `today` e non una data a scelta: chi legge `left_at` —
+    /// `app.has_lease_in_force`, `app.property_residents`,
+    /// [`Self::ensure_tenancy_complete`] — guarda **se c'è** e non che data porta,
+    /// quindi una data futura farebbe uscire la persona da subito dicendo il
+    /// contrario. `lease_parties_dates_ck` (`left_at >= joined_at`) è rispettato per
+    /// costruzione: `joined_at` lo scrive [`Self::link_user`] con la data dello
+    /// stesso orologio, che non può essere dopo oggi.
+    ///
+    /// **Toglie l'intestazione, e dice se c'era.** Chi è uscito non intesta niente,
+    /// e `lease_parties_primary_uk` non guarda `left_at`: l'intestazione passa a chi
+    /// entra, e questa riga va scritta **prima** della sua, o per un istante gli
+    /// intestatari sono due. Restituirla qui tiene l'ordine in un posto solo.
+    pub fn leave(&mut self, today: NaiveDate, now: DateTime<Utc>) -> DomainResult<bool> {
+        if self.left_at.is_some() {
+            return Err(DomainError::Invariant(Invariant::LeasePartyAlreadyLeft));
+        }
+        let was_primary = self.is_primary;
+        self.left_at = Some(today);
+        self.is_primary = false;
+        self.updated_at = now;
+        Ok(was_primary)
     }
 
     /// Le quote di chi abita devono coprire il canone per intero, e ci deve essere

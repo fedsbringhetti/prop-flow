@@ -44,3 +44,48 @@ export function remainingShare(parties: readonly LeaseParty[]): string {
 export function hasPrimary(parties: readonly LeaseParty[]): boolean {
   return parties.some((party) => party.is_primary && party.left_at === null)
 }
+
+/** Chi è ancora nel contratto. Chi è uscito (`left_at`) resta fra le righe e non conta. */
+export function stillOnLease(parties: readonly LeaseParty[]): LeaseParty[] {
+  return parties.filter((party) => party.left_at === null)
+}
+
+/**
+ * Le quote che il subentro propone: **com'erano** (ADR-056).
+ *
+ * Chi entra riceve la quota di chi esce, e chi resta tiene la sua. Sono i valori
+ * con cui i campi **partono pieni** — non un `placeholder`, che è testo grigio in un
+ * campo vuoto: confermando senza toccare niente si manderebbe niente. Si propongono
+ * solo le quote di chi condivide il canone, come `SHARES_RENT`; il garante resta
+ * fuori, com'è fuori dalla somma.
+ *
+ * `null` se chi esce non è fra chi è ancora nel contratto: il dialogo non ha niente
+ * da proporre finché non lo si sceglie.
+ */
+export function proposedHandover(
+  parties: readonly LeaseParty[],
+  leavingId: string,
+): { joining: string; staying: { party: LeaseParty; share_percent: string }[] } | null {
+  const leaving = stillOnLease(parties).find((party) => party.id === leavingId)
+  if (!leaving) return null
+  return {
+    joining: leaving.share_percent,
+    staying: stillOnLease(parties)
+      .filter((party) => party.id !== leavingId && SHARES_RENT.includes(party.role))
+      .map((party) => ({ party, share_percent: party.share_percent })),
+  }
+}
+
+/**
+ * Chi si può invitare su un contratto che **non accetta più parti**.
+ *
+ * Da attivo l'invito raggiunge solo una parte che esiste, ancora senza account, e
+ * con l'email a cui l'invito sarà intestato: un'email nuova creerebbe una parte, e
+ * il server la rifiuta con `lease.parties_locked` (ADR-056). Per far entrare
+ * qualcuno di nuovo c'è il subentro.
+ */
+export function invitableParties(parties: readonly LeaseParty[]): LeaseParty[] {
+  return stillOnLease(parties).filter(
+    (party) => party.user_id === undefined && party.email !== undefined,
+  )
+}

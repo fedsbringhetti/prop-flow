@@ -8,6 +8,7 @@ import {
   cancelLease,
   correctLeaseParty,
   getLease,
+  handoverLease,
   removeLeaseParty,
   addLeaseParty,
   inviteTenant,
@@ -27,9 +28,16 @@ import { TableCaption, TableFrame, Td, TdNumeric, Th, ThNumeric, Tr } from '@/co
 import { keys } from '@/app/query'
 import { useApi, useIsStaff } from '@/app/session'
 import { t } from '@/i18n'
+import { sumAmounts } from '@/lib/decimal'
 import { formatAmount, formatDate, formatDecimal, todayIso } from '@/lib/format'
 import { AttachmentsCard } from '../shared/attachments'
-import { hasPrimary, remainingShare } from './shares'
+import {
+  hasPrimary,
+  invitableParties,
+  proposedHandover,
+  remainingShare,
+  stillOnLease,
+} from './shares'
 import { ChargeStatusBadge, LeaseStatusBadge } from '../shared/status'
 
 const PARTY_ROLES: LeasePartyRole[] = ['tenant', 'cotenant', 'guarantor']
@@ -84,7 +92,11 @@ export function LeaseDetailPage() {
                  esce. */
               !isStaff ? null : (
               <>
-                <InviteTenantDialog leaseId={id} parties={data.parties} />
+                <InviteTenantDialog
+                  leaseId={id}
+                  parties={data.parties}
+                  acceptsParties={data.status === 'draft' || data.status === 'pending_signature'}
+                />
                 {data.status === 'draft' || data.status === 'pending_signature' ? (
                   <ConfirmAction
                     trigger={<Button variant="primary">{t.lease.activate}</Button>}
@@ -108,6 +120,16 @@ export function LeaseDetailPage() {
                     confirmLabel={t.lease.cancel}
                     onConfirm={() => cancel.mutateAsync()}
                   />
+                ) : null}
+                {/* **Accanto a «Disdici», e non la stessa cosa**: il subentro chiude
+                    il posto di una persona e il contratto continua (ADR-056). Si
+                    offre sul contratto in essere oggi, cioè gli stati che il
+                    dominio ammette in `Lease::ensure_open_to_handover`: attivo, non
+                    scaduto, già cominciato. */}
+                {data.status === 'active' &&
+                data.effective_status !== 'expired' &&
+                data.start_date <= todayIso() ? (
+                  <HandoverDialog leaseId={id} parties={data.parties} onDone={refresh} />
                 ) : null}
                 {data.status === 'active' ? <TerminateAction onConfirm={terminate.mutateAsync} /> : null}
               </>
@@ -194,6 +216,19 @@ export function LeaseDetailPage() {
                               ({t.lease.partyPrimary})
                             </span>
                           ) : null}
+                          {/* **Chi è uscito resta fra le righe, e lo dice**: ha
+                              degli addebiti, e la sua quota non conta più. Chi non
+                              ha ancora un account è in attesa — il segnaposto del
+                              subentro, o chi non ha accettato l'invito. */}
+                          {party.left_at !== null ? (
+                            <span className="ml-2 text-xs text-ink-muted">
+                              ({t.lease.partyLeft(formatDate(party.left_at))})
+                            </span>
+                          ) : party.user_id === undefined ? (
+                            <span className="ml-2 text-xs text-ink-muted">
+                              ({t.lease.partyPending})
+                            </span>
+                          ) : null}
                         </Td>
                         <Td>{t.lease.partyRoles[party.role]}</Td>
                         <Td>{party.email ?? t.common.none}</Td>
@@ -252,6 +287,291 @@ function TerminateAction({ onConfirm }: { onConfirm: (reason: string) => Promise
         )}
       </Field>
     </ConfirmAction>
+  )
+}
+
+/** I campi del subentro, con le quote **com'erano** per chi esce indicato. */
+function handoverValues(parties: readonly LeaseParty[], leavingId: string) {
+  const proposal = proposedHandover(parties, leavingId)
+  return {
+    leavingId,
+    joiningShare: proposal?.joining ?? '',
+    shares: Object.fromEntries(
+      (proposal?.staying ?? []).map((row) => [row.party.id, row.share_percent]),
+    ),
+  }
+}
+
+/** Il separatore decimale che si digita non è per forza quello che l'API accetta. */
+function asAmount(raw: string): string {
+  return raw.trim().replace(',', '.')
+}
+
+/**
+ * Il subentro: chi esce lascia oggi il suo posto, chi entra riceve l'invito.
+ *
+ * # Tre passi nella stessa modale
+ *
+ * Il form, la conferma, il codice. La conferma **cambia il corpo** e non apre un
+ * `ConfirmAction` sopra, per la ragione scritta su `InviteTenantDialog`: due strati
+ * modali per un gesto che si spiega in due righe, e dopo serve comunque mostrare il
+ * codice d'invito, che è l'unica copia se la posta non arriva. La conferma nomina
+ * chi esce e chi entra perché non c'è un «annulla» dopo — ed è una conferma sola,
+ * senza conto alla rovescia: la disdetta, che è più distruttiva, non lo ha.
+ *
+ * # Le quote partono piene
+ *
+ * Con i valori di prima — chi entra con la quota di chi esce — come valori dei
+ * campi e non come `placeholder`. Si applicano subito, e fino all'accettazione il
+ * posto di chi entra resta in attesa (ADR-056).
+ */
+function HandoverDialog({
+  leaseId,
+  parties,
+  onDone,
+}: {
+  leaseId: string
+  parties: LeaseParty[]
+  onDone: () => Promise<void>
+}) {
+  const client = useApi()
+  const candidates = stillOnLease(parties)
+  // Con una parte sola non c'è niente da scegliere; con più d'una la scelta è di
+  // chi amministra, e proporne una sarebbe indovinare chi se ne va.
+  const onlyOne = candidates.length === 1 ? (candidates[0]?.id ?? '') : ''
+  const [open, setOpen] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  const [issued, setIssued] = useState<Invitation | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [person, setPerson] = useState({ full_name: '', email: '' })
+  const [values, setValues] = useState(() => handoverValues(parties, onlyOne))
+
+  const leaving = candidates.find((party) => party.id === values.leavingId)
+  const staying = proposedHandover(parties, values.leavingId)?.staying ?? []
+  const total = sumAmounts([
+    asAmount(values.joiningShare),
+    ...staying.map((row) => asAmount(values.shares[row.party.id] ?? '')),
+  ])
+
+  function reset() {
+    setConfirming(false)
+    setError(null)
+    setIssued(null)
+    setCopied(false)
+    setPerson({ full_name: '', email: '' })
+    setValues(handoverValues(parties, onlyOne))
+  }
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      handoverLease(client, leaseId, {
+        leaving_party_id: values.leavingId,
+        joining: {
+          full_name: person.full_name,
+          email: person.email.trim(),
+          share_percent: asAmount(values.joiningShare),
+        },
+        shares: staying.map((row) => ({
+          party_id: row.party.id,
+          share_percent: asAmount(values.shares[row.party.id] ?? ''),
+        })),
+      }),
+    onSuccess: async (result) => {
+      setIssued(result.invitation)
+      setConfirming(false)
+      setError(null)
+      await onDone()
+    },
+    // L'errore si legge nel form, dove si corregge: la conferma non ha campi.
+    onError: (failure) => {
+      setError(failure)
+      setConfirming(false)
+    },
+  })
+
+  return (
+    <FormDialog
+      trigger={<Button>{t.lease.handover}</Button>}
+      title={
+        issued
+          ? t.lease.handoverDoneTitle
+          : confirming
+            ? t.lease.handoverConfirmTitle
+            : t.lease.handoverTitle
+      }
+      description={
+        issued ? t.lease.handoverDoneExplain : confirming ? undefined : t.lease.handoverExplain
+      }
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        // Il codice si dimentica alla chiusura, come nell'invito.
+        if (!next) reset()
+      }}
+    >
+      {issued ? (
+        <div className="flex flex-col gap-3">
+          <InvitationToken token={issued.accept_token} />
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              onClick={() => {
+                void navigator.clipboard.writeText(issued.accept_token).then(() => setCopied(true))
+              }}
+            >
+              <Copy aria-hidden />
+              {copied ? t.common.copied : t.common.copy}
+            </Button>
+            <Button variant="primary" onClick={() => setOpen(false)}>
+              {t.common.close}
+            </Button>
+          </div>
+        </div>
+      ) : confirming ? (
+        <div className="flex flex-col gap-4">
+          <p className="text-sm">
+            {t.lease.handoverConfirmExplain(leaving?.full_name ?? '', person.full_name)}
+          </p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={() => setConfirming(false)} disabled={mutation.isPending}>
+              {t.lease.handoverBack}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate()}
+            >
+              {mutation.isPending ? t.common.saving : t.lease.handoverConfirm}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <form
+          noValidate
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setError(null)
+            setConfirming(true)
+          }}
+        >
+          <InlineError error={error} />
+          {candidates.length > 1 ? (
+            <Field label={t.lease.handoverLeaving} required>
+              {(props) => (
+                <Select
+                  {...props}
+                  value={values.leavingId}
+                  onChange={(event) => setValues(handoverValues(parties, event.target.value))}
+                >
+                  <option value="">{t.lease.handoverChooseLeaving}</option>
+                  {candidates.map((party) => (
+                    <option key={party.id} value={party.id}>
+                      {party.full_name}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          ) : (
+            <DescriptionList>
+              <DescriptionItem label={t.lease.handoverLeaving}>
+                {leaving?.full_name ?? t.common.none}
+              </DescriptionItem>
+            </DescriptionList>
+          )}
+          <p className="text-sm font-medium">{t.lease.handoverJoining}</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label={t.invitation.fullName} required>
+              {(props) => (
+                <Input
+                  {...props}
+                  value={person.full_name}
+                  onChange={(event) => setPerson((v) => ({ ...v, full_name: event.target.value }))}
+                />
+              )}
+            </Field>
+            <Field label={t.invitation.email} required>
+              {(props) => (
+                <Input
+                  {...props}
+                  type="email"
+                  value={person.email}
+                  onChange={(event) => setPerson((v) => ({ ...v, email: event.target.value }))}
+                />
+              )}
+            </Field>
+          </div>
+          {leaving ? (
+            <fieldset className="flex flex-col gap-3">
+              <legend className="text-sm font-medium">{t.lease.handoverShares}</legend>
+              <p className="text-xs text-ink-muted">{t.lease.handoverSharesHint}</p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field label={t.lease.handoverJoiningShare(person.full_name)}>
+                  {(props) => (
+                    <Input
+                      {...props}
+                      inputMode="decimal"
+                      value={values.joiningShare}
+                      onChange={(event) =>
+                        setValues((v) => ({ ...v, joiningShare: event.target.value }))
+                      }
+                    />
+                  )}
+                </Field>
+                {staying.map((row) => (
+                  <Field key={row.party.id} label={row.party.full_name}>
+                    {(props) => (
+                      <Input
+                        {...props}
+                        inputMode="decimal"
+                        value={values.shares[row.party.id] ?? ''}
+                        onChange={(event) =>
+                          setValues((v) => ({
+                            ...v,
+                            shares: { ...v.shares, [row.party.id]: event.target.value },
+                          }))
+                        }
+                      />
+                    )}
+                  </Field>
+                ))}
+              </div>
+              <p className="text-xs text-ink-muted" role="status">
+                {t.lease.handoverSharesTotal(formatDecimal(total, { maximumFractionDigits: 2 }))}
+              </p>
+            </fieldset>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setOpen(false)}>{t.common.cancel}</Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!leaving || !person.full_name.trim() || !person.email.trim()}
+            >
+              {t.lease.handoverContinue}
+            </Button>
+          </div>
+        </form>
+      )}
+    </FormDialog>
+  )
+}
+
+/** Il codice d'invito, e dove lo usa chi lo riceve. */
+function InvitationToken({ token }: { token: string }) {
+  return (
+    <>
+      <div>
+        <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
+          {t.invitation.tokenLabel}
+        </p>
+        <code className="mt-1 block break-all rounded-lg bg-surface-muted p-3 font-numeric text-sm">
+          {token}
+        </code>
+      </div>
+      <p className="text-sm text-ink-muted">{t.invitation.tokenWhereToUse}</p>
+    </>
   )
 }
 
@@ -589,9 +909,12 @@ function AddPartyDialog({ leaseId, parties }: { leaseId: string; parties: LeaseP
 /**
  * L'invito, e il token consegnato per quello che è.
  *
- * `Notifier` è una porta senza adattatore: **nessuna email parte**. Una schermata
- * che dicesse «invito inviato» sarebbe una bugia nell'interfaccia, quindi il token
- * si mostra e si dice che va consegnato a mano. È brutto ed è la verità.
+ * L'email parte **dopo il commit e best-effort**: se il relay non risponde l'invito
+ * vale lo stesso, e il token mostrato qui è l'unica copia su cui contare. Una
+ * schermata che dicesse soltanto «invito inviato» sarebbe una bugia a metà, quindi il
+ * token si mostra e si dice che, se l'email non arriva, va consegnato a mano. Fino
+ * alla 5-quater nessuna email partiva e questo commento lo diceva; il subentro, che
+ * mostra lo stesso codice, ha reso visibile che era rimasto indietro.
  *
  * Il token è una **credenziale**: si mostra una volta, non si conserva, e non
  * finisce in nessun log — ecco perché non passa da nessuna cache di query.
@@ -613,7 +936,20 @@ function AddPartyDialog({ leaseId, parties }: { leaseId: string; parties: LeaseP
  * dietro. Qui la modale cambia corpo e torna al form, che è anche il gesto
  * successivo — rifare l'invito con l'indirizzo giusto.
  */
-function InviteTenantDialog({ leaseId, parties }: { leaseId: string; parties: LeaseParty[] }) {
+function InviteTenantDialog({
+  leaseId,
+  parties,
+  acceptsParties,
+}: {
+  leaseId: string
+  parties: LeaseParty[]
+  /**
+   * In bozza e in firma l'invito può creare la parte; da attivo raggiunge solo una
+   * parte che esiste, e l'email non si digita: è quella della parte (ADR-056).
+   */
+  acceptsParties: boolean
+}) {
+  const invitable = invitableParties(parties)
   const client = useApi()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -697,15 +1033,7 @@ function InviteTenantDialog({ leaseId, parties }: { leaseId: string; parties: Le
         </div>
       ) : issued ? (
         <div className="flex flex-col gap-3">
-          <div>
-            <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
-              {t.invitation.tokenLabel}
-            </p>
-            <code className="mt-1 block break-all rounded-lg bg-surface-muted p-3 font-numeric text-sm">
-              {issued.accept_token}
-            </code>
-          </div>
-          <p className="text-sm text-ink-muted">{t.invitation.tokenWhereToUse}</p>
+          <InvitationToken token={issued.accept_token} />
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="dangerGhost" onClick={() => setConfirmingRevoke(true)}>
               {t.invitation.revoke}
@@ -738,37 +1066,81 @@ function InviteTenantDialog({ leaseId, parties }: { leaseId: string; parties: Le
               {t.invitation.revokeDone}
             </p>
           ) : null}
-          <Field label={t.invitation.fullName} required>
-            {(props) => (
-              <Input
-                {...props}
-                value={values.full_name}
-                onChange={(event) => setValues((v) => ({ ...v, full_name: event.target.value }))}
-              />
-            )}
-          </Field>
-          <Field label={t.invitation.email} required>
-            {(props) => (
-              <Input
-                {...props}
-                type="email"
-                value={values.email}
-                onChange={(event) => setValues((v) => ({ ...v, email: event.target.value }))}
-              />
-            )}
-          </Field>
-          {/* **La quota che questa persona riceverà, detta prima.** L'invito crea
-              la parte con il residuo, e quando le quote sono già complete la crea
-              a zero: era il passo in cui il difetto di ADR-046 diventava invisibile
-              — nessuno lo diceva, e si scopriva quando l'attivazione rifiutava. */}
-          <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">
-            {t.invitation.shareOnAccept(remainingShare(parties))}
-          </p>
+          {acceptsParties ? (
+            <>
+              <Field label={t.invitation.fullName} required>
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={values.full_name}
+                    onChange={(event) =>
+                      setValues((v) => ({ ...v, full_name: event.target.value }))
+                    }
+                  />
+                )}
+              </Field>
+              <Field label={t.invitation.email} required>
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="email"
+                    value={values.email}
+                    onChange={(event) => setValues((v) => ({ ...v, email: event.target.value }))}
+                  />
+                )}
+              </Field>
+              {/* **La quota che questa persona riceverà, detta prima.** L'invito
+                  crea la parte con il residuo, e quando le quote sono già complete
+                  la crea a zero: era il passo in cui il difetto di ADR-046
+                  diventava invisibile — nessuno lo diceva, e si scopriva quando
+                  l'attivazione rifiutava. */}
+              <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink-muted">
+                {t.invitation.shareOnAccept(remainingShare(parties))}
+              </p>
+            </>
+          ) : invitable.length > 0 ? (
+            <>
+              {/* **Nessun campo email libero** su un contratto in essere: un'email
+                  nuova creerebbe una parte, ed era la seconda porta di ADR-046.
+                  Si sceglie chi è già scritto sul contratto (ADR-056). */}
+              <p className="text-sm text-ink-muted">{t.invitation.lockedExplain}</p>
+              <Field label={t.invitation.whoToInvite} required>
+                {(props) => (
+                  <Select
+                    {...props}
+                    value={values.email}
+                    onChange={(event) => {
+                      const chosen = invitable.find((party) => party.email === event.target.value)
+                      setValues({
+                        email: chosen?.email ?? '',
+                        full_name: chosen?.full_name ?? '',
+                      })
+                    }}
+                  >
+                    <option value="">{t.invitation.chooseParty}</option>
+                    {invitable.map((party) => (
+                      <option key={party.id} value={party.email}>
+                        {party.full_name} — {party.email}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            </>
+          ) : (
+            <p className="text-sm text-ink-muted">{t.invitation.nobodyToInvite}</p>
+          )}
           <div className="flex justify-end gap-2">
             <Button onClick={() => setOpen(false)}>{t.common.cancel}</Button>
-            <Button type="submit" variant="primary" disabled={mutation.isPending}>
-              {mutation.isPending ? t.common.saving : t.invitation.send}
-            </Button>
+            {acceptsParties || invitable.length > 0 ? (
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={mutation.isPending || (!acceptsParties && !values.email)}
+              >
+                {mutation.isPending ? t.common.saving : t.invitation.send}
+              </Button>
+            ) : null}
           </div>
         </form>
       )}

@@ -53,7 +53,7 @@ pub struct InvitationResponse {
 }
 
 impl InvitationResponse {
-    fn from_issued(issued: &IssuedInvitation) -> Self {
+    pub(crate) fn from_issued(issued: &IssuedInvitation) -> Self {
         let invitation: &Invitation = &issued.invitation;
         Self {
             id: invitation.id().as_uuid(),

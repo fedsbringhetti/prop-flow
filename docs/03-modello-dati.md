@@ -136,6 +136,23 @@ contratto e l'immobile — e ad aprirvi segnalazioni, perché `tickets_insert` p
 non rilegge quando `X-Org-Id` coincide con l'organizzazione dei claim (ADR-012). Lo
 staff passava già da `member_role`; il ramo dell'inquilino era l'unico a non guardarla.
 
+**`left_at` su `app.lease_parties` da questa sezione lo scrive qualcuno**, ed è il
+subentro ([ADR-056](08-decisioni.md#adr-056)): il giorno da cui la parte non è più nel
+contratto, **mai nel futuro**. Non è una svista di stile che tutte le letture lo trattino
+come un booleano — `app.has_lease_in_force` (`0039`), `app.property_residents` (`0030`),
+`LeaseParty::ensure_tenancy_complete` guardano `left_at IS NULL`, non la data — ed è
+proprio per questo che il subentro scrive oggi e non una data a scelta: una data futura
+farebbe uscire la persona da subito dicendo il contrario. `app.can_access_lease` invece
+**non guarda `left_at`**: chi è uscito continua a leggere il contratto finché è membro,
+perché ha degli addebiti. La differenza è voluta, e la ragione sta in ADR-056.
+
+`lease_parties_dates_ck` (`left_at >= joined_at`) è rispettato per costruzione:
+`joined_at` lo scrive l'accettazione dell'invito con lo stesso orologio che scrive
+`left_at`, e non può essere dopo oggi. `lease_parties_primary_uk` e
+`lease_parties_lease_user_uk` **non guardano `left_at`**: il primo obbliga a togliere
+l'intestazione a chi esce prima di darla a chi entra, il secondo impedisce a chi è uscito
+di rientrare sullo stesso contratto — la via è un contratto nuovo.
+
 `app.can_access_ticket` ha **cinque** rami dalla migration `0035`: al quarto — chi è
 parte del contratto indicato — se ne aggiunge uno per le segnalazioni dichiarate di
 interesse comune, che risponde a chi risulta residente dell'immobile secondo

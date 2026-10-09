@@ -233,6 +233,39 @@ come le policy dello staff passano già da `member_role`. Senza, chi usciva legg
 proprio contratto disdetto e apriva segnalazioni nell'organizzazione lasciata finché il
 token non scadeva ([ADR-054](08-decisioni.md#adr-054)).
 
+<a id="chi-e-uscito-da-un-contratto"></a>
+
+### Chi è uscito da un contratto
+
+**Smette di essere residente, non smette di essere debitore**
+([ADR-056](08-decisioni.md#adr-056)). Il subentro scrive `left_at` sulla parte che esce,
+e lo schema distingue già le due cose:
+
+- `app.has_lease_in_force` e `app.property_residents` filtrano `left_at IS NULL`: da
+  quel giorno la persona **può uscire dall'organizzazione**, **non è più fra i
+  residenti** e non vede le segnalazioni condivise con loro;
+- `app.can_access_lease` **non guarda `left_at`, e resta così**: chi è uscito continua a
+  leggere il contratto — e con esso i suoi addebiti — finché è membro. Quando esce anche
+  dall'organizzazione, la regola di sopra ([ADR-054](08-decisioni.md#adr-054)) gli toglie
+  la lettura come a chiunque.
+
+Sembra una dimenticanza, e non lo è: uscire a metà contratto lascia degli addebiti, e la
+scheda del contratto è la pagina da cui si vedono. Un test che affermasse «chi è uscito
+non vede più il contratto» sarebbe sbagliato, e
+`a_handover_lets_the_leaving_tenant_out_and_puts_the_joining_one_in_its_place` afferma il
+contrario: provato al contrario con il filtro aggiunto alla funzione, è **l'unico** test
+della suite a cadere.
+
+Un uscente che non aveva mai accettato il suo invito può accettarlo dopo: l'accettazione
+lo collega alla sua riga, uscita, ed entra nello stesso perimetro. Su quella riga
+`joined_at` **resta nullo** — scriverlo violerebbe `lease_parties_dates_ck`, ed è anche
+falso, perché nel contratto quella persona non è mai entrata. Fino al 9 ottobre 2026 il
+codice non lo faceva e questa frase era falsa: vedi l'emendamento in
+[ADR-056](08-decisioni.md#adr-056).
+
+**Non lo si può però re-invitare** su quel contratto: `409 lease.party_already_left`. Il
+suo invito vecchio resta valido, uno nuovo no.
+
 ### Il pool privilegiato
 
 `begin_privileged()` usa un ruolo con `BYPASSRLS`. Ammesso **solo** dove un
@@ -278,6 +311,12 @@ hash del token, le policy verificano che esista un invito pendente per l'email
 dell'utente corrente. Un invito può conferire solo il ruolo `tenant`, e la condizione
 è ripetuta nella policy: un token spedito per email non deve poter diventare un ruolo
 di staff nemmeno con una query scritta a mano.
+
+**Un invito non aggiunge una persona a un contratto attivo.** Raggiunge una parte che
+esiste; un'email che non è di nessuna parte crea la parte solo in bozza o in firma, e
+altrimenti risponde `409 lease.parties_locked`. Per far entrare qualcuno al posto di chi
+esce c'è il subentro, che è di chi amministra e verifica le quote sullo stato finale
+([ADR-056](08-decisioni.md#adr-056)).
 
 Un token sconosciuto e un token intestato a un'altra email danno lo stesso `401` con
 lo stesso corpo — `code` compreso — per la ragione di

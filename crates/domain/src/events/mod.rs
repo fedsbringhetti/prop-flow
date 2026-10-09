@@ -125,6 +125,7 @@ pub enum DomainEventPayload {
     LeasePartyAdded(LeasePartyAdded),
     LeasePartyCorrected(LeasePartyCorrected),
     LeasePartyRemoved(LeasePartyRemoved),
+    LeaseHandedOver(LeaseHandedOver),
     TenantInvited(TenantInvited),
     InvitationRevoked(InvitationRevoked),
     InvitationAccepted(InvitationAccepted),
@@ -177,6 +178,7 @@ impl DomainEventPayload {
             Self::LeasePartyAdded(_) => "lease.party.added",
             Self::LeasePartyCorrected(_) => "lease.party.corrected",
             Self::LeasePartyRemoved(_) => "lease.party.removed",
+            Self::LeaseHandedOver(_) => "lease.handed_over",
             Self::TenantInvited(_) => "identity.invitation.issued",
             Self::InvitationRevoked(_) => "identity.invitation.revoked",
             Self::InvitationAccepted(_) => "identity.invitation.accepted",
@@ -229,7 +231,8 @@ impl DomainEventPayload {
             | Self::LeaseCancelled(_)
             | Self::LeasePartyAdded(_)
             | Self::LeasePartyCorrected(_)
-            | Self::LeasePartyRemoved(_) => "Lease",
+            | Self::LeasePartyRemoved(_)
+            | Self::LeaseHandedOver(_) => "Lease",
             Self::TenantInvited(_) | Self::InvitationRevoked(_) | Self::InvitationAccepted(_) => {
                 "Invitation"
             }
@@ -301,6 +304,7 @@ impl DomainEventPayload {
             Self::LeasePartyAdded(event) => event.lease_id.as_uuid(),
             Self::LeasePartyCorrected(event) => event.lease_id.as_uuid(),
             Self::LeasePartyRemoved(event) => event.lease_id.as_uuid(),
+            Self::LeaseHandedOver(event) => event.lease_id.as_uuid(),
             Self::TenantInvited(event) => event.invitation_id.as_uuid(),
             Self::InvitationRevoked(event) => event.invitation_id.as_uuid(),
             Self::InvitationAccepted(event) => event.invitation_id.as_uuid(),
@@ -356,6 +360,7 @@ impl DomainEventPayload {
             Self::LeasePartyAdded(event) => Some(event.org_id),
             Self::LeasePartyCorrected(event) => Some(event.org_id),
             Self::LeasePartyRemoved(event) => Some(event.org_id),
+            Self::LeaseHandedOver(event) => Some(event.org_id),
             Self::TenantInvited(event) => Some(event.org_id),
             Self::InvitationRevoked(event) => Some(event.org_id),
             Self::InvitationAccepted(event) => Some(event.org_id),
@@ -574,12 +579,28 @@ pub struct LeasePartyCorrected {
 }
 
 /// Una parte tolta perché inserita per sbaglio. Non è un inquilino che se ne va:
-/// quello ha una data e un evento suo, e non esiste ancora.
+/// quello ha una data e un evento suo, [`LeaseHandedOver`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LeasePartyRemoved {
     pub lease_id: LeaseId,
     pub org_id: OrgId,
     pub party_id: LeasePartyId,
+}
+
+/// Un subentro: una parte esce e un'altra prende il suo posto (ADR-056).
+///
+/// **Un evento e non due.** `LeasePartyRemoved` + `LeasePartyAdded` direbbero due
+/// fatti indipendenti, e chi li consuma non saprebbe che erano la stessa
+/// transizione. Le quote di chi resta, se sono cambiate, non ci sono: si rileggono
+/// dal contratto, come per `LeasePartyCorrected`. Identificatori e data, mai nomi né
+/// email (regola 25).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeaseHandedOver {
+    pub lease_id: LeaseId,
+    pub org_id: OrgId,
+    pub leaving_party_id: LeasePartyId,
+    pub joining_party_id: LeasePartyId,
+    pub effective_date: chrono::NaiveDate,
 }
 
 /// Nessun nome né email: identificatori e ruolo bastano a sapere cosa invalidare.
