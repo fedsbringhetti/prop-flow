@@ -343,6 +343,10 @@ cargo test --workspace                 # i test che richiedono il DB si dichiara
 # Solo le invarianti dello schema, su un database già migrato
 ./ops/ci/check-schema.sh "$DATABASE_URL"
 
+# Svuota la target directory di Cargo, che non perde mai le build superate.
+# Mostra dimensione e contenuto e chiede conferma, con default no (`just sweep`)
+./ops/dev/sweep-target.sh
+
 # Ambiente di sviluppo
 docker compose up -d postgres storage storage-setup mailpit   # storage: documenti; mailpit: posta
 ./ops/dev/generate-jwt-keys.sh          # crea .secrets/, richiede OpenSSL 3
