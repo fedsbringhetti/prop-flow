@@ -205,3 +205,14 @@ web-test:
 
 # Tutto ciò che verifica la CI.
 ci: check web-check test
+
+# ---------------------------------------------------------------------------
+# Fare pulizia
+
+# Cargo non cancella mai una build superata, e l'hash degli artefatti non dipende
+# dai sorgenti: ogni toolchain, lock o combinazione di feature lascia dietro una
+# copia intera. Il perché delle scelte sta in testa allo script.
+
+# Svuota la target directory di Cargo, dopo averne mostrato la dimensione e chiesto conferma.
+sweep:
+    ./ops/dev/sweep-target.sh

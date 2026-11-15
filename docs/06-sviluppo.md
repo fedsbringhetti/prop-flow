@@ -111,7 +111,33 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+
+# Svuotare la target directory di Cargo, con conferma (default no)
+just sweep                       # oppure ./ops/dev/sweep-target.sh
 ```
+
+### Liberare spazio: `just sweep`
+
+**Cargo non cancella mai una build superata.** L'hash nei nomi degli artefatti
+(`libfoo-53d0b5347d5c3856.rlib`) dipende da compilatore, `Cargo.lock`, feature e
+profilo, non dai sorgenti: ogni cambio di toolchain, ogni aggiornamento del lock e
+ogni combinazione nuova di feature lascia dietro una serie intera di librerie e di
+binari di test. La target directory cresce senza limite — in un altro progetto era
+arrivata a 132 GB, con il disco a 1 GB libero.
+
+`just sweep` chiede a `cargo metadata` qual è la target directory **effettiva**
+(quella che rispetta `CARGO_TARGET_DIR` e `build.target-dir`), ne mostra la
+dimensione e il contenuto, avvisa se sta fuori dal progetto — e quindi è
+probabilmente condivisa, e `cargo clean` cancellerebbe anche le build degli altri —
+e chiede `Delete it? [y/N]`. Solo `y` o `yes` procede con `cargo clean`; qualunque
+altra risposta, o l'assenza di un terminale, non cancella niente.
+
+Niente di ciò che sparisce è sorgente, ma la build successiva parte da fredda: per
+questo workspace sono diversi minuti. Non serve ricostruire niente a mano, perché
+nessuna ricetta presuppone un binario già compilato. Attenzione a ciò che si è
+messo in `target/` per comodità — log, script di un giro a mano: se ne va anche
+quello. Il perché delle singole scelte (niente `jq`, `cargo clean` invece di
+`cargo sweep`, la conferma scritta a mano) sta in testa allo script.
 
 ## Strategia di test
 
