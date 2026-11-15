@@ -30,6 +30,37 @@ L'advisory non ha una versione corretta: 0.9.10 è l'ultima pubblicata.
 
 Da rivalutare se jsonwebtoken rende `rsa` opzionale, o se esce una versione di `rsa`
 che corregge il problema.""" },
+    { id = "RUSTSEC-2026-0387", reason = """
+Timing variabile in operazioni che dovrebbero essere a tempo costante, in
+`crypto-bigint` 0.5.5. Lo tira nell'albero jsonwebtoken 11 con la feature
+`rust_crypto`, attraverso `p256` e `p384` → `elliptic-curve`: è l'aritmetica di
+ECDSA.
+
+Non raggiungibile da questo codice, per la stessa ragione della deroga qui sopra: si
+firma e si verifica solo con EdDSA, e nessun percorso ECDSA viene eseguito. La
+correzione esiste solo dalla 0.7.6, una major che `elliptic-curve` 0.13 non accetta,
+quindi non c'è un `cargo update` che la porti.
+
+Da rivalutare con jsonwebtoken 12, uscito il 13 novembre 2026, che passa a `p256` e
+`p384` 0.14: è un salto di major della libreria dei token, e va fatto a parte e non
+dentro una correzione del lockfile.""" },
+    # Le quattro advisory di `zip` hanno la stessa causa e la stessa ragione: una sola
+    # spiegazione, ripetuta per riferimento, invece di quattro che possono divergere.
+    { id = "RUSTSEC-2026-0367", reason = "zip 3.0.0, dipendenza di build di utoipa-swagger-ui: vedi RUSTSEC-2026-0429" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 3.0.0, dipendenza di build di utoipa-swagger-ui: vedi RUSTSEC-2026-0429" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 3.0.0, dipendenza di build di utoipa-swagger-ui: vedi RUSTSEC-2026-0429" },
+    { id = "RUSTSEC-2026-0429", reason = """
+Quattro advisory su `zip` 3.0.0 (questa, 0367, 0368, 0369), tutte sull'estrazione
+di archivi costruiti ad arte. La correzione è dalla 9.0.0.
+
+Non raggiungibile: `zip` è una dipendenza **di build** di `utoipa-swagger-ui`, che
+la usa nel suo `build.rs` per scompattare l'archivio di Swagger UI. Con la feature
+`vendored` quell'archivio arriva dal crate `utoipa-swagger-ui-vendored`, fissato nel
+lockfile con il suo checksum: nessun input non fidato, nessuna estrazione a runtime,
+e niente di `zip` finisce nel binario.
+
+Non eliminabile oggi: `utoipa-swagger-ui` 9.0.2, l'ultima pubblicata, chiede
+`zip ^3.0`. Da rivalutare quando una sua versione accetta `zip` 9.""" },
 ]
 
 [bans]
